@@ -103,6 +103,7 @@ public class ClaudeSession : IAsyncDisposable
         var args = new List<string>
         {
             "--print",
+            "--verbose",
             "--output-format", "stream-json",
             "--input-format", "stream-json",
             "--include-partial-messages",
@@ -136,7 +137,6 @@ public class ClaudeSession : IAsyncDisposable
         if (_currentProcess.HasExited)
             throw new InvalidOperationException("Не удалось запустить claude process");
 
-        Info.Status = SessionStatus.Active;
         StartFileWatcher();
 
         // Читаем stderr асинхронно, иначе при переполнении буфера процесс зависнет
@@ -192,7 +192,13 @@ public class ClaudeSession : IAsyncDisposable
                 try { await process.WaitForExitAsync(exitCts.Token); }
                 catch (OperationCanceledException) { } // 10 с истекло — идём дальше
             }
-            try { await stderrTask; } catch { }
+            try
+            {
+                var stderr = await stderrTask;
+                if (!string.IsNullOrWhiteSpace(stderr))
+                    Console.Error.WriteLine($"[ClaudeSession stderr] {stderr.Trim()}");
+            }
+            catch { }
             process.Dispose();
             _currentProcess = null;
 
@@ -262,6 +268,8 @@ public class ClaudeSession : IAsyncDisposable
                 var numTurns = root.TryGetProperty("num_turns", out var nt) ? nt.GetInt32() : 0;
                 Info.Status = subtype == "error" ? SessionStatus.Error : SessionStatus.Finished;
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, ParseUsage(root)));
+                // Закрываем stdin: все permission-запросы уже обработаны, Claude может завершить процесс
+                try { _currentProcess?.StandardInput.Close(); } catch { }
                 break;
 
             case "user":
@@ -384,7 +392,7 @@ public class ClaudeSession : IAsyncDisposable
         }
 
         _permissionWaiters.Remove(requestId);
-        Info.Status = SessionStatus.Active;
+        Info.Status = SessionStatus.Working;
 
         var response = JsonSerializer.Serialize(new
         {

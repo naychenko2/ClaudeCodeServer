@@ -195,7 +195,10 @@ public class SessionManager
                 case TextDeltaMessage m:    acc.OnTextDelta(m.Text); break;
                 case ThinkingDeltaMessage m: acc.OnThinkingDelta(m.Text); break;
                 case ToolUseMessage m:      acc.OnToolUse(m.Id, m.Name, m.Input); break;
-                case ToolResultMessage m:   acc.OnToolResult(m.ToolUseId, m.Content, m.IsError); break;
+                case ToolResultMessage m:
+                    acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);
+                    await acc.SaveSnapshotAsync(_history); // промежуточное сохранение после каждого tool call
+                    break;
                 case FileChangedMessage m:  acc.OnFileChanged(m.Path, m.Added, m.Removed); break;
                 case ResultMessage m:       await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, _history); break;
                 case ErrorMessage m:        await acc.OnErrorAsync(m.Text, _history); break;

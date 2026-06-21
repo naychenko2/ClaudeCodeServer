@@ -80,6 +80,15 @@ internal class TurnAccumulator
         return result;
     }
 
+    // Сохраняет снимок текущего состояния не закрывая ход.
+    // Вызывается после каждого tool_result чтобы частичная история
+    // была доступна на диске даже при рестарте сервера.
+    public async Task SaveSnapshotAsync(ChatHistoryService svc)
+    {
+        if (_saveKey is null) return;
+        await svc.SaveAsync(_saveKey, GetAll());
+    }
+
     private void FlushBuffers()
     {
         if (_textBuf.Length > 0)

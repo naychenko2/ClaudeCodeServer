@@ -178,6 +178,7 @@ public class SessionManager
                 case SessionStartedMessage m:
                     acc.SetSaveKey(m.ClaudeSessionId);
                     acc.OnSessionStarted(m.Model, m.Mode);
+                    SaveSessions(); // ClaudeSessionId теперь известен — сохраняем для выживания после рестарта
                     break;
                 case TextDeltaMessage m:
                     acc.OnTextDelta(m.Text);

@@ -130,14 +130,22 @@ public class SessionManager
             await claudeSession.StartAsync();
         }
 
+        entry.Info.Status = SessionStatus.Working;
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        await BroadcastStatusChangeAsync(sessionId, entry.Info.ProjectId,
+            SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
+
         entry.Accumulator?.OnUserMessage(text, attachedPaths);
         await entry.Process.SendMessageAsync(text, attachedPaths);
     }
 
     public void RespondPermission(string sessionId, string requestId, string behavior)
     {
-        if (_sessions.TryGetValue(sessionId, out var entry))
-            entry.Process?.RespondPermission(requestId, behavior);
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        entry.Process?.RespondPermission(requestId, behavior);
+        entry.Info.Status = SessionStatus.Working;
+        _ = BroadcastStatusChangeAsync(sessionId, entry.Info.ProjectId,
+            SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
     }
 
     public void Interrupt(string sessionId)
@@ -171,6 +179,10 @@ public class SessionManager
 
     private async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg)
     {
+        _sessions.TryGetValue(sessionId, out var entry);
+
+        // Аккумулятор — отдельный try, чтобы ошибка сохранения истории
+        // не заблокировала обновление статуса и широковещание.
         try
         {
             switch (msg)
@@ -178,29 +190,15 @@ public class SessionManager
                 case SessionStartedMessage m:
                     acc.SetSaveKey(m.ClaudeSessionId);
                     acc.OnSessionStarted(m.Model, m.Mode);
-                    SaveSessions(); // ClaudeSessionId теперь известен — сохраняем для выживания после рестарта
+                    SaveSessions();
                     break;
-                case TextDeltaMessage m:
-                    acc.OnTextDelta(m.Text);
-                    break;
-                case ThinkingDeltaMessage m:
-                    acc.OnThinkingDelta(m.Text);
-                    break;
-                case ToolUseMessage m:
-                    acc.OnToolUse(m.Id, m.Name, m.Input);
-                    break;
-                case ToolResultMessage m:
-                    acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);
-                    break;
-                case FileChangedMessage m:
-                    acc.OnFileChanged(m.Path, m.Added, m.Removed);
-                    break;
-                case ResultMessage m:
-                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, _history);
-                    break;
-                case ErrorMessage m:
-                    await acc.OnErrorAsync(m.Text, _history);
-                    break;
+                case TextDeltaMessage m:    acc.OnTextDelta(m.Text); break;
+                case ThinkingDeltaMessage m: acc.OnThinkingDelta(m.Text); break;
+                case ToolUseMessage m:      acc.OnToolUse(m.Id, m.Name, m.Input); break;
+                case ToolResultMessage m:   acc.OnToolResult(m.ToolUseId, m.Content, m.IsError); break;
+                case FileChangedMessage m:  acc.OnFileChanged(m.Path, m.Added, m.Removed); break;
+                case ResultMessage m:       await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, _history); break;
+                case ErrorMessage m:        await acc.OnErrorAsync(m.Text, _history); break;
             }
         }
         catch (Exception ex)
@@ -208,9 +206,48 @@ public class SessionManager
             Console.Error.WriteLine($"[SessionManager] Ошибка аккумулятора ({sessionId}): {ex.Message}");
         }
 
+        // Обновление статуса — всегда, независимо от аккумулятора.
+        // Если OnResultAsync выбросит, статус всё равно обновится.
+        if (entry is not null)
+        {
+            SessionStatus? newStatus = null;
+
+            if (msg is PermissionRequestMessage)
+                newStatus = SessionStatus.Waiting;
+            else if (msg is ResultMessage rm)
+                newStatus = rm.Subtype == "error" ? SessionStatus.Error : SessionStatus.Active;
+            else if (msg is ErrorMessage)
+                newStatus = SessionStatus.Error;
+            else if (msg is ExitedMessage &&
+                     (entry.Info.Status == SessionStatus.Working || entry.Info.Status == SessionStatus.Waiting))
+                newStatus = SessionStatus.Active; // прерван без result — возвращаем в рабочее состояние
+
+            if (newStatus.HasValue)
+            {
+                entry.Info.Status = newStatus.Value;
+                entry.Info.UpdatedAt = DateTime.UtcNow;
+                if (msg is ResultMessage) SaveSessions();
+                await BroadcastStatusChangeAsync(sessionId, entry.Info.ProjectId,
+                    newStatus.Value, entry.Info.LastMessage, entry.Info.MessageCount);
+            }
+        }
+
         await BroadcastAsync(sessionId, msg);
     }
 
     private Task BroadcastAsync(string sessionId, ServerMessage msg) =>
         _hub.Clients.Group(sessionId).SendAsync("message", msg with { SessionId = sessionId });
+
+    // Рассылаем в project-группу (все вкладки проекта) И в session-группу (сам чат),
+    // чтобы клиент не пропустил обновление если не успел войти в project-группу.
+    private async Task BroadcastStatusChangeAsync(string sessionId, string projectId, SessionStatus status,
+        string? lastMessage = null, int messageCount = 0)
+    {
+        var statusMsg = new StatusChangedMessage(status.ToString().ToLower(), lastMessage, messageCount)
+            with { SessionId = sessionId };
+        await Task.WhenAll(
+            _hub.Clients.Group("project_" + projectId).SendAsync("message", statusMsg),
+            _hub.Clients.Group(sessionId).SendAsync("message", statusMsg)
+        );
+    }
 }

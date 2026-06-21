@@ -81,6 +81,17 @@ export function onMessage(handler: (msg: ServerMessage) => void): () => void {
   return () => conn.off('message', handler);
 }
 
+export async function joinProject(projectId: string): Promise<void> {
+  const conn = await ensureConnected();
+  await conn.invoke('JoinProject', projectId);
+}
+
+export async function leaveProject(projectId: string): Promise<void> {
+  const conn = getConnection();
+  if (conn.state === signalR.HubConnectionState.Connected)
+    await conn.invoke('LeaveProject', projectId);
+}
+
 export function onReconnected(callback: () => void): void {
   getConnection().onreconnected(callback);
 }

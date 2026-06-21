@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import type { Project, Session } from '../types';
 import { api } from '../lib/api';
+import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { StatusBadge } from './StatusBadge';
 
 interface Props {
@@ -22,6 +23,7 @@ export function SessionList({ project, activeSession, onSelect, isMobile = false
     return s;
   };
 
+  // Загрузка и поллинг сессий
   useEffect(() => {
     initializedRef.current = false;
 
@@ -30,7 +32,6 @@ export function SessionList({ project, activeSession, onSelect, isMobile = false
       setSessions(list);
       if (!initializedRef.current) {
         initializedRef.current = true;
-        // авто-выбор только если сессия ещё не выбрана
         if (!activeSession) {
           if (list.length > 0) {
             onSelect(list[0], undefined, true);
@@ -48,6 +49,46 @@ export function SessionList({ project, activeSession, onSelect, isMobile = false
       api.sessions.list(project.id).then(setSessions);
     }, 5000);
     return () => clearInterval(interval);
+  }, [project.id]);
+
+  // Подписка на статусы в реальном времени через project-группу
+  useEffect(() => {
+    let mounted = true;
+
+    const doJoin = () => {
+      joinProject(project.id).catch(() => {});
+    };
+    doJoin();
+
+    // Переподключение — перезаходим в группу и рефетчим статусы (могли пропустить status_changed)
+    onReconnected(() => {
+      if (!mounted) return;
+      doJoin();
+      api.sessions.list(project.id).then(list => {
+        if (mounted) setSessions(list);
+      }).catch(() => {});
+    });
+
+    const unsub = onMessage(msg => {
+      if (!mounted) return;
+      if (msg.type !== 'status_changed') return;
+      setSessions(prev => prev.map(s =>
+        s.id === msg.sessionId
+          ? {
+              ...s,
+              status: msg.status as Session['status'],
+              ...(msg.lastMessage !== undefined && { lastMessage: msg.lastMessage }),
+              ...(msg.messageCount !== undefined && msg.messageCount > 0 && { messageCount: msg.messageCount }),
+            }
+          : s
+      ));
+    });
+
+    return () => {
+      mounted = false;
+      unsub();
+      leaveProject(project.id).catch(() => {});
+    };
   }, [project.id]);
 
   const handleDelete = async () => {
@@ -112,7 +153,7 @@ export function SessionList({ project, activeSession, onSelect, isMobile = false
                 <span style={{ fontSize: 13.5, fontWeight: 600, color: '#2A251F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {s.name ?? `Чат #${index + 1}`}
                 </span>
-                {(s.status === 'starting' || s.status === 'finished' || s.status === 'error') && (
+                {(s.status === 'starting' || s.status === 'working' || s.status === 'finished' || s.status === 'error') && (
                   <StatusBadge status={s.status} />
                 )}
               </div>

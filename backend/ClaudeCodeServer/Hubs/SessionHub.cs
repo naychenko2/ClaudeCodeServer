@@ -19,6 +19,16 @@ public class SessionHub : Hub
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, sessionId);
     }
 
+    public async Task JoinProject(string projectId)
+    {
+        await Groups.AddToGroupAsync(Context.ConnectionId, "project_" + projectId);
+    }
+
+    public async Task LeaveProject(string projectId)
+    {
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, "project_" + projectId);
+    }
+
     public async Task SendMessage(string sessionId, string text, List<string>? attachedPaths = null)
     {
         await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? []);

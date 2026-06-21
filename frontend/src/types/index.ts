@@ -11,7 +11,7 @@ export interface Session {
   projectId: string;
   claudeSessionId?: string;
   mode: 'auto' | 'plan' | 'ask';
-  status: 'starting' | 'active' | 'waiting' | 'finished' | 'error';
+  status: 'starting' | 'working' | 'active' | 'waiting' | 'finished' | 'error';
   lastMessage?: string;
   messageCount: number;
   createdAt: string;
@@ -40,6 +40,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo }
   | { type: 'error'; text: string }
   | { type: 'exited' }
+  | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
 );
 
 export interface UsageInfo {

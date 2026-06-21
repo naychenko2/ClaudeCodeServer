@@ -7,6 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      devOptions: { enabled: true },
       manifest: {
         name: 'Claude Code Server',
         short_name: 'ClaudeCode',
@@ -28,15 +29,15 @@ export default defineConfig({
     host: true,
     port: 5173,
     proxy: {
-      '/api': {
-        target: 'http://localhost:5000',
-        changeOrigin: true,
-      },
-      '/hubs': {
-        target: 'http://localhost:5000',
-        changeOrigin: true,
-        ws: true,
-      },
+      '/api': { target: 'http://localhost:5000', changeOrigin: true },
+      '/hubs': { target: 'http://localhost:5000', changeOrigin: true, ws: true },
+    },
+  },
+  preview: {
+    port: 4173,
+    proxy: {
+      '/api': { target: 'http://localhost:5000', changeOrigin: true },
+      '/hubs': { target: 'http://localhost:5000', changeOrigin: true, ws: true },
     },
   },
 });

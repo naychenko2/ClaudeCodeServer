@@ -39,6 +39,9 @@ public record ErrorMessage(string Text)
 public record ExitedMessage()
     : ServerMessage("exited");
 
+public record StatusChangedMessage(string Status, string? LastMessage = null, int MessageCount = 0)
+    : ServerMessage("status_changed");
+
 public record UsageInfo(int InputTokens, int OutputTokens, int CacheReadTokens, int CacheCreationTokens);
 
 // Сообщения от клиента к серверу

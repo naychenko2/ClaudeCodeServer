@@ -68,7 +68,7 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
 
 ## Claude Code CLI subprocess
 
-`ClaudeSession` запускает: `claude --output-format stream-json --include-partial-messages --permission-prompt-tool stdio [--resume <id>]`
+`ClaudeSession` запускает: `claude --print --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio [--resume <id>]`
 
 WorkingDirectory = `project.RootPath`
 

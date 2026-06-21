@@ -17,6 +17,9 @@ public class ClaudeSession : IAsyncDisposable
     private readonly SemaphoreSlim _turnLock = new(1, 1);
     private Process? _currentProcess;
 
+    // Если claude не выдаёт ни одной строки дольше этого — считаем зависшим
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(5);
+
     // Отслеживание изменений файлов
     private FileSystemWatcher? _watcher;
     private readonly ConcurrentDictionary<string, string?> _fileCache = new();
@@ -38,13 +41,11 @@ public class ClaudeSession : IAsyncDisposable
         Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
         Info.UpdatedAt = DateTime.UtcNow;
 
-        // Собираем полный текст с вложениями
         var fullText = BuildMessageText(text, attachedPaths);
 
         // Запускаем ход в фоне, чтобы не блокировать SignalR-соединение
         _ = Task.Run(async () =>
         {
-            // Проблема 2: проверяем отмену до захвата лока, чтобы не запускать дублирующий turn
             if (_cts.IsCancellationRequested) return;
             await _turnLock.WaitAsync(_cts.Token);
             try { await RunTurnAsync(fullText, _cts.Token); }
@@ -53,7 +54,6 @@ public class ClaudeSession : IAsyncDisposable
             {
                 Info.Status = SessionStatus.Error;
                 await _onMessage(new ErrorMessage(ex.Message));
-                // Проблема 7: не отправляем ExitedMessage здесь — RunTurnAsync.finally уже его отправит
             }
             finally { _turnLock.Release(); }
         });
@@ -84,22 +84,27 @@ public class ClaudeSession : IAsyncDisposable
     public void RespondPermission(string requestId, string behavior)
     {
         if (_permissionWaiters.TryGetValue(requestId, out var tcs))
-            tcs.SetResult(behavior);
+            tcs.TrySetResult(behavior);
     }
 
     public void Interrupt()
     {
         try { _currentProcess?.Kill(); } catch { }
+        // Отменяем все ожидающие permission-диалоги: процесс убит, ответа не будет
+        foreach (var tcs in _permissionWaiters.Values)
+            tcs.TrySetCanceled();
+        _permissionWaiters.Clear();
     }
 
     private async Task RunTurnAsync(string text, CancellationToken ct)
     {
+        // --print обязателен: без него --output-format/--input-format/--include-partial-messages/--permission-prompt-tool не работают
+        // --input-format stream-json нужен: мы посылаем JSON-объекты в stdin, а не plain text
         var args = new List<string>
         {
             "--print",
             "--output-format", "stream-json",
             "--input-format", "stream-json",
-            "--verbose",
             "--include-partial-messages",
             "--permission-prompt-tool", "stdio"
         };
@@ -107,7 +112,6 @@ public class ClaudeSession : IAsyncDisposable
         if (Info.ClaudeSessionId is not null)
             args.AddRange(["--resume", Info.ClaudeSessionId]);
 
-        // Проблема 5: передаём режим в CLI (только если не Auto, т.к. Auto — это поведение по умолчанию)
         if (Info.Mode != ClaudeMode.Auto)
             args.AddRange(["--mode", Info.Mode.ToString().ToLower()]);
 
@@ -129,19 +133,16 @@ public class ClaudeSession : IAsyncDisposable
         process.Start();
         _currentProcess = process;
 
-        // Проблема 3: проверяем что процесс успешно запустился
-        if (_currentProcess == null || _currentProcess.HasExited)
+        if (_currentProcess.HasExited)
             throw new InvalidOperationException("Не удалось запустить claude process");
 
         Info.Status = SessionStatus.Active;
         StartFileWatcher();
 
-        // Проблема 4: читаем stderr асинхронно параллельно с stdout,
-        // иначе при переполнении буфера stderr процесс зависнет
+        // Читаем stderr асинхронно, иначе при переполнении буфера процесс зависнет
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
 
-        // Отправляем сообщение. stdin оставляем открытым — claude может запросить разрешение
-        // через sdk_control_request и ждать control_response в stdin
+        // stdin оставляем открытым — claude пишет control_response в него при permission-запросах
         var msg = JsonSerializer.Serialize(new
         {
             type = "user",
@@ -154,8 +155,26 @@ public class ClaudeSession : IAsyncDisposable
         {
             while (!ct.IsCancellationRequested)
             {
-                var line = await process.StandardOutput.ReadLineAsync(ct);
-                if (line is null) break;
+                // Watchdog: пересоздаём linked CTS на каждую строку.
+                // Если claude замолчал дольше IdleTimeout — прерываем и сообщаем об ошибке.
+                using var watchdogCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                watchdogCts.CancelAfter(IdleTimeout);
+
+                string? line;
+                try
+                {
+                    line = await process.StandardOutput.ReadLineAsync(watchdogCts.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    // Сработал watchdog (не внешняя отмена сессии)
+                    await _onMessage(new ErrorMessage(
+                        $"Claude не отвечает более {IdleTimeout.TotalMinutes:0} мин — прерываем"));
+                    try { process.Kill(); } catch { }
+                    break;
+                }
+
+                if (line is null) break; // stdout закрыт — процесс завершился
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 await ProcessLineAsync(line);
             }
@@ -164,18 +183,19 @@ public class ClaudeSession : IAsyncDisposable
         finally
         {
             StopFileWatcher();
-            process.StandardInput.Close();
+            try { process.StandardInput.Close(); } catch { }
             if (!process.HasExited)
             {
-                process.Kill();
-                await process.WaitForExitAsync();
+                try { process.Kill(); } catch { }
+                // Ограниченное ожидание завершения — Kill() асинхронен на некоторых ОС
+                using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try { await process.WaitForExitAsync(exitCts.Token); }
+                catch (OperationCanceledException) { } // 10 с истекло — идём дальше
             }
-            // Дожидаемся завершения чтения stderr (чтобы не переполнился буфер)
             try { await stderrTask; } catch { }
             process.Dispose();
             _currentProcess = null;
 
-            // Если статус не был выставлен через result, ставим Finished
             if (Info.Status == SessionStatus.Active)
                 Info.Status = SessionStatus.Finished;
 
@@ -203,7 +223,7 @@ public class ClaudeSession : IAsyncDisposable
 
     private async Task ProcessLineAsync(string line)
     {
-        // Проблема 6: невалидный JSON от CLI не должен убивать весь turn
+        // Невалидный JSON от CLI не должен убивать весь turn
         JsonDocument doc;
         try { doc = JsonDocument.Parse(line); }
         catch (JsonException) { return; }
@@ -329,8 +349,7 @@ public class ClaudeSession : IAsyncDisposable
 
     private async Task HandlePermissionAsync(JsonElement root)
     {
-        // Проблема 8: используем request_id из CLI, а не генерируем новый Guid,
-        // чтобы control_response содержал правильный ID который ожидает claude
+        // Используем request_id из CLI — именно его ждёт claude в control_response
         var requestId = root.TryGetProperty("request_id", out var rid)
             ? rid.GetString() ?? Guid.NewGuid().ToString()
             : Guid.NewGuid().ToString();
@@ -345,15 +364,21 @@ public class ClaudeSession : IAsyncDisposable
 
         await _onMessage(new PermissionRequestMessage(requestId, toolName, toolInput));
 
-        // Проблема 1: при таймауте удаляем запись из словаря и отправляем 'deny',
-        // иначе TCS остаётся в _permissionWaiters навсегда — утечка памяти
         string behavior;
         try
         {
+            // Ждём ответа пользователя или таймаута 5 минут
             behavior = await tcs.Task.WaitAsync(TimeSpan.FromMinutes(5));
+        }
+        catch (TaskCanceledException)
+        {
+            // Interrupt() отменил TCS через TrySetCanceled() — процесс уже убит
+            _permissionWaiters.Remove(requestId);
+            return;
         }
         catch (TimeoutException)
         {
+            // Пользователь не ответил 5 минут — deny и продолжаем
             _permissionWaiters.Remove(requestId);
             behavior = "deny";
         }
@@ -414,12 +439,12 @@ public class ClaudeSession : IAsyncDisposable
         var sep = Path.DirectorySeparatorChar;
         if (fullPath.Contains(sep + ".git" + sep) ||
             fullPath.EndsWith(sep + ".git") ||
-            fullPath.Contains(sep + ".playwright") ||  // .playwright-mcp и любые playwright-директории
+            fullPath.Contains(sep + ".playwright") ||
             fullPath.Contains(sep + "obj" + sep) ||
             fullPath.Contains(sep + "node_modules" + sep) ||
             fileName.EndsWith("~") ||
             fileName.EndsWith(".tmp") ||
-            fileName.Contains(".tmp.")) return;      // dotnet: File.cs.tmp.12345.abc
+            fileName.Contains(".tmp.")) return;
 
         if (_debounce.TryRemove(fullPath, out var old)) old.Cancel();
         var cts = new CancellationTokenSource();
@@ -428,10 +453,9 @@ public class ClaudeSession : IAsyncDisposable
         Task.Delay(400, cts.Token).ContinueWith(t =>
         {
             if (t.IsCanceled) return;
-            _debounce.TryRemove(fullPath, out var __);
+            _debounce.TryRemove(fullPath, out CancellationTokenSource? _);
             try
             {
-                // Директории не обрабатываем
                 if (!File.Exists(fullPath) && !_fileCache.ContainsKey(fullPath)) return;
 
                 var rel = Path.GetRelativePath(_rootPath, fullPath).Replace('\\', '/');
@@ -439,7 +463,6 @@ public class ClaudeSession : IAsyncDisposable
                 _fileCache.TryGetValue(fullPath, out var oldContent);
                 _fileCache[fullPath] = newContent;
                 var (added, removed) = CountLineDiff(oldContent, newContent);
-                // Не шлём события без реальных изменений
                 if (added == 0 && removed == 0) return;
                 _ = _onMessage(new FileChangedMessage(rel, added, removed));
             }
@@ -461,7 +484,9 @@ public class ClaudeSession : IAsyncDisposable
         if (_currentProcess != null && !_currentProcess.HasExited)
         {
             _currentProcess.Kill();
-            await _currentProcess.WaitForExitAsync();
+            using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            try { await _currentProcess.WaitForExitAsync(exitCts.Token); }
+            catch (OperationCanceledException) { }
         }
         _currentProcess?.Dispose();
         _cts.Dispose();

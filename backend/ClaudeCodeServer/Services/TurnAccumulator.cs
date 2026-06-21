@@ -67,7 +67,18 @@ internal class TurnAccumulator
         await FlushAsync(svc);
     }
 
-    public List<StoredMessage> GetAll() => [.. _history, .. _currentTurn];
+    public List<StoredMessage> GetAll()
+    {
+        var result = new List<StoredMessage>(_history.Count + _currentTurn.Count + 2);
+        result.AddRange(_history);
+        result.AddRange(_currentTurn);
+        // Включаем буферизованный текст/думание (ещё не зафиксированный в _currentTurn)
+        if (_thinkingBuf.Length > 0)
+            result.Add(new StoredThinkingMessage(_thinkingBuf.ToString()));
+        if (_textBuf.Length > 0)
+            result.Add(new StoredTextMessage(_textBuf.ToString()));
+        return result;
+    }
 
     private void FlushBuffers()
     {

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { ChatItem, ServerMessage } from '../types';
-import { joinSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession } from '../lib/signalr';
+import { joinSession, joinProject, onMessage, onReconnected, sendMessage, respondPermission, interruptSession } from '../lib/signalr';
 import { api } from '../lib/api';
 
 // --- Модульный персистентный стор ---
@@ -50,6 +50,15 @@ function ensureHandler() {
         setState(sid, prev => ({ ...prev, isWaiting: false }));
       }
     }
+    // Переподключаем project-группы (для real-time статусов)
+    const projectIds = new Set<string>();
+    for (const [, s] of _store) {
+      if (s.projectId) projectIds.add(s.projectId);
+    }
+    for (const pid of projectIds) {
+      try { await joinProject(pid); } catch { }
+    }
+
     for (const [sid, s] of _store) {
       if (!s.isJoined) continue;
       try {
@@ -140,6 +149,31 @@ function ensureHandler() {
       case 'exited':
         setState(sid, prev => ({ ...prev, isWaiting: false }));
         break;
+      case 'status_changed': {
+        // Страховка: синхронизируем isWaiting при получении статуса через session-группу
+        if (msg.status === 'active' || msg.status === 'error') {
+          setState(sid, prev => ({ ...prev, isWaiting: false }));
+        }
+        // При переходе в active — перезагружаем историю:
+        // клиент мог пропустить text_delta/tool_use пока был оффлайн или не в группе
+        if (msg.status === 'active') {
+          const projectId = getState(sid).projectId;
+          if (projectId) {
+            api.sessions.getHistory(projectId, sid).then(raw => {
+              const serverItems = (raw as any[]).map((m: any): ChatItem => {
+                if (m.kind === 'thinking') return { ...m, expanded: false };
+                if (m.kind === 'error') return { ...m, canRetry: false };
+                return m as ChatItem;
+              });
+              setState(sid, prev => {
+                if (serverItems.length <= prev.items.length) return prev;
+                return { ...prev, items: serverItems };
+              });
+            }).catch(() => {});
+          }
+        }
+        break;
+      }
     }
   });
 }

@@ -214,9 +214,9 @@ export function WorkspacePage({ project, onBack }: Props) {
     <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
       {/* Мобайл: хедер чата с кнопкой назад и переключателем вкладок */}
       {isMobile && !openFile && (
-        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#EDE7DC', borderBottom: '1px solid #DDD4C4' }}>
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', background: '#EDE7DC', borderBottom: '1px solid #DDD4C4' }}>
           <button onClick={handleMobileBack} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, padding: '2px 4px', color: '#8A8070', flexShrink: 0 }}>‹</button>
-          <div style={{ flex: 1 }}>{TabSwitcher}</div>
+          <span style={{ fontWeight: 700, fontSize: 15, color: '#2A251F', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</span>
         </div>
       )}
       {openFile && !isMobile && (

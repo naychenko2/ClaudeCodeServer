@@ -12,6 +12,7 @@ interface SessionState {
   items: ChatItem[];
   isWaiting: boolean;
   isJoined: boolean;
+  projectId?: string;
 }
 
 const _store = new Map<string, SessionState>();
@@ -38,17 +39,39 @@ function ensureHandler() {
   if (_handlerReady) return;
   _handlerReady = true;
 
-  // После переподключения: сбрасываем зависшие isWaiting и перезаходим в группы
+  // После переподключения: сбрасываем зависшие isWaiting, перезаходим в группы,
+  // подтягиваем историю чтобы показать сообщения пропущенные во время разрыва
   onReconnected(async () => {
-    // При разрыве соединения незавершённые ходы уже не придут — снимаем ожидание
+    // Запоминаем какие сессии ждали ДО сброса, затем немедленно снимаем ожидание
+    const wasWaiting = new Set<string>();
     for (const [sid, s] of _store) {
       if (s.isWaiting) {
+        wasWaiting.add(sid);
         setState(sid, prev => ({ ...prev, isWaiting: false }));
       }
     }
     for (const [sid, s] of _store) {
       if (!s.isJoined) continue;
-      try { await joinSession(sid); } catch { /* пропускаем — не блокируем остальные */ }
+      try {
+        await joinSession(sid);
+        // Для сессий что ждали — подтягиваем историю (пропущенные сообщения)
+        if (wasWaiting.has(sid) && s.projectId) {
+          try {
+            const raw = await api.sessions.getHistory(s.projectId, sid);
+            const items = (raw as any[]).map((msg: any): ChatItem => {
+              if (msg.kind === 'thinking') return { ...msg, expanded: false };
+              if (msg.kind === 'error') return { ...msg, canRetry: false };
+              return msg as ChatItem;
+            });
+            if (items.length > 0) {
+              setState(sid, prev => ({
+                ...prev,
+                items: prev.items.length > items.length ? prev.items : items,
+              }));
+            }
+          } catch { /* история недоступна — не блокируем */ }
+        }
+      } catch { /* пропускаем — не блокируем остальные */ }
     }
   });
 
@@ -131,7 +154,7 @@ function ensureJoined(sid: string, projectId?: string) {
 
 async function joinAndLoadHistory(sid: string, projectId?: string) {
   await joinSession(sid);
-  setState(sid, prev => ({ ...prev, isJoined: true }));
+  setState(sid, prev => ({ ...prev, isJoined: true, projectId }));
   if (!projectId) return;
   try {
     const raw = await api.sessions.getHistory(projectId, sid);

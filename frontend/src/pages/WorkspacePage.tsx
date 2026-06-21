@@ -39,10 +39,10 @@ export function WorkspacePage({ project, onBack }: Props) {
   const isTablet = windowWidth >= 768 && windowWidth < 1100;
   const sidebarWidth = isTablet ? 288 : 300;
 
-  const handleSelectSession = (session: Session, firstMessage?: string) => {
+  const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
     setPendingMessage(firstMessage);
-    if (isMobile) setMobileView('chat');
+    if (isMobile && !autoSelect) setMobileView('chat');
     // если файл открыт в split-режиме — переключаемся в fullscreen
     if (openFile && !fileFullscreen) {
       setFileFullscreen(true);
@@ -57,10 +57,15 @@ export function WorkspacePage({ project, onBack }: Props) {
     setChatDockExpanded(true);
   };
 
-  // из чата → split-режим
+  // из чата → split-режим (на планшете/мобайле — fullscreen)
   const handleOpenFileFromChat = (filePath: string) => {
     setOpenFile(filePath);
-    setFileFullscreen(false);
+    if (isTablet) {
+      setFileFullscreen(true);
+      setChatDockExpanded(true);
+    } else {
+      setFileFullscreen(false);
+    }
   };
 
   const handleCloseFile = () => {
@@ -244,8 +249,8 @@ export function WorkspacePage({ project, onBack }: Props) {
         </div>
       )}
 
-      {/* Файл открыт, нормальный split: [Chat] | [splitter] | [FileViewer], 50/50 по умолчанию */}
-      {openFile && !fileFullscreen && (
+      {/* Файл открыт, split только на десктопе: [Chat] | [splitter] | [FileViewer] */}
+      {openFile && !fileFullscreen && !isTablet && (
         <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
           <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
             {activeSession
@@ -267,11 +272,11 @@ export function WorkspacePage({ project, onBack }: Props) {
         </div>
       )}
 
-      {/* Файл развёрнут fullscreen: FileViewer сверху + chat-dock снизу */}
-      {openFile && fileFullscreen && (
+      {/* Fullscreen: на десктопе — по флагу, на планшете — всегда */}
+      {openFile && (fileFullscreen || isTablet) && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <FileViewer project={project} filePath={openFile} onClose={handleCloseFile} isFullscreen onToggleFullscreen={() => setFileFullscreen(false)} />
+            <FileViewer project={project} filePath={openFile} onClose={handleCloseFile} isFullscreen onToggleFullscreen={isTablet ? undefined : () => setFileFullscreen(false)} />
           </div>
           {activeSession ? (
             <div style={{ flexShrink: 0, height: chatDockExpanded ? 300 : 56, overflow: 'hidden', borderTop: '1px solid #E0D8CC', transition: 'height 0.2s ease' }}>

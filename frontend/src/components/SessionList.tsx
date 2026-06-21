@@ -6,7 +6,7 @@ import { StatusBadge } from './StatusBadge';
 interface Props {
   project: Project;
   activeSession: Session | null;
-  onSelect: (session: Session, firstMessage?: string) => void;
+  onSelect: (session: Session, firstMessage?: string, autoSelect?: boolean) => void;
   isMobile?: boolean;
 }
 
@@ -31,11 +31,11 @@ export function SessionList({ project, activeSession, onSelect, isMobile = false
       if (!initializedRef.current) {
         initializedRef.current = true;
         if (list.length > 0) {
-          onSelect(list[0]);
+          onSelect(list[0], undefined, true);
         } else {
           const s = await api.sessions.create(project.id);
           setSessions([s]);
-          onSelect(s);
+          onSelect(s, undefined, true);
         }
       }
     };
@@ -55,7 +55,7 @@ export function SessionList({ project, activeSession, onSelect, isMobile = false
     setDeleteTarget(null);
     if (activeSession?.id === deleteTarget.id) {
       if (updated.length > 0) {
-        onSelect(updated[0]);
+        onSelect(updated[0], undefined, true);
       } else {
         const s = await api.sessions.create(project.id);
         setSessions([s]);

@@ -43,10 +43,10 @@ export function WorkspacePage({ project, onBack }: Props) {
     setActiveSession(session);
     setPendingMessage(firstMessage);
     if (isMobile && !autoSelect) setMobileView('chat');
-    // если файл открыт в split-режиме — переключаемся в fullscreen
-    if (openFile && !fileFullscreen) {
-      setFileFullscreen(true);
-      setChatDockExpanded(true);
+    if (!autoSelect) {
+      // явный выбор — закрываем файл, показываем чат во весь экран
+      setOpenFile(null);
+      setFileFullscreen(false);
     }
   };
 
@@ -112,11 +112,16 @@ export function WorkspacePage({ project, onBack }: Props) {
     setMobileView('sidebar');
   };
 
+  const handleTabSwitch = (tab: LeftTab) => {
+    setLeftTab(tab);
+    if (isMobile) setMobileView('sidebar');
+  };
+
   const TabSwitcher = (
     <div style={{ display: 'flex', gap: 3, background: '#E1D9CA', borderRadius: 10, padding: 3 }}>
       {(['sessions', 'files'] as LeftTab[]).map(tab => (
         <button key={tab}
-          onClick={() => setLeftTab(tab)}
+          onClick={() => handleTabSwitch(tab)}
           style={{
             flex: 1, textAlign: 'center', fontSize: 13, fontWeight: 600,
             padding: 8, cursor: 'pointer', border: 'none',
@@ -186,13 +191,11 @@ export function WorkspacePage({ project, onBack }: Props) {
 
   const ChatArea = (
     <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
-      {/* Мобайл: кнопка назад над чатом — только когда открыт чат (не файл) */}
+      {/* Мобайл: хедер чата с кнопкой назад и переключателем вкладок */}
       {isMobile && !openFile && (
-        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', background: '#EDE7DC', borderBottom: '1px solid #DDD4C4' }}>
-          <button onClick={handleMobileBack} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, padding: 2, color: '#8A8070' }}>‹</button>
-          <span style={{ fontWeight: 700, fontSize: 15, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#2A251F' }}>
-            {activeSession?.name ?? project.name}
-          </span>
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#EDE7DC', borderBottom: '1px solid #DDD4C4' }}>
+          <button onClick={handleMobileBack} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, padding: '2px 4px', color: '#8A8070', flexShrink: 0 }}>‹</button>
+          <div style={{ flex: 1 }}>{TabSwitcher}</div>
         </div>
       )}
       {openFile && !isMobile && (

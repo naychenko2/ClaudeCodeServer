@@ -30,12 +30,15 @@ export function SessionList({ project, activeSession, onSelect, isMobile = false
       setSessions(list);
       if (!initializedRef.current) {
         initializedRef.current = true;
-        if (list.length > 0) {
-          onSelect(list[0], undefined, true);
-        } else {
-          const s = await api.sessions.create(project.id);
-          setSessions([s]);
-          onSelect(s, undefined, true);
+        // авто-выбор только если сессия ещё не выбрана
+        if (!activeSession) {
+          if (list.length > 0) {
+            onSelect(list[0], undefined, true);
+          } else {
+            const s = await api.sessions.create(project.id);
+            setSessions([s]);
+            onSelect(s, undefined, true);
+          }
         }
       }
     };

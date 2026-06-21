@@ -3,9 +3,13 @@ using System.Text.Json.Serialization;
 namespace ClaudeCodeServer.Protocol;
 
 // Сообщения от сервера к клиенту (через SignalR)
-public abstract record ServerMessage(string Type);
+public abstract record ServerMessage(string Type)
+{
+    // Заполняется при броадкасте в SessionManager — позволяет клиенту роутить по сессии
+    public string SessionId { get; init; } = "";
+}
 
-public record SessionStartedMessage(string SessionId, bool IsResume, string Model, string Mode)
+public record SessionStartedMessage(string ClaudeSessionId, bool IsResume, string Model, string Mode)
     : ServerMessage("session_started");
 
 public record TextDeltaMessage(string Text)

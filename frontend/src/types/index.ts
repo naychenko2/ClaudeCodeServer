@@ -28,9 +28,9 @@ export interface FileEntry {
   isModified: boolean;
 }
 
-// WebSocket сообщения от сервера
-export type ServerMessage =
-  | { type: 'session_started'; sessionId: string; isResume: boolean; model: string; mode: string }
+// WebSocket сообщения от сервера — sessionId присутствует во всех типах
+export type ServerMessage = { sessionId: string } & (
+  | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string }
   | { type: 'text_delta'; text: string }
   | { type: 'thinking_delta'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
@@ -39,7 +39,8 @@ export type ServerMessage =
   | { type: 'file_changed'; path: string; added: number; removed: number }
   | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo }
   | { type: 'error'; text: string }
-  | { type: 'exited' };
+  | { type: 'exited' }
+);
 
 export interface UsageInfo {
   inputTokens: number;

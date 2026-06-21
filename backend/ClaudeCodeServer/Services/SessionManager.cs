@@ -73,5 +73,5 @@ public class SessionManager
     }
 
     private Task BroadcastAsync(string sessionId, ServerMessage msg) =>
-        _hub.Clients.Group(sessionId).SendAsync("message", msg);
+        _hub.Clients.Group(sessionId).SendAsync("message", msg with { SessionId = sessionId });
 }

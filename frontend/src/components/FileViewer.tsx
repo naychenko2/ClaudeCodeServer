@@ -46,6 +46,8 @@ interface Props {
   project: Project;
   filePath: string;
   onClose: () => void;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }
 
 interface FileContent {
@@ -74,7 +76,37 @@ const TrashIcon = () => (
   </svg>
 );
 
-export function FileViewer({ project, filePath, onClose }: Props) {
+const ExpandIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="15 3 21 3 21 9"/>
+    <polyline points="9 21 3 21 3 15"/>
+    <line x1="21" y1="3" x2="14" y2="10"/>
+    <line x1="3" y1="21" x2="10" y2="14"/>
+  </svg>
+);
+
+const SplitViewIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2"/>
+    <line x1="12" y1="3" x2="12" y2="21"/>
+  </svg>
+);
+
+const CloseIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+    <line x1="18" y1="6" x2="6" y2="18"/>
+    <line x1="6" y1="6" x2="18" y2="18"/>
+  </svg>
+);
+
+const EditIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+  </svg>
+);
+
+export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleFullscreen }: Props) {
   const [fileContent, setFileContent] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(true);
   const [diff, setDiff] = useState<string | null>(null);
@@ -155,6 +187,10 @@ export function FileViewer({ project, filePath, onClose }: Props) {
 
   const fileName = filePath.split('/').pop() ?? filePath;
   const isMarkdown = /\.(md|mdx)$/i.test(fileName);
+  const diffStats = diff ? {
+    added: diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
+    removed: diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length,
+  } : null;
   const fileSizeMb = fileContent?.fileSize != null ? (fileContent.fileSize / 1024 / 1024).toFixed(2) : null;
 
   const btnPrimary: React.CSSProperties = {
@@ -170,21 +206,31 @@ export function FileViewer({ project, filePath, onClose }: Props) {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#FBF8F2' }}>
       {/* Шапка */}
       <div style={{ padding: '10px 14px', borderBottom: '1px solid #E0D8CC', display: 'flex', alignItems: 'center', gap: 8, background: '#EDE7DC', flexShrink: 0 }}>
-        {/* Кнопка назад */}
-        <button
-          onClick={handleClose}
-          style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: '#756B5E', fontSize: 13, fontWeight: 600, padding: '4px 6px', borderRadius: 7, flexShrink: 0 }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 18l-6-6 6-6" />
-          </svg>
-          Файлы
-        </button>
+        {/* Кнопка назад — только в обычном режиме */}
+        {!isFullscreen && (
+          <button
+            onClick={handleClose}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: '#756B5E', fontSize: 13, fontWeight: 600, padding: '4px 6px', borderRadius: 7, flexShrink: 0 }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+            Файлы
+          </button>
+        )}
 
         {/* Имя файла */}
         <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#2A251F' }}>
           {fileName}
         </span>
+
+        {/* Статистика diff */}
+        {diffStats && (
+          <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+            <span style={{ fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: '#27AE60', fontWeight: 600 }}>+{diffStats.added}</span>
+            <span style={{ fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: '#C0392B', fontWeight: 600 }}>-{diffStats.removed}</span>
+          </span>
+        )}
 
         {/* Pill-переключатель Файл / Diff */}
         <div style={{ display: 'flex', background: '#D8CFBE', borderRadius: 8, padding: 3, gap: 2, flexShrink: 0 }}>
@@ -203,35 +249,63 @@ export function FileViewer({ project, filePath, onClose }: Props) {
         </div>
 
         {/* Кнопки действий */}
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
           {!editing && !fileContent?.isBinary && (
             <>
               {diff && (
                 <button onClick={handleRevert} style={btnSecondary}>Откатить</button>
               )}
-              <button
-                onClick={() => setDeleteConfirm(true)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9A8F7E', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 6 }}
-              >
-                <TrashIcon />
-              </button>
-              <button onClick={() => { setEditing(true); setTab('file'); }} style={btnPrimary}>Править</button>
+              {/* В fullscreen режиме — иконка карандаша, в обычном — текстовая кнопка */}
+              {isFullscreen ? (
+                <button
+                  onClick={() => { setEditing(true); setTab('file'); }}
+                  title="Редактировать"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#756B5E', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 6 }}
+                >
+                  <EditIcon />
+                </button>
+              ) : (
+                <button onClick={() => { setEditing(true); setTab('file'); }} style={btnPrimary}>Править</button>
+              )}
             </>
           )}
-          {!editing && fileContent?.isBinary && (
-            <button
-              onClick={() => setDeleteConfirm(true)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9A8F7E', display: 'flex', alignItems: 'center', padding: 4 }}
-            >
-              <TrashIcon />
-            </button>
-          )}
+          {!editing && fileContent?.isBinary && null}
           {editing && (
             <>
               <button onClick={() => { setEditing(false); setEditContent(content); }} style={btnSecondary}>Отмена</button>
               <button onClick={handleSave} style={btnPrimary}>Сохранить</button>
             </>
           )}
+
+          {/* Кнопка expand / split-view */}
+          {onToggleFullscreen && !editing && (
+            <button
+              onClick={onToggleFullscreen}
+              title={isFullscreen ? 'Режим разделения' : 'Развернуть на весь экран'}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#756B5E', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 6 }}
+            >
+              {isFullscreen ? <SplitViewIcon /> : <ExpandIcon />}
+            </button>
+          )}
+
+          {/* Корзина */}
+          {!editing && (
+            <button
+              onClick={() => setDeleteConfirm(true)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9A8F7E', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 6 }}
+            >
+              <TrashIcon />
+            </button>
+          )}
+
+          {/* Закрыть */}
+          <button
+            onClick={handleClose}
+            title="Закрыть"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9A8F7E', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 6 }}
+          >
+            <CloseIcon />
+          </button>
         </div>
       </div>
 

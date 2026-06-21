@@ -27,6 +27,8 @@ export function WorkspacePage({ project, onBack }: Props) {
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
   const [openFile, setOpenFile] = useState<string | null>(null);
+  const [fileFullscreen, setFileFullscreen] = useState(false);
+  const [chatDockExpanded, setChatDockExpanded] = useState(true);
   // мобайл: показываем либо sidebar, либо chat
   const [mobileView, setMobileView] = useState<'sidebar' | 'chat'>('sidebar');
 
@@ -39,6 +41,16 @@ export function WorkspacePage({ project, onBack }: Props) {
     setActiveSession(session);
     setPendingMessage(firstMessage);
     if (isMobile) setMobileView('chat');
+  };
+
+  const handleCloseFile = () => {
+    setOpenFile(null);
+    setFileFullscreen(false);
+  };
+
+  const handleEnterFullscreen = () => {
+    setFileFullscreen(true);
+    setChatDockExpanded(true);
   };
 
   const handleMobileBack = () => {
@@ -168,30 +180,51 @@ export function WorkspacePage({ project, onBack }: Props) {
     );
   }
 
+  const NoSession = (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>
+      Выберите или создайте сессию
+    </div>
+  );
+
   return (
     <div style={{ display: 'flex', height: '100vh', background: '#F4F0E8', fontFamily: "'Hanken Grotesk', sans-serif", overflow: 'hidden' }}>
       {Sidebar}
-      {openFile ? (
+
+      {/* Нет открытого файла — только чат */}
+      {!openFile && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          {activeSession
+            ? <ChatPanel session={activeSession} project={project} onOpenFile={setOpenFile} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} />
+            : NoSession}
+        </div>
+      )}
+
+      {/* Файл открыт, нормальный split: [Chat 420px] | [FileViewer flex:1] */}
+      {openFile && !fileFullscreen && (
         <>
-          <div style={{ flex: 1, borderRight: '1px solid #D4CFC4', overflow: 'hidden' }}>
-            <FileViewer project={project} filePath={openFile} onClose={() => setOpenFile(null)} />
+          <div style={{ flex: 'none', width: 420, borderRight: '1px solid #D4CFC4', overflow: 'hidden' }}>
+            {activeSession
+              ? <ChatPanel session={activeSession} project={project} onOpenFile={setOpenFile} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} />
+              : NoSession}
           </div>
-          <div style={{ flex: 'none', width: 420, overflow: 'hidden' }}>
-            {activeSession ? (
-              <ChatPanel session={activeSession} project={project} onOpenFile={setOpenFile} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} />
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>
-                Выберите или создайте сессию
-              </div>
-            )}
+          <div style={{ flex: 1, overflow: 'hidden' }}>
+            <FileViewer project={project} filePath={openFile} onClose={handleCloseFile} onToggleFullscreen={handleEnterFullscreen} />
           </div>
         </>
-      ) : (
-        <div style={{ flex: 1, overflow: 'hidden' }}>
+      )}
+
+      {/* Файл развёрнут fullscreen: FileViewer сверху + chat-dock снизу */}
+      {openFile && fileFullscreen && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ flex: 1, overflow: 'hidden' }}>
+            <FileViewer project={project} filePath={openFile} onClose={handleCloseFile} isFullscreen onToggleFullscreen={() => setFileFullscreen(false)} />
+          </div>
           {activeSession ? (
-            <ChatPanel session={activeSession} project={project} onOpenFile={setOpenFile} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} />
+            <div style={{ flexShrink: 0, height: chatDockExpanded ? 300 : 56, overflow: 'hidden', borderTop: '1px solid #E0D8CC', transition: 'height 0.2s ease' }}>
+              <ChatPanel session={activeSession} project={project} onOpenFile={setOpenFile} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} dockMode={chatDockExpanded ? 'expanded' : 'collapsed'} onToggleDock={() => setChatDockExpanded(p => !p)} />
+            </div>
           ) : (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>
+            <div style={{ flexShrink: 0, height: 56, borderTop: '1px solid #E0D8CC', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8A8070', fontSize: 13, background: '#EDE7DC' }}>
               Выберите или создайте сессию
             </div>
           )}

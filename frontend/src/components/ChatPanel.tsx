@@ -10,6 +10,8 @@ interface Props {
   onOpenFile: (path: string) => void;
   pendingMessage?: string;
   onPendingMessageSent?: () => void;
+  dockMode?: 'expanded' | 'collapsed';
+  onToggleDock?: () => void;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -109,11 +111,12 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, dockMode, onToggleDock }: Props) {
   const { items, isWaiting, isJoined, send, allowPermission, denyPermission, interrupt, toggleThinking } = useSession(session.id);
   const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [showAttachPicker, setShowAttachPicker] = useState(false);
+  const [miniText, setMiniText] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const pendingRef = useRef<string | undefined>(pendingMessage);
   pendingRef.current = pendingMessage;
@@ -142,6 +145,142 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const handleHint = (hint: string) => {
     send(hint, []);
   };
+
+  const handleRetry = () => {
+    const lastUser = [...items].reverse().find(it => it.kind === 'user_message');
+    if (lastUser && lastUser.kind === 'user_message') send(lastUser.text, lastUser.attachedPaths ?? []);
+  };
+
+  // Dock: свёрнутая полоска
+  if (dockMode === 'collapsed') {
+    const lastPreview = (() => {
+      for (let i = items.length - 1; i >= 0; i--) {
+        const it = items[i];
+        if (it.kind === 'text') return it.text;
+        if (it.kind === 'user_message') return it.text;
+      }
+      return '';
+    })();
+
+    const handleMiniSend = () => {
+      if (!miniText.trim() || isWaiting) return;
+      send(miniText, []);
+      setMiniText('');
+    };
+
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', height: 56, background: '#EDE7DC', boxSizing: 'border-box' }}>
+        <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#D97757', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#F4F0E8' }} />
+        </div>
+        <span style={{ flex: 1, fontSize: 13, color: '#5A5040', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {lastPreview || (session.name ?? 'Новая сессия')}
+        </span>
+        <input
+          value={miniText}
+          onChange={e => setMiniText(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleMiniSend(); } }}
+          placeholder="Ответить…"
+          style={{ width: 180, padding: '6px 10px', border: '1px solid #D4CFC4', borderRadius: 8, fontSize: 13, background: '#F4F0E8', outline: 'none', fontFamily: 'inherit', color: '#2A251F' }}
+        />
+        <button
+          onClick={handleMiniSend}
+          disabled={!miniText.trim() || isWaiting}
+          style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: miniText.trim() && !isWaiting ? 'pointer' : 'default', background: miniText.trim() && !isWaiting ? '#D97757' : '#DDD4C4', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5" strokeLinecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+        <button
+          onClick={onToggleDock}
+          title="Развернуть чат"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#756B5E', padding: 4, borderRadius: 6, display: 'flex', alignItems: 'center', flexShrink: 0 }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 15l-6-6-6 6"/></svg>
+        </button>
+      </div>
+    );
+  }
+
+  // Dock: развёрнутая панель
+  if (dockMode === 'expanded') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#F4F0E8' }}>
+        {/* Компактный заголовок */}
+        <div style={{ padding: '9px 16px', borderBottom: '1px solid #E7E0D2', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, background: '#EDE7DC' }}>
+          <div style={{ width: 24, height: 24, borderRadius: '50%', background: '#D97757', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ width: 9, height: 9, borderRadius: '50%', background: '#F4F0E8' }} />
+          </div>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#2A251F', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {session.name ?? 'Новая сессия'}
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#5E8B4E', flexShrink: 0 }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#5E8B4E' }} />
+            <span>активна</span>
+          </div>
+          {isWaiting && (
+            <button onClick={interrupt} style={{ fontSize: 12, color: '#B4452F', background: '#FFF0EE', border: '1px solid #F5C5BC', borderRadius: 8, padding: '3px 8px', cursor: 'pointer', fontWeight: 600, flexShrink: 0 }}>
+              Стоп
+            </button>
+          )}
+          <button
+            onClick={onToggleDock}
+            title="Свернуть чат"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#756B5E', padding: 4, borderRadius: 6, display: 'flex', alignItems: 'center', flexShrink: 0 }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+        </div>
+
+        {/* Сообщения */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {items.map((item, i) => (
+              <ChatItemView
+                key={i}
+                item={item}
+                index={i}
+                onToggleThinking={toggleThinking}
+                onAllowPermission={allowPermission}
+                onDenyPermission={denyPermission}
+                onOpenFile={onOpenFile}
+                onRevert={path => api.files.revert(project.id, path)}
+                onRetry={handleRetry}
+              />
+            ))}
+            {isWaiting && !items.some(it => it.kind === 'permission_request' && !it.resolved) && (
+              <div style={{ fontSize: 12, color: '#8A8070', display: 'flex', gap: 4 }}>
+                <span className="dots">ожидаю ответа</span>
+                <span>…</span>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+        </div>
+
+        {/* Composer */}
+        <div style={{ padding: '10px 16px 14px', borderTop: '1px solid #E7E0D2', flexShrink: 0 }}>
+          <Composer
+            onSend={handleSend}
+            onStop={interrupt}
+            onAttach={() => setShowAttachPicker(true)}
+            isGenerating={isWaiting}
+            mode={mode}
+            onModeChange={setMode}
+            attachments={attachedFiles}
+            onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
+          />
+        </div>
+
+        {showAttachPicker && (
+          <AttachPicker
+            projectId={project.id}
+            onPick={path => setAttachedFiles(prev => prev.includes(path) ? prev : [...prev, path])}
+            onClose={() => setShowAttachPicker(false)}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -240,10 +379,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onDenyPermission={denyPermission}
             onOpenFile={onOpenFile}
             onRevert={path => api.files.revert(project.id, path)}
-            onRetry={() => {
-              const lastUser = [...items].reverse().find(it => it.kind === 'user_message');
-              if (lastUser && lastUser.kind === 'user_message') send(lastUser.text, lastUser.attachedPaths ?? []);
-            }}
+            onRetry={handleRetry}
           />
         ))}
 

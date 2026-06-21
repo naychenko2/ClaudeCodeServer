@@ -52,7 +52,7 @@ public class FilesController(FileService files, ProjectManager projects) : Contr
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (FileNotFoundException) { return NotFound(); }
-        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
     [HttpPut("content")]
@@ -60,7 +60,7 @@ public class FilesController(FileService files, ProjectManager projects) : Contr
     {
         try { files.WriteFile(GetRoot(projectId), path, req.Content); return Ok(); }
         catch (KeyNotFoundException) { return NotFound(); }
-        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
     [HttpGet("diff")]
@@ -90,7 +90,7 @@ public class FilesController(FileService files, ProjectManager projects) : Contr
     {
         try { files.CreateFile(GetRoot(projectId), req.Path); return Ok(); }
         catch (KeyNotFoundException) { return NotFound(); }
-        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
     [HttpPost("mkdir")]
@@ -98,7 +98,7 @@ public class FilesController(FileService files, ProjectManager projects) : Contr
     {
         try { files.CreateDirectory(GetRoot(projectId), req.Path); return Ok(); }
         catch (KeyNotFoundException) { return NotFound(); }
-        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
     [HttpPost("rename")]
@@ -106,7 +106,7 @@ public class FilesController(FileService files, ProjectManager projects) : Contr
     {
         try { files.Rename(GetRoot(projectId), req.OldPath, req.NewPath); return Ok(); }
         catch (KeyNotFoundException) { return NotFound(); }
-        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
     [HttpDelete]
@@ -115,7 +115,7 @@ public class FilesController(FileService files, ProjectManager projects) : Contr
         try { files.Delete(GetRoot(projectId), path); return NoContent(); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (FileNotFoundException) { return NotFound(); }
-        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 }
 

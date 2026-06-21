@@ -22,6 +22,7 @@ import type { Project } from '../types';
 import { api } from '../lib/api';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
+import { MarkdownViewer } from './MarkdownViewer';
 
 SyntaxHighlighter.registerLanguage('tsx', tsx);
 SyntaxHighlighter.registerLanguage('typescript', typescript);
@@ -153,6 +154,7 @@ export function FileViewer({ project, filePath, onClose }: Props) {
   };
 
   const fileName = filePath.split('/').pop() ?? filePath;
+  const isMarkdown = /\.(md|mdx)$/i.test(fileName);
   const fileSizeMb = fileContent?.fileSize != null ? (fileContent.fileSize / 1024 / 1024).toFixed(2) : null;
 
   const btnPrimary: React.CSSProperties = {
@@ -273,15 +275,17 @@ export function FileViewer({ project, filePath, onClose }: Props) {
               editing
                 ? <textarea value={editContent} onChange={e => setEditContent(e.target.value)}
                     style={{ width: '100%', flex: 1, border: 'none', outline: 'none', resize: 'none', fontFamily: "'JetBrains Mono', monospace", fontSize: 13, lineHeight: 1.6, boxSizing: 'border-box', background: 'transparent' }} />
-                : <SyntaxHighlighter
-                    language={getLanguage(filePath)}
-                    style={oneLight}
-                    customStyle={{ margin: 0, padding: 0, background: 'transparent', fontSize: 13, lineHeight: '1.6', fontFamily: "'JetBrains Mono', monospace" }}
-                    codeTagProps={{ style: { fontFamily: "'JetBrains Mono', monospace" } }}
-                    wrapLongLines
-                  >
-                    {content}
-                  </SyntaxHighlighter>
+                : isMarkdown
+                  ? <MarkdownViewer content={content} />
+                  : <SyntaxHighlighter
+                      language={getLanguage(filePath)}
+                      style={oneLight}
+                      customStyle={{ margin: 0, padding: 0, background: 'transparent', fontSize: 13, lineHeight: '1.6', fontFamily: "'JetBrains Mono', monospace" }}
+                      codeTagProps={{ style: { fontFamily: "'JetBrains Mono', monospace" } }}
+                      wrapLongLines
+                    >
+                      {content}
+                    </SyntaxHighlighter>
             )}
           </>
         )}

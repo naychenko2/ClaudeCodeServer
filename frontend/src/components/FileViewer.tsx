@@ -1,0 +1,289 @@
+import { useEffect, useState } from 'react';
+import type { Project } from '../types';
+import { api } from '../lib/api';
+import { EmptyState } from './EmptyState';
+
+interface Props {
+  project: Project;
+  filePath: string;
+  onClose: () => void;
+}
+
+interface FileContent {
+  content: string | null;
+  isBinary: boolean;
+  isImage: boolean;
+  mimeType?: string;
+  base64?: string;
+  fileSize?: number;
+}
+
+type ViewTab = 'file' | 'diff';
+
+const FileSvg = () => (
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+  </svg>
+);
+
+const TrashIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14H6L5 6" />
+    <path d="M10 11v6M14 11v6M9 6V4h6v2" />
+  </svg>
+);
+
+export function FileViewer({ project, filePath, onClose }: Props) {
+  const [fileContent, setFileContent] = useState<FileContent | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [diff, setDiff] = useState<string | null>(null);
+  const [tab, setTab] = useState<ViewTab>('file');
+  const [editing, setEditing] = useState(false);
+  const [editContent, setEditContent] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [unsavedConfirm, setUnsavedConfirm] = useState(false);
+
+  const content = fileContent?.content ?? '';
+  const hasUnsavedChanges = editing && editContent !== content;
+
+  useEffect(() => {
+    setEditing(false);
+    setTab('file');
+    setLoading(true);
+    setFileContent(null);
+    api.files.getContent(project.id, filePath).then(r => {
+      setFileContent(r);
+      setEditContent(r.content ?? '');
+    }).finally(() => setLoading(false));
+    api.files.getDiff(project.id, filePath).then(r => setDiff(r.diff));
+  }, [project.id, filePath]);
+
+  const handleSave = async () => {
+    await api.files.saveContent(project.id, filePath, editContent);
+    setFileContent(prev => prev ? { ...prev, content: editContent } : prev);
+    setEditing(false);
+    const r = await api.files.getDiff(project.id, filePath);
+    setDiff(r.diff);
+  };
+
+  const handleDelete = async () => {
+    await api.files.delete(project.id, filePath);
+    onClose();
+  };
+
+  const handleRevert = async () => {
+    await api.files.revert(project.id, filePath);
+    const r = await api.files.getContent(project.id, filePath);
+    setFileContent(r);
+    setEditContent(r.content ?? '');
+    setDiff(null);
+  };
+
+  const handleClose = () => {
+    if (hasUnsavedChanges) {
+      setUnsavedConfirm(true);
+    } else {
+      onClose();
+    }
+  };
+
+  const handleCloseWithoutSave = () => {
+    setUnsavedConfirm(false);
+    onClose();
+  };
+
+  const handleSaveAndClose = async () => {
+    setUnsavedConfirm(false);
+    await handleSave();
+    onClose();
+  };
+
+  const handleDownload = () => {
+    if (!fileContent?.base64) return;
+    const byteStr = atob(fileContent.base64);
+    const bytes = new Uint8Array(byteStr.length);
+    for (let i = 0; i < byteStr.length; i++) bytes[i] = byteStr.charCodeAt(i);
+    const blob = new Blob([bytes], { type: fileContent.mimeType ?? 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const fileName = filePath.split('/').pop() ?? filePath;
+  const fileSizeMb = fileContent?.fileSize != null ? (fileContent.fileSize / 1024 / 1024).toFixed(2) : null;
+
+  const btnPrimary: React.CSSProperties = {
+    border: 'none', background: '#D97757', color: '#FBF8F2',
+    borderRadius: 8, padding: '5px 13px', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+  };
+  const btnSecondary: React.CSSProperties = {
+    background: 'none', border: '1px solid #D4CFC4', color: '#5C5246',
+    borderRadius: 8, padding: '5px 11px', cursor: 'pointer', fontSize: 13,
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#FBF8F2' }}>
+      {/* Шапка */}
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid #E0D8CC', display: 'flex', alignItems: 'center', gap: 8, background: '#EDE7DC', flexShrink: 0 }}>
+        {/* Кнопка назад */}
+        <button
+          onClick={handleClose}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: '#756B5E', fontSize: 13, fontWeight: 600, padding: '4px 6px', borderRadius: 7, flexShrink: 0 }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+          Файлы
+        </button>
+
+        {/* Имя файла */}
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#2A251F' }}>
+          {fileName}
+        </span>
+
+        {/* Pill-переключатель Файл / Diff */}
+        <div style={{ display: 'flex', background: '#D8CFBE', borderRadius: 8, padding: 3, gap: 2, flexShrink: 0 }}>
+          {(['file', 'diff'] as ViewTab[]).map(t => (
+            <button key={t} onClick={() => setTab(t)}
+              style={{
+                padding: '3px 11px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                fontSize: 12.5, fontWeight: 600, transition: 'background 0.15s, color 0.15s',
+                background: tab === t ? '#FFFFFF' : 'transparent',
+                color: tab === t ? '#2A251F' : '#756B5E',
+                boxShadow: tab === t ? '0 1px 4px rgba(42,37,31,0.12)' : 'none',
+              }}>
+              {t === 'file' ? 'Файл' : 'Diff'}
+            </button>
+          ))}
+        </div>
+
+        {/* Кнопки действий */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+          {!editing && !fileContent?.isBinary && (
+            <>
+              {diff && (
+                <button onClick={handleRevert} style={btnSecondary}>Откатить</button>
+              )}
+              <button
+                onClick={() => setDeleteConfirm(true)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9A8F7E', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 6 }}
+              >
+                <TrashIcon />
+              </button>
+              <button onClick={() => { setEditing(true); setTab('file'); }} style={btnPrimary}>Править</button>
+            </>
+          )}
+          {!editing && fileContent?.isBinary && (
+            <button
+              onClick={() => setDeleteConfirm(true)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9A8F7E', display: 'flex', alignItems: 'center', padding: 4 }}
+            >
+              <TrashIcon />
+            </button>
+          )}
+          {editing && (
+            <>
+              <button onClick={() => { setEditing(false); setEditContent(content); }} style={btnSecondary}>Отмена</button>
+              <button onClick={handleSave} style={btnPrimary}>Сохранить</button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Содержимое */}
+      <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'flex', flexDirection: 'column' }}>
+        {loading && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 14 }}>
+            <div style={{ width: 36, height: 36, borderRadius: '50%', border: '3px solid #E0D7C8', borderTopColor: '#D97757', animation: 'spin 0.8s linear infinite' }} />
+            <div style={{ fontSize: 13, color: '#9A8F7E' }}>Загружаю файл…</div>
+          </div>
+        )}
+
+        {!loading && tab === 'file' && (
+          <>
+            {fileContent?.isImage && fileContent.base64 && (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 16 }}>
+                <img
+                  src={`data:${fileContent.mimeType};base64,${fileContent.base64}`}
+                  style={{ maxWidth: '100%', borderRadius: 8 }}
+                  alt={fileName}
+                />
+              </div>
+            )}
+
+            {fileContent?.isBinary && !fileContent.isImage && (
+              <EmptyState
+                icon={<FileSvg />}
+                title="Нельзя показать"
+                subtitle={`${fileName} — бинарный файл${fileSizeMb ? `, ${fileSizeMb} МБ` : ''}`}
+                action={
+                  fileContent.base64 ? (
+                    <button onClick={handleDownload} style={{ ...btnPrimary, padding: '8px 16px' }}>
+                      Скачать
+                    </button>
+                  ) : undefined
+                }
+              />
+            )}
+
+            {!fileContent?.isBinary && !fileContent?.isImage && (
+              editing
+                ? <textarea value={editContent} onChange={e => setEditContent(e.target.value)}
+                    style={{ width: '100%', flex: 1, border: 'none', outline: 'none', resize: 'none', fontFamily: "'JetBrains Mono', monospace", fontSize: 13, lineHeight: 1.6, boxSizing: 'border-box', background: 'transparent' }} />
+                : <pre style={{ margin: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: '#2A251F' }}>
+                    {content}
+                  </pre>
+            )}
+          </>
+        )}
+
+        {!loading && tab === 'diff' && (
+          diff
+            ? <pre style={{ margin: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                {diff.split('\n').map((line, i) => (
+                  <div key={i} style={{
+                    background: line.startsWith('+') ? '#E8F5E9' : line.startsWith('-') ? '#FFEBEE' : 'transparent',
+                    color: line.startsWith('+') ? '#1B5E20' : line.startsWith('-') ? '#B71C1C' : '#555',
+                    padding: '0 4px',
+                  }}>{line}</div>
+                ))}
+              </pre>
+            : <div style={{ color: '#8A8070', fontSize: 13, padding: 16 }}>Файл не изменён</div>
+        )}
+      </div>
+
+      {/* Диалог удаления */}
+      {deleteConfirm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div style={{ background: '#F4F0E8', borderRadius: 20, padding: 24, width: 340, boxShadow: '0 24px 60px rgba(23,19,15,0.4)' }}>
+            <h3 style={{ fontFamily: "'PT Serif', serif", fontWeight: 500, fontSize: 20, margin: '0 0 8px', letterSpacing: '-0.01em' }}>Удалить «{fileName}»?</h3>
+            <p style={{ fontSize: 13, color: '#756B5E', marginBottom: 20 }}>Это действие нельзя отменить.</p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setDeleteConfirm(false)} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: '#EDE7DC', color: '#5C5246', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Отмена</button>
+              <button onClick={handleDelete} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: '#C0392B', color: '#FFF', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Удалить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Диалог несохранённых изменений */}
+      {unsavedConfirm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div style={{ background: '#F4F0E8', borderRadius: 20, padding: 24, width: 360, boxShadow: '0 24px 60px rgba(23,19,15,0.4)' }}>
+            <h3 style={{ fontFamily: "'PT Serif', serif", fontWeight: 500, fontSize: 20, margin: '0 0 8px', letterSpacing: '-0.01em' }}>Сохранить изменения?</h3>
+            <p style={{ fontSize: 13, color: '#756B5E', marginBottom: 20 }}>В файле «{fileName}» есть несохранённые правки.</p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={handleCloseWithoutSave} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: '#EDE7DC', color: '#5C5246', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Не сохранять</button>
+              <button onClick={handleSaveAndClose} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: '#D97757', color: '#FBF8F2', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Сохранить</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

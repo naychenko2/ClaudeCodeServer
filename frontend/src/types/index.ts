@@ -1,0 +1,66 @@
+export interface Project {
+  id: string;
+  name: string;
+  rootPath: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Session {
+  id: string;
+  projectId: string;
+  claudeSessionId?: string;
+  mode: 'auto' | 'plan' | 'ask';
+  status: 'starting' | 'active' | 'waiting' | 'finished' | 'error';
+  lastMessage?: string;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+  name?: string;
+}
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size?: number;
+  modified: string;
+  isModified: boolean;
+}
+
+// WebSocket сообщения от сервера
+export type ServerMessage =
+  | { type: 'session_started'; sessionId: string; isResume: boolean; model: string; mode: string }
+  | { type: 'text_delta'; text: string }
+  | { type: 'thinking_delta'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean }
+  | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
+  | { type: 'file_changed'; path: string; added: number; removed: number }
+  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo }
+  | { type: 'error'; text: string }
+  | { type: 'exited' };
+
+export interface UsageInfo {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
+
+// Элементы чата
+export type ChatItem =
+  | { kind: 'user_message'; text: string; attachedPaths?: string[] }
+  | { kind: 'session_started'; model: string; mode: string }
+  | { kind: 'text'; text: string }
+  | { kind: 'thinking'; text: string; expanded: boolean }
+  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean }
+  | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean }
+  | { kind: 'file_changed'; path: string; added: number; removed: number }
+  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number }
+  | { kind: 'error'; text: string; canRetry?: boolean };
+
+export interface AuthState {
+  serverUrl: string;
+  apiKey: string;
+}

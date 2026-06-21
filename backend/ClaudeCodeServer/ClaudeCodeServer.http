@@ -1,0 +1,6 @@
+@ClaudeCodeServer_HostAddress = http://localhost:5148
+
+GET {{ClaudeCodeServer_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

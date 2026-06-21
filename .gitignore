@@ -1,0 +1,22 @@
+# .NET
+backend/**/bin/
+backend/**/obj/
+*.user
+.vs/
+data/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Playwright MCP
+.playwright-mcp/
+
+# Среда
+.env
+.env.local
+*.env
+
+# OS
+Thumbs.db
+.DS_Store

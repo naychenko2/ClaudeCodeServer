@@ -1,0 +1,76 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using ClaudeCodeServer.Models;
+
+namespace ClaudeCodeServer.Services;
+
+public class ProjectManager
+{
+    private readonly ConcurrentDictionary<string, Project> _projects = new();
+    private readonly string _storePath;
+
+    public ProjectManager(IConfiguration config)
+    {
+        _storePath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
+        Load();
+    }
+
+    public IReadOnlyCollection<Project> GetAll() => _projects.Values.ToList();
+
+    public Project? GetById(string id) => _projects.GetValueOrDefault(id);
+
+    public Project Create(string name, string rootPath)
+    {
+        if (!Directory.Exists(rootPath))
+            throw new DirectoryNotFoundException($"Папка не найдена: {rootPath}");
+
+        var project = new Project { Name = name, RootPath = rootPath };
+        _projects[project.Id] = project;
+        Save();
+        return project;
+    }
+
+    public Project Update(string id, string? name, string? rootPath)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+
+        if (name is not null) project.Name = name;
+        if (rootPath is not null)
+        {
+            if (!Directory.Exists(rootPath))
+                throw new DirectoryNotFoundException($"Папка не найдена: {rootPath}");
+            project.RootPath = rootPath;
+        }
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
+    public bool Delete(string id)
+    {
+        var removed = _projects.TryRemove(id, out _);
+        if (removed) Save();
+        return removed;
+    }
+
+    private void Load()
+    {
+        if (!File.Exists(_storePath)) return;
+        try
+        {
+            var json = File.ReadAllText(_storePath);
+            var list = JsonSerializer.Deserialize<List<Project>>(json);
+            if (list is null) return;
+            foreach (var p in list)
+                _projects[p.Id] = p;
+        }
+        catch { /* первый запуск или повреждённый файл */ }
+    }
+
+    private void Save()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
+        File.WriteAllText(_storePath, JsonSerializer.Serialize(_projects.Values.ToList()));
+    }
+}

@@ -32,3 +32,5 @@ app.MapControllers();
 app.MapHub<SessionHub>("/hubs/session");
 
 app.Run();
+
+public partial class Program { }

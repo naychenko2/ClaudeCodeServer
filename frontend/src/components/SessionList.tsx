@@ -79,7 +79,7 @@ export function SessionList({ project, activeSession, onSelect, isMobile = false
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
           }}
         >
-          + Новая сессия
+          + Новый чат
         </button>
       </div>
 
@@ -110,7 +110,7 @@ export function SessionList({ project, activeSession, onSelect, isMobile = false
                   <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#C9933A', flexShrink: 0 }} />
                 )}
                 <span style={{ fontSize: 13.5, fontWeight: 600, color: '#2A251F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {s.name ?? `Сессия #${index + 1}`}
+                  {s.name ?? `Чат #${index + 1}`}
                 </span>
                 {(s.status === 'starting' || s.status === 'finished' || s.status === 'error') && (
                   <StatusBadge status={s.status} />
@@ -147,7 +147,7 @@ export function SessionList({ project, activeSession, onSelect, isMobile = false
       {deleteTarget && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div style={{ background: '#F4F0E8', borderRadius: 20, padding: 24, width: 340, boxShadow: '0 24px 60px rgba(23,19,15,0.4)' }}>
-            <h3 style={{ fontFamily: "'PT Serif', serif", fontWeight: 500, fontSize: 20, margin: '0 0 8px', letterSpacing: '-0.01em' }}>Удалить сессию?</h3>
+            <h3 style={{ fontFamily: "'PT Serif', serif", fontWeight: 500, fontSize: 20, margin: '0 0 8px', letterSpacing: '-0.01em' }}>Удалить чат?</h3>
             <p style={{ fontSize: 13, color: '#756B5E', marginBottom: 20 }}>Это действие нельзя отменить.</p>
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => setDeleteTarget(null)} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: '#EDE7DC', color: '#5C5246', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Отмена</button>

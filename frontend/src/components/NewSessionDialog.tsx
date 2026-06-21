@@ -52,7 +52,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
       onCreated(session, firstMessage.trim() || undefined);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка создания сессии');
+      setError(err instanceof Error ? err.message : 'Ошибка создания чата');
     } finally {
       setLoading(false);
     }
@@ -109,7 +109,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
             letterSpacing: '-0.01em',
           }}
         >
-          Новая сессия
+          Новый чат
         </h2>
 
         {/* Поле «Название» */}

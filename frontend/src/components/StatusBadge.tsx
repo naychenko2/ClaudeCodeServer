@@ -6,7 +6,7 @@ const STATUS_CONFIG: Record<SessionStatus, { label: string; dot: string; text: s
   starting: { label: 'запуск',       dot: C.info,    text: C.info,        bg: C.infoBg },
   active:   { label: 'активна',      dot: C.success, text: C.successText, bg: C.successBg },
   waiting:  { label: 'ждёт ввода',   dot: C.warning, text: C.warningText, bg: C.warningBg },
-  finished: { label: 'завершена',    dot: '#B0A697', text: C.textMuted,   bg: C.bgPanel },
+  finished: { label: 'готово',        dot: '#B0A697', text: C.textMuted,   bg: C.bgPanel },
   error:    { label: 'ошибка',       dot: C.danger,  text: C.dangerText,  bg: C.dangerBg },
 }
 

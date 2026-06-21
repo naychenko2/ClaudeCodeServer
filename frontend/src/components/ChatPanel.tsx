@@ -255,7 +255,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#F4F0E8' }} />
         </div>
         <span style={{ flex: 1, fontSize: 13, color: '#5A5040', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {lastPreview || (session.name ?? 'Новая сессия')}
+          {lastPreview || (session.name ?? 'Новый чат')}
         </span>
         <input
           value={miniText}
@@ -292,7 +292,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             <div style={{ width: 9, height: 9, borderRadius: '50%', background: '#F4F0E8' }} />
           </div>
           <span style={{ fontSize: 13, fontWeight: 600, color: '#2A251F', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {session.name ?? 'Новая сессия'}
+            {session.name ?? 'Новый чат'}
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#5E8B4E', flexShrink: 0 }}>
             <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#5E8B4E' }} />
@@ -372,7 +372,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       }}>
         <div>
           <div style={{ fontSize: 17, fontWeight: 600, color: '#2A251F' }}>
-            {session.name ?? 'Новая сессия'}
+            {session.name ?? 'Новый чат'}
           </div>
           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#9A8F7E', marginTop: 2 }}>
             {project.name} · {session.mode ?? 'auto'}
@@ -551,7 +551,7 @@ function ChatItemView({ item, index, onToggleThinking, onAllowPermission, onDeny
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: '#2A251F', marginBottom: 2 }}>
-              Сессия запущена
+              Чат запущен
             </div>
             <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: '#9A8F7E' }}>
               {item.model} · {item.mode}

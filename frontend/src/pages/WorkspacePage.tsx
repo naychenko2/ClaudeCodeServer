@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { Project, Session } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -29,6 +29,8 @@ export function WorkspacePage({ project, onBack }: Props) {
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [fileFullscreen, setFileFullscreen] = useState(false);
   const [chatDockExpanded, setChatDockExpanded] = useState(true);
+  const [chatFlex, setChatFlex] = useState(1); // 1:1 = 50/50 по умолчанию
+  const splitContainerRef = useRef<HTMLDivElement>(null);
   // мобайл: показываем либо sidebar, либо chat
   const [mobileView, setMobileView] = useState<'sidebar' | 'chat'>('sidebar');
 
@@ -41,6 +43,24 @@ export function WorkspacePage({ project, onBack }: Props) {
     setActiveSession(session);
     setPendingMessage(firstMessage);
     if (isMobile) setMobileView('chat');
+    // если файл открыт в split-режиме — переключаемся в fullscreen
+    if (openFile && !fileFullscreen) {
+      setFileFullscreen(true);
+      setChatDockExpanded(true);
+    }
+  };
+
+  // из дерева файлов → всегда fullscreen
+  const handleOpenFileFromTree = (filePath: string) => {
+    setOpenFile(filePath);
+    setFileFullscreen(true);
+    setChatDockExpanded(true);
+  };
+
+  // из чата → split-режим
+  const handleOpenFileFromChat = (filePath: string) => {
+    setOpenFile(filePath);
+    setFileFullscreen(false);
   };
 
   const handleCloseFile = () => {
@@ -51,6 +71,31 @@ export function WorkspacePage({ project, onBack }: Props) {
   const handleEnterFullscreen = () => {
     setFileFullscreen(true);
     setChatDockExpanded(true);
+  };
+
+  const handleSplitterMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = splitContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const SPLITTER = 5;
+
+    const onMove = (ev: MouseEvent) => {
+      const available = rect.width - SPLITTER;
+      const chatW = Math.max(200, Math.min(available - 200, ev.clientX - rect.left));
+      const fileW = available - chatW;
+      if (fileW > 0) setChatFlex(chatW / fileW);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
   };
 
   const handleMobileBack = () => {
@@ -112,7 +157,7 @@ export function WorkspacePage({ project, onBack }: Props) {
         {leftTab === 'sessions' ? (
           <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} isMobile={isMobile} />
         ) : (
-          <FileExplorer project={project} onOpenFile={(f) => { setOpenFile(f); if (isMobile) setMobileView('chat'); }} />
+          <FileExplorer project={project} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} />
         )}
       </div>
       {/* Project footer — клик возвращает к списку проектов */}
@@ -161,7 +206,7 @@ export function WorkspacePage({ project, onBack }: Props) {
       {!openFile && (
         <div style={{ flex: 1, overflow: 'hidden', ...(isMobile ? { paddingTop: 52 } : {}) }}>
           {activeSession ? (
-            <ChatPanel session={activeSession} project={project} onOpenFile={(f) => setOpenFile(f)} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} />
+            <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} />
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>
               Выберите или создайте сессию
@@ -194,23 +239,32 @@ export function WorkspacePage({ project, onBack }: Props) {
       {!openFile && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {activeSession
-            ? <ChatPanel session={activeSession} project={project} onOpenFile={setOpenFile} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} />
+            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} />
             : NoSession}
         </div>
       )}
 
-      {/* Файл открыт, нормальный split: [Chat 420px] | [FileViewer flex:1] */}
+      {/* Файл открыт, нормальный split: [Chat] | [splitter] | [FileViewer], 50/50 по умолчанию */}
       {openFile && !fileFullscreen && (
-        <>
-          <div style={{ flex: 'none', width: 420, borderRight: '1px solid #D4CFC4', overflow: 'hidden' }}>
+        <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
+          <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
             {activeSession
-              ? <ChatPanel session={activeSession} project={project} onOpenFile={setOpenFile} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} />
+              ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} />
               : NoSession}
           </div>
-          <div style={{ flex: 1, overflow: 'hidden' }}>
+          {/* Сплиттер */}
+          <div
+            onMouseDown={handleSplitterMouseDown}
+            style={{ flex: '0 0 5px', background: '#D4CFC4', cursor: 'col-resize', flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            onMouseEnter={e => (e.currentTarget.style.background = '#BDB7AC')}
+            onMouseLeave={e => (e.currentTarget.style.background = '#D4CFC4')}
+          >
+            <div style={{ width: 1, height: 32, background: '#A8A09A', borderRadius: 1, pointerEvents: 'none' }} />
+          </div>
+          <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
             <FileViewer project={project} filePath={openFile} onClose={handleCloseFile} onToggleFullscreen={handleEnterFullscreen} />
           </div>
-        </>
+        </div>
       )}
 
       {/* Файл развёрнут fullscreen: FileViewer сверху + chat-dock снизу */}
@@ -221,7 +275,7 @@ export function WorkspacePage({ project, onBack }: Props) {
           </div>
           {activeSession ? (
             <div style={{ flexShrink: 0, height: chatDockExpanded ? 300 : 56, overflow: 'hidden', borderTop: '1px solid #E0D8CC', transition: 'height 0.2s ease' }}>
-              <ChatPanel session={activeSession} project={project} onOpenFile={setOpenFile} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} dockMode={chatDockExpanded ? 'expanded' : 'collapsed'} onToggleDock={() => setChatDockExpanded(p => !p)} />
+              <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} dockMode={chatDockExpanded ? 'expanded' : 'collapsed'} onToggleDock={() => setChatDockExpanded(p => !p)} />
             </div>
           ) : (
             <div style={{ flexShrink: 0, height: 56, borderTop: '1px solid #E0D8CC', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8A8070', fontSize: 13, background: '#EDE7DC' }}>

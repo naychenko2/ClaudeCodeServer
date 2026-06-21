@@ -203,7 +203,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   pendingRef.current = pendingMessage;
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    bottomRef.current?.scrollIntoView({ behavior: 'instant' });
   }, [items]);
 
   // Автоотправка первого сообщения сразу после присоединения к сессии

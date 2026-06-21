@@ -55,7 +55,7 @@ export function WorkspacePage({ project, onBack }: Props) {
   const handleOpenFileFromTree = (filePath: string) => {
     setOpenFile(filePath);
     setFileFullscreen(true);
-    setChatDockExpanded(true);
+    if (!openFile) setChatDockExpanded(true);  // при первом открытии — раскрыть; при переключении — сохранить
   };
 
   // из чата → split-режим (на планшете/мобайле — fullscreen)

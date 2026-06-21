@@ -1,0 +1,60 @@
+const EXT_MAP: Record<string, string> = {
+  ts: 'typescript',
+  tsx: 'tsx',
+  js: 'javascript',
+  jsx: 'jsx',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  cs: 'csharp',
+  json: 'json',
+  json5: 'json5',
+  md: 'markdown',
+  mdx: 'markdown',
+  html: 'html',
+  htm: 'html',
+  xml: 'xml',
+  svg: 'xml',
+  css: 'css',
+  scss: 'scss',
+  less: 'less',
+  py: 'python',
+  rb: 'ruby',
+  go: 'go',
+  rs: 'rust',
+  java: 'java',
+  kt: 'kotlin',
+  swift: 'swift',
+  cpp: 'cpp',
+  cc: 'cpp',
+  c: 'c',
+  h: 'c',
+  hpp: 'cpp',
+  sh: 'bash',
+  bash: 'bash',
+  zsh: 'bash',
+  ps1: 'powershell',
+  psm1: 'powershell',
+  yaml: 'yaml',
+  yml: 'yaml',
+  toml: 'toml',
+  sql: 'sql',
+  graphql: 'graphql',
+  gql: 'graphql',
+  dockerfile: 'dockerfile',
+  proto: 'protobuf',
+  tf: 'hcl',
+  lua: 'lua',
+  r: 'r',
+  php: 'php',
+  vue: 'markup',
+  svelte: 'markup',
+};
+
+export function getLanguage(filePath: string): string {
+  const name = filePath.split('/').pop()?.toLowerCase() ?? '';
+  if (name === 'dockerfile') return 'dockerfile';
+  if (name === 'makefile') return 'makefile';
+
+  const ext = name.split('.').pop() ?? '';
+  return EXT_MAP[ext] ?? 'text';
+}

@@ -3,6 +3,10 @@ import type { Project, Session, ChatItem, FileEntry } from '../types';
 import { useSession } from '../hooks/useSession';
 import { api } from '../lib/api';
 import { Composer } from './Composer';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface Props {
   session: Session;
@@ -34,6 +38,83 @@ function ClaudeHeader() {
         fontSize: 11, letterSpacing: '0.06em', color: '#9A8F7E',
       }}>CLAUDE</span>
     </div>
+  );
+}
+
+// Рендер текста Claude с поддержкой Markdown
+function MarkdownContent({ text }: { text: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => (
+          <p style={{ margin: '0 0 8px 0', lineHeight: 1.6 }}>{children}</p>
+        ),
+        h1: ({ children }) => (
+          <h1 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 20, fontWeight: 600, margin: '10px 0 6px', color: '#2A251F', letterSpacing: '-0.01em' }}>{children}</h1>
+        ),
+        h2: ({ children }) => (
+          <h2 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 17, fontWeight: 600, margin: '8px 0 5px', color: '#2A251F', letterSpacing: '-0.01em' }}>{children}</h2>
+        ),
+        h3: ({ children }) => (
+          <h3 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 15, fontWeight: 600, margin: '6px 0 4px', color: '#2A251F' }}>{children}</h3>
+        ),
+        pre: ({ children }) => <>{children}</>,
+        code: ({ className, children, ...props }) => {
+          const language = /language-(\w+)/.exec(className || '')?.[1];
+          const text = String(children).replace(/\n$/, '');
+          if (language) {
+            return (
+              <SyntaxHighlighter
+                language={language}
+                style={oneDark}
+                customStyle={{ borderRadius: 8, fontSize: 12.5, margin: '6px 0', padding: '10px 14px', fontFamily: "'JetBrains Mono', monospace" }}
+              >
+                {text}
+              </SyntaxHighlighter>
+            );
+          }
+          if (text.includes('\n')) {
+            return (
+              <pre style={{ background: '#2A251F', borderRadius: 8, padding: '10px 14px', margin: '6px 0', overflowX: 'auto' }}>
+                <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: '#E8E1D4', lineHeight: 1.5 }} {...props}>{text}</code>
+              </pre>
+            );
+          }
+          return (
+            <code style={{ fontFamily: "'JetBrains Mono', monospace", background: '#EDE7DA', padding: '1px 5px', borderRadius: 4, fontSize: '0.88em', color: '#5A3322' }} {...props}>
+              {children}
+            </code>
+          );
+        },
+        ul: ({ children }) => <ul style={{ paddingLeft: 18, margin: '2px 0 8px' }}>{children}</ul>,
+        ol: ({ children }) => <ol style={{ paddingLeft: 18, margin: '2px 0 8px' }}>{children}</ol>,
+        li: ({ children }) => <li style={{ marginBottom: 3, lineHeight: 1.6 }}>{children}</li>,
+        blockquote: ({ children }) => (
+          <blockquote style={{ borderLeft: '3px solid #D97757', paddingLeft: 12, margin: '6px 0', color: '#756B5E', fontStyle: 'italic' }}>
+            {children}
+          </blockquote>
+        ),
+        a: ({ children, href }) => (
+          <a href={href} style={{ color: '#D97757', textDecoration: 'underline' }} target="_blank" rel="noopener noreferrer">
+            {children}
+          </a>
+        ),
+        strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
+        hr: () => <hr style={{ border: 'none', borderTop: '1px solid #E0D7C8', margin: '10px 0' }} />,
+        table: ({ children }) => (
+          <table style={{ borderCollapse: 'collapse', width: '100%', margin: '6px 0', fontSize: 13 }}>{children}</table>
+        ),
+        th: ({ children }) => (
+          <th style={{ border: '1px solid #E0D7C8', padding: '6px 10px', background: '#EDE7DA', fontWeight: 600, textAlign: 'left' }}>{children}</th>
+        ),
+        td: ({ children }) => (
+          <td style={{ border: '1px solid #E0D7C8', padding: '6px 10px' }}>{children}</td>
+        ),
+      }}
+    >
+      {text}
+    </ReactMarkdown>
   );
 }
 
@@ -483,12 +564,8 @@ function ChatItemView({ item, index, onToggleThinking, onAllowPermission, onDeny
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '90%' }}>
           <ClaudeHeader />
-          <div style={{
-            fontSize: 14, lineHeight: 1.5, color: '#2A251F',
-            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-            paddingLeft: 30,
-          }}>
-            {item.text}
+          <div style={{ fontSize: 14, color: '#2A251F', wordBreak: 'break-word', paddingLeft: 30 }}>
+            <MarkdownContent text={item.text} />
           </div>
         </div>
       );

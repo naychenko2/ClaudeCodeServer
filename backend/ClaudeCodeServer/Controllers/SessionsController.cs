@@ -17,11 +17,19 @@ public class SessionsController(SessionManager sessions) : ControllerBase
         try
         {
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
-            var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId);
-            session.Name = req.Name;
+            var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name);
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
+    }
+
+    [HttpGet("{sessionId}/history")]
+    public async Task<IActionResult> GetHistory(string projectId, string sessionId)
+    {
+        var session = sessions.GetById(sessionId);
+        if (session == null || session.ProjectId != projectId) return NotFound();
+        var history = await sessions.GetHistoryAsync(sessionId);
+        return Ok(history);
     }
 
     [HttpDelete("{sessionId}")]

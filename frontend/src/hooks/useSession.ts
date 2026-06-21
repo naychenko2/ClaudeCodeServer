@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { ChatItem, ServerMessage } from '../types';
 import { joinSession, onMessage, sendMessage, respondPermission, interruptSession } from '../lib/signalr';
+import { api } from '../lib/api';
 
 // --- Модульный персистентный стор ---
 // Состояние живёт на уровне модуля и переживает переключение между сессиями.
@@ -106,17 +107,37 @@ function ensureHandler() {
 }
 
 // Присоединяемся к сессии один раз и остаёмся — даже при переключении между сессиями
-function ensureJoined(sid: string) {
+function ensureJoined(sid: string, projectId?: string) {
   if (getState(sid).isJoined || _joining.has(sid)) return;
-  const p = joinSession(sid)
-    .then(() => setState(sid, prev => ({ ...prev, isJoined: true })))
+  const p = joinAndLoadHistory(sid, projectId)
     .finally(() => _joining.delete(sid));
   _joining.set(sid, p);
 }
 
+async function joinAndLoadHistory(sid: string, projectId?: string) {
+  await joinSession(sid);
+  setState(sid, prev => ({ ...prev, isJoined: true }));
+  if (!projectId) return;
+  try {
+    const raw = await api.sessions.getHistory(projectId, sid);
+    const items = (raw as any[]).map((msg: any): ChatItem => {
+      if (msg.kind === 'thinking') return { ...msg, expanded: false };
+      if (msg.kind === 'error') return { ...msg, canRetry: false };
+      return msg as ChatItem;
+    });
+    setState(sid, prev => {
+      // Не перезаписываем если уже есть живые сообщения (race condition)
+      if (prev.items.length > 0) return prev;
+      return { ...prev, items };
+    });
+  } catch {
+    // История недоступна — не блокируем работу
+  }
+}
+
 // --- React-хук ---
 
-export function useSession(sessionId: string | null) {
+export function useSession(sessionId: string | null, projectId?: string) {
   ensureHandler();
   const [, setTick] = useState(0);
 
@@ -128,13 +149,13 @@ export function useSession(sessionId: string | null) {
     const notify = () => setTick(n => n + 1);
     listeners.add(notify);
 
-    ensureJoined(sessionId);
+    ensureJoined(sessionId, projectId);
 
     return () => {
       listeners.delete(notify);
       // leaveSession не вызываем — сессия продолжает работать в фоне
     };
-  }, [sessionId]);
+  }, [sessionId, projectId]);
 
   const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false };
 

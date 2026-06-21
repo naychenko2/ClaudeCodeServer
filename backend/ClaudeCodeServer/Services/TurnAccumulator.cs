@@ -1,0 +1,94 @@
+using System.Text;
+using ClaudeCodeServer.Protocol;
+
+namespace ClaudeCodeServer.Services;
+
+internal class TurnAccumulator
+{
+    private string? _saveKey;
+    private readonly List<StoredMessage> _history;
+    private readonly List<StoredMessage> _currentTurn = [];
+    private readonly Dictionary<string, StoredToolUseMessage> _pendingTools = [];
+    private readonly StringBuilder _textBuf = new();
+    private readonly StringBuilder _thinkingBuf = new();
+
+    public TurnAccumulator(List<StoredMessage> history, string? saveKey = null)
+    {
+        _history = history;
+        _saveKey = saveKey;
+    }
+
+    public void SetSaveKey(string claudeSessionId) => _saveKey = claudeSessionId;
+
+    public void OnUserMessage(string text, IReadOnlyList<string> attachedPaths)
+        => _currentTurn.Add(new StoredUserMessage(text, attachedPaths.Count > 0 ? [.. attachedPaths] : null));
+
+    public void OnSessionStarted(string model, string mode)
+        => _currentTurn.Add(new StoredSessionStartedMessage(model, mode));
+
+    public void OnTextDelta(string text) => _textBuf.Append(text);
+
+    public void OnThinkingDelta(string text) => _thinkingBuf.Append(text);
+
+    public void OnToolUse(string id, string name, object? input)
+    {
+        FlushBuffers();
+        var msg = new StoredToolUseMessage { Id = id, Name = name, Input = input };
+        _pendingTools[id] = msg;
+        _currentTurn.Add(msg);
+    }
+
+    public void OnToolResult(string toolUseId, string content, bool isError)
+    {
+        if (_pendingTools.TryGetValue(toolUseId, out var msg))
+        {
+            msg.Result = content;
+            msg.IsError = isError;
+        }
+    }
+
+    public void OnFileChanged(string path, int added, int removed)
+    {
+        FlushBuffers();
+        _currentTurn.Add(new StoredFileChangedMessage(path, added, removed));
+    }
+
+    public async Task OnResultAsync(string subtype, long durationMs, int numTurns, ChatHistoryService svc)
+    {
+        FlushBuffers();
+        _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns));
+        await FlushAsync(svc);
+    }
+
+    public async Task OnErrorAsync(string text, ChatHistoryService svc)
+    {
+        FlushBuffers();
+        _currentTurn.Add(new StoredErrorMessage(text));
+        await FlushAsync(svc);
+    }
+
+    public List<StoredMessage> GetAll() => [.. _history, .. _currentTurn];
+
+    private void FlushBuffers()
+    {
+        if (_textBuf.Length > 0)
+        {
+            _currentTurn.Add(new StoredTextMessage(_textBuf.ToString()));
+            _textBuf.Clear();
+        }
+        if (_thinkingBuf.Length > 0)
+        {
+            _currentTurn.Add(new StoredThinkingMessage(_thinkingBuf.ToString()));
+            _thinkingBuf.Clear();
+        }
+    }
+
+    private async Task FlushAsync(ChatHistoryService svc)
+    {
+        _history.AddRange(_currentTurn);
+        _currentTurn.Clear();
+        _pendingTools.Clear();
+        if (_saveKey is not null)
+            await svc.SaveAsync(_saveKey, _history);
+    }
+}

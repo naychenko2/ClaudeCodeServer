@@ -193,7 +193,7 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, dockMode, onToggleDock }: Props) {
-  const { items, isWaiting, isJoined, send, allowPermission, denyPermission, interrupt, toggleThinking } = useSession(session.id);
+  const { items, isWaiting, isJoined, send, allowPermission, denyPermission, interrupt, toggleThinking } = useSession(session.id, project.id);
   const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [showAttachPicker, setShowAttachPicker] = useState(false);

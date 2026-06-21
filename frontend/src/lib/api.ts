@@ -43,6 +43,8 @@ export const api = {
       }),
     delete: (projectId: string, sessionId: string) =>
       request<void>(`/projects/${projectId}/sessions/${sessionId}`, { method: 'DELETE' }),
+    getHistory: (projectId: string, sessionId: string) =>
+      request<unknown[]>(`/projects/${projectId}/sessions/${sessionId}/history`),
   },
 
   files: {

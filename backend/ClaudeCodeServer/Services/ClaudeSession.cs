@@ -18,7 +18,7 @@ public class ClaudeSession : IAsyncDisposable
     private Process? _currentProcess;
 
     // Если claude не выдаёт ни одной строки дольше этого — считаем зависшим
-    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(60);
 
     // Отслеживание изменений файлов
     private FileSystemWatcher? _watcher;
@@ -375,8 +375,8 @@ public class ClaudeSession : IAsyncDisposable
         string behavior;
         try
         {
-            // Ждём ответа пользователя или таймаута 5 минут
-            behavior = await tcs.Task.WaitAsync(TimeSpan.FromMinutes(5));
+            // Ждём ответа пользователя или таймаута 60 минут
+            behavior = await tcs.Task.WaitAsync(TimeSpan.FromMinutes(60));
         }
         catch (TaskCanceledException)
         {

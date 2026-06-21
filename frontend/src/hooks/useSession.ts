@@ -36,7 +36,8 @@ export function useSession(sessionId: string | null) {
     // Восстанавливаем историю из кэша (или начинаем с пустого)
     setItems(itemsCacheRef.current.get(sessionId) ?? []);
     setIsJoined(false);
-    joinSession(sessionId).then(() => setIsJoined(true));
+    let cancelled = false;
+    joinSession(sessionId).then(() => { if (!cancelled) setIsJoined(true); });
 
     unsubRef.current = onMessage((msg: ServerMessage) => {
       switch (msg.type) {
@@ -100,6 +101,7 @@ export function useSession(sessionId: string | null) {
     });
 
     return () => {
+      cancelled = true;
       unsubRef.current?.();
       leaveSession(sessionId);
     };

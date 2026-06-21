@@ -159,8 +159,19 @@ public class FileService
         catch { return false; }
     }
 
+    private record ModifiedCache(HashSet<string> Files, long ExpiresAt);
+    private static readonly Dictionary<string, ModifiedCache> _modifiedCache = new();
+    private static readonly Lock _cacheLock = new();
+
     private static HashSet<string> GetModifiedFiles(string rootPath)
     {
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        lock (_cacheLock)
+        {
+            if (_modifiedCache.TryGetValue(rootPath, out var cached) && cached.ExpiresAt > now)
+                return cached.Files;
+        }
+
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
@@ -184,6 +195,12 @@ public class FileService
             proc.WaitForExit(3000);
         }
         catch { }
+
+        var ttl = System.Diagnostics.Stopwatch.Frequency * 5; // 5 секунд
+        lock (_cacheLock)
+        {
+            _modifiedCache[rootPath] = new ModifiedCache(result, now + ttl);
+        }
         return result;
     }
 }

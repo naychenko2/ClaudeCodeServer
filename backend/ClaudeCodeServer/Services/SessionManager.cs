@@ -111,8 +111,24 @@ public class SessionManager
 
     public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths)
     {
-        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Process is null)
-            throw new InvalidOperationException("Сессия не найдена или не запущена");
+        if (!_sessions.TryGetValue(sessionId, out var entry))
+            throw new InvalidOperationException("Сессия не найдена");
+
+        // После перезапуска сервера Process может быть null — восстанавливаем сессию
+        if (entry.Process is null)
+        {
+            var project = _projects.GetById(entry.Info.ProjectId)
+                ?? throw new InvalidOperationException("Проект не найден");
+            var existingHistory = entry.Info.ClaudeSessionId != null
+                ? await _history.LoadAsync(entry.Info.ClaudeSessionId)
+                : [];
+            var accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
+            entry.Accumulator = accumulator;
+            var claudeSession = new ClaudeSession(entry.Info, project.RootPath,
+                msg => OnMessageAsync(sessionId, accumulator, msg));
+            entry.Process = claudeSession;
+            await claudeSession.StartAsync();
+        }
 
         entry.Accumulator?.OnUserMessage(text, attachedPaths);
         await entry.Process.SendMessageAsync(text, attachedPaths);
@@ -155,33 +171,40 @@ public class SessionManager
 
     private async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg)
     {
-        switch (msg)
+        try
         {
-            case SessionStartedMessage m:
-                acc.SetSaveKey(m.ClaudeSessionId);
-                acc.OnSessionStarted(m.Model, m.Mode);
-                break;
-            case TextDeltaMessage m:
-                acc.OnTextDelta(m.Text);
-                break;
-            case ThinkingDeltaMessage m:
-                acc.OnThinkingDelta(m.Text);
-                break;
-            case ToolUseMessage m:
-                acc.OnToolUse(m.Id, m.Name, m.Input);
-                break;
-            case ToolResultMessage m:
-                acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);
-                break;
-            case FileChangedMessage m:
-                acc.OnFileChanged(m.Path, m.Added, m.Removed);
-                break;
-            case ResultMessage m:
-                await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, _history);
-                break;
-            case ErrorMessage m:
-                await acc.OnErrorAsync(m.Text, _history);
-                break;
+            switch (msg)
+            {
+                case SessionStartedMessage m:
+                    acc.SetSaveKey(m.ClaudeSessionId);
+                    acc.OnSessionStarted(m.Model, m.Mode);
+                    break;
+                case TextDeltaMessage m:
+                    acc.OnTextDelta(m.Text);
+                    break;
+                case ThinkingDeltaMessage m:
+                    acc.OnThinkingDelta(m.Text);
+                    break;
+                case ToolUseMessage m:
+                    acc.OnToolUse(m.Id, m.Name, m.Input);
+                    break;
+                case ToolResultMessage m:
+                    acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);
+                    break;
+                case FileChangedMessage m:
+                    acc.OnFileChanged(m.Path, m.Added, m.Removed);
+                    break;
+                case ResultMessage m:
+                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, _history);
+                    break;
+                case ErrorMessage m:
+                    await acc.OnErrorAsync(m.Text, _history);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SessionManager] Ошибка аккумулятора ({sessionId}): {ex.Message}");
         }
 
         await BroadcastAsync(sessionId, msg);

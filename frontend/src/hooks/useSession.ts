@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { ChatItem, ServerMessage } from '../types';
-import { joinSession, onMessage, sendMessage, respondPermission, interruptSession } from '../lib/signalr';
+import { joinSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession } from '../lib/signalr';
 import { api } from '../lib/api';
 
 // --- Модульный персистентный стор ---
@@ -37,6 +37,24 @@ let _handlerReady = false;
 function ensureHandler() {
   if (_handlerReady) return;
   _handlerReady = true;
+
+  // После переподключения SignalR группы теряются — заново входим во все активные сессии
+  onReconnected(async () => {
+    const toRejoin = Array.from(_store.entries())
+      .filter(([, s]) => s.isJoined)
+      .map(([sid]) => sid);
+    // Сбрасываем флаг чтобы ensureJoined мог войти заново
+    for (const sid of toRejoin) {
+      setState(sid, prev => ({ ...prev, isJoined: false }));
+    }
+    for (const sid of toRejoin) {
+      try {
+        await joinSession(sid);
+        setState(sid, prev => ({ ...prev, isJoined: true }));
+      } catch { /* продолжаем — остальные сессии важнее */ }
+    }
+  });
+
   onMessage((msg: ServerMessage) => {
     const sid = msg.sessionId;
     if (!sid) return;
@@ -166,7 +184,19 @@ export function useSession(sessionId: string | null, projectId?: string) {
       isWaiting: true,
       items: [...prev.items, { kind: 'user_message', text, attachedPaths }],
     }));
-    await sendMessage(sessionId, text, attachedPaths);
+    try {
+      await sendMessage(sessionId, text, attachedPaths);
+    } catch (err) {
+      setState(sessionId, prev => ({
+        ...prev,
+        isWaiting: false,
+        items: [...prev.items, {
+          kind: 'error' as const,
+          text: `Ошибка отправки: ${err instanceof Error ? err.message : String(err)}`,
+          canRetry: true,
+        }],
+      }));
+    }
   }, [sessionId]);
 
   const allowPermission = useCallback(async (requestId: string) => {

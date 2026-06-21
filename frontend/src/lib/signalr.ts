@@ -76,3 +76,7 @@ export function onMessage(handler: (msg: ServerMessage) => void): () => void {
   conn.on('message', handler);
   return () => conn.off('message', handler);
 }
+
+export function onReconnected(callback: () => void): void {
+  getConnection().onreconnected(callback);
+}

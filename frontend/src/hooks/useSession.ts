@@ -38,8 +38,14 @@ function ensureHandler() {
   if (_handlerReady) return;
   _handlerReady = true;
 
-  // После переподключения SignalR группы теряются — тихо перезаходим
+  // После переподключения: сбрасываем зависшие isWaiting и перезаходим в группы
   onReconnected(async () => {
+    // При разрыве соединения незавершённые ходы уже не придут — снимаем ожидание
+    for (const [sid, s] of _store) {
+      if (s.isWaiting) {
+        setState(sid, prev => ({ ...prev, isWaiting: false }));
+      }
+    }
     for (const [sid, s] of _store) {
       if (!s.isJoined) continue;
       try { await joinSession(sid); } catch { /* пропускаем — не блокируем остальные */ }

@@ -47,6 +47,14 @@ Frontend (src/):
   types/      index.ts (Project, Session, ChatItem, ServerMessage, AuthState)
 ```
 
+## Дизайн-макеты
+
+Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
+
+Ключевые файлы:
+- `Claude Code Desktop.dc.html` — десктопные макеты (все состояния)
+- `shots/desktop-files.png`, `shots/01-desktop-file.png`, `shots/02-desktop-file.png` — скриншоты
+
 ## Дизайн-система
 
 Цвета из `frontend/src/lib/design.ts`:
@@ -114,7 +122,7 @@ DELETE              /api/projects/{id}/files          ?path=
 | `frontend-dev` | React/TypeScript (frontend/src/) |
 | `backend-dev` | C#/.NET (backend/) |
 | `architect` | кросс-слойный дизайн |
-| `analyst` | анализ макетов Claude Design #52adb1f7 |
+| `analyst` | анализ макетов Claude Design `52adb1f7-312b-4f25-8c47-2bccfca9df94` |
 | `designer` | дизайн-система и стили |
 | `dotnet-builder` | сборка и починка .NET |
 

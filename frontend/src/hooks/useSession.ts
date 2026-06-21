@@ -150,8 +150,10 @@ function ensureHandler() {
         setState(sid, prev => ({ ...prev, isWaiting: false }));
         break;
       case 'status_changed': {
-        // Страховка: синхронизируем isWaiting при получении статуса через session-группу
-        if (msg.status === 'active' || msg.status === 'error') {
+        // Синхронизируем isWaiting по статусу — работает для всех открытых вкладок/браузеров
+        if (msg.status === 'working' || msg.status === 'waiting') {
+          setState(sid, prev => ({ ...prev, isWaiting: true }));
+        } else if (msg.status === 'active' || msg.status === 'error' || msg.status === 'finished') {
           setState(sid, prev => ({ ...prev, isWaiting: false }));
         }
         // При переходе в active — перезагружаем историю:

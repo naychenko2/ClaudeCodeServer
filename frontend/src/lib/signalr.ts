@@ -7,7 +7,11 @@ export function getConnection(): signalR.HubConnection {
   if (!connection) {
     connection = new signalR.HubConnectionBuilder()
       .withUrl('/hubs/session')
-      .withAutomaticReconnect()
+      .withAutomaticReconnect({
+        // Переподключаемся бесконечно с экспоненциальным откатом, макс 30 сек
+        nextRetryDelayInMilliseconds: ctx =>
+          Math.min(1000 * Math.pow(2, ctx.previousRetryCount), 30_000),
+      })
       .build();
   }
   return connection;

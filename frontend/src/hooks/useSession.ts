@@ -38,20 +38,11 @@ function ensureHandler() {
   if (_handlerReady) return;
   _handlerReady = true;
 
-  // После переподключения SignalR группы теряются — заново входим во все активные сессии
+  // После переподключения SignalR группы теряются — тихо перезаходим
   onReconnected(async () => {
-    const toRejoin = Array.from(_store.entries())
-      .filter(([, s]) => s.isJoined)
-      .map(([sid]) => sid);
-    // Сбрасываем флаг чтобы ensureJoined мог войти заново
-    for (const sid of toRejoin) {
-      setState(sid, prev => ({ ...prev, isJoined: false }));
-    }
-    for (const sid of toRejoin) {
-      try {
-        await joinSession(sid);
-        setState(sid, prev => ({ ...prev, isJoined: true }));
-      } catch { /* продолжаем — остальные сессии важнее */ }
+    for (const [sid, s] of _store) {
+      if (!s.isJoined) continue;
+      try { await joinSession(sid); } catch { /* пропускаем — не блокируем остальные */ }
     }
   });
 
@@ -185,6 +176,10 @@ export function useSession(sessionId: string | null, projectId?: string) {
       items: [...prev.items, { kind: 'user_message', text, attachedPaths }],
     }));
     try {
+      // Всегда подтверждаем членство в группе перед отправкой:
+      // защита от потери группы при переподключении или переключении проекта
+      await joinSession(sessionId);
+      setState(sessionId, prev => ({ ...prev, isJoined: true }));
       await sendMessage(sessionId, text, attachedPaths);
     } catch (err) {
       setState(sessionId, prev => ({
@@ -209,6 +204,7 @@ export function useSession(sessionId: string | null, projectId?: string) {
           ? { ...item, resolved: true } : item
       ),
     }));
+    await joinSession(sessionId); // гарантируем группу перед ответом
     await respondPermission(sessionId, requestId, 'allow');
   }, [sessionId]);
 
@@ -222,6 +218,7 @@ export function useSession(sessionId: string | null, projectId?: string) {
           ? { ...item, resolved: true } : item
       ),
     }));
+    await joinSession(sessionId); // гарантируем группу перед ответом
     await respondPermission(sessionId, requestId, 'deny');
   }, [sessionId]);
 

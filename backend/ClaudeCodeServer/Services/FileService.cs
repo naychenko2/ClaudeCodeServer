@@ -18,6 +18,7 @@ public class FileService
         var dir = SafeJoin(rootPath, relativePath);
         if (!Directory.Exists(dir)) throw new DirectoryNotFoundException();
 
+        var modified = GetModifiedFiles(rootPath);
         var entries = new List<FileEntry>();
 
         foreach (var d in Directory.GetDirectories(dir).OrderBy(x => x))
@@ -32,7 +33,7 @@ public class FileService
             var info = new FileInfo(f);
             var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
             entries.Add(new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
-                IsGitModified(rootPath, rel)));
+                modified.Contains(rel)));
         }
 
         return entries;
@@ -40,6 +41,7 @@ public class FileService
 
     public IEnumerable<FileEntry> Search(string rootPath, string query)
     {
+        var modified = GetModifiedFiles(rootPath);
         return Directory.EnumerateFiles(rootPath, "*", SearchOption.AllDirectories)
             .Where(f => Path.GetFileName(f).Contains(query, StringComparison.OrdinalIgnoreCase))
             .Take(100)
@@ -48,7 +50,7 @@ public class FileService
                 var info = new FileInfo(f);
                 var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
                 return new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
-                    IsGitModified(rootPath, rel));
+                    modified.Contains(rel));
             });
     }
 
@@ -157,21 +159,31 @@ public class FileService
         catch { return false; }
     }
 
-    private static bool IsGitModified(string rootPath, string relativePath)
+    private static HashSet<string> GetModifiedFiles(string rootPath)
     {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("git", $"status --porcelain \"{relativePath}\"")
+            var psi = new System.Diagnostics.ProcessStartInfo("git", "status --porcelain")
             {
                 WorkingDirectory = rootPath,
                 RedirectStandardOutput = true,
                 UseShellExecute = false
             };
             using var proc = System.Diagnostics.Process.Start(psi)!;
-            var output = proc.StandardOutput.ReadToEnd();
-            proc.WaitForExit(1000);
-            return !string.IsNullOrWhiteSpace(output);
+            string? line;
+            while ((line = proc.StandardOutput.ReadLine()) != null)
+            {
+                if (line.Length < 4) continue;
+                var path = line[3..];
+                // для переименований: "R  old -> new" берём новый путь
+                var arrowIdx = path.IndexOf(" -> ", StringComparison.Ordinal);
+                if (arrowIdx >= 0) path = path[(arrowIdx + 4)..];
+                result.Add(path.Trim().Replace('\\', '/'));
+            }
+            proc.WaitForExit(3000);
         }
-        catch { return false; }
+        catch { }
+        return result;
     }
 }

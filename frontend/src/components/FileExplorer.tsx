@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { EmptyState } from './EmptyState';
@@ -38,23 +38,63 @@ function FolderIcon() {
   );
 }
 
+interface TreeNode {
+  entry: FileEntry;
+  depth: number;
+}
+
 export function FileExplorer({ project, onOpenFile }: Props) {
-  const [entries, setEntries] = useState<FileEntry[]>([]);
-  const [currentPath, setCurrentPath] = useState('');
+  const [dirCache, setDirCache] = useState<Map<string, FileEntry[]>>(new Map());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
+  const inFlight = useRef(new Set<string>());
+
   const [search, setSearch] = useState('');
   const [searchResults, setSearchResults] = useState<FileEntry[] | null>(null);
+  const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const [showCreateFile, setShowCreateFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');
-  const [hoveredPath, setHoveredPath] = useState<string | null>(null);
+  const [createInDir, setCreateInDir] = useState('');
 
-  const load = (path: string) => {
-    api.files.list(project.id, path).then(setEntries);
-    setCurrentPath(path);
-    setSearchResults(null);
+  const loadDir = useCallback(async (path: string) => {
+    if (inFlight.current.has(path)) return;
+    inFlight.current.add(path);
+    setLoadingDirs(prev => new Set(prev).add(path));
+    try {
+      const entries = await api.files.list(project.id, path);
+      setDirCache(prev => new Map(prev).set(path, entries));
+    } finally {
+      inFlight.current.delete(path);
+      setLoadingDirs(prev => { const n = new Set(prev); n.delete(path); return n; });
+    }
+  }, [project.id]);
+
+  useEffect(() => {
+    setDirCache(new Map());
+    setExpanded(new Set());
+    setCreateInDir('');
     setSearch('');
-  };
+    setSearchResults(null);
+    inFlight.current.clear();
+    loadDir('');
+  }, [project.id, loadDir]);
 
-  useEffect(() => { load(''); }, [project.id]);
+  const invalidateDir = useCallback(async (path: string) => {
+    inFlight.current.delete(path);
+    setDirCache(prev => { const n = new Map(prev); n.delete(path); return n; });
+    await loadDir(path);
+  }, [loadDir]);
+
+  const handleToggleDir = async (entry: FileEntry) => {
+    const { path } = entry;
+    setCreateInDir(path);
+    if (expanded.has(path)) {
+      setExpanded(prev => { const n = new Set(prev); n.delete(path); return n; });
+    } else {
+      if (!dirCache.has(path)) await loadDir(path);
+      setExpanded(prev => new Set(prev).add(path));
+    }
+  };
 
   const handleSearch = async (q: string) => {
     setSearch(q);
@@ -64,15 +104,78 @@ export function FileExplorer({ project, onOpenFile }: Props) {
   };
 
   const handleCreateFile = async () => {
-    const path = currentPath ? `${currentPath}/${newFileName}` : newFileName;
+    const path = createInDir ? `${createInDir}/${newFileName}` : newFileName;
     await api.files.createFile(project.id, path);
     setShowCreateFile(false);
     setNewFileName('');
-    load(currentPath);
+    await invalidateDir(createInDir);
+    if (createInDir) setExpanded(prev => new Set(prev).add(createInDir));
   };
 
-  const displayEntries = searchResults ?? entries;
-  const breadcrumbs = currentPath.split('/').filter(Boolean);
+  const flatTree = useMemo((): TreeNode[] => {
+    const walk = (path: string, depth: number): TreeNode[] => {
+      const entries = dirCache.get(path) ?? [];
+      const result: TreeNode[] = [];
+      for (const entry of entries) {
+        result.push({ entry, depth });
+        if (entry.isDirectory && expanded.has(entry.path)) {
+          result.push(...walk(entry.path, depth + 1));
+        }
+      }
+      return result;
+    };
+    return walk('', 0);
+  }, [dirCache, expanded]);
+
+  const rootLoading = !dirCache.has('') && loadingDirs.has('');
+
+  const renderFileRow = (entry: FileEntry, depth: number) => {
+    const isExpanded = expanded.has(entry.path);
+    const isLoading = loadingDirs.has(entry.path);
+    const em = entry.isDirectory ? null : getExtMeta(entry.name);
+    return (
+      <div
+        key={entry.path}
+        onClick={() => entry.isDirectory ? handleToggleDir(entry) : onOpenFile(entry.path)}
+        onMouseEnter={() => setHoveredPath(entry.path)}
+        onMouseLeave={() => setHoveredPath(null)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          paddingLeft: 8 + depth * 16, paddingRight: 8,
+          paddingTop: 6, paddingBottom: 6,
+          borderRadius: 8, cursor: 'pointer',
+          background: hoveredPath === entry.path ? '#E8E1D4' : 'transparent',
+          transition: 'background 0.1s',
+        }}
+      >
+        <span style={{ width: 12, flexShrink: 0, textAlign: 'center', userSelect: 'none', color: '#9A8F7E', fontSize: 9, lineHeight: 1 }}>
+          {entry.isDirectory ? (isLoading ? '·' : (isExpanded ? '▾' : '▸')) : ''}
+        </span>
+        {entry.isDirectory ? (
+          <span style={{ flexShrink: 0, display: 'flex' }}><FolderIcon /></span>
+        ) : (
+          <span style={{
+            width: 23, height: 23, borderRadius: 6,
+            background: em!.bg, color: em!.fg,
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 8.5, fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0, letterSpacing: '-0.02em',
+          }}>{em!.label}</span>
+        )}
+        <span style={{
+          fontFamily: "'JetBrains Mono', monospace",
+          fontSize: 13, flex: 1,
+          fontWeight: entry.isDirectory ? 700 : 500,
+          color: '#39332B',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{entry.name}</span>
+        {entry.isModified && (
+          <span style={{ fontSize: 9, fontWeight: 700, color: '#C2693B', background: '#FBEBE0', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -93,7 +196,6 @@ export function FileExplorer({ project, onOpenFile }: Props) {
           )}
         </div>
 
-        {/* Новый файл — dashed */}
         <div
           onClick={() => setShowCreateFile(true)}
           style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 34, border: '1.5px dashed #D0C6B4', borderRadius: 9, color: '#BE5536', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
@@ -103,73 +205,28 @@ export function FileExplorer({ project, onOpenFile }: Props) {
         </div>
       </div>
 
-      {/* Breadcrumbs */}
-      {!searchResults && breadcrumbs.length > 0 && (
-        <div style={{ padding: '0 12px 6px', fontSize: 11, color: '#9A8F7E', display: 'flex', gap: 4, flexWrap: 'wrap', fontFamily: "'JetBrains Mono', monospace" }}>
-          <span style={{ cursor: 'pointer', color: '#3E7CA6' }} onClick={() => load('')}>корень</span>
-          {breadcrumbs.map((seg, i) => (
-            <span key={i}>
-              / <span style={{ cursor: 'pointer', color: '#3E7CA6' }} onClick={() => load(breadcrumbs.slice(0, i + 1).join('/'))}>{seg}</span>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Файлы */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 12px' }}>
-        {searchResults !== null && searchResults.length === 0 ? (
-          <EmptyState
-            icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>}
-            title="Ничего не найдено"
-            subtitle={`Нет файлов по запросу «${search}»`}
-          />
-        ) : displayEntries.length === 0 && !search ? (
+      {/* Tree / результаты поиска */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0 4px 12px' }}>
+        {rootLoading ? (
+          <div style={{ padding: '24px 12px', color: '#9A8F7E', fontSize: 13, textAlign: 'center', fontFamily: "'JetBrains Mono', monospace" }}>Загрузка…</div>
+        ) : searchResults !== null ? (
+          searchResults.length === 0 ? (
+            <EmptyState
+              icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>}
+              title="Ничего не найдено"
+              subtitle={`Нет файлов по запросу «${search}»`}
+            />
+          ) : (
+            searchResults.map(entry => renderFileRow(entry, 0))
+          )
+        ) : flatTree.length === 0 ? (
           <EmptyState
             icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
             title="Папка пуста"
             subtitle="Здесь пока нет файлов"
           />
         ) : (
-          displayEntries.map(entry => {
-            const em = entry.isDirectory ? null : getExtMeta(entry.name);
-            return (
-              <div
-                key={entry.path}
-                onClick={() => entry.isDirectory ? load(entry.path) : onOpenFile(entry.path)}
-                onMouseEnter={() => setHoveredPath(entry.path)}
-                onMouseLeave={() => setHoveredPath(null)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 9,
-                  padding: '8px 8px', borderRadius: 8, cursor: 'pointer',
-                  background: hoveredPath === entry.path ? '#E8E1D4' : 'transparent',
-                  transition: 'background 0.1s',
-                }}
-              >
-                {entry.isDirectory ? (
-                  <span style={{ flexShrink: 0, display: 'flex' }}><FolderIcon /></span>
-                ) : (
-                  <span style={{
-                    width: 23, height: 23, borderRadius: 6,
-                    background: em!.bg, color: em!.fg,
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 8.5, fontWeight: 700,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    flexShrink: 0, letterSpacing: '-0.02em',
-                  }}>{em!.label}</span>
-                )}
-                <span style={{
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: 13, flex: 1,
-                  fontWeight: entry.isDirectory ? 700 : 500,
-                  color: '#39332B',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>{entry.name}</span>
-                {entry.isModified && (
-                  <span style={{ fontSize: 9, fontWeight: 700, color: '#C2693B', background: '#FBEBE0', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
-                )}
-              </div>
-            );
-          })
+          flatTree.map(({ entry, depth }) => renderFileRow(entry, depth))
         )}
       </div>
 
@@ -177,7 +234,10 @@ export function FileExplorer({ project, onOpenFile }: Props) {
       {showCreateFile && (
         <div onClick={() => setShowCreateFile(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div onClick={e => e.stopPropagation()} style={{ width: 420, background: '#F4F0E8', borderRadius: 20, padding: 24, boxShadow: '0 24px 60px rgba(23,19,15,0.4)' }}>
-            <h2 style={{ fontFamily: "'PT Serif', serif", fontWeight: 500, fontSize: 22, margin: '0 0 16px', letterSpacing: '-0.01em' }}>Новый файл</h2>
+            <h2 style={{ fontFamily: "'PT Serif', serif", fontWeight: 500, fontSize: 22, margin: '0 0 6px', letterSpacing: '-0.01em' }}>Новый файл</h2>
+            {createInDir && (
+              <div style={{ fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: '#9A8F7E', marginBottom: 12 }}>{createInDir}/</div>
+            )}
             <input
               placeholder="name.py"
               value={newFileName}

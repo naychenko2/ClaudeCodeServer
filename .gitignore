@@ -27,3 +27,6 @@ Thumbs.db
 
 # Скриншоты и debug-файлы
 *.png
+!frontend/public/pwa-*.png
+!frontend/public/maskable-icon-*.png
+!frontend/public/apple-touch-icon-*.png

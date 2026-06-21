@@ -1,7 +1,46 @@
 import { useEffect, useState } from 'react';
+import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
+import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
+import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript';
+import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript';
+import jsx from 'react-syntax-highlighter/dist/esm/languages/prism/jsx';
+import csharp from 'react-syntax-highlighter/dist/esm/languages/prism/csharp';
+import json from 'react-syntax-highlighter/dist/esm/languages/prism/json';
+import markdown from 'react-syntax-highlighter/dist/esm/languages/prism/markdown';
+import css from 'react-syntax-highlighter/dist/esm/languages/prism/css';
+import scss from 'react-syntax-highlighter/dist/esm/languages/prism/scss';
+import python from 'react-syntax-highlighter/dist/esm/languages/prism/python';
+import go from 'react-syntax-highlighter/dist/esm/languages/prism/go';
+import rust from 'react-syntax-highlighter/dist/esm/languages/prism/rust';
+import java from 'react-syntax-highlighter/dist/esm/languages/prism/java';
+import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';
+import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml';
+import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
+import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
 import type { Project } from '../types';
 import { api } from '../lib/api';
 import { EmptyState } from './EmptyState';
+import { getLanguage } from '../lib/getLanguage';
+import { MarkdownViewer } from './MarkdownViewer';
+
+SyntaxHighlighter.registerLanguage('tsx', tsx);
+SyntaxHighlighter.registerLanguage('typescript', typescript);
+SyntaxHighlighter.registerLanguage('javascript', javascript);
+SyntaxHighlighter.registerLanguage('jsx', jsx);
+SyntaxHighlighter.registerLanguage('csharp', csharp);
+SyntaxHighlighter.registerLanguage('json', json);
+SyntaxHighlighter.registerLanguage('markdown', markdown);
+SyntaxHighlighter.registerLanguage('css', css);
+SyntaxHighlighter.registerLanguage('scss', scss);
+SyntaxHighlighter.registerLanguage('python', python);
+SyntaxHighlighter.registerLanguage('go', go);
+SyntaxHighlighter.registerLanguage('rust', rust);
+SyntaxHighlighter.registerLanguage('java', java);
+SyntaxHighlighter.registerLanguage('bash', bash);
+SyntaxHighlighter.registerLanguage('yaml', yaml);
+SyntaxHighlighter.registerLanguage('sql', sql);
+SyntaxHighlighter.registerLanguage('markup', markup);
 
 interface Props {
   project: Project;
@@ -115,6 +154,7 @@ export function FileViewer({ project, filePath, onClose }: Props) {
   };
 
   const fileName = filePath.split('/').pop() ?? filePath;
+  const isMarkdown = /\.(md|mdx)$/i.test(fileName);
   const fileSizeMb = fileContent?.fileSize != null ? (fileContent.fileSize / 1024 / 1024).toFixed(2) : null;
 
   const btnPrimary: React.CSSProperties = {
@@ -235,9 +275,17 @@ export function FileViewer({ project, filePath, onClose }: Props) {
               editing
                 ? <textarea value={editContent} onChange={e => setEditContent(e.target.value)}
                     style={{ width: '100%', flex: 1, border: 'none', outline: 'none', resize: 'none', fontFamily: "'JetBrains Mono', monospace", fontSize: 13, lineHeight: 1.6, boxSizing: 'border-box', background: 'transparent' }} />
-                : <pre style={{ margin: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: '#2A251F' }}>
-                    {content}
-                  </pre>
+                : isMarkdown
+                  ? <MarkdownViewer content={content} />
+                  : <SyntaxHighlighter
+                      language={getLanguage(filePath)}
+                      style={oneLight}
+                      customStyle={{ margin: 0, padding: 0, background: 'transparent', fontSize: 13, lineHeight: '1.6', fontFamily: "'JetBrains Mono', monospace" }}
+                      codeTagProps={{ style: { fontFamily: "'JetBrains Mono', monospace" } }}
+                      wrapLongLines
+                    >
+                      {content}
+                    </SyntaxHighlighter>
             )}
           </>
         )}

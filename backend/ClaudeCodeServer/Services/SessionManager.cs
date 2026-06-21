@@ -72,7 +72,7 @@ public class SessionManager
         _sessions.Values
             .Where(e => e.Info.ProjectId == projectId)
             .Select(e => e.Info)
-            .OrderBy(s => s.CreatedAt)
+            .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 
     public Session? GetById(string id) =>

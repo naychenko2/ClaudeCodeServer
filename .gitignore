@@ -17,7 +17,13 @@ frontend/dist/
 .env.local
 *.env
 
+# IDE
+backend/.idea/
+
 # OS
 Thumbs.db
 .DS_Store
 .claude/worktrees/
+
+# Скриншоты и debug-файлы
+*.png

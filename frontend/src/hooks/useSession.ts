@@ -198,8 +198,9 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
       return msg as ChatItem;
     });
     setState(sid, prev => {
-      // Не перезаписываем если уже есть живые сообщения (race condition)
-      if (prev.items.length > 0) return prev;
+      // Сервер — источник истины: используем его данные если их больше.
+      // Иначе оставляем живые сообщения от стриминга (race condition при активном ходе).
+      if (items.length <= prev.items.length) return prev;
       return { ...prev, items };
     });
   } catch {
@@ -222,6 +223,23 @@ export function useSession(sessionId: string | null, projectId?: string) {
     listeners.add(notify);
 
     ensureJoined(sessionId, projectId);
+
+    // При переключении на уже-присоединённую сессию подтягиваем историю с сервера.
+    // Нужно чтобы после завершённых ходов (пока был открыт другой чат) данные были актуальны.
+    const st = getState(sessionId);
+    if (st.isJoined && projectId && !st.isWaiting) {
+      api.sessions.getHistory(projectId, sessionId).then(raw => {
+        const serverItems = (raw as any[]).map((m: any): ChatItem => {
+          if (m.kind === 'thinking') return { ...m, expanded: false };
+          if (m.kind === 'error') return { ...m, canRetry: false };
+          return m as ChatItem;
+        });
+        setState(sessionId, prev => {
+          if (serverItems.length <= prev.items.length) return prev;
+          return { ...prev, items: serverItems };
+        });
+      }).catch(() => {});
+    }
 
     return () => {
       listeners.delete(notify);

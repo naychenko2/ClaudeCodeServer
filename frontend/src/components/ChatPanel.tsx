@@ -349,6 +349,28 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     if (lastUser && lastUser.kind === 'user_message') { atBottomRef.current = true; send(lastUser.text, lastUser.attachedPaths ?? []); }
   };
 
+  // Индекс последнего result — у него показываем плашку токенов/времени, у прошлых скрываем
+  const lastResultIndex = items.reduce((acc, it, i) => (it.kind === 'result' ? i : acc), -1);
+  // Единый рендер одного элемента ленты (используется в основном рендере и в доке)
+  const renderItem = (item: ChatItem, i: number) => (
+    <ChatItemView
+      key={i}
+      item={item}
+      index={i}
+      online={online}
+      streaming={isWaiting && i === items.length - 1}
+      isLastResult={i === lastResultIndex}
+      onToggleThinking={toggleThinking}
+      onAllowPermission={allowPermission}
+      onDenyPermission={denyPermission}
+      onAllowAlways={allowAlways}
+      onAnswerQuestion={answerQuestion}
+      onOpenFile={onOpenFile}
+      onRevert={path => api.files.revert(project.id, path)}
+      onRetry={handleRetry}
+    />
+  );
+
   // Dock: свёрнутая полоска
   if (dockMode === 'collapsed') {
     // Свежий ответ Claude (а не эхо запроса пользователя) — для превью в свёрнутом доке
@@ -413,23 +435,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         {/* Сообщения (нижний отступ = высота плавающего composer) */}
         <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {items.map((item, i) => (
-              <ChatItemView
-                key={i}
-                item={item}
-                index={i}
-                online={online}
-                streaming={isWaiting && i === items.length - 1}
-                onToggleThinking={toggleThinking}
-                onAllowPermission={allowPermission}
-                onDenyPermission={denyPermission}
-                onAllowAlways={allowAlways}
-                onAnswerQuestion={answerQuestion}
-                onOpenFile={onOpenFile}
-                onRevert={path => api.files.revert(project.id, path)}
-                onRetry={handleRetry}
-              />
-            ))}
+            {items.map(renderItem)}
             {isWaiting && !items.some(it => it.kind === 'permission_request' && !it.resolved) && (
               <div style={{ fontSize: 12, color: '#8A8070', display: 'flex', gap: 4 }}>
                 <span className="dots">ожидаю ответа</span>
@@ -543,23 +549,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           </div>
         )}
 
-        {items.map((item, i) => (
-          <ChatItemView
-            key={i}
-            item={item}
-            index={i}
-            online={online}
-            streaming={isWaiting && i === items.length - 1}
-            onToggleThinking={toggleThinking}
-            onAllowPermission={allowPermission}
-            onDenyPermission={denyPermission}
-            onAllowAlways={allowAlways}
-            onAnswerQuestion={answerQuestion}
-            onOpenFile={onOpenFile}
-            onRevert={path => api.files.revert(project.id, path)}
-            onRetry={handleRetry}
-          />
-        ))}
+        {items.map(renderItem)}
 
         {isWaiting && !items.some(it => it.kind === 'permission_request' && !it.resolved) && (
           <div style={{ fontSize: 12, color: '#8A8070', display: 'flex', gap: 4 }}>
@@ -1048,6 +1038,7 @@ interface ItemProps {
   index: number;
   online: boolean;
   streaming?: boolean;
+  isLastResult?: boolean;
   onToggleThinking: (i: number) => void;
   onAllowPermission: (id: string) => void;
   onDenyPermission: (id: string) => void;
@@ -1058,7 +1049,7 @@ interface ItemProps {
   onRetry: () => void;
 }
 
-function ChatItemView({ item, index, online, streaming, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onOpenFile, onRevert, onRetry }: ItemProps) {
+function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onOpenFile, onRevert, onRetry }: ItemProps) {
   switch (item.kind) {
     case 'user_message':
       return (
@@ -1085,17 +1076,12 @@ function ChatItemView({ item, index, online, streaming, onToggleThinking, onAllo
 
     case 'session_started':
       return (
-        <div style={{
-          background: '#FFFFFF', border: '1px solid #E8E1D4',
-          borderRadius: 14, padding: '11px 13px',
-          boxShadow: '0 2px 8px rgba(60,50,35,0.04)',
-          display: 'flex', alignItems: 'flex-start', gap: 10,
-        }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
           <div style={{
-            width: 26, height: 26, borderRadius: 7, background: '#D97757',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            width: 22, height: 22, borderRadius: 6, background: '#D97757',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1,
           }}>
-            <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#F4F0E8' }} />
+            <div style={{ width: 9, height: 9, borderRadius: '50%', background: '#F4F0E8' }} />
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: '#2A251F', marginBottom: 2 }}>
@@ -1134,7 +1120,7 @@ function ChatItemView({ item, index, online, streaming, onToggleThinking, onAllo
       return (
         <div style={{
           background: '#EFEAE0', border: '1px solid #E4DDCE',
-          borderRadius: 12, overflow: 'hidden', maxWidth: '90%',
+          borderRadius: 12, overflow: 'hidden',
         }}>
           <div
             style={{
@@ -1389,6 +1375,9 @@ function ChatItemView({ item, index, online, streaming, onToggleThinking, onAllo
           </div>
         );
       }
+
+      // Плашка токенов/времени — только у последнего хода (экономия места); у прошлых скрываем
+      if (!isLastResult) return null;
 
       return (
         <div style={{

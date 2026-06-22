@@ -242,7 +242,7 @@ export function WorkspacePage({ project, onBack }: Props) {
             boxShadow: leftTab === tab ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
           }}
         >
-          {tab === 'sessions' ? 'Чаты' : 'Файлы'}
+          {tab === 'sessions' ? 'Сессии' : 'Файлы'}
         </button>
       ))}
     </div>
@@ -314,7 +314,7 @@ export function WorkspacePage({ project, onBack }: Props) {
                     boxShadow: leftTab === tab ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
                   }}
                 >
-                  {tab === 'sessions' ? 'Чаты' : 'Файлы'}
+                  {tab === 'sessions' ? 'Сессии' : 'Файлы'}
                 </button>
               ))}
             </div>

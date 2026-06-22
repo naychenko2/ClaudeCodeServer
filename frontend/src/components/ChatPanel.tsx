@@ -1124,8 +1124,8 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
               Размышление
             </span>
             {item.text && (
-              <span style={{ fontSize: 10.5, color: '#9A8F7E', fontFamily: "'JetBrains Mono', monospace" }}>
-                {item.text.length} симв.
+              <span title="приблизительно, по объёму текста" style={{ fontSize: 10.5, color: '#9A8F7E', fontFamily: "'JetBrains Mono', monospace" }}>
+                ~{Math.max(1, Math.round(item.text.length / 4))} ток.
               </span>
             )}
             <span style={{

@@ -84,10 +84,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
                 justifyContent: 'center',
               }}
             >
-              <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect x="3" y="5" width="22" height="18" rx="3" stroke="white" strokeWidth="1.8" fill="none" />
-                <path d="M8 11L12 14L8 17" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M14 17H20" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4" />
               </svg>
             </div>
           </div>
@@ -143,7 +141,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
               onChange={(e) => setServerUrl(e.target.value)}
               onFocus={() => setFocusedField('server')}
               onBlur={() => setFocusedField(null)}
-              placeholder="https://example.com"
+              placeholder="https://code.acme.dev"
               disabled={isLoading}
               style={{ border: 'none', background: 'none', flex: 1, fontSize: 15, color: '#2A251F', fontFamily: "'JetBrains Mono', monospace", outline: 'none', opacity: isLoading ? 0.6 : 1 }}
             />

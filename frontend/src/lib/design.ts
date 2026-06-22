@@ -1,4 +1,14 @@
-// Дизайн-токены из макетов Claude Design
+// Дизайн-токены из макетов Claude Design.
+// Единый источник правды для цветов, типографики, радиусов, теней и стилей контролов.
+
+// === Семейства шрифтов ===
+export const FONT = {
+  sans:  "'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  serif: "'PT Serif', Georgia, serif",
+  mono:  "'JetBrains Mono', 'Courier New', monospace",
+} as const
+
+// === Цвета ===
 export const C = {
   // Фоны
   bgMain:      '#F4F0E8',
@@ -6,21 +16,30 @@ export const C = {
   bgCard:      '#FBF8F2',
   bgWhite:     '#FFFFFF',
   bgSelected:  '#E8E1D4',
+  bgInset:     '#E7E0D2',   // утопленные зоны/футеры панелей
 
   // Текст
   textHeading:   '#2A251F',   // заголовки и акцентный текст
   textPrimary:   '#39332B',
   textSecondary: '#756B5E',
   textMuted:     '#9A8F7E',
+  onAccent:      '#FBF8F2',   // текст/иконки поверх accent-фона
 
   // Акцентный (ОСНОВНОЙ — оранжевый)
   accent:        '#D97757',
   accentLight:   '#F4ECE1',
   accentMuted:   '#EAD3C5',
+  accentSoft:    '#E8A990',   // disabled/loading состояние accent-кнопки
 
   // Границы
   border:      '#E0D7C8',
   borderLight: '#E8E1D4',
+  divider:     '#DDD4C4',   // выраженная граница между панелями
+  dashed:      '#D0C6B4',   // пунктирные границы кнопок «создать»
+  track:       '#D8CFBE',   // дорожка выключенного переключателя
+
+  // Оверлей модальных окон
+  overlay:     'rgba(23,19,15,0.42)',
 
   // Статусы
   success:     '#5E8B4E',
@@ -29,9 +48,10 @@ export const C = {
   warning:     '#C9923E',
   warningBg:   '#FBEFE0',
   warningText: '#8A6A28',
-  danger:      '#B4452F',
-  dangerBg:    '#FBF1EC',
-  dangerText:  '#B4452F',
+  danger:       '#B4452F',
+  dangerBg:     '#FBF1EC',
+  dangerText:   '#B4452F',
+  dangerBorder: '#F5C6BF',
   info:        '#3E7CA6',
   infoBg:      '#E7EFF5',
 
@@ -42,49 +62,40 @@ export const C = {
   diffRemText: '#B71C1C',
 } as const
 
-// Кнопки
-export const BTN = {
-  primary: {
-    background: C.accent,
-    color: '#FBF8F2',
-    border: 'none',
-    borderRadius: 11,
-    padding: '11px 20px',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
-  },
-  secondary: {
-    background: C.bgPanel,
-    color: C.textSecondary,
-    border: 'none',
-    borderRadius: 11,
-    padding: '11px 20px',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
-  },
-  ghost: {
-    background: 'none',
-    color: C.textSecondary,
-    border: `1px solid ${C.border}`,
-    borderRadius: 9,
-    padding: '6px 12px',
-    fontSize: 13,
-    cursor: 'pointer',
-  },
-  danger: {
-    background: C.danger,
-    color: '#FBF8F2',
-    border: 'none',
-    borderRadius: 9,
-    padding: '8px 16px',
-    fontSize: 13,
-    cursor: 'pointer',
-  },
+// === Радиусы (единая шкала) ===
+export const R = {
+  sm:    6,       // мелкие теги/чипы
+  md:    8,       // icon-hover, мелкие кнопки тулбара
+  lg:    10,      // сегменты, компактные кнопки
+  xl:    12,      // поля ввода и кнопки форм
+  xxl:   14,      // крупные поля/кнопки (логин)
+  pill:  9,       // pill-переключатели
+  modal: 20,      // карточки модальных окон
+  full:  '50%',   // круги (аватары, тумблеры)
 } as const
 
-// Тулбары — единая система (высота, паддинги, icon-кнопка, pill-переключатель)
+// === Тени ===
+export const SHADOW = {
+  focus:    '0 0 0 3px rgba(217,119,87,0.14)',   // focus-ring контролов
+  card:     '0 2px 8px rgba(60,50,35,0.05)',     // лёгкая тень карточек
+  dropdown: '0 8px 28px rgba(60,50,35,0.16)',    // выпадающие меню
+  modal:    '0 24px 60px rgba(23,19,15,0.40)',   // модальные окна
+  button:   '0 4px 14px rgba(217,119,87,0.30)',  // свечение основной кнопки
+  thumb:    '0 1px 3px rgba(42,37,31,0.12)',     // бегунок переключателя
+} as const
+
+// === Базовый стиль текстового поля (для контролов в обёртках с иконкой) ===
+export const FIELD = {
+  background:   C.bgWhite,
+  border:       `1px solid ${C.border}`,
+  borderRadius: R.xl,
+  color:        C.textHeading,
+  fontSize:     14,
+  // focus-состояние применяют контролы через borderFocus/SHADOW.focus
+  borderFocus:  C.accent,
+} as const
+
+// === Тулбары — единая система (высота, паддинги, icon-кнопка, pill-переключатель) ===
 export const TB = {
   heightDesktop: 52,
   heightMobile: 56,
@@ -98,9 +109,9 @@ export const TB = {
   iconColor: C.textMuted,
   iconColorHover: C.textPrimary,
   iconHoverBg: C.bgSelected,
-  iconRadius: 8,
+  iconRadius: R.md,
   pillTrack: C.bgSelected,
-  pillRadius: 9,
+  pillRadius: R.pill,
   pillThumbBg: C.bgWhite,
-  pillThumbShadow: '0 1px 3px rgba(42,37,31,0.12)',
+  pillThumbShadow: SHADOW.thumb,
 } as const

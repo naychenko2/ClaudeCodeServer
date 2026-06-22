@@ -37,8 +37,14 @@ public record AskQuestionMessage(string ToolUseId, object Input)
 public record FileChangedMessage(string Path, int Added, int Removed)
     : ServerMessage("file_changed");
 
-public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null)
+public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null)
     : ServerMessage("result");
+
+// Ответ оборван по лимиту токенов (assistant stop_reason == max_tokens)
+public record TruncatedMessage() : ServerMessage("truncated");
+
+// Скрытое (зашифрованное) размышление — блок redacted_thinking
+public record RedactedThinkingMessage() : ServerMessage("redacted_thinking");
 
 public record ErrorMessage(string Text)
     : ServerMessage("error");

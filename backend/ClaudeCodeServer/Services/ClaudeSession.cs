@@ -357,8 +357,15 @@ public class ClaudeSession : IAsyncDisposable
                 var totalCost = root.TryGetProperty("total_cost_usd", out var tc) ? tc.GetDouble() : (double?)null;
                 var apiErr = root.TryGetProperty("api_error_status", out var ae) && ae.ValueKind == JsonValueKind.String
                     ? ae.GetString() : null;
+                List<string>? denials = null;
+                if (root.TryGetProperty("permission_denials", out var pd) && pd.ValueKind == JsonValueKind.Array && pd.GetArrayLength() > 0)
+                {
+                    denials = [];
+                    foreach (var x in pd.EnumerateArray())
+                        denials.Add(x.TryGetProperty("tool_name", out var tnm) ? tnm.GetString() ?? "?" : "?");
+                }
                 Info.Status = subtype == "error" ? SessionStatus.Error : SessionStatus.Finished;
-                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, ParseUsage(root), totalCost, apiErr));
+                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, ParseUsage(root), totalCost, apiErr, denials));
                 // Закрываем stdin: все permission-запросы уже обработаны, Claude может завершить процесс
                 try { _currentProcess?.StandardInput.Close(); } catch { }
                 break;
@@ -473,7 +480,11 @@ public class ClaudeSession : IAsyncDisposable
         foreach (var block in content.EnumerateArray())
         {
             if (!block.TryGetProperty("type", out var bt)) continue;
-            if (bt.GetString() != "tool_use") continue;
+            var blockType = bt.GetString();
+
+            // Скрытое размышление — показываем плашку-плейсхолдер
+            if (blockType == "redacted_thinking") { await _onMessage(new RedactedThinkingMessage()); continue; }
+            if (blockType != "tool_use") continue;
 
             var toolId = block.TryGetProperty("id", out var tid) ? tid.GetString() ?? "" : "";
             var toolName = block.TryGetProperty("name", out var tn) ? tn.GetString() ?? "" : "";
@@ -484,6 +495,10 @@ public class ClaudeSession : IAsyncDisposable
             if (toolName == "AskUserQuestion") continue;
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }
+
+        // Ответ оборван по лимиту токенов
+        if (msg.TryGetProperty("stop_reason", out var stopReason) && stopReason.GetString() == "max_tokens")
+            await _onMessage(new TruncatedMessage());
     }
 
     private async Task HandlePermissionAsync(JsonElement root)

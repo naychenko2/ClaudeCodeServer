@@ -54,10 +54,10 @@ internal class TurnAccumulator
     }
 
     public async Task OnResultAsync(string subtype, long durationMs, int numTurns,
-        UsageInfo? usage, double? totalCostUsd, string? apiErrorStatus, ChatHistoryService svc)
+        UsageInfo? usage, double? totalCostUsd, string? apiErrorStatus, IReadOnlyList<string>? permissionDenials, ChatHistoryService svc)
     {
         FlushBuffers();
-        _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns, usage, totalCostUsd, apiErrorStatus));
+        _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns, usage, totalCostUsd, apiErrorStatus, permissionDenials));
         await FlushAsync(svc);
     }
 

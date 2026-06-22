@@ -43,7 +43,8 @@ public class StoredFileChangedMessage(string path, int added, int removed) : Sto
 }
 
 public class StoredResultMessage(string subtype, long durationMs, int numTurns,
-    UsageInfo? usage = null, double? totalCostUsd = null, string? apiErrorStatus = null) : StoredMessage
+    UsageInfo? usage = null, double? totalCostUsd = null, string? apiErrorStatus = null,
+    IReadOnlyList<string>? permissionDenials = null) : StoredMessage
 {
     public string Subtype { get; init; } = subtype;
     public long DurationMs { get; init; } = durationMs;
@@ -51,6 +52,7 @@ public class StoredResultMessage(string subtype, long durationMs, int numTurns,
     public UsageInfo? Usage { get; init; } = usage;
     public double? TotalCostUsd { get; init; } = totalCostUsd;
     public string? ApiErrorStatus { get; init; } = apiErrorStatus;
+    public IReadOnlyList<string>? PermissionDenials { get; init; } = permissionDenials;
 }
 
 public class StoredErrorMessage(string text) : StoredMessage

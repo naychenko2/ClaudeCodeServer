@@ -47,10 +47,12 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
   | { type: 'ask_question'; toolUseId: string; input: unknown }
   | { type: 'file_changed'; path: string; added: number; removed: number }
-  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string }
+  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[] }
   | { type: 'error'; text: string }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string }
   | { type: 'compact_boundary'; trigger: string; preTokens?: number }
+  | { type: 'truncated' }
+  | { type: 'redacted_thinking' }
   | { type: 'exited' }
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
 );
@@ -72,9 +74,11 @@ export type ChatItem =
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean }
   | { kind: 'file_changed'; path: string; added: number; removed: number }
-  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string }
+  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[] }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string }
   | { kind: 'compact_boundary'; trigger: string; preTokens?: number }
+  | { kind: 'truncated' }
+  | { kind: 'redacted_thinking' }
   | { kind: 'interrupted' }
   | { kind: 'resumed' }
   | { kind: 'error'; text: string; canRetry?: boolean };

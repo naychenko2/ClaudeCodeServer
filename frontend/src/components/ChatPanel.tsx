@@ -412,13 +412,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
         {/* Сообщения (нижний отступ = высота плавающего composer) */}
         <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 760, margin: '0 auto' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {items.map((item, i) => (
               <ChatItemView
                 key={i}
                 item={item}
                 index={i}
                 online={online}
+                streaming={isWaiting && i === items.length - 1}
                 onToggleThinking={toggleThinking}
                 onAllowPermission={allowPermission}
                 onDenyPermission={denyPermission}
@@ -441,7 +442,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
         {/* Composer — плавающий над доком, контент виден под ним */}
         <div ref={composerWrapRef} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '0 16px 12px', pointerEvents: 'none' }}>
-          <div style={{ maxWidth: 760, margin: '0 auto', pointerEvents: 'auto', borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
+          <div style={{ width: '100%', pointerEvents: 'auto', borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
             {online ? (
               <Composer
                 onSend={handleSend}
@@ -489,7 +490,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         {/* Empty state */}
         {items.length === 0 && online && (
           <div style={{
@@ -548,6 +549,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             item={item}
             index={i}
             online={online}
+            streaming={isWaiting && i === items.length - 1}
             onToggleThinking={toggleThinking}
             onAllowPermission={allowPermission}
             onDenyPermission={denyPermission}
@@ -1000,7 +1002,7 @@ function AskQuestionView({ item, online, onAnswer }: {
 }
 
 // Ответ ассистента с действиями «Копировать / Повторить» под текстом
-function TextMessageView({ text, online, onRetry }: { text: string; online: boolean; onRetry: () => void }) {
+function TextMessageView({ text, online, onRetry, streaming }: { text: string; online: boolean; onRetry: () => void; streaming?: boolean }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
     navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {});
@@ -1015,8 +1017,11 @@ function TextMessageView({ text, online, onRetry }: { text: string; online: bool
       <ClaudeHeader />
       <div style={{ fontSize: 14, color: '#2A251F', wordBreak: 'break-word', paddingLeft: 30 }}>
         <MarkdownContent text={text} />
+        {/* Мигающая каретка стриминга (B2) */}
+        {streaming && <span style={{ display: 'inline-block', width: 7, height: 15, marginTop: 3, borderRadius: 1, background: '#D97757', animation: 'blink 1s step-start infinite', verticalAlign: 'text-bottom' }} />}
       </div>
-      <div className="msg-actions" style={{ paddingLeft: 30, display: 'flex', gap: 4 }}>
+      {/* Действия — только когда генерация завершена */}
+      {!streaming && <div className="msg-actions" style={{ paddingLeft: 30, display: 'flex', gap: 4 }}>
         <button onClick={copy} style={act} title="Скопировать ответ"
           onMouseEnter={e => (e.currentTarget.style.background = '#EDE7DA')}
           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -1032,7 +1037,7 @@ function TextMessageView({ text, online, onRetry }: { text: string; online: bool
             Повторить
           </button>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -1041,6 +1046,7 @@ interface ItemProps {
   item: ChatItem;
   index: number;
   online: boolean;
+  streaming?: boolean;
   onToggleThinking: (i: number) => void;
   onAllowPermission: (id: string) => void;
   onDenyPermission: (id: string) => void;
@@ -1051,7 +1057,7 @@ interface ItemProps {
   onRetry: () => void;
 }
 
-function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onOpenFile, onRevert, onRetry }: ItemProps) {
+function ChatItemView({ item, index, online, streaming, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onOpenFile, onRevert, onRetry }: ItemProps) {
   switch (item.kind) {
     case 'user_message':
       return (
@@ -1121,7 +1127,7 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
       );
 
     case 'text':
-      return <TextMessageView text={item.text} online={online} onRetry={onRetry} />;
+      return <TextMessageView text={item.text} online={online} onRetry={onRetry} streaming={streaming} />;
 
     case 'thinking':
       return (
@@ -1243,7 +1249,7 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
                   cursor: 'pointer', fontSize: 12, color: '#B05C38', padding: '4px 0',
                 }}
               >
-                Всегда разрешать «{item.toolName}» в этой сессии
+                Всегда разрешать «{item.toolName}» в этом чате
               </button>
             </>
           ) : (
@@ -1406,6 +1412,14 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
               <span style={{ color: '#B05C38', fontWeight: 700 }}>{fmtCost(item.totalCostUsd)}</span>
             </>
           )}
+          {item.permissionDenials && item.permissionDenials.length > 0 && (
+            <>
+              {sep}
+              <span title={`Запрещено: ${item.permissionDenials.join(', ')}`} style={{ color: '#C0392B', fontWeight: 700 }}>
+                ⊘ {item.permissionDenials.length} {item.permissionDenials.length === 1 ? 'запрет' : 'запрета(ов)'}
+              </span>
+            </>
+          )}
         </div>
       );
     }
@@ -1463,7 +1477,7 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
           <div style={{ flex: 1, height: 1, background: '#E0D7C8' }} />
           <span style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
             <span style={{ color: '#B89B6E' }}>✦</span>
-            продолжение сессии
+            продолжение чата
           </span>
           <div style={{ flex: 1, height: 1, background: '#E0D7C8' }} />
         </div>
@@ -1482,6 +1496,30 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
           {online && (
             <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: '1px solid #C9BEAD', background: '#FFF', cursor: 'pointer', color: '#5A5043', whiteSpace: 'nowrap' }}>Повторить</button>
           )}
+        </div>
+      );
+
+    case 'truncated':
+      return (
+        <div style={{
+          alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 8,
+          background: '#FBF0DC', border: '1px solid #EAD2A0', borderRadius: 8, padding: '6px 12px',
+          fontSize: 12.5, color: '#9A6B1E',
+        }}>
+          <span>✂</span>
+          <span>Ответ обрезан — достигнут лимит токенов в ответе</span>
+        </div>
+      );
+
+    case 'redacted_thinking':
+      return (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+          background: '#EFEAE0', border: '1px solid #E0D7C8', borderRadius: 10,
+          fontSize: 12.5, fontStyle: 'italic', color: '#8A8070',
+        }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+          Размышление скрыто (зашифровано провайдером)
         </div>
       );
 

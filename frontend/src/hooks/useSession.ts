@@ -150,8 +150,14 @@ function ensureHandler() {
         setState(sid, prev => ({
           ...prev,
           isWaiting: false,
-          items: [...prev.items, { kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd, apiErrorStatus: msg.apiErrorStatus }],
+          items: [...prev.items, { kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd, apiErrorStatus: msg.apiErrorStatus, permissionDenials: msg.permissionDenials }],
         }));
+        break;
+      case 'truncated':
+        updateItems(sid, items => [...items, { kind: 'truncated' }]);
+        break;
+      case 'redacted_thinking':
+        updateItems(sid, items => [...items, { kind: 'redacted_thinking' }]);
         break;
       case 'rate_limit':
         // Мягкий лимит во время хода — claude приостановился, ждём сброса. isWaiting не трогаем.

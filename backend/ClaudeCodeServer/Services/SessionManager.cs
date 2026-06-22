@@ -226,7 +226,7 @@ public class SessionManager
                     await acc.SaveSnapshotAsync(_history); // промежуточное сохранение после каждого tool call
                     break;
                 case FileChangedMessage m:  acc.OnFileChanged(m.Path, m.Added, m.Removed); break;
-                case ResultMessage m:       await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, _history); break;
+                case ResultMessage m:       await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history); break;
                 case ErrorMessage m:        await acc.OnErrorAsync(m.Text, _history); break;
             }
         }

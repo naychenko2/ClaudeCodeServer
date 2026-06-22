@@ -692,19 +692,67 @@ function toolMeta(name: string): { color: string; icon: React.ReactNode } {
     return { color: '#8E4A82', icon: svg(<><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></>) };
   if (n === 'task')
     return { color: '#B05C38', icon: svg(<><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>) };
+  if (n === 'skill')
+    return { color: '#8E4A82', icon: svg(<><path d="M12 3l1.9 5.2L19 10l-5.1 1.8L12 17l-1.9-5.2L5 10l5.1-1.8z" /><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" /></>) };
   return { color: '#3E7CA6', icon: svg(<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6 2 2 6-6a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3z" />) };
+}
+
+// Inline-diff для Edit/MultiEdit/Write: удалённые строки красным, добавленные зелёным
+function DiffBody({ hunks }: { hunks: Array<{ old?: string; new?: string }> }) {
+  const MAX = 240;
+  let count = 0;
+  const rows: React.ReactNode[] = [];
+  const pushLines = (text: string, kind: 'del' | 'add') => {
+    for (const ln of text.split('\n')) {
+      if (count >= MAX) return;
+      rows.push(
+        <div key={count} style={{
+          display: 'flex', gap: 7, padding: '0 9px',
+          background: kind === 'del' ? '#FBEAE7' : '#EAF4E6',
+          color: kind === 'del' ? '#A8392C' : '#37722B',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        }}>
+          <span style={{ userSelect: 'none', opacity: 0.55, flexShrink: 0 }}>{kind === 'del' ? '−' : '+'}</span>
+          <span style={{ flex: 1 }}>{ln || ' '}</span>
+        </div>
+      );
+      count++;
+    }
+  };
+  hunks.forEach(h => { if (h.old) pushLines(h.old, 'del'); if (h.new) pushLines(h.new, 'add'); });
+  return (
+    <div style={{
+      margin: '0 0 9px', borderRadius: 7, overflow: 'hidden', border: '1px solid #E7E0D2',
+      fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, lineHeight: 1.55,
+      maxHeight: 320, overflowY: 'auto',
+    }}>
+      {rows}
+      {count >= MAX && <div style={{ padding: '2px 9px', color: '#9A8F7E', fontStyle: 'italic' }}>…(обрезано)</div>}
+    </div>
+  );
 }
 
 // Строка инструмента с раскрываемым телом результата (вывод Bash/Read и т.п.)
 function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }) {
   const meta = toolMeta(item.name);
   const [open, setOpen] = useState(false);
-  const toolArg = (() => {
-    if (!item.input) return '';
-    const inp = item.input as Record<string, unknown>;
-    return String(inp.path ?? inp.command ?? inp.file_path ?? inp.pattern ?? '');
-  })();
-  const hasBody = item.result !== undefined && item.result.trim().length > 0;
+  const n = item.name.toLowerCase();
+  const inp = (item.input ?? {}) as Record<string, any>;
+  const toolArg = String(inp.command ?? inp.file_path ?? inp.path ?? inp.pattern ?? inp.query ?? inp.url ?? inp.notebook_path ?? inp.description ?? inp.prompt ?? '');
+  // MCP-инструменты приходят как mcp__server__tool — показываем «server · tool»
+  const displayName = item.name.startsWith('mcp__') ? item.name.slice(5).replace(/__/g, ' · ') : item.name;
+  // Inline-diff из input (доступен сразу, не дожидаясь tool_result)
+  const editHunks: Array<{ old?: string; new?: string }> =
+    n === 'edit' && (typeof inp.old_string === 'string' || typeof inp.new_string === 'string')
+      ? [{ old: inp.old_string, new: inp.new_string }]
+    : n === 'multiedit' && Array.isArray(inp.edits)
+      ? inp.edits.map((e: any) => ({ old: e.old_string, new: e.new_string }))
+    : n === 'write' && typeof inp.content === 'string'
+      ? [{ new: inp.content }]
+    : [];
+  const hasDiff = editHunks.length > 0;
+  const hasResult = item.result !== undefined && item.result.trim().length > 0;
+  const hasBody = hasDiff || hasResult;
 
   return (
     <div style={{ borderTop: '1px solid #E7E0D2', borderBottom: '1px solid #E7E0D2' }}>
@@ -715,7 +763,7 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
         {item.result === undefined && <ToolSpinner />}
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: meta.color }}>
           {meta.icon}
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600 }}>{item.name}</span>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600 }}>{displayName}</span>
         </span>
         {toolArg
           ? <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, flex: 1, color: '#39332B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolArg}</span>
@@ -729,7 +777,8 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
           <span style={{ color: '#9A8F7E', fontSize: 11, flexShrink: 0, display: 'inline-block', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
         )}
       </div>
-      {open && hasBody && (
+      {open && hasDiff && <DiffBody hunks={editHunks} />}
+      {open && !hasDiff && hasResult && (
         <pre style={{
           margin: '0 0 9px', padding: '8px 10px', background: '#2A251F', borderRadius: 7,
           color: item.isError ? '#F0B8AC' : '#D8CFC0', fontFamily: "'JetBrains Mono', monospace",

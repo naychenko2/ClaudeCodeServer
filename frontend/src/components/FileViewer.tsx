@@ -127,6 +127,61 @@ const DownloadIcon = () => (
   </svg>
 );
 
+// Парсинг unified-diff (git) в строки с номерами old/new и заголовками ханков
+interface DiffRow { type: 'hunk' | 'add' | 'del' | 'ctx' | 'meta'; text: string; oldNo?: number; newNo?: number }
+function parseDiff(diff: string): DiffRow[] {
+  const rows: DiffRow[] = [];
+  let oldNo = 0, newNo = 0;
+  for (const raw of diff.split('\n')) {
+    if (raw.startsWith('diff --git') || raw.startsWith('index ') || raw.startsWith('--- ') || raw.startsWith('+++ ') ||
+        raw.startsWith('new file') || raw.startsWith('deleted file') || raw.startsWith('similarity') || raw.startsWith('rename ')) continue;
+    if (raw.startsWith('@@')) {
+      const m = raw.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (m) { oldNo = parseInt(m[1], 10); newNo = parseInt(m[2], 10); }
+      rows.push({ type: 'hunk', text: raw });
+    } else if (raw.startsWith('+')) {
+      rows.push({ type: 'add', text: raw.slice(1), newNo }); newNo++;
+    } else if (raw.startsWith('-')) {
+      rows.push({ type: 'del', text: raw.slice(1), oldNo }); oldNo++;
+    } else if (raw.startsWith('\\')) {
+      rows.push({ type: 'meta', text: raw });
+    } else {
+      rows.push({ type: 'ctx', text: raw.startsWith(' ') ? raw.slice(1) : raw, oldNo, newNo }); oldNo++; newNo++;
+    }
+  }
+  // Срезаем хвостовую пустую строку (split по \n)
+  if (rows.length && rows[rows.length - 1].type === 'ctx' && rows[rows.length - 1].text === '') rows.pop();
+  return rows;
+}
+
+function DiffView({ diff }: { diff: string }) {
+  const rows = parseDiff(diff);
+  const gutter: React.CSSProperties = { width: 40, textAlign: 'right', padding: '0 7px', color: '#C4BBA9', userSelect: 'none', flexShrink: 0 };
+  return (
+    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, lineHeight: '1.55' }}>
+      {rows.map((r, i) => {
+        if (r.type === 'hunk') return (
+          <div key={i} style={{ background: '#EEF2F6', color: '#5C7390', padding: '2px 10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{r.text}</div>
+        );
+        if (r.type === 'meta') return (
+          <div key={i} style={{ color: '#9A8F7E', padding: '0 10px', fontStyle: 'italic' }}>{r.text}</div>
+        );
+        const bg = r.type === 'add' ? '#EAF3E7' : r.type === 'del' ? '#F8E7E1' : 'transparent';
+        const sign = r.type === 'add' ? '+' : r.type === 'del' ? '−' : '';
+        const signColor = r.type === 'add' ? '#37722B' : '#A8392C';
+        return (
+          <div key={i} style={{ display: 'flex', background: bg, alignItems: 'flex-start' }}>
+            <span style={gutter}>{r.oldNo ?? ''}</span>
+            <span style={gutter}>{r.newNo ?? ''}</span>
+            <span style={{ width: 16, textAlign: 'center', color: signColor, userSelect: 'none', flexShrink: 0 }}>{sign}</span>
+            <span style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: '#2A251F', paddingRight: 10 }}>{r.text || ' '}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleFullscreen }: Props) {
   const online = useOnline();
   const [fileContent, setFileContent] = useState<FileContent | null>(null);
@@ -466,6 +521,8 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
                       style={oneLight}
                       customStyle={{ margin: 0, padding: 0, background: 'transparent', fontSize: 13, lineHeight: '1.6', fontFamily: "'JetBrains Mono', monospace" }}
                       codeTagProps={{ style: { fontFamily: "'JetBrains Mono', monospace" } }}
+                      showLineNumbers
+                      lineNumberStyle={{ minWidth: '2.6em', paddingRight: '1.1em', textAlign: 'right', color: '#C4BBA9', userSelect: 'none' }}
                       wrapLongLines
                     >
                       {content}
@@ -476,15 +533,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
 
         {!loading && !loadError && tab === 'diff' && (
           diff
-            ? <pre style={{ margin: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                {diff.split('\n').map((line, i) => (
-                  <div key={i} style={{
-                    background: line.startsWith('+') ? '#E8F5E9' : line.startsWith('-') ? '#FFEBEE' : 'transparent',
-                    color: line.startsWith('+') ? '#1B5E20' : line.startsWith('-') ? '#B71C1C' : '#555',
-                    padding: '0 4px',
-                  }}>{line}</div>
-                ))}
-              </pre>
+            ? <DiffView diff={diff} />
             : <div style={{ color: '#8A8070', fontSize: 13, padding: 16 }}>Файл не изменён</div>
         )}
       </div>

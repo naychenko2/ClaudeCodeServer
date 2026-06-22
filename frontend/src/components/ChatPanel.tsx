@@ -672,8 +672,30 @@ function TodoPlanView({ input }: { input: unknown }) {
   );
 }
 
+// Иконка и цвет по типу инструмента — чтобы read/edit/bash/web/mcp различались с первого взгляда
+function toolMeta(name: string): { color: string; icon: React.ReactNode } {
+  const n = name.toLowerCase();
+  const svg = (children: React.ReactNode) => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
+  );
+  if (n.startsWith('mcp__'))
+    return { color: '#8E4A82', icon: svg(<><path d="M9 2v6M15 2v6" /><path d="M6 8h12v3a6 6 0 0 1-12 0z" /><path d="M12 17v5" /></>) };
+  if (['read', 'glob', 'grep', 'ls'].includes(n))
+    return { color: '#3E7CA6', icon: svg(<><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></>) };
+  if (['edit', 'write', 'multiedit', 'notebookedit'].includes(n))
+    return { color: '#C2693B', icon: svg(<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></>) };
+  if (n.startsWith('bash') || n.includes('shell'))
+    return { color: '#5E8B4E', icon: svg(<><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></>) };
+  if (['websearch', 'webfetch'].includes(n))
+    return { color: '#8E4A82', icon: svg(<><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></>) };
+  if (n === 'task')
+    return { color: '#B05C38', icon: svg(<><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>) };
+  return { color: '#3E7CA6', icon: svg(<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6 2 2 6-6a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3z" />) };
+}
+
 // Строка инструмента с раскрываемым телом результата (вывод Bash/Read и т.п.)
 function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }) {
+  const meta = toolMeta(item.name);
   const [open, setOpen] = useState(false);
   const toolArg = (() => {
     if (!item.input) return '';
@@ -689,8 +711,9 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
         onClick={() => hasBody && setOpen(o => !o)}
       >
         {item.result === undefined && <ToolSpinner />}
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: '#3E7CA6', fontWeight: 600, flexShrink: 0 }}>
-          {item.name}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: meta.color }}>
+          {meta.icon}
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600 }}>{item.name}</span>
         </span>
         {toolArg
           ? <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, flex: 1, color: '#39332B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolArg}</span>
@@ -989,6 +1012,46 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
       const fmtCost = (c: number) => '$' + (c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2));
       const u = item.usage;
       const sep = <span style={{ opacity: 0.45 }}>·</span>;
+
+      // Ошибочный итог хода — показываем причину и предлагаем повторить
+      if (!ok) {
+        const REASONS: Record<string, string> = {
+          error_max_turns: 'достигнут лимит ходов',
+          error_during_execution: 'сбой во время выполнения',
+          error_max_budget_usd: 'исчерпан бюджет',
+          error_max_structured_output_retries: 'не удалось получить структурированный ответ',
+        };
+        const reason = REASONS[item.subtype] ?? `ход завершился с ошибкой (${item.subtype})`;
+        return (
+          <div style={{
+            alignSelf: 'center', maxWidth: '100%',
+            background: '#FDECEA', border: '1px solid #F5C6CB', borderRadius: 8,
+            padding: '8px 12px', fontSize: 12.5, color: '#C0392B',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, flexWrap: 'wrap',
+          }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <span style={{ fontWeight: 700 }}>✗</span>
+              <span>{reason}</span>
+              <span style={{ opacity: 0.65, fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>
+                · {item.numTurns} {stepWord(item.numTurns)} · {(item.durationMs / 1000).toFixed(1)}с
+              </span>
+            </span>
+            {online && (
+              <button
+                onClick={onRetry}
+                style={{
+                  fontSize: 12, padding: '4px 10px', borderRadius: 6,
+                  border: '1px solid #C0392B', background: '#FFF', cursor: 'pointer',
+                  color: '#C0392B', whiteSpace: 'nowrap', flexShrink: 0,
+                }}
+              >
+                Повторить
+              </button>
+            )}
+          </div>
+        );
+      }
+
       return (
         <div style={{
           fontSize: 11, color: '#8A8070', alignSelf: 'center',

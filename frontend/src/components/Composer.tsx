@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { C, R, FONT, SHADOW } from '../lib/design';
 
 export interface ComposerProps {
   onSend: (text: string, attachments: string[]) => void;
@@ -209,9 +210,9 @@ export function Composer({
 
   // Стили контейнера
   const containerStyle: React.CSSProperties = {
-    background: isGenerating ? '#FBF8F2' : '#FFFFFF',
-    border: `1px solid ${isGenerating ? '#E8E1D4' : hasText ? '#D97757' : '#E0D7C8'}`,
-    borderRadius: 14,
+    background: isGenerating ? C.bgCard : C.bgWhite,
+    border: `1px solid ${isGenerating ? C.bgSelected : hasText ? C.accent : C.border}`,
+    borderRadius: R.xxl,
     padding: isMobile ? '8px 10px' : '7px 8px',
     boxShadow: hasText && !isGenerating ? '0 3px 12px rgba(217,119,87,0.10)' : 'none',
     display: 'flex',
@@ -237,8 +238,8 @@ export function Composer({
       onClick={onAttach}
       title="Прикрепить файл"
       style={{
-        width: 32, height: 32, borderRadius: 9, border: 'none', background: 'none',
-        cursor: 'pointer', color: '#8A8072', display: 'flex', alignItems: 'center',
+        width: 32, height: 32, borderRadius: R.pill, border: 'none', background: 'none',
+        cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
         justifyContent: 'center', flexShrink: 0,
       }}
     >
@@ -252,14 +253,14 @@ export function Composer({
   const inputArea = isGenerating ? (
     <div style={dotsStyle}>
       <ThreeDots />
-      <span style={{ fontStyle: 'italic', color: '#9A8F7E', fontSize: 14 }}>
+      <span style={{ fontStyle: 'italic', color: C.textMuted, fontSize: 14 }}>
         Claude печатает…
       </span>
     </div>
   ) : isListening ? (
     <div style={{ ...dotsStyle, gap: 10 }}>
       <span style={{ width: 9, height: 9, borderRadius: '50%', background: '#D9534F', animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
-      <span style={{ fontSize: 13, color: '#C2532E', fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", flexShrink: 0, minWidth: 34 }}>{fmtRecTime(recSeconds)}</span>
+      <span style={{ fontSize: 13, color: '#C2532E', fontWeight: 600, fontFamily: FONT.mono, flexShrink: 0, minWidth: 34 }}>{fmtRecTime(recSeconds)}</span>
       <Waveform />
     </div>
   ) : (
@@ -278,7 +279,7 @@ export function Composer({
         outline: 'none',
         resize: 'none',
         fontSize: isMobile ? 16 : 15, // 16px — чтобы iOS не зумил при фокусе
-        color: '#39332B',
+        color: C.textPrimary,
         background: 'transparent',
         minHeight: 34,
         maxHeight: 200,
@@ -297,8 +298,8 @@ export function Composer({
         onClick={() => setModeMenuOpen(o => !o)}
         title="Режим работы"
         style={{
-          height: isMobile ? 32 : 28, padding: '0 10px', borderRadius: 8, border: 'none',
-          background: modeMenuOpen ? '#EBE3D6' : '#F4ECE1', color: '#756B5E',
+          height: isMobile ? 32 : 28, padding: '0 10px', borderRadius: R.md, border: 'none',
+          background: modeMenuOpen ? C.bgSelected : C.accentLight, color: C.textSecondary,
           fontSize: 12.5, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
           display: 'flex', alignItems: 'center', gap: 6,
         }}
@@ -313,8 +314,8 @@ export function Composer({
       {modeMenuOpen && (
         <div style={{
           position: 'absolute', bottom: 'calc(100% + 6px)', right: 0, minWidth: 248, maxWidth: 'calc(100vw - 32px)',
-          background: '#FFFFFF', border: '1px solid #E0D7C8', borderRadius: 12,
-          boxShadow: '0 8px 28px rgba(60,50,35,0.16)', padding: 5, zIndex: 50,
+          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+          boxShadow: SHADOW.dropdown, padding: 5, zIndex: 50,
         }}>
           {MODES.map(m => {
             const active = m === mode;
@@ -322,19 +323,19 @@ export function Composer({
               <button key={m} onClick={() => { onModeChange(m); setModeMenuOpen(false); }}
                 style={{
                   width: '100%', display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 9px',
-                  borderRadius: 9, border: 'none', background: active ? '#F4ECE1' : 'transparent',
+                  borderRadius: R.pill, border: 'none', background: active ? C.accentLight : 'transparent',
                   cursor: 'pointer', textAlign: 'left',
                 }}
                 onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#F7F2EA'; }}
                 onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
               >
-                <span style={{ color: active ? '#D97757' : '#9A8F7E', display: 'flex', marginTop: 1, flexShrink: 0 }}><ModeIcon mode={m} /></span>
+                <span style={{ color: active ? C.accent : C.textMuted, display: 'flex', marginTop: 1, flexShrink: 0 }}><ModeIcon mode={m} /></span>
                 <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#2A251F' }}>{MODE_META[m].label}</span>
-                  <span style={{ display: 'block', fontSize: 11.5, color: '#9A8F7E', marginTop: 1, lineHeight: 1.35 }}>{MODE_META[m].desc}</span>
+                  <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading }}>{MODE_META[m].label}</span>
+                  <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, marginTop: 1, lineHeight: 1.35 }}>{MODE_META[m].desc}</span>
                 </span>
                 {active && (
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M20 6L9 17l-5-5" /></svg>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M20 6L9 17l-5-5" /></svg>
                 )}
               </button>
             );
@@ -349,8 +350,8 @@ export function Composer({
       onClick={startMic}
       title="Голосовой ввод"
       style={{
-        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: 9, border: 'none',
-        background: 'none', cursor: 'pointer', color: '#9A8F7E',
+        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
+        background: 'none', cursor: 'pointer', color: C.textMuted,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
         transition: 'color 0.15s, background 0.15s',
       }}
@@ -362,13 +363,13 @@ export function Composer({
   // Во время записи mic+send заменяются на отмену (✕) и подтверждение (✓)
   const cancelRecBtn = (
     <button onClick={() => stopMic(false)} title="Отменить запись"
-      style={{ width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: 9, border: 'none', background: '#F4E7E4', color: '#B23A2E', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      style={{ width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: C.dangerBg, color: C.danger, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
     </button>
   );
   const confirmRecBtn = (
     <button onClick={() => stopMic(true)} title="Готово — вставить текст"
-      style={{ width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: 9, border: 'none', background: '#5E8B4E', color: '#FBF8F2', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      style={{ width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: R.pill, border: 'none', background: C.success, color: C.onAccent, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
     </button>
   );
@@ -380,10 +381,10 @@ export function Composer({
       style={{
         width: isMobile ? 38 : 34,
         height: isMobile ? 38 : 34,
-        borderRadius: 9,
+        borderRadius: R.pill,
         border: 'none',
-        background: '#2A251F',
-        color: '#F4F0E8',
+        background: C.textHeading,
+        color: C.bgMain,
         cursor: 'pointer',
         display: 'flex',
         alignItems: 'center',
@@ -401,10 +402,10 @@ export function Composer({
       style={{
         width: isMobile ? 38 : 34,
         height: isMobile ? 38 : 34,
-        borderRadius: 9,
+        borderRadius: R.pill,
         border: 'none',
-        background: hasText || attachments.length > 0 ? '#D97757' : '#E7DFD2',
-        color: hasText || attachments.length > 0 ? '#FBF8F2' : '#B0A697',
+        background: hasText || attachments.length > 0 ? C.accent : C.bgSelected,
+        color: hasText || attachments.length > 0 ? C.onAccent : C.textMuted,
         cursor: hasText || attachments.length > 0 ? 'pointer' : 'default',
         display: 'flex',
         alignItems: 'center',
@@ -438,12 +439,12 @@ export function Composer({
                   display: 'flex',
                   alignItems: 'center',
                   gap: 5,
-                  background: '#F4ECE1',
-                  borderRadius: 8,
+                  background: C.accentLight,
+                  borderRadius: R.md,
                   height: 30,
                   padding: '0 9px 0 7px',
                   fontSize: 12,
-                  color: '#5C5246',
+                  color: C.textSecondary,
                 }}
               >
                 <FileIcon name={name} />
@@ -458,7 +459,7 @@ export function Composer({
                     cursor: 'pointer',
                     padding: 0,
                     marginLeft: 2,
-                    color: '#9A8F7E',
+                    color: C.textMuted,
                     lineHeight: 1,
                     fontSize: 13,
                     display: 'flex',

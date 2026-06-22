@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { useOnline } from '../hooks/useOnline';
 import { getSyncProgress, subscribeSyncProgress, syncLabel, syncCount } from '../lib/sync';
+import { C, R, FONT } from '../lib/design';
 
 // Единый, ненавязчивый индикатор состояния связи и прогресса синхронизации.
 // Сам подписывается на онлайн-статус и стор прогресса снапшота.
@@ -35,8 +36,8 @@ function Spinner({ size = 13 }: { size?: number }) {
         width: size,
         height: size,
         borderRadius: '50%',
-        border: '2px solid #E0D7C8',
-        borderTopColor: '#D97757',
+        border: `2px solid ${C.border}`,
+        borderTopColor: C.accent,
         animation: 'spin 0.8s linear infinite',
         flexShrink: 0,
       }}
@@ -68,34 +69,34 @@ export function ConnectionStatus(props: Props) {
   const state: ConnState = progress.active ? 'syncing' : online ? 'online' : 'offline';
 
   // Цвет точки-статуса: онлайн = зелёный, офлайн = приглушённый серый
-  const dotColor = state === 'offline' ? '#A89F8E' : '#5E8B4E';
+  const dotColor = state === 'offline' ? C.textMuted : C.success;
 
   if (props.variant === 'footer') {
     // Строка состояния: при синхронизации/офлайне заменяет путь проекта
     let statusText = props.subtitle;
-    let statusColor = '#9A8F7E';
+    let statusColor: string = C.textMuted;
     let statusMono = true; // путь — моноширинным
     if (state === 'syncing') {
       statusText = syncLabel(progress);
-      statusColor = '#BE5536';
+      statusColor = C.accent;
       statusMono = false;
     } else if (state === 'offline') {
       statusText = 'Офлайн — сохранённые данные';
-      statusColor = '#8A8070';
+      statusColor = C.textMuted;
       statusMono = false;
     }
 
     return (
       <>
         {/* Иконка-кружок слева: спиннер при синхронизации, иначе точка-статус */}
-        <div style={{ width: 32, height: 32, borderRadius: 9, background: '#FFFFFF', border: '1px solid #E0D7C8', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <div style={{ width: 32, height: 32, borderRadius: R.pill, background: C.bgWhite, border: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           {state === 'syncing'
             ? <Spinner size={14} />
             : <div style={{ width: 9, height: 9, borderRadius: '50%', background: dotColor }} />}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#2A251F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{props.title}</div>
-          <div style={{ fontSize: 11, color: statusColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: statusMono ? "'JetBrains Mono', monospace" : "'Hanken Grotesk', sans-serif", fontWeight: statusMono ? 400 : 600 }}>{statusText}</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{props.title}</div>
+          <div style={{ fontSize: 11, color: statusColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: statusMono ? FONT.mono : FONT.sans, fontWeight: statusMono ? 400 : 600 }}>{statusText}</div>
         </div>
       </>
     );
@@ -112,10 +113,10 @@ export function ConnectionStatus(props: Props) {
         <Spinner size={12} />
         {/* «Синхронизация» — необязательная подпись, жертвуется первой при нехватке места */}
         <span style={{
-          fontFamily: "'Hanken Grotesk', sans-serif",
+          fontFamily: FONT.sans,
           fontSize: 11,
           fontWeight: 600,
-          color: '#8A8070',
+          color: C.textMuted,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
@@ -125,10 +126,10 @@ export function ConnectionStatus(props: Props) {
         </span>
         {/* Счётчик — моноширинный, accent, не сжимается и не обрезается */}
         <span style={{
-          fontFamily: "'JetBrains Mono', monospace",
+          fontFamily: FONT.mono,
           fontSize: 11,
           fontWeight: 600,
-          color: '#BE5536',
+          color: C.accent,
           whiteSpace: 'nowrap',
           flexShrink: 0,
         }}>
@@ -141,11 +142,11 @@ export function ConnectionStatus(props: Props) {
   // Онлайн (URL) / офлайн — одностройный обрезаемый текст
   let text = props.label;
   let mono = true;
-  let color = '#756B5E';
+  let color: string = C.textSecondary;
   if (state === 'offline') {
     text = 'Офлайн';
     mono = false;
-    color = '#8A8070';
+    color = C.textMuted;
   }
 
   // Для онлайн-URL убираем схему (https:// / http://) — на узком экране важнее видеть хост.
@@ -158,7 +159,7 @@ export function ConnectionStatus(props: Props) {
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0, overflow: 'hidden' }}>
       <span style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
       <span style={{
-        fontFamily: mono ? "'JetBrains Mono', monospace" : "'Hanken Grotesk', sans-serif",
+        fontFamily: mono ? FONT.mono : FONT.sans,
         fontSize: 11,
         fontWeight: mono ? 400 : 600,
         color,

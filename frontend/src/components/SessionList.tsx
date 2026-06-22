@@ -7,6 +7,8 @@ import { isOnline } from '../lib/offline';
 import { StatusBadge } from './StatusBadge';
 import { EditSessionDialog } from './EditSessionDialog';
 import { modelLabel } from '../lib/models';
+import { C, R, FONT, SHADOW } from '../lib/design';
+import { Modal, Button } from './ui';
 
 interface Props {
   project: Project;
@@ -128,13 +130,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {online && (
-        <div style={{ padding: '10px 12px', borderBottom: '1px solid #D4CFC4' }}>
+        <div style={{ padding: '10px 12px', borderBottom: `1px solid ${C.divider}` }}>
           <button
             onClick={createNew}
             style={{
-              width: '100%', padding: 11, borderRadius: 12,
-              border: '1.5px dashed #D0C6B4', background: 'none', cursor: 'pointer',
-              fontSize: 13, color: '#BE5536', fontWeight: 600,
+              width: '100%', padding: 11, borderRadius: R.xl,
+              border: `1.5px dashed ${C.dashed}`, background: 'none', cursor: 'pointer',
+              fontSize: 13, color: C.accent, fontWeight: 600,
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
             }}
           >
@@ -158,15 +160,15 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               paddingRight: isMobile ? 16 : 12,
               // у активной карточки добавляем слева место под акцентную полосу
               paddingLeft: (isMobile ? 16 : 12) + (isActive ? 6 : 0),
-              borderRadius: isMobile ? 16 : 12,
+              borderRadius: isMobile ? 16 : R.xl,
               marginBottom: 5,
               cursor: 'pointer',
               overflow: 'hidden',
-              background: isActive ? '#FBF1EA' : '#FFFFFF',
-              border: '1px solid ' + (isActive ? '#D97757' : '#E8E1D4'),
+              background: isActive ? C.accentLight : C.bgWhite,
+              border: '1px solid ' + (isActive ? C.accent : C.borderLight),
               boxShadow: isActive
                 ? '0 2px 10px rgba(217,119,87,0.18)'
-                : '0 2px 8px rgba(60,50,35,0.04)',
+                : SHADOW.card,
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'flex-start',
@@ -174,17 +176,17 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           >
             {/* Акцентная полоса слева — явный маркер текущего чата */}
             {isActive && (
-              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: '#D97757' }} />
+              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: C.accent }} />
             )}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                 {s.status === 'active' && (
-                  <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#5E8B4E', flexShrink: 0 }} />
+                  <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.success, flexShrink: 0 }} />
                 )}
                 {s.status === 'waiting' && (
-                  <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#C9933A', flexShrink: 0 }} />
+                  <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.warning, flexShrink: 0 }} />
                 )}
-                <span style={{ fontSize: 13.5, fontWeight: isActive ? 700 : 600, color: '#2A251F', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: 13.5, fontWeight: isActive ? 700 : 600, color: C.textHeading, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {s.name ?? `Чат #${index + 1}`}
                 </span>
                 {(s.status === 'starting' || s.status === 'working' || s.status === 'finished' || s.status === 'error') && (
@@ -192,21 +194,21 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                 )}
               </div>
               {s.lastMessage && (
-                <div style={{ fontSize: 12, color: '#9A8F7E', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {s.lastMessage}
                 </div>
               )}
               {/* Бейдж используемой модели — тех-инфо моноширинным шрифтом */}
               <div style={{ marginTop: 5, display: 'flex' }}>
                 <span style={{
-                  fontFamily: "'JetBrains Mono', monospace",
+                  fontFamily: FONT.mono,
                   fontSize: 10.5,
                   fontWeight: 500,
                   letterSpacing: '-0.01em',
-                  color: isActive ? '#BE5536' : '#9A8F7E',
-                  background: isActive ? '#F4DECF' : '#F0EAE0',
+                  color: isActive ? C.accent : C.textMuted,
+                  background: isActive ? C.accentLight : C.bgPanel,
                   padding: '1px 6px',
-                  borderRadius: 5,
+                  borderRadius: R.sm,
                   maxWidth: '100%',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -223,12 +225,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                 title="Настройки чата"
                 style={{
                   background: 'none', border: 'none', cursor: 'pointer',
-                  color: '#9A8F7E', padding: 0, flexShrink: 0,
-                  width: 24, height: 24, borderRadius: 6,
+                  color: C.textMuted, padding: 0, flexShrink: 0,
+                  width: 24, height: 24, borderRadius: R.sm,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                 }}
-                onMouseEnter={e => { e.currentTarget.style.color = '#5A5040'; e.currentTarget.style.background = '#F0EAE0'; }}
-                onMouseLeave={e => { e.currentTarget.style.color = '#9A8F7E'; e.currentTarget.style.background = 'none'; }}
+                onMouseEnter={e => { e.currentTarget.style.color = C.textPrimary; e.currentTarget.style.background = C.bgPanel; }}
+                onMouseLeave={e => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.background = 'none'; }}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
@@ -240,12 +242,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                 title="Удалить чат"
                 style={{
                   background: 'none', border: 'none', cursor: 'pointer',
-                  color: '#9A8F7E', padding: 0, flexShrink: 0,
-                  width: 24, height: 24, borderRadius: 6,
+                  color: C.textMuted, padding: 0, flexShrink: 0,
+                  width: 24, height: 24, borderRadius: R.sm,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                 }}
-                onMouseEnter={e => { e.currentTarget.style.color = '#C0392B'; e.currentTarget.style.background = '#FFF0EE'; }}
-                onMouseLeave={e => { e.currentTarget.style.color = '#9A8F7E'; e.currentTarget.style.background = 'none'; }}
+                onMouseEnter={e => { e.currentTarget.style.color = C.danger; e.currentTarget.style.background = C.dangerBg; }}
+                onMouseLeave={e => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.background = 'none'; }}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="3 6 5 6 21 6" />
@@ -270,16 +272,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       )}
 
       {deleteTarget && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div style={{ background: '#F4F0E8', borderRadius: 20, padding: 24, width: 340, boxShadow: '0 24px 60px rgba(23,19,15,0.4)' }}>
-            <h3 style={{ fontFamily: "'PT Serif', serif", fontWeight: 500, fontSize: 20, margin: '0 0 8px', letterSpacing: '-0.01em' }}>Удалить чат?</h3>
-            <p style={{ fontSize: 13, color: '#756B5E', marginBottom: 20 }}>Это действие нельзя отменить.</p>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => setDeleteTarget(null)} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: '#EDE7DC', color: '#5C5246', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Отмена</button>
-              <button onClick={handleDelete} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: '#C0392B', color: '#FFF', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Удалить</button>
-            </div>
+        <Modal title="Удалить чат?" width={340} onClose={() => setDeleteTarget(null)}>
+          <p style={{ fontSize: 13, color: C.textSecondary, margin: 0 }}>Это действие нельзя отменить.</p>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Button variant="secondary" fullWidth onClick={() => setDeleteTarget(null)}>Отмена</Button>
+            <Button variant="danger" fullWidth onClick={handleDelete}>Удалить</Button>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

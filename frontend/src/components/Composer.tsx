@@ -85,6 +85,22 @@ function StopIcon() {
   );
 }
 
+// Дорожка-«волна» при записи (псевдо: SpeechRecognition не даёт амплитуду — анимируем полоски)
+function Waveform() {
+  const delays = [0.0, 0.12, 0.28, 0.45, 0.6, 0.32, 0.15, 0.5, 0.05, 0.36, 0.18, 0.42];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 3, flex: 1, height: 22, overflow: 'hidden' }}>
+      {delays.map((d, i) => (
+        <span key={i} className="cc-wave-bar" style={{ height: 22, animationDelay: `${d}s` }} />
+      ))}
+    </div>
+  );
+}
+
+function fmtRecTime(s: number): string {
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 export function Composer({
   onSend,
   onStop,
@@ -98,10 +114,20 @@ export function Composer({
 }: ComposerProps) {
   const [text, setText] = useState('');
   const [isListening, setIsListening] = useState(false);
+  const [recSeconds, setRecSeconds] = useState(0);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
+  const recCancelRef = useRef(false);
   const modeRef = useRef<HTMLDivElement>(null);
+
+  // Таймер записи голоса
+  useEffect(() => {
+    if (!isListening) { setRecSeconds(0); return; }
+    setRecSeconds(0);
+    const id = setInterval(() => setRecSeconds(s => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [isListening]);
 
   // Закрытие меню режимов по клику вне него
   useEffect(() => {
@@ -148,22 +174,18 @@ export function Composer({
     }
   };
 
-  const toggleMic = () => {
-    if (!hasSpeech) return;
-
-    if (isListening) {
-      recognitionRef.current?.stop();
-      return;
-    }
-
+  const startMic = () => {
+    if (!hasSpeech || isListening) return;
     const SpeechRecognitionCtor =
       (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
     const rec = new SpeechRecognitionCtor() as any;
     rec.lang = 'ru-RU';
     rec.interimResults = false;
     rec.maxAlternatives = 1;
+    recCancelRef.current = false;
 
     rec.onresult = (e: SpeechRecognitionEvent) => {
+      if (recCancelRef.current) return; // отменено — не вставляем
       const transcript = e.results[0][0].transcript;
       setText(prev => (prev ? prev + ' ' + transcript : transcript));
     };
@@ -174,6 +196,15 @@ export function Composer({
     recognitionRef.current = rec;
     rec.start();
     setIsListening(true);
+  };
+
+  // confirm=true — остановить и вставить распознанное; false — отменить без вставки
+  const stopMic = (confirm: boolean) => {
+    recCancelRef.current = !confirm;
+    try {
+      if (confirm) recognitionRef.current?.stop();
+      else recognitionRef.current?.abort();
+    } catch { /* noop */ }
   };
 
   // Стили контейнера
@@ -226,10 +257,10 @@ export function Composer({
       </span>
     </div>
   ) : isListening ? (
-    <div style={{ ...dotsStyle, gap: 9 }}>
+    <div style={{ ...dotsStyle, gap: 10 }}>
       <span style={{ width: 9, height: 9, borderRadius: '50%', background: '#D9534F', animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
-      <span style={{ fontSize: 14, color: '#C2532E', fontWeight: 500, flexShrink: 0 }}>Слушаю… говорите</span>
-      {text && <span style={{ fontSize: 13, color: '#9A8F7E', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{text}</span>}
+      <span style={{ fontSize: 13, color: '#C2532E', fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", flexShrink: 0, minWidth: 34 }}>{fmtRecTime(recSeconds)}</span>
+      <Waveform />
     </div>
   ) : (
     <textarea
@@ -315,26 +346,32 @@ export function Composer({
 
   const micButton = hasSpeech ? (
     <button
-      onClick={toggleMic}
-      title={isListening ? 'Остановить запись' : 'Голосовой ввод'}
+      onClick={startMic}
+      title="Голосовой ввод"
       style={{
-        width: isMobile ? 36 : 32,
-        height: isMobile ? 36 : 32,
-        borderRadius: 9,
-        border: 'none',
-        background: isListening ? '#FDECEA' : 'none',
-        cursor: 'pointer',
-        color: isListening ? '#D97757' : '#9A8F7E',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexShrink: 0,
+        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: 9, border: 'none',
+        background: 'none', cursor: 'pointer', color: '#9A8F7E',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
         transition: 'color 0.15s, background 0.15s',
       }}
     >
       <MicIcon />
     </button>
   ) : null;
+
+  // Во время записи mic+send заменяются на отмену (✕) и подтверждение (✓)
+  const cancelRecBtn = (
+    <button onClick={() => stopMic(false)} title="Отменить запись"
+      style={{ width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: 9, border: 'none', background: '#F4E7E4', color: '#B23A2E', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+    </button>
+  );
+  const confirmRecBtn = (
+    <button onClick={() => stopMic(true)} title="Готово — вставить текст"
+      style={{ width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: 9, border: 'none', background: '#5E8B4E', color: '#FBF8F2', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+    </button>
+  );
 
   const sendButton = isGenerating ? (
     <button
@@ -445,8 +482,7 @@ export function Composer({
             {attachButton}
             {modeButton}
             <div style={{ flex: 1 }} />
-            {micButton}
-            {sendButton}
+            {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
           </div>
         </div>
       ) : (
@@ -455,8 +491,7 @@ export function Composer({
           {attachButton}
           {inputArea}
           {modeButton}
-          {micButton}
-          {sendButton}
+          {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
         </div>
       )}
     </div>

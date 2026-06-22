@@ -1524,6 +1524,19 @@ function ChatItemView({ item, index, online, streaming, onToggleThinking, onAllo
         </div>
       );
 
+    case 'session_ended':
+      return (
+        <div style={{
+          alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
+          background: '#FDECEA', border: '1px solid #F5C6CB', borderRadius: 8, padding: '7px 12px', fontSize: 12.5, color: '#C0392B',
+        }}>
+          <span>⚠ Сессия прервана — Claude завершился неожиданно</span>
+          {online && (
+            <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: '1px solid #C0392B', background: '#FFF', cursor: 'pointer', color: '#C0392B', whiteSpace: 'nowrap' }}>Повторить</button>
+          )}
+        </div>
+      );
+
     case 'error':
       return (
         <div style={{

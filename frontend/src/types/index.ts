@@ -82,6 +82,7 @@ export type ChatItem =
   | { kind: 'redacted_thinking' }
   | { kind: 'interrupted' }
   | { kind: 'resumed' }
+  | { kind: 'session_ended' }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 export interface AuthState {

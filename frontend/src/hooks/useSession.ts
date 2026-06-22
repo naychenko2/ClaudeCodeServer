@@ -189,7 +189,12 @@ function ensureHandler() {
         }));
         break;
       case 'exited':
-        setState(sid, prev => ({ ...prev, isWaiting: false }));
+        // Процесс claude завершился. Если ждали ответ и не было result/прерывания/ошибки — это аварийный выход.
+        setState(sid, prev => {
+          const last = prev.items[prev.items.length - 1];
+          const abnormal = prev.isWaiting && !(last && (last.kind === 'interrupted' || last.kind === 'error' || last.kind === 'session_ended'));
+          return { ...prev, isWaiting: false, items: abnormal ? [...prev.items, { kind: 'session_ended' }] : prev.items };
+        });
         break;
       case 'status_changed': {
         // Синхронизируем isWaiting по статусу — работает для всех открытых вкладок/браузеров

@@ -81,6 +81,44 @@ body {
   flex-shrink: 0;
 }
 
+/* === Индикатор ожидания ответа (WaitingIndicator) === */
+@keyframes cc-pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(217, 119, 87, 0.45); }
+  70%  { box-shadow: 0 0 0 8px rgba(217, 119, 87, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(217, 119, 87, 0); }
+}
+.cc-pulse-ring { animation: cc-pulse-ring 1.6s ease-out infinite; }
+
+@keyframes cc-shimmer-text {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.cc-shimmer-text {
+  background: linear-gradient(90deg, #9A8F7E 0%, #9A8F7E 35%, #D97757 50%, #9A8F7E 65%, #9A8F7E 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: cc-shimmer-text 1.8s linear infinite;
+}
+
+/* === Действия под ответом Claude (TextMessageView) === */
+/* Десктоп с точным указателем: скрыты, проявляются по hover на сообщении */
+@media (hover: hover) and (pointer: fine) {
+  .cc-actions { opacity: 0; transition: opacity 0.15s ease; }
+  .cc-msg:hover .cc-actions, .cc-actions:focus-within { opacity: 1; }
+}
+/* Тач (нет hover): всегда видимы, приглушены */
+@media (hover: none), (pointer: coarse) {
+  .cc-actions { opacity: 0.6; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-pulse-ring { animation: none; }
+  .cc-shimmer-text { animation: none; -webkit-text-fill-color: #9A8F7E; color: #9A8F7E; }
+}
+
 /* Кастомные скроллбары — только десктоп/планшет (>=768px).
    На мобильных (<768px) остаются нативные оверлей-скроллбары. */
 @media (min-width: 768px) {

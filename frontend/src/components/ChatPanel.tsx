@@ -48,6 +48,96 @@ function ClaudeHeader() {
   );
 }
 
+// 200 шутливых вариантов «процесса» — синонимы к думаю/рассуждаю/синтезирую/создаю
+const THINKING_VERBS = [
+  'Думаю', 'Размышляю', 'Мыслю', 'Соображаю', 'Кумекаю', 'Раздумываю', 'Обмозговываю', 'Прикидываю', 'Мозгую', 'Раскидываю мозгами',
+  'Шевелю извилинами', 'Шевелю мозгами', 'Ломаю голову', 'Морщу лоб', 'Напрягаю мозг', 'Включаю мозг', 'Прогреваю мозг', 'Раскочегариваю мозг', 'Кипячу мозг', 'Перегреваю процессор',
+  'Рассуждаю', 'Анализирую', 'Взвешиваю', 'Обдумываю', 'Осмысляю', 'Прокручиваю', 'Перебираю варианты', 'Взвешиваю «за» и «против»', 'Прикидываю расклад', 'Прорабатываю',
+  'Раскладываю по полочкам', 'Раскладываю по косточкам', 'Вникаю', 'Разбираюсь', 'Докапываюсь до сути', 'Копаю глубже', 'Раскапываю суть', 'Прослеживаю связи', 'Связываю факты', 'Сопоставляю факты',
+  'Распутываю клубок', 'Разматываю клубок', 'Раскручиваю логику', 'Выстраиваю логику', 'Делаю выводы', 'Изучаю детали', 'Вглядываюсь в детали', 'Прочёсываю детали', 'Прошерстиваю', 'Свожу концы с концами',
+  'Синтезирую', 'Собираю воедино', 'Свожу воедино', 'Связываю мысли', 'Сшиваю идеи', 'Комбинирую', 'Сопоставляю', 'Структурирую', 'Систематизирую', 'Компоную',
+  'Соединяю точки', 'Собираю пазл', 'Складываю пазл', 'Собираю мозаику', 'Собираю картину', 'Складываю картину', 'Сплетаю нити', 'Стыкую факты', 'Группирую идеи', 'Упорядочиваю мысли',
+  'Перевариваю информацию', 'Усваиваю данные', 'Обрабатываю данные', 'Перемалываю данные', 'Просеиваю идеи', 'Фильтрую мысли', 'Дистиллирую суть', 'Выпариваю суть', 'Сгущаю мысль', 'Концентрируюсь',
+  'Создаю', 'Творю', 'Сочиняю', 'Конструирую', 'Мастерю', 'Изобретаю', 'Придумываю', 'Выдумываю', 'Замышляю', 'Задумываю',
+  'Проектирую', 'Набрасываю', 'Эскизирую', 'Рисую в уме', 'Вырисовываю', 'Формирую', 'Леплю', 'Ваяю', 'Кую', 'Строю',
+  'Возвожу', 'Рождаю идею', 'Высиживаю идею', 'Вынашиваю мысль', 'Стряпаю', 'Замешиваю', 'Завариваю мысль', 'Настаиваю идею', 'Отливаю в форму', 'Шлифую формулировку',
+  'Пишу', 'Печатаю мысли', 'Слагаю', 'Складываю слова', 'Подбираю слова', 'Нанизываю слова', 'Плету слова', 'Вью словеса', 'Жонглирую словами', 'Перебираю слова',
+  'Колдую', 'Химичу', 'Шаманю', 'Ворожу', 'Чародействую', 'Творю волшебство', 'Творю магию', 'Варю зелье мыслей', 'Варю идею', 'Варю мысли',
+  'Медитирую', 'Гружусь', 'Загружаюсь', 'Втыкаю', 'Парю в облаках мыслей', 'Жонглирую идеями', 'Тасую варианты', 'Раскидываю пасьянс', 'Перебираю карты', 'Раскручиваю маховик',
+  'Кручу шестерёнки', 'Завожу шестерёнки', 'Запускаю мыслемашину', 'Гоняю байты', 'Перебираю биты', 'Щёлкаю нейронами', 'Искрю нейронами', 'Шуршу нейронами', 'Перебираю нейроны', 'Раскручиваю нейроны',
+  'Работаю', 'Тружусь', 'Вкалываю', 'Пыхчу', 'Корплю', 'Колупаюсь', 'Ковыряюсь', 'Копошусь', 'Вожусь', 'Хлопочу',
+  'Стараюсь', 'Усердствую', 'Напрягаюсь', 'Кручусь', 'Верчусь', 'Шуршу', 'Бьюсь над задачей', 'Грызу задачу', 'Жую задачу', 'Пыхчу над задачей',
+  'Прорабатываю детали', 'Прокапываю', 'Распаковываю', 'Раскручиваю', 'Разгоняюсь', 'Набираю обороты', 'Вхожу в курс', 'Погружаюсь', 'Ныряю глубже', 'Углубляюсь',
+  'Прозреваю', 'Дозреваю до ответа', 'Дозреваю', 'Нащупываю ответ', 'Нащупываю мысль', 'Ищу зацепку', 'Ловлю мысль', 'Ловлю идею', 'Ловлю вдохновение', 'Призываю музу',
+  'Совещаюсь с музой', 'Подключаю интуицию', 'Сверяюсь с логикой', 'Прикидываю на пальцах', 'Считаю в уме', 'Раскручиваю сюжет', 'Распутываю узел', 'Собираю по крупицам', 'Свожу к сути', 'Финализирую мысль',
+];
+
+const pickVerb = (exclude?: string) => {
+  let v = THINKING_VERBS[Math.floor(Math.random() * THINKING_VERBS.length)];
+  if (exclude && THINKING_VERBS.length > 1) {
+    while (v === exclude) v = THINKING_VERBS[Math.floor(Math.random() * THINKING_VERBS.length)];
+  }
+  return v;
+};
+
+// Живой индикатор ожидания: пульс-аватар Claude + «печатная машинка» по синонимам.
+// Текст печатается посимвольно с курсором, в конце дописывается «…», держит паузу,
+// затем стирается и сменяется новым случайным синонимом.
+function WaitingIndicator() {
+  const [text, setText] = useState('');
+  const reduced = typeof window !== 'undefined'
+    && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+  useEffect(() => {
+    // При reduced-motion — статичная подпись без анимации печати
+    if (reduced) { setText(pickVerb() + '…'); return; }
+    let timer = 0;
+    let verb = pickVerb();
+    let shown = '';
+    let phase: 'typing' | 'pausing' | 'deleting' = 'typing';
+    const tick = () => {
+      const full = verb + '…';
+      if (phase === 'typing') {
+        shown = full.slice(0, shown.length + 1);
+        setText(shown);
+        if (shown.length >= full.length) { phase = 'pausing'; timer = window.setTimeout(tick, 1700); }
+        else timer = window.setTimeout(tick, 55 + Math.random() * 50);
+      } else if (phase === 'pausing') {
+        phase = 'deleting';
+        timer = window.setTimeout(tick, 35);
+      } else {
+        shown = shown.slice(0, -1);
+        setText(shown);
+        if (shown.length === 0) { verb = pickVerb(verb); phase = 'typing'; timer = window.setTimeout(tick, 260); }
+        else timer = window.setTimeout(tick, 26);
+      }
+    };
+    timer = window.setTimeout(tick, 140);
+    return () => clearTimeout(timer);
+  }, [reduced]);
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <span className="cc-pulse-ring" style={{
+        width: 22, height: 22, borderRadius: 6, background: '#D97757',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      }}>
+        <span style={{ width: 9, height: 9, borderRadius: '50%', background: '#F4F0E8' }} />
+      </span>
+      <span style={{ display: 'inline-flex', alignItems: 'baseline', minHeight: 17 }}>
+        <span className="cc-shimmer-text" style={{ fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+          {text}
+        </span>
+        <span style={{
+          display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2,
+          background: '#D97757', borderRadius: 1, alignSelf: 'center',
+          animation: reduced ? 'none' : 'blink 1s step-start infinite',
+        }} />
+      </span>
+    </div>
+  );
+}
+
 // Общая шапка чата — одинаковая для полноэкранного режима и дока (split снизу).
 // onToggleDock задаётся только в доке — добавляет кнопку сворачивания.
 interface ChatHeaderBarProps {
@@ -371,6 +461,32 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     />
   );
 
+  // Подряд идущие карточки инструментов объединяем в один контур: внешние линии
+  // сверху/снизу + по одной линии-разделителю между соседями (без двойных бордеров)
+  const renderItems = () => {
+    const stackable = (it: ChatItem) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && !it.parentToolUseId;
+    const out: React.ReactNode[] = [];
+    let i = 0;
+    while (i < items.length) {
+      if (stackable(items[i])) {
+        const start = i;
+        const group: React.ReactNode[] = [];
+        while (i < items.length && stackable(items[i])) { group.push(renderItem(items[i], i)); i++; }
+        // Один контур на стопку: внешние линии сверху/снизу + по одному разделителю между соседями
+        out.push(
+          <div key={`grp-${start}`} style={{ borderTop: '1px solid #E7E0D2', borderBottom: '1px solid #E7E0D2' }}>
+            {group.map((node, gi) => (
+              <div key={gi} style={gi === 0 ? undefined : { borderTop: '1px solid #E7E0D2' }}>{node}</div>
+            ))}
+          </div>
+        );
+      } else {
+        out.push(renderItem(items[i], i)); i++;
+      }
+    }
+    return out;
+  };
+
   // Dock: свёрнутая полоска
   if (dockMode === 'collapsed') {
     // Свежий ответ Claude (а не эхо запроса пользователя) — для превью в свёрнутом доке
@@ -435,12 +551,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         {/* Сообщения (нижний отступ = высота плавающего composer) */}
         <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {items.map(renderItem)}
+            {renderItems()}
             {isWaiting && !items.some(it => it.kind === 'permission_request' && !it.resolved) && (
-              <div style={{ fontSize: 12, color: '#8A8070', display: 'flex', gap: 4 }}>
-                <span className="dots">ожидаю ответа</span>
-                <span>…</span>
-              </div>
+              <WaitingIndicator />
             )}
             <div ref={bottomRef} />
           </div>
@@ -549,13 +662,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           </div>
         )}
 
-        {items.map(renderItem)}
+        {renderItems()}
 
         {isWaiting && !items.some(it => it.kind === 'permission_request' && !it.resolved) && (
-          <div style={{ fontSize: 12, color: '#8A8070', display: 'flex', gap: 4 }}>
-            <span className="dots">ожидаю ответа</span>
-            <span>…</span>
-          </div>
+          <WaitingIndicator />
         )}
         <div ref={bottomRef} />
       </div></div>
@@ -751,7 +861,7 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
   const hasBody = hasDiff || hasResult;
 
   return (
-    <div style={{ borderTop: '1px solid #E7E0D2', borderBottom: '1px solid #E7E0D2' }}>
+    <div>
       <div
         style={{ padding: '9px 0', display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
         onClick={() => hasBody && setOpen(o => !o)}
@@ -992,43 +1102,45 @@ function AskQuestionView({ item, online, onAnswer }: {
   );
 }
 
-// Ответ ассистента с действиями «Копировать / Повторить» под текстом
+// Ответ ассистента. Действия «Копировать/Повторить» — иконками в правом верхнем
+// углу: десктоп — fade-in по hover на сообщении, мобайл (тач) — всегда видимы.
 function TextMessageView({ text, online, onRetry, streaming }: { text: string; online: boolean; onRetry: () => void; streaming?: boolean }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
     navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {});
   };
-  const act: React.CSSProperties = {
-    display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 7px', borderRadius: 6,
-    border: '1px solid transparent', background: 'transparent', color: '#9A8F7E',
-    fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+  const iconBtn: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: 26, height: 26, borderRadius: 7, border: 'none', background: '#EDE7DA',
+    color: '#9A8F7E', cursor: 'pointer', fontFamily: 'inherit', padding: 0,
   };
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden' }}>
+    <div className="cc-msg" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden' }}>
       <ClaudeHeader />
       <div style={{ fontSize: 14, color: '#2A251F', wordBreak: 'break-word', paddingLeft: 30 }}>
         <MarkdownContent text={text} />
         {/* Мигающая каретка стриминга (B2) */}
         {streaming && <span style={{ display: 'inline-block', width: 7, height: 15, marginTop: 3, borderRadius: 1, background: '#D97757', animation: 'blink 1s step-start infinite', verticalAlign: 'text-bottom' }} />}
       </div>
-      {/* Действия — только когда генерация завершена */}
-      {!streaming && <div className="msg-actions" style={{ paddingLeft: 30, display: 'flex', gap: 4 }}>
-        <button onClick={copy} style={act} title="Скопировать ответ"
-          onMouseEnter={e => (e.currentTarget.style.background = '#EDE7DA')}
-          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-          {copied
-            ? <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5E8B4E" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg><span style={{ color: '#5E8B4E' }}>Скопировано</span></>
-            : <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>Копировать</>}
-        </button>
-        {online && (
-          <button onClick={onRetry} style={act} title="Повторить последний запрос"
-            onMouseEnter={e => (e.currentTarget.style.background = '#EDE7DA')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 4v6h6" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
-            Повторить
+      {/* Действия — компактными иконками в правом верхнем углу (CSS управляет hover/тач) */}
+      {!streaming && (
+        <div className="cc-actions" style={{ position: 'absolute', top: 0, right: 0, display: 'flex', gap: 4 }}>
+          <button onClick={copy} style={iconBtn} title={copied ? 'Скопировано' : 'Скопировать ответ'} aria-label="Скопировать ответ"
+            onMouseEnter={e => { if (!copied) e.currentTarget.style.background = '#E2DACB'; }}
+            onMouseLeave={e => { if (!copied) e.currentTarget.style.background = '#EDE7DA'; }}>
+            {copied
+              ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5E8B4E" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+              : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>}
           </button>
-        )}
-      </div>}
+          {online && (
+            <button onClick={onRetry} style={iconBtn} title="Повторить последний запрос" aria-label="Повторить последний запрос"
+              onMouseEnter={e => (e.currentTarget.style.background = '#E2DACB')}
+              onMouseLeave={e => (e.currentTarget.style.background = '#EDE7DA')}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 4v6h6" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

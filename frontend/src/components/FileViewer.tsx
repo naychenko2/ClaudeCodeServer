@@ -28,7 +28,7 @@ import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
 import { DocumentViewer, type DocKind } from './DocumentViewer';
 import { base64ToBytes } from '../lib/binary';
-import { C } from '../lib/design';
+import { C, FONT, SHADOW } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from './Toolbar';
 
 SyntaxHighlighter.registerLanguage('tsx', tsx);
@@ -168,13 +168,13 @@ function DiffView({ diff }: { diff: string }) {
   const rows = parseDiff(diff);
   const gutter: React.CSSProperties = { width: 40, textAlign: 'right', padding: '0 7px', color: '#C4BBA9', userSelect: 'none', flexShrink: 0 };
   return (
-    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, lineHeight: '1.55' }}>
+    <div style={{ fontFamily: FONT.mono, fontSize: 12, lineHeight: '1.55' }}>
       {rows.map((r, i) => {
         if (r.type === 'hunk') return (
           <div key={i} style={{ background: '#EEF2F6', color: '#5C7390', padding: '2px 10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{r.text}</div>
         );
         if (r.type === 'meta') return (
-          <div key={i} style={{ color: '#9A8F7E', padding: '0 10px', fontStyle: 'italic' }}>{r.text}</div>
+          <div key={i} style={{ color: C.textMuted, padding: '0 10px', fontStyle: 'italic' }}>{r.text}</div>
         );
         const bg = r.type === 'add' ? '#EAF3E7' : r.type === 'del' ? '#F8E7E1' : 'transparent';
         const sign = r.type === 'add' ? '+' : r.type === 'del' ? '−' : '';
@@ -184,7 +184,7 @@ function DiffView({ diff }: { diff: string }) {
             <span style={gutter}>{r.oldNo ?? ''}</span>
             <span style={gutter}>{r.newNo ?? ''}</span>
             <span style={{ width: 16, textAlign: 'center', color: signColor, userSelect: 'none', flexShrink: 0 }}>{sign}</span>
-            <span style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: '#2A251F', paddingRight: 10 }}>{r.text || ' '}</span>
+            <span style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: C.textHeading, paddingRight: 10 }}>{r.text || ' '}</span>
           </div>
         );
       })}
@@ -311,12 +311,12 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
   const fileSizeMb = fileContent?.fileSize != null ? (fileContent.fileSize / 1024 / 1024).toFixed(2) : null;
 
   const btnPrimary: React.CSSProperties = {
-    border: 'none', background: C.accent, color: '#FBF8F2',
+    border: 'none', background: C.accent, color: C.onAccent,
     borderRadius: 8, padding: '5px 13px', cursor: 'pointer', fontSize: 13, fontWeight: 600,
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#FBF8F2', position: 'relative' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative' }}>
       {/* Шапка */}
       <Toolbar isMobile={isMobile}>
         {/* Кнопка назад — только в обычном режиме */}
@@ -333,15 +333,15 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
         )}
 
         {/* Имя файла */}
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 13, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: C.textHeading }}>
+        <span style={{ fontFamily: FONT.mono, fontWeight: 700, fontSize: 13, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: C.textHeading }}>
           {fileName}
         </span>
 
         {/* Статистика diff */}
         {diffStats && (
           <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-            <span style={{ fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: C.success, fontWeight: 600 }}>+{diffStats.added}</span>
-            <span style={{ fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: C.danger, fontWeight: 600 }}>-{diffStats.removed}</span>
+            <span style={{ fontSize: 12, fontFamily: FONT.mono, color: C.success, fontWeight: 600 }}>+{diffStats.added}</span>
+            <span style={{ fontSize: 12, fontFamily: FONT.mono, color: C.danger, fontWeight: 600 }}>-{diffStats.removed}</span>
           </span>
         )}
 
@@ -444,8 +444,8 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
       <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'flex', flexDirection: 'column' }}>
         {loading && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 14 }}>
-            <div style={{ width: 36, height: 36, borderRadius: '50%', border: '3px solid #E0D7C8', borderTopColor: '#D97757', animation: 'spin 0.8s linear infinite' }} />
-            <div style={{ fontSize: 13, color: '#9A8F7E' }}>Загружаю файл…</div>
+            <div style={{ width: 36, height: 36, borderRadius: '50%', border: `3px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.8s linear infinite' }} />
+            <div style={{ fontSize: 13, color: C.textMuted }}>Загружаю файл…</div>
           </div>
         )}
 
@@ -470,7 +470,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
                   alt={fileName}
                 />
                 {/* Метаданные изображения: тип · размеры · вес */}
-                <div style={{ fontSize: 12, color: '#9A8F7E', fontFamily: "'JetBrains Mono', monospace", display: 'flex', gap: 7, flexWrap: 'wrap', justifyContent: 'center' }}>
+                <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.mono, display: 'flex', gap: 7, flexWrap: 'wrap', justifyContent: 'center' }}>
                   <span>{(fileContent.mimeType?.split('/')[1] ?? fileName.split('.').pop() ?? '').toUpperCase()}</span>
                   {imgDims && <><span style={{ opacity: 0.5 }}>·</span><span>{imgDims.w}×{imgDims.h}</span></>}
                   {fileSizeMb && <><span style={{ opacity: 0.5 }}>·</span><span>{fileSizeMb} МБ</span></>}
@@ -507,14 +507,14 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
             {!fileContent?.isBinary && !fileContent?.isImage && (
               editing
                 ? <textarea value={editContent} onChange={e => setEditContent(e.target.value)}
-                    style={{ width: '100%', flex: 1, border: 'none', outline: 'none', resize: 'none', fontFamily: "'JetBrains Mono', monospace", fontSize: 13, lineHeight: 1.6, boxSizing: 'border-box', background: 'transparent' }} />
+                    style={{ width: '100%', flex: 1, border: 'none', outline: 'none', resize: 'none', fontFamily: FONT.mono, fontSize: 13, lineHeight: 1.6, boxSizing: 'border-box', background: 'transparent' }} />
                 : isMarkdown
                   ? <MarkdownViewer content={content} />
                   : <SyntaxHighlighter
                       language={getLanguage(filePath)}
                       style={oneLight}
-                      customStyle={{ margin: 0, padding: 0, background: 'transparent', fontSize: 13, lineHeight: '1.6', fontFamily: "'JetBrains Mono', monospace" }}
-                      codeTagProps={{ style: { fontFamily: "'JetBrains Mono', monospace" } }}
+                      customStyle={{ margin: 0, padding: 0, background: 'transparent', fontSize: 13, lineHeight: '1.6', fontFamily: FONT.mono }}
+                      codeTagProps={{ style: { fontFamily: FONT.mono } }}
                       showLineNumbers
                       lineNumberStyle={{ minWidth: '2.6em', paddingRight: '1.1em', textAlign: 'right', color: '#C4BBA9', userSelect: 'none' }}
                       wrapLongLines
@@ -539,7 +539,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
           title="Редактировать"
           style={{
             position: 'absolute', right: 18, bottom: 18, width: 52, height: 52, borderRadius: '50%',
-            border: 'none', background: '#D97757', color: '#FBF8F2', cursor: 'pointer',
+            border: 'none', background: C.accent, color: C.onAccent, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             boxShadow: '0 6px 18px rgba(217,119,87,0.42)', zIndex: 20,
           }}
@@ -553,12 +553,12 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
 
       {/* Диалог удаления */}
       {deleteConfirm && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div style={{ background: '#F4F0E8', borderRadius: 20, padding: 24, width: 340, boxShadow: '0 24px 60px rgba(23,19,15,0.4)' }}>
-            <h3 style={{ fontFamily: "'PT Serif', serif", fontWeight: 500, fontSize: 20, margin: '0 0 8px', letterSpacing: '-0.01em' }}>Удалить «{fileName}»?</h3>
-            <p style={{ fontSize: 13, color: '#756B5E', marginBottom: 20 }}>Это действие нельзя отменить.</p>
+        <div style={{ position: 'fixed', inset: 0, background: C.overlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div style={{ background: C.bgMain, borderRadius: 20, padding: 24, width: 340, boxShadow: SHADOW.modal }}>
+            <h3 style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 20, margin: '0 0 8px', letterSpacing: '-0.01em' }}>Удалить «{fileName}»?</h3>
+            <p style={{ fontSize: 13, color: C.textSecondary, marginBottom: 20 }}>Это действие нельзя отменить.</p>
             <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => setDeleteConfirm(false)} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: '#EDE7DC', color: '#5C5246', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Отмена</button>
+              <button onClick={() => setDeleteConfirm(false)} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: C.bgPanel, color: '#5C5246', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Отмена</button>
               <button onClick={handleDelete} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: '#C0392B', color: '#FFF', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Удалить</button>
             </div>
           </div>
@@ -567,13 +567,13 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
 
       {/* Диалог несохранённых изменений */}
       {unsavedConfirm && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div style={{ background: '#F4F0E8', borderRadius: 20, padding: 24, width: 360, boxShadow: '0 24px 60px rgba(23,19,15,0.4)' }}>
-            <h3 style={{ fontFamily: "'PT Serif', serif", fontWeight: 500, fontSize: 20, margin: '0 0 8px', letterSpacing: '-0.01em' }}>Сохранить изменения?</h3>
-            <p style={{ fontSize: 13, color: '#756B5E', marginBottom: 20 }}>В файле «{fileName}» есть несохранённые правки.</p>
+        <div style={{ position: 'fixed', inset: 0, background: C.overlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div style={{ background: C.bgMain, borderRadius: 20, padding: 24, width: 360, boxShadow: SHADOW.modal }}>
+            <h3 style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 20, margin: '0 0 8px', letterSpacing: '-0.01em' }}>Сохранить изменения?</h3>
+            <p style={{ fontSize: 13, color: C.textSecondary, marginBottom: 20 }}>В файле «{fileName}» есть несохранённые правки.</p>
             <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={handleCloseWithoutSave} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: '#EDE7DC', color: '#5C5246', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Не сохранять</button>
-              <button onClick={handleSaveAndClose} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: '#D97757', color: '#FBF8F2', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Сохранить</button>
+              <button onClick={handleCloseWithoutSave} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: C.bgPanel, color: '#5C5246', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Не сохранять</button>
+              <button onClick={handleSaveAndClose} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: C.accent, color: C.onAccent, cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Сохранить</button>
             </div>
           </div>
         </div>

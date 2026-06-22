@@ -6,7 +6,7 @@ import { api } from '../lib/api';
 import { modelLabel } from '../lib/models';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
-import { C } from '../lib/design';
+import { C, FONT } from '../lib/design';
 import { Toolbar, ToolbarIconButton } from './Toolbar';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -35,14 +35,14 @@ function ClaudeHeader() {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <div style={{
-        width: 22, height: 22, borderRadius: 6, background: '#D97757',
+        width: 22, height: 22, borderRadius: 6, background: C.accent,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        <div style={{ width: 9, height: 9, borderRadius: '50%', background: '#F4F0E8' }} />
+        <div style={{ width: 9, height: 9, borderRadius: '50%', background: C.bgMain }} />
       </div>
       <span style={{
-        fontFamily: "'JetBrains Mono', monospace",
-        fontSize: 11, letterSpacing: '0.06em', color: '#9A8F7E',
+        fontFamily: FONT.mono,
+        fontSize: 11, letterSpacing: '0.06em', color: C.textMuted,
       }}>CLAUDE</span>
     </div>
   );
@@ -119,10 +119,10 @@ function WaitingIndicator() {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <span className="cc-pulse-ring" style={{
-        width: 22, height: 22, borderRadius: 6, background: '#D97757',
+        width: 22, height: 22, borderRadius: 6, background: C.accent,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
       }}>
-        <span style={{ width: 9, height: 9, borderRadius: '50%', background: '#F4F0E8' }} />
+        <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.bgMain }} />
       </span>
       <span style={{ display: 'inline-flex', alignItems: 'baseline', minHeight: 17 }}>
         <span className="cc-shimmer-text" style={{ fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
@@ -130,7 +130,7 @@ function WaitingIndicator() {
         </span>
         <span style={{
           display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2,
-          background: '#D97757', borderRadius: 1, alignSelf: 'center',
+          background: C.accent, borderRadius: 1, alignSelf: 'center',
           animation: reduced ? 'none' : 'blink 1s step-start infinite',
         }} />
       </span>
@@ -158,7 +158,7 @@ function ChatHeaderBar({ session, project, isWaiting, online, onInterrupt, onOpe
         <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {session.name ?? 'Новый чат'}
         </div>
-        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {project.name} · {session.mode ?? 'auto'} · {modelLabel(session.model)}
         </div>
       </div>
@@ -175,7 +175,7 @@ function ChatHeaderBar({ session, project, isWaiting, online, onInterrupt, onOpe
           onClick={onInterrupt}
           style={{
             fontSize: 13, fontWeight: 600, height: 32, display: 'inline-flex', alignItems: 'center', gap: 6,
-            color: '#FBF8F2', background: C.danger, border: 'none', borderRadius: 8,
+            color: C.onAccent, background: C.danger, border: 'none', borderRadius: 8,
             padding: '0 12px', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
           }}
         >
@@ -197,8 +197,8 @@ function OfflineComposerStub() {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-      padding: '14px', borderRadius: 14, background: '#EDE7DC',
-      border: '1px solid #E0D8CC', color: '#9A8F7E', fontSize: 13, fontWeight: 600,
+      padding: '14px', borderRadius: 14, background: C.bgPanel,
+      border: '1px solid #E0D8CC', color: C.textMuted, fontSize: 13, fontWeight: 600,
     }}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M1 1l22 22" />
@@ -220,13 +220,13 @@ function MarkdownContent({ text }: { text: string }) {
           <p style={{ margin: '0 0 8px 0', lineHeight: 1.6 }}>{children}</p>
         ),
         h1: ({ children }) => (
-          <h1 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 20, fontWeight: 600, margin: '10px 0 6px', color: '#2A251F', letterSpacing: '-0.01em' }}>{children}</h1>
+          <h1 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 20, fontWeight: 600, margin: '10px 0 6px', color: C.textHeading, letterSpacing: '-0.01em' }}>{children}</h1>
         ),
         h2: ({ children }) => (
-          <h2 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 17, fontWeight: 600, margin: '8px 0 5px', color: '#2A251F', letterSpacing: '-0.01em' }}>{children}</h2>
+          <h2 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 17, fontWeight: 600, margin: '8px 0 5px', color: C.textHeading, letterSpacing: '-0.01em' }}>{children}</h2>
         ),
         h3: ({ children }) => (
-          <h3 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 15, fontWeight: 600, margin: '6px 0 4px', color: '#2A251F' }}>{children}</h3>
+          <h3 style={{ fontFamily: '"PT Serif", Georgia, serif', fontSize: 15, fontWeight: 600, margin: '6px 0 4px', color: C.textHeading }}>{children}</h3>
         ),
         pre: ({ children }) => <>{children}</>,
         code: ({ className, children, ...props }) => {
@@ -237,7 +237,7 @@ function MarkdownContent({ text }: { text: string }) {
               <SyntaxHighlighter
                 language={language}
                 style={oneDark}
-                customStyle={{ borderRadius: 8, fontSize: 12.5, margin: '6px 0', padding: '10px 14px', fontFamily: "'JetBrains Mono', monospace", overflowX: 'auto' }}
+                customStyle={{ borderRadius: 8, fontSize: 12.5, margin: '6px 0', padding: '10px 14px', fontFamily: FONT.mono, overflowX: 'auto' }}
               >
                 {text}
               </SyntaxHighlighter>
@@ -245,13 +245,13 @@ function MarkdownContent({ text }: { text: string }) {
           }
           if (text.includes('\n')) {
             return (
-              <pre style={{ background: '#2A251F', borderRadius: 8, padding: '10px 14px', margin: '6px 0', overflowX: 'auto' }}>
-                <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: '#E8E1D4', lineHeight: 1.5 }} {...props}>{text}</code>
+              <pre style={{ background: C.textHeading, borderRadius: 8, padding: '10px 14px', margin: '6px 0', overflowX: 'auto' }}>
+                <code style={{ fontFamily: FONT.mono, fontSize: 12.5, color: C.bgSelected, lineHeight: 1.5 }} {...props}>{text}</code>
               </pre>
             );
           }
           return (
-            <code style={{ fontFamily: "'JetBrains Mono', monospace", background: '#EDE7DA', padding: '1px 5px', borderRadius: 4, fontSize: '0.88em', color: '#5A3322' }} {...props}>
+            <code style={{ fontFamily: FONT.mono, background: '#EDE7DA', padding: '1px 5px', borderRadius: 4, fontSize: '0.88em', color: '#5A3322' }} {...props}>
               {children}
             </code>
           );
@@ -260,27 +260,27 @@ function MarkdownContent({ text }: { text: string }) {
         ol: ({ children }) => <ol style={{ paddingLeft: 18, margin: '2px 0 8px' }}>{children}</ol>,
         li: ({ children }) => <li style={{ marginBottom: 3, lineHeight: 1.6 }}>{children}</li>,
         blockquote: ({ children }) => (
-          <blockquote style={{ borderLeft: '3px solid #D97757', paddingLeft: 12, margin: '6px 0', color: '#756B5E', fontStyle: 'italic' }}>
+          <blockquote style={{ borderLeft: `3px solid ${C.accent}`, paddingLeft: 12, margin: '6px 0', color: C.textSecondary, fontStyle: 'italic' }}>
             {children}
           </blockquote>
         ),
         a: ({ children, href }) => (
-          <a href={href} style={{ color: '#D97757', textDecoration: 'underline' }} target="_blank" rel="noopener noreferrer">
+          <a href={href} style={{ color: C.accent, textDecoration: 'underline' }} target="_blank" rel="noopener noreferrer">
             {children}
           </a>
         ),
         strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
-        hr: () => <hr style={{ border: 'none', borderTop: '1px solid #E0D7C8', margin: '10px 0' }} />,
+        hr: () => <hr style={{ border: 'none', borderTop: `1px solid ${C.border}`, margin: '10px 0' }} />,
         table: ({ children }) => (
           <div style={{ overflowX: 'auto', margin: '6px 0' }}>
             <table style={{ borderCollapse: 'collapse', minWidth: '100%', fontSize: 13 }}>{children}</table>
           </div>
         ),
         th: ({ children }) => (
-          <th style={{ border: '1px solid #E0D7C8', padding: '6px 10px', background: '#EDE7DA', fontWeight: 600, textAlign: 'left' }}>{children}</th>
+          <th style={{ border: `1px solid ${C.border}`, padding: '6px 10px', background: '#EDE7DA', fontWeight: 600, textAlign: 'left' }}>{children}</th>
         ),
         td: ({ children }) => (
-          <td style={{ border: '1px solid #E0D7C8', padding: '6px 10px' }}>{children}</td>
+          <td style={{ border: `1px solid ${C.border}`, padding: '6px 10px' }}>{children}</td>
         ),
       }}
     >
@@ -313,7 +313,7 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
     <div
       onClick={onClose}
       style={{
-        position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)',
+        position: 'fixed', inset: 0, background: C.overlay,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         zIndex: 1000,
       }}
@@ -321,13 +321,13 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          background: '#F4F0E8', borderRadius: 20, padding: '16px 0',
+          background: C.bgMain, borderRadius: 20, padding: '16px 0',
           minWidth: 340, maxWidth: 440, maxHeight: '60vh',
           display: 'flex', flexDirection: 'column',
           boxShadow: '0 24px 60px rgba(23,19,15,0.4)',
         }}
       >
-        <div style={{ padding: '0 18px 12px', fontFamily: "'PT Serif', serif", fontWeight: 500, fontSize: 18, letterSpacing: '-0.01em', color: '#2A251F', borderBottom: '1px solid #E8E1D4' }}>
+        <div style={{ padding: '0 18px 12px', fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, letterSpacing: '-0.01em', color: C.textHeading, borderBottom: `1px solid ${C.borderLight}` }}>
           Прикрепить файл
         </div>
         <div style={{ overflowY: 'auto', flex: 1, padding: '8px 0' }}>
@@ -342,7 +342,7 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
               onClick={() => { onPick(f.path); onClose(); }}
               style={{
                 padding: '8px 16px', cursor: 'pointer', fontSize: 13,
-                color: '#39332B', display: 'flex', alignItems: 'center', gap: 8,
+                color: C.textPrimary, display: 'flex', alignItems: 'center', gap: 8,
               }}
               onMouseEnter={e => (e.currentTarget.style.background = '#F0EAE0')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
@@ -474,9 +474,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         while (i < items.length && stackable(items[i])) { group.push(renderItem(items[i], i)); i++; }
         // Один контур на стопку: внешние линии сверху/снизу + по одному разделителю между соседями
         out.push(
-          <div key={`grp-${start}`} style={{ borderTop: '1px solid #E7E0D2', borderBottom: '1px solid #E7E0D2' }}>
+          <div key={`grp-${start}`} style={{ borderTop: `1px solid ${C.bgInset}`, borderBottom: `1px solid ${C.bgInset}` }}>
             {group.map((node, gi) => (
-              <div key={gi} style={gi === 0 ? undefined : { borderTop: '1px solid #E7E0D2' }}>{node}</div>
+              <div key={gi} style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>{node}</div>
             ))}
           </div>
         );
@@ -507,7 +507,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return (
       <Toolbar noBorder style={{ height: 56, gap: 10 }}>
         <div style={{ width: 28, height: 28, borderRadius: '50%', background: C.accent, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#F4F0E8' }} />
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: C.bgMain }} />
         </div>
         <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: isWaiting ? C.textMuted : C.textSecondary, fontStyle: isWaiting ? 'italic' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {isWaiting ? 'Claude печатает…' : (lastAnswer || session.name || 'Новый чат')}
@@ -518,12 +518,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleMiniSend(); } }}
           placeholder={online ? 'Ответить…' : 'Офлайн'}
           disabled={!online}
-          style={{ width: 180, padding: '6px 10px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, background: '#F4F0E8', outline: 'none', fontFamily: 'inherit', color: C.textHeading }}
+          style={{ width: 180, padding: '6px 10px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, background: C.bgMain, outline: 'none', fontFamily: 'inherit', color: C.textHeading }}
         />
         <button
           onClick={handleMiniSend}
           disabled={!miniText.trim() || isWaiting || !online}
-          style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: miniText.trim() && !isWaiting && online ? 'pointer' : 'default', background: miniText.trim() && !isWaiting && online ? C.accent : '#DDD4C4', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+          style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: miniText.trim() && !isWaiting && online ? 'pointer' : 'default', background: miniText.trim() && !isWaiting && online ? C.accent : C.divider, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5" strokeLinecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
         </button>
@@ -537,7 +537,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Dock: развёрнутая панель
   if (dockMode === 'expanded') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#F4F0E8', position: 'relative' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgMain, position: 'relative' }}>
         <ChatHeaderBar
           session={session}
           project={project}
@@ -597,7 +597,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', background: '#F4F0E8' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', background: C.bgMain }}>
       <ChatHeaderBar
         session={session}
         project={project}
@@ -619,7 +619,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           }}>
             {/* Логотип */}
             <div style={{
-              width: 46, height: 46, borderRadius: 13, background: '#D97757',
+              width: 46, height: 46, borderRadius: 13, background: C.accent,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
               <div style={{
@@ -630,7 +630,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             {/* Заголовок */}
             <div style={{
               fontFamily: '"PT Serif", Georgia, serif',
-              fontWeight: 500, fontSize: 20, color: '#2A251F', letterSpacing: '-0.01em',
+              fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
             }}>
               Чем помочь?
             </div>
@@ -647,12 +647,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
                   key={hint}
                   onClick={() => handleHint(hint)}
                   style={{
-                    background: '#FFF', border: '1px solid #E8E1D4',
+                    background: '#FFF', border: `1px solid ${C.borderLight}`,
                     borderRadius: 10, padding: '9px 12px',
-                    fontSize: 13, color: '#39332B', cursor: 'pointer',
+                    fontSize: 13, color: C.textPrimary, cursor: 'pointer',
                     fontFamily: 'inherit',
                   }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#F4ECE1')}
+                  onMouseEnter={e => (e.currentTarget.style.background = C.accentLight)}
                   onMouseLeave={e => (e.currentTarget.style.background = '#FFF')}
                 >
                   {hint}
@@ -727,15 +727,15 @@ function TodoPlanView({ input }: { input: unknown }) {
 
   return (
     <div style={{
-      border: '1px solid #E8E1D4', borderRadius: 12, background: '#FFFFFF',
+      border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite,
       overflow: 'hidden', boxShadow: '0 2px 8px rgba(60,50,35,0.04)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderBottom: '1px solid #EFE9DD' }}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
         </svg>
-        <span style={{ fontFamily: "'PT Serif', serif", fontSize: 14, fontWeight: 700, color: '#2A251F' }}>План</span>
-        <span style={{ marginLeft: 'auto', fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: '#9A8F7E' }}>
+        <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>План</span>
+        <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
           {done}/{todos.length}
         </span>
       </div>
@@ -765,7 +765,7 @@ function TodoPlanView({ input }: { input: unknown }) {
               </span>
               <span style={{
                 fontSize: 13, lineHeight: 1.4,
-                color: isDone ? '#9A8F7E' : isActive ? '#2A251F' : '#756B5E',
+                color: isDone ? C.textMuted : isActive ? C.textHeading : C.textSecondary,
                 textDecoration: isDone ? 'line-through' : 'none',
                 fontWeight: isActive ? 600 : 400,
               }}>
@@ -788,18 +788,18 @@ function toolMeta(name: string): { color: string; icon: React.ReactNode } {
   if (n.startsWith('mcp__'))
     return { color: '#8E4A82', icon: svg(<><path d="M9 2v6M15 2v6" /><path d="M6 8h12v3a6 6 0 0 1-12 0z" /><path d="M12 17v5" /></>) };
   if (['read', 'glob', 'grep', 'ls'].includes(n))
-    return { color: '#3E7CA6', icon: svg(<><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></>) };
+    return { color: C.info, icon: svg(<><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></>) };
   if (['edit', 'write', 'multiedit', 'notebookedit'].includes(n))
     return { color: '#C2693B', icon: svg(<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></>) };
   if (n.startsWith('bash') || n.includes('shell'))
-    return { color: '#5E8B4E', icon: svg(<><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></>) };
+    return { color: C.success, icon: svg(<><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></>) };
   if (['websearch', 'webfetch'].includes(n))
     return { color: '#8E4A82', icon: svg(<><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></>) };
   if (n === 'task')
     return { color: '#B05C38', icon: svg(<><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>) };
   if (n === 'skill')
     return { color: '#8E4A82', icon: svg(<><path d="M12 3l1.9 5.2L19 10l-5.1 1.8L12 17l-1.9-5.2L5 10l5.1-1.8z" /><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" /></>) };
-  return { color: '#3E7CA6', icon: svg(<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6 2 2 6-6a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3z" />) };
+  return { color: C.info, icon: svg(<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6 2 2 6-6a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3z" />) };
 }
 
 // Inline-diff для Edit/MultiEdit/Write: удалённые строки красным, добавленные зелёным
@@ -827,12 +827,12 @@ function DiffBody({ hunks }: { hunks: Array<{ old?: string; new?: string }> }) {
   hunks.forEach(h => { if (h.old) pushLines(h.old, 'del'); if (h.new) pushLines(h.new, 'add'); });
   return (
     <div style={{
-      margin: '0 0 9px', borderRadius: 7, overflow: 'hidden', border: '1px solid #E7E0D2',
-      fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, lineHeight: 1.55,
+      margin: '0 0 9px', borderRadius: 7, overflow: 'hidden', border: `1px solid ${C.bgInset}`,
+      fontFamily: FONT.mono, fontSize: 11.5, lineHeight: 1.55,
       maxHeight: 320, overflowY: 'auto',
     }}>
       {rows}
-      {count >= MAX && <div style={{ padding: '2px 9px', color: '#9A8F7E', fontStyle: 'italic' }}>…(обрезано)</div>}
+      {count >= MAX && <div style={{ padding: '2px 9px', color: C.textMuted, fontStyle: 'italic' }}>…(обрезано)</div>}
     </div>
   );
 }
@@ -869,25 +869,25 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
         {item.result === undefined && <ToolSpinner />}
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: meta.color }}>
           {meta.icon}
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600 }}>{displayName}</span>
+          <span style={{ fontFamily: FONT.mono, fontSize: 10, fontWeight: 600 }}>{displayName}</span>
         </span>
         {toolArg
-          ? <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, flex: 1, color: '#39332B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolArg}</span>
+          ? <span style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolArg}</span>
           : <span style={{ flex: 1 }} />}
         {item.result !== undefined && (
-          <span style={{ fontSize: 11, color: item.isError ? '#C0392B' : '#9A8F7E', flexShrink: 0 }}>
+          <span style={{ fontSize: 11, color: item.isError ? '#C0392B' : C.textMuted, flexShrink: 0 }}>
             {item.isError ? 'ошибка' : 'готово'}
           </span>
         )}
         {hasBody && (
-          <span style={{ color: '#9A8F7E', fontSize: 11, flexShrink: 0, display: 'inline-block', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
+          <span style={{ color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
         )}
       </div>
       {open && hasDiff && <DiffBody hunks={editHunks} />}
       {open && !hasDiff && hasResult && (
         <pre style={{
-          margin: '0 0 9px', padding: '8px 10px', background: '#2A251F', borderRadius: 7,
-          color: item.isError ? '#F0B8AC' : '#D8CFC0', fontFamily: "'JetBrains Mono', monospace",
+          margin: '0 0 9px', padding: '8px 10px', background: C.textHeading, borderRadius: 7,
+          color: item.isError ? '#F0B8AC' : '#D8CFC0', fontFamily: FONT.mono,
           fontSize: 11.5, lineHeight: 1.5, maxHeight: 280, overflow: 'auto',
           whiteSpace: 'pre-wrap', wordBreak: 'break-word',
         }}>
@@ -975,9 +975,9 @@ function AskQuestionView({ item, online, onAnswer }: {
 
   const renderQuestion = (q: QuestionDef, qi: number) => (
     <div>
-      <div style={{ fontSize: 13, color: '#2A251F', fontWeight: 600, marginBottom: 9 }}>
+      <div style={{ fontSize: 13, color: C.textHeading, fontWeight: 600, marginBottom: 9 }}>
         {q.question}
-        {q.multiSelect && <span style={{ fontWeight: 400, color: '#9A8F7E', fontSize: 11 }}> · можно несколько</span>}
+        {q.multiSelect && <span style={{ fontWeight: 400, color: C.textMuted, fontSize: 11 }}> · можно несколько</span>}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {q.options.map(opt => {
@@ -987,15 +987,15 @@ function AskQuestionView({ item, online, onAnswer }: {
               style={{
                 textAlign: 'left', padding: '9px 12px', borderRadius: 9, minHeight: 44, boxSizing: 'border-box',
                 cursor: disabled ? 'default' : 'pointer',
-                border: isSel ? '1.5px solid #D97757' : '1px solid #E0D7C8',
-                background: isSel ? '#F4ECE1' : '#FFFFFF',
+                border: isSel ? `1.5px solid ${C.accent}` : `1px solid ${C.border}`,
+                background: isSel ? C.accentLight : C.bgWhite,
                 display: 'flex', alignItems: 'flex-start', gap: 9,
               }}
             >
               {!q.multiSelect && <span style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}><ChoiceMarker multi={false} selected={isSel} /></span>}
               <span style={{ flex: 1 }}>
-                <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#2A251F' }}>{opt.label}</span>
-                {opt.description && <span style={{ display: 'block', fontSize: 12, color: '#756B5E', marginTop: 2, lineHeight: 1.4 }}>{opt.description}</span>}
+                <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading }}>{opt.label}</span>
+                {opt.description && <span style={{ display: 'block', fontSize: 12, color: C.textSecondary, marginTop: 2, lineHeight: 1.4 }}>{opt.description}</span>}
               </span>
               {q.multiSelect && <span style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}><ChoiceMarker multi selected={isSel} /></span>}
             </button>
@@ -1006,11 +1006,11 @@ function AskQuestionView({ item, online, onAnswer }: {
           const open = !!customOpen[qi];
           const filled = open && (customText[qi]?.trim().length ?? 0) > 0;
           return (
-            <div style={{ borderRadius: 9, overflow: 'hidden', border: open ? '1.5px solid #D97757' : '1px dashed #C9A98F', background: open ? '#F4ECE1' : 'transparent' }}>
+            <div style={{ borderRadius: 9, overflow: 'hidden', border: open ? `1.5px solid ${C.accent}` : '1px dashed #C9A98F', background: open ? C.accentLight : 'transparent' }}>
               <div onClick={() => !disabled && toggleCustom(qi, !!q.multiSelect)}
                 style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', minHeight: 44, boxSizing: 'border-box', cursor: disabled ? 'default' : 'pointer' }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A8F7E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
-                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: open ? '#2A251F' : '#9A8F7E' }}>Свой вариант{open ? '' : '…'}</span>
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: open ? C.textHeading : C.textMuted }}>Свой вариант{open ? '' : '…'}</span>
                 {q.multiSelect && <span style={{ flexShrink: 0, display: 'flex' }}><ChoiceMarker multi selected={filled} /></span>}
               </div>
               {open && (
@@ -1022,7 +1022,7 @@ function AskQuestionView({ item, online, onAnswer }: {
                     disabled={disabled}
                     placeholder="Введите свой ответ…"
                     rows={2}
-                    style={{ width: '100%', boxSizing: 'border-box', borderRadius: 8, border: '1px solid #E0D7C8', background: '#FFFFFF', padding: '8px 10px', fontSize: 13, color: '#2A251F', fontFamily: 'inherit', resize: 'none', minHeight: 44, outline: 'none' }}
+                    style={{ width: '100%', boxSizing: 'border-box', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 10px', fontSize: 13, color: C.textHeading, fontFamily: 'inherit', resize: 'none', minHeight: 44, outline: 'none' }}
                   />
                 </div>
               )}
@@ -1034,23 +1034,23 @@ function AskQuestionView({ item, online, onAnswer }: {
   );
 
   const secBtn = (label: string, onClick: () => void): React.ReactNode => (
-    <button onClick={onClick} style={{ flex: 1, minHeight: 44, background: '#FFFFFF', border: '1px solid #E0D7C8', color: '#2A251F', borderRadius: 9, padding: '9px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>{label}</button>
+    <button onClick={onClick} style={{ flex: 1, minHeight: 44, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textHeading, borderRadius: 9, padding: '9px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>{label}</button>
   );
   const answerBtn = (full: boolean): React.ReactNode => (
     <button onClick={submit} disabled={!allAnswered}
-      style={{ flex: full ? undefined : 1, width: full ? '100%' : undefined, minHeight: 44, background: '#D97757', color: '#FBF8F2', borderRadius: 9, padding: '9px 16px', border: 'none', cursor: allAnswered ? 'pointer' : 'default', fontSize: 13, fontWeight: 600, opacity: allAnswered ? 1 : 0.5 }}>Ответить</button>
+      style={{ flex: full ? undefined : 1, width: full ? '100%' : undefined, minHeight: 44, background: C.accent, color: C.onAccent, borderRadius: 9, padding: '9px 16px', border: 'none', cursor: allAnswered ? 'pointer' : 'default', fontSize: 13, fontWeight: 600, opacity: allAnswered ? 1 : 0.5 }}>Ответить</button>
   );
 
   return (
-    <div style={{ border: '1px solid #E6C9B8', borderLeft: '3px solid #D97757', borderRadius: 12, padding: '13px 14px', background: '#FBF1EA' }}>
+    <div style={{ border: '1px solid #E6C9B8', borderLeft: `3px solid ${C.accent}`, borderRadius: 12, padding: '13px 14px', background: '#FBF1EA' }}>
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 11 }}>
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 600, color: '#2A251F' }}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 600, color: C.textHeading }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
           </svg>
           Claude уточняет
         </div>
-        {multiQ && <span style={{ fontSize: 12, fontWeight: 600, color: '#9A8F7E', fontFamily: "'JetBrains Mono', monospace" }}>{activeTab + 1} / {questions.length}</span>}
+        {multiQ && <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, fontFamily: FONT.mono }}>{activeTab + 1} / {questions.length}</span>}
       </div>
 
       {multiQ && (
@@ -1063,14 +1063,14 @@ function AskQuestionView({ item, online, onAnswer }: {
                 style={{
                   flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6, padding: '0 11px', height: 28, boxSizing: 'border-box',
                   borderRadius: 14, cursor: disabled ? 'default' : 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', lineHeight: 1,
-                  border: active ? '1.5px solid #D97757' : '1px solid #E0D7C8',
-                  background: active ? '#F4ECE1' : '#FFFFFF',
-                  color: active || ans ? '#2A251F' : '#756B5E',
+                  border: active ? `1.5px solid ${C.accent}` : `1px solid ${C.border}`,
+                  background: active ? C.accentLight : C.bgWhite,
+                  color: active || ans ? C.textHeading : C.textSecondary,
                 }}
               >
                 {ans
                   ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-                  : <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? '#D97757' : '#C9BEAD', flexShrink: 0 }} />}
+                  : <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? C.accent : '#C9BEAD', flexShrink: 0 }} />}
                 {q.header || `Q${qi + 1}`}
               </button>
             );
@@ -1085,7 +1085,7 @@ function AskQuestionView({ item, online, onAnswer }: {
       {item.resolved ? (
         <div style={{ fontSize: 12, color: '#8A8070' }}>Ответ отправлен</div>
       ) : !online ? (
-        <div style={{ fontSize: 12, color: '#9A8F7E' }}>Недоступно офлайн</div>
+        <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
       ) : multiQ ? (
         <div style={{ display: 'flex', gap: 8 }}>
           {activeTab > 0 && secBtn('‹ Назад', () => setActiveTab(t => t - 1))}
@@ -1112,15 +1112,15 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
   const iconBtn: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     width: 26, height: 26, borderRadius: 7, border: 'none', background: '#EDE7DA',
-    color: '#9A8F7E', cursor: 'pointer', fontFamily: 'inherit', padding: 0,
+    color: C.textMuted, cursor: 'pointer', fontFamily: 'inherit', padding: 0,
   };
   return (
     <div className="cc-msg" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden' }}>
       <ClaudeHeader />
-      <div style={{ fontSize: 14, color: '#2A251F', wordBreak: 'break-word', paddingLeft: 30 }}>
+      <div style={{ fontSize: 14, color: C.textHeading, wordBreak: 'break-word', paddingLeft: 30 }}>
         <MarkdownContent text={text} />
         {/* Мигающая каретка стриминга (B2) */}
-        {streaming && <span style={{ display: 'inline-block', width: 7, height: 15, marginTop: 3, borderRadius: 1, background: '#D97757', animation: 'blink 1s step-start infinite', verticalAlign: 'text-bottom' }} />}
+        {streaming && <span style={{ display: 'inline-block', width: 7, height: 15, marginTop: 3, borderRadius: 1, background: C.accent, animation: 'blink 1s step-start infinite', verticalAlign: 'text-bottom' }} />}
       </div>
       {/* Действия — компактными иконками в правом верхнем углу (CSS управляет hover/тач) */}
       {!streaming && (
@@ -1190,20 +1190,20 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
       return (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
           <div style={{
-            width: 22, height: 22, borderRadius: 6, background: '#D97757',
+            width: 22, height: 22, borderRadius: 6, background: C.accent,
             display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1,
           }}>
-            <div style={{ width: 9, height: 9, borderRadius: '50%', background: '#F4F0E8' }} />
+            <div style={{ width: 9, height: 9, borderRadius: '50%', background: C.bgMain }} />
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#2A251F', marginBottom: 2 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, marginBottom: 2 }}>
               Чат запущен
             </div>
-            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: '#9A8F7E' }}>
+            <div style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
               {item.model} · {item.mode}{typeof item.toolCount === 'number' && item.toolCount > 0 ? ` · ${item.toolCount} инстр.` : ''}
             </div>
             {item.cwd && (
-              <div title={item.cwd} style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: '#9A8F7E', overflow: 'hidden' }}>
+              <div title={item.cwd} style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden' }}>
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#B0A697" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.cwd}</span>
               </div>
@@ -1213,8 +1213,8 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
                 {item.mcpServers.map(s => {
                   const ok = /connect|ready|ok|success|running/i.test(s.status);
                   return (
-                    <span key={s.name} title={`MCP «${s.name}»: ${s.status || '—'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontFamily: "'JetBrains Mono', monospace", color: '#756B5E', background: '#F0EAE0', borderRadius: 5, padding: '1px 7px' }}>
-                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: ok ? '#5E8B4E' : '#C0392B', flexShrink: 0 }} />
+                    <span key={s.name} title={`MCP «${s.name}»: ${s.status || '—'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontFamily: FONT.mono, color: C.textSecondary, background: '#F0EAE0', borderRadius: 5, padding: '1px 7px' }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: ok ? C.success : '#C0392B', flexShrink: 0 }} />
                       {s.name}
                     </span>
                   );
@@ -1241,22 +1241,22 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
             }}
             onClick={() => onToggleThinking(index)}
           >
-            <span style={{ color: '#9A8F7E', display: 'flex', alignItems: 'center' }}>
+            <span style={{ color: C.textMuted, display: 'flex', alignItems: 'center' }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 3a6 6 0 0 0-4 10.5V17h8v-3.5A6 6 0 0 0 12 3z" />
                 <path d="M9 20h6M10 22h4" />
               </svg>
             </span>
-            <span style={{ fontSize: 12.5, fontStyle: 'italic', color: '#756B5E', flex: 1 }}>
+            <span style={{ fontSize: 12.5, fontStyle: 'italic', color: C.textSecondary, flex: 1 }}>
               Размышление
             </span>
             {item.text && (
-              <span title="приблизительно, по объёму текста" style={{ fontSize: 10.5, color: '#9A8F7E', fontFamily: "'JetBrains Mono', monospace" }}>
+              <span title="приблизительно, по объёму текста" style={{ fontSize: 10.5, color: C.textMuted, fontFamily: FONT.mono }}>
                 ~{Math.max(1, Math.round(item.text.length / 4))} ток.
               </span>
             )}
             <span style={{
-              color: '#9A8F7E', fontSize: 12,
+              color: C.textMuted, fontSize: 12,
               transform: item.expanded ? 'rotate(180deg)' : 'rotate(0deg)',
               transition: 'transform 0.2s',
               display: 'inline-block',
@@ -1279,7 +1279,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
       const node = item.name === 'TodoWrite' ? <TodoPlanView input={item.input} /> : <ToolUseView item={item} />;
       // Дочерние вызовы субагента (Task) — с отступом и линией-коннектором
       return item.parentToolUseId
-        ? <div style={{ marginLeft: 8, paddingLeft: 14, borderLeft: '2px solid #E0D7C8' }}>{node}</div>
+        ? <div style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `2px solid ${C.border}` }}>{node}</div>
         : node;
     }
 
@@ -1298,18 +1298,18 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
       })();
       return (
         <div style={{
-          border: '1px solid #E6C9B8', borderLeft: '3px solid #D97757',
+          border: '1px solid #E6C9B8', borderLeft: `3px solid ${C.accent}`,
           borderRadius: 12, padding: '13px 14px', background: '#FBF1EA',
         }}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: '#2A251F' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: C.textHeading }}>
             Запрос разрешения
           </div>
           <div style={{ fontSize: 12, color: '#5A5040', marginBottom: 10 }}>
             Claude хочет выполнить <span style={{ fontWeight: 600 }}>{item.toolName}</span>:
           </div>
           <div style={{
-            background: '#2A251F', borderRadius: 7, padding: '8px 11px',
-            color: '#E8E1D4', fontFamily: "'JetBrains Mono', monospace",
+            background: C.textHeading, borderRadius: 7, padding: '8px 11px',
+            color: C.bgSelected, fontFamily: FONT.mono,
             fontSize: 12, marginBottom: 12, lineHeight: 1.5,
             whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto',
           }}>
@@ -1323,7 +1323,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
                 <button
                   onClick={() => onAllowPermission(item.requestId)}
                   style={{
-                    flex: 1, background: '#D97757', color: '#FBF8F2',
+                    flex: 1, background: C.accent, color: C.onAccent,
                     borderRadius: 9, padding: 9, border: 'none',
                     cursor: 'pointer', fontSize: 13, fontWeight: 600,
                   }}
@@ -1333,8 +1333,8 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
                 <button
                   onClick={() => onDenyPermission(item.requestId)}
                   style={{
-                    flex: 1, background: '#FFFFFF', border: '1px solid #E0D7C8',
-                    color: '#756B5E', borderRadius: 9, padding: 9,
+                    flex: 1, background: C.bgWhite, border: `1px solid ${C.border}`,
+                    color: C.textSecondary, borderRadius: 9, padding: 9,
                     cursor: 'pointer', fontSize: 13,
                   }}
                 >
@@ -1352,7 +1352,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
               </button>
             </>
           ) : (
-            <div style={{ fontSize: 12, color: '#9A8F7E' }}>Недоступно офлайн</div>
+            <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
           )}
         </div>
       );
@@ -1362,8 +1362,8 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
       const fileName = item.path.replace(/\\/g, '/').split('/').pop() ?? item.path;
       return (
         <div style={{
-          border: '1px solid #E8E1D4', borderRadius: 14, overflow: 'hidden',
-          background: '#FFFFFF', boxShadow: '0 2px 10px rgba(60,50,35,0.05)',
+          border: `1px solid ${C.borderLight}`, borderRadius: 14, overflow: 'hidden',
+          background: C.bgWhite, boxShadow: '0 2px 10px rgba(60,50,35,0.05)',
         }}>
           <div style={{
             display: 'flex', alignItems: 'center', gap: 11,
@@ -1383,13 +1383,13 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
               </svg>
             </div>
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#2A251F', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {fileName}
             </span>
-            <span style={{ fontSize: 11.5, color: '#27AE60', fontFamily: "'JetBrains Mono', monospace" }}>
+            <span style={{ fontSize: 11.5, color: '#27AE60', fontFamily: FONT.mono }}>
               +{item.added}
             </span>
-            <span style={{ fontSize: 11.5, color: '#C0392B', fontFamily: "'JetBrains Mono', monospace" }}>
+            <span style={{ fontSize: 11.5, color: '#C0392B', fontFamily: FONT.mono }}>
               -{item.removed}
             </span>
           </div>
@@ -1398,7 +1398,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
               onClick={() => onOpenFile(item.path)}
               style={{
                 fontSize: 12, padding: '4px 10px', borderRadius: 6,
-                border: '1px solid #E8E1D4', background: '#FFF', cursor: 'pointer', color: '#39332B',
+                border: `1px solid ${C.borderLight}`, background: '#FFF', cursor: 'pointer', color: C.textPrimary,
               }}
             >
               Открыть
@@ -1468,7 +1468,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
             <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <span style={{ fontWeight: 700 }}>✗</span>
               <span>{reason}</span>
-              <span style={{ opacity: 0.65, fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>
+              <span style={{ opacity: 0.65, fontFamily: FONT.mono, fontSize: 11 }}>
                 · {item.numTurns} {stepWord(item.numTurns)} · {(item.durationMs / 1000).toFixed(1)}с
               </span>
             </span>
@@ -1495,10 +1495,10 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
         <div style={{
           fontSize: 11, color: '#8A8070', alignSelf: 'center',
           background: '#E8E2D6', borderRadius: 8, padding: '4px 11px',
-          fontFamily: "'JetBrains Mono', monospace",
+          fontFamily: FONT.mono,
           display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', justifyContent: 'center',
         }}>
-          <span style={{ color: ok ? '#5E8B4E' : '#C0392B', fontWeight: 700 }}>{ok ? '✓' : '✗'}</span>
+          <span style={{ color: ok ? C.success : '#C0392B', fontWeight: 700 }}>{ok ? '✓' : '✗'}</span>
           <span>{item.numTurns} {stepWord(item.numTurns)}</span>
           {sep}
           <span>{(item.durationMs / 1000).toFixed(1)}с</span>
@@ -1561,27 +1561,27 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
     case 'compact_boundary': {
       const fmtTok = (nn: number) => nn >= 1000 ? (nn / 1000).toFixed(nn >= 10000 ? 0 : 1) + 'k' : String(nn);
       return (
-        <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center', gap: 10, color: '#9A8F7E', fontSize: 11, margin: '2px 0' }}>
-          <div style={{ flex: 1, height: 1, background: '#E0D7C8' }} />
+        <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center', gap: 10, color: C.textMuted, fontSize: 11, margin: '2px 0' }}>
+          <div style={{ flex: 1, height: 1, background: C.border }} />
           <span style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
             <span style={{ color: '#B89B6E' }}>✦</span>
             контекст свёрнут
             {typeof item.preTokens === 'number' && item.preTokens > 0 && <span style={{ opacity: 0.7 }}>· было {fmtTok(item.preTokens)} токенов</span>}
           </span>
-          <div style={{ flex: 1, height: 1, background: '#E0D7C8' }} />
+          <div style={{ flex: 1, height: 1, background: C.border }} />
         </div>
       );
     }
 
     case 'resumed':
       return (
-        <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center', gap: 10, color: '#9A8F7E', fontSize: 11, margin: '2px 0' }}>
-          <div style={{ flex: 1, height: 1, background: '#E0D7C8' }} />
+        <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center', gap: 10, color: C.textMuted, fontSize: 11, margin: '2px 0' }}>
+          <div style={{ flex: 1, height: 1, background: C.border }} />
           <span style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
             <span style={{ color: '#B89B6E' }}>✦</span>
             продолжение чата
           </span>
-          <div style={{ flex: 1, height: 1, background: '#E0D7C8' }} />
+          <div style={{ flex: 1, height: 1, background: C.border }} />
         </div>
       );
 
@@ -1589,7 +1589,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
       return (
         <div style={{
           alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
-          background: '#F3ECE2', border: '1px solid #E0D7C8', borderRadius: 8, padding: '6px 12px', fontSize: 12, color: '#756B5E',
+          background: '#F3ECE2', border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 12px', fontSize: 12, color: C.textSecondary,
         }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <svg width="11" height="11" viewBox="0 0 24 24" fill="#9A8F7E"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
@@ -1617,7 +1617,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
       return (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-          background: '#EFEAE0', border: '1px solid #E0D7C8', borderRadius: 10,
+          background: '#EFEAE0', border: `1px solid ${C.border}`, borderRadius: 10,
           fontSize: 12.5, fontStyle: 'italic', color: '#8A8070',
         }}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>

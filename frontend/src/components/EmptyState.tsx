@@ -1,4 +1,4 @@
-import { C } from '../lib/design'
+import { C, FONT } from '../lib/design'
 
 interface EmptyStateProps {
   icon: React.ReactNode       // SVG или emoji
@@ -15,7 +15,7 @@ export function EmptyState({ icon, title, subtitle, action }: EmptyStateProps) {
         display:'flex', alignItems:'center', justifyContent:'center', marginBottom:8 }}>
         {icon}
       </div>
-      <div style={{ fontFamily:"'PT Serif', serif", fontWeight:500, fontSize:21, color:C.textPrimary, letterSpacing:'-0.01em' }}>{title}</div>
+      <div style={{ fontFamily:FONT.serif, fontWeight:500, fontSize:21, color:C.textPrimary, letterSpacing:'-0.01em' }}>{title}</div>
       {subtitle && <div style={{ fontSize:13.5, color:C.textSecondary, lineHeight:1.5, maxWidth:240 }}>{subtitle}</div>}
       {action && <div style={{ marginTop:12 }}>{action}</div>}
     </div>

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { base64ToBytes } from '../lib/binary';
+import { C } from '../lib/design';
 
 interface Sheet { name: string; html: string }
 
@@ -47,8 +48,8 @@ export default function XlsxViewer({ base64 }: { base64: string }) {
               style={{
                 padding: '4px 12px', borderRadius: 7, border: 'none', cursor: 'pointer',
                 fontSize: 12.5, fontWeight: 600,
-                background: i === active ? '#D97757' : '#EDE7DC',
-                color: i === active ? '#FBF8F2' : '#756B5E',
+                background: i === active ? C.accent : C.bgPanel,
+                color: i === active ? C.onAccent : C.textSecondary,
               }}>
               {s.name}
             </button>
@@ -57,7 +58,7 @@ export default function XlsxViewer({ base64 }: { base64: string }) {
       )}
 
       {/* Таблица текущего листа */}
-      <div style={{ overflow: 'auto', border: '1px solid #E0D8CC', borderRadius: 8, background: '#FFFFFF' }}
+      <div style={{ overflow: 'auto', border: '1px solid #E0D8CC', borderRadius: 8, background: C.bgWhite }}
         dangerouslySetInnerHTML={{ __html: current.html }} />
     </div>
   );

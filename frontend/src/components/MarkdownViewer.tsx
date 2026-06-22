@@ -1,35 +1,36 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
+import { C, FONT } from '../lib/design';
 
 interface Props {
   content: string;
 }
 
-const mono = "'JetBrains Mono', monospace";
-const serif = "'PT Serif', serif";
+const mono = FONT.mono;
+const serif = FONT.serif;
 
 const components: Components = {
   h1: ({ children }) => (
-    <h1 style={{ fontFamily: serif, fontSize: 26, fontWeight: 700, margin: '0 0 16px', color: '#2A251F', letterSpacing: '-0.02em', lineHeight: 1.25 }}>{children}</h1>
+    <h1 style={{ fontFamily: serif, fontSize: 26, fontWeight: 700, margin: '0 0 16px', color: C.textHeading, letterSpacing: '-0.02em', lineHeight: 1.25 }}>{children}</h1>
   ),
   h2: ({ children }) => (
-    <h2 style={{ fontFamily: serif, fontSize: 21, fontWeight: 700, margin: '24px 0 12px', color: '#2A251F', letterSpacing: '-0.01em', lineHeight: 1.3 }}>{children}</h2>
+    <h2 style={{ fontFamily: serif, fontSize: 21, fontWeight: 700, margin: '24px 0 12px', color: C.textHeading, letterSpacing: '-0.01em', lineHeight: 1.3 }}>{children}</h2>
   ),
   h3: ({ children }) => (
-    <h3 style={{ fontFamily: serif, fontSize: 17, fontWeight: 700, margin: '20px 0 8px', color: '#2A251F', lineHeight: 1.35 }}>{children}</h3>
+    <h3 style={{ fontFamily: serif, fontSize: 17, fontWeight: 700, margin: '20px 0 8px', color: C.textHeading, lineHeight: 1.35 }}>{children}</h3>
   ),
   h4: ({ children }) => (
-    <h4 style={{ fontFamily: serif, fontSize: 15, fontWeight: 700, margin: '16px 0 6px', color: '#2A251F' }}>{children}</h4>
+    <h4 style={{ fontFamily: serif, fontSize: 15, fontWeight: 700, margin: '16px 0 6px', color: C.textHeading }}>{children}</h4>
   ),
   p: ({ children }) => (
-    <p style={{ margin: '0 0 14px', lineHeight: 1.7, color: '#2A251F' }}>{children}</p>
+    <p style={{ margin: '0 0 14px', lineHeight: 1.7, color: C.textHeading }}>{children}</p>
   ),
   a: ({ href, children }) => (
-    <a href={href} style={{ color: '#D97757', textDecoration: 'underline' }}>{children}</a>
+    <a href={href} style={{ color: C.accent, textDecoration: 'underline' }}>{children}</a>
   ),
   strong: ({ children }) => (
-    <strong style={{ fontWeight: 700, color: '#2A251F' }}>{children}</strong>
+    <strong style={{ fontWeight: 700, color: C.textHeading }}>{children}</strong>
   ),
   em: ({ children }) => (
     <em style={{ fontStyle: 'italic' }}>{children}</em>
@@ -44,7 +45,7 @@ const components: Components = {
     );
   },
   pre: ({ children }) => (
-    <pre style={{ margin: '0 0 16px', background: '#EDE7DA', borderRadius: 10, padding: '14px 16px', overflowX: 'auto', fontFamily: mono, fontSize: 12.5, lineHeight: 1.6, color: '#2A251F' }}>
+    <pre style={{ margin: '0 0 16px', background: '#EDE7DA', borderRadius: 10, padding: '14px 16px', overflowX: 'auto', fontFamily: mono, fontSize: 12.5, lineHeight: 1.6, color: C.textHeading }}>
       {children}
     </pre>
   ),
@@ -55,15 +56,15 @@ const components: Components = {
     <ol style={{ margin: '0 0 14px', paddingLeft: 22, lineHeight: 1.7 }}>{children}</ol>
   ),
   li: ({ children }) => (
-    <li style={{ margin: '3px 0', color: '#2A251F' }}>{children}</li>
+    <li style={{ margin: '3px 0', color: C.textHeading }}>{children}</li>
   ),
   blockquote: ({ children }) => (
-    <blockquote style={{ margin: '0 0 14px', padding: '10px 16px', borderLeft: '3px solid #D97757', background: '#F4F0E8', borderRadius: '0 8px 8px 0', color: '#5C5246' }}>
+    <blockquote style={{ margin: '0 0 14px', padding: '10px 16px', borderLeft: `3px solid ${C.accent}`, background: C.bgMain, borderRadius: '0 8px 8px 0', color: '#5C5246' }}>
       {children}
     </blockquote>
   ),
   hr: () => (
-    <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid #E0D7C8' }} />
+    <hr style={{ margin: '20px 0', border: 'none', borderTop: `1px solid ${C.border}` }} />
   ),
   table: ({ children }) => (
     <div style={{ overflowX: 'auto', marginBottom: 14 }}>
@@ -71,10 +72,10 @@ const components: Components = {
     </div>
   ),
   th: ({ children }) => (
-    <th style={{ padding: '7px 12px', background: '#EDE7DA', fontWeight: 700, textAlign: 'left', borderBottom: '2px solid #E0D7C8', color: '#2A251F' }}>{children}</th>
+    <th style={{ padding: '7px 12px', background: '#EDE7DA', fontWeight: 700, textAlign: 'left', borderBottom: `2px solid ${C.border}`, color: C.textHeading }}>{children}</th>
   ),
   td: ({ children }) => (
-    <td style={{ padding: '7px 12px', borderBottom: '1px solid #E0D7C8', color: '#2A251F' }}>{children}</td>
+    <td style={{ padding: '7px 12px', borderBottom: `1px solid ${C.border}`, color: C.textHeading }}>{children}</td>
   ),
   img: ({ src, alt }) => (
     <img src={src} alt={alt ?? ''} style={{ maxWidth: '100%', borderRadius: 8, margin: '8px 0' }} />
@@ -83,7 +84,7 @@ const components: Components = {
 
 export function MarkdownViewer({ content }: Props) {
   return (
-    <div style={{ fontFamily: "'Hanken Grotesk', sans-serif", fontSize: 14, lineHeight: 1.7, color: '#2A251F', width: '100%' }}>
+    <div style={{ fontFamily: FONT.sans, fontSize: 14, lineHeight: 1.7, color: C.textHeading, width: '100%' }}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{content}</ReactMarkdown>
     </div>
   );

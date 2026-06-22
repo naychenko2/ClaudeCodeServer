@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { renderAsync } from 'docx-preview';
 import { base64ToBytes } from '../lib/binary';
+import { C } from '../lib/design';
 
 export default function DocxViewer({ base64 }: { base64: string }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -30,8 +31,8 @@ export default function DocxViewer({ base64 }: { base64: string }) {
     <div style={{ width: '100%', position: 'relative' }}>
       {loading && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: 40 }}>
-          <div style={{ width: 36, height: 36, borderRadius: '50%', border: '3px solid #E0D7C8', borderTopColor: '#D97757', animation: 'spin 0.8s linear infinite' }} />
-          <div style={{ fontSize: 13, color: '#9A8F7E' }}>Загружаю документ…</div>
+          <div style={{ width: 36, height: 36, borderRadius: '50%', border: `3px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.8s linear infinite' }} />
+          <div style={{ fontSize: 13, color: C.textMuted }}>Загружаю документ…</div>
         </div>
       )}
       {error && (

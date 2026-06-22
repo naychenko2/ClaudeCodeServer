@@ -7,7 +7,7 @@ import { FileViewer } from '../components/FileViewer';
 import { ConnectionStatus } from '../components/ConnectionStatus';
 import { joinProject, leaveProject, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
-import { C } from '../lib/design';
+import { C, FONT } from '../lib/design';
 import { PillSwitch } from '../components/Toolbar';
 
 interface Props {
@@ -40,7 +40,7 @@ function Splitter({ orientation, active, onMouseDown }: {
       onMouseDown={onMouseDown}
       style={{
         position: 'relative', flexShrink: 0, cursor: vertical ? 'col-resize' : 'row-resize',
-        background: active ? '#D97757' : '#E0D7C8', transition: 'background 0.15s ease',
+        background: active ? C.accent : C.border, transition: 'background 0.15s ease',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         ...(vertical ? { flex: '0 0 1px', width: 1, alignSelf: 'stretch' } : { height: 1, width: '100%' }),
       }}
@@ -49,12 +49,12 @@ function Splitter({ orientation, active, onMouseDown }: {
     >
       <div style={{
         position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-        borderRadius: 3, background: '#D97757', opacity: active ? 1 : 0,
+        borderRadius: 3, background: C.accent, opacity: active ? 1 : 0,
         transition: 'opacity 0.15s ease', pointerEvents: 'none',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
         ...(vertical ? { width: 4, height: 34, flexDirection: 'column' } : { width: 34, height: 4, flexDirection: 'row' }),
       }}>
-        {[0, 1, 2].map(i => <span key={i} style={{ width: 2, height: 2, borderRadius: '50%', background: '#FBF8F2' }} />)}
+        {[0, 1, 2].map(i => <span key={i} style={{ width: 2, height: 2, borderRadius: '50%', background: C.onAccent }} />)}
       </div>
       <div style={vertical
         ? { position: 'absolute', top: 0, bottom: 0, left: -6, right: -6, cursor: 'col-resize' }
@@ -240,7 +240,7 @@ export function WorkspacePage({ project, onBack }: Props) {
   );
 
   const Sidebar = (
-    <div style={{ width: isMobile ? '100%' : sidebarWidth, display: 'flex', flexDirection: 'column', background: '#EDE7DC', flexShrink: 0, height: '100%' }}>
+    <div style={{ width: isMobile ? '100%' : sidebarWidth, display: 'flex', flexDirection: 'column', background: C.bgPanel, flexShrink: 0, height: '100%' }}>
       {/* Планшет/десктоп: логотип + tabs в одном header блоке */}
       {!isMobile && (
         <div style={{ padding: '16px 16px 14px', flexShrink: 0 }}>
@@ -250,7 +250,7 @@ export function WorkspacePage({ project, onBack }: Props) {
                 <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>
               </svg>
             </div>
-            <span style={{ fontFamily: "'PT Serif', serif", fontSize: 18, fontWeight: 500, color: C.textHeading }}>Claude Code Server</span>
+            <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading }}>Claude Code Server</span>
           </div>
           {TabSwitcher}
         </div>
@@ -265,7 +265,7 @@ export function WorkspacePage({ project, onBack }: Props) {
       {/* Project footer — клик возвращает к списку проектов */}
       <div
         onClick={onBack}
-        style={{ padding: '11px 14px', borderTop: '1px solid #DDD4C4', display: 'flex', alignItems: 'center', gap: 11, background: '#E7E0D2', cursor: 'pointer', flexShrink: 0 }}
+        style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 11, background: C.bgInset, cursor: 'pointer', flexShrink: 0 }}
       >
         <ConnectionStatus variant="footer" title={project.name} subtitle={project.rootPath} />
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A8F7E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -277,7 +277,7 @@ export function WorkspacePage({ project, onBack }: Props) {
 
   if (isMobile) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#EDE7DC', fontFamily: "'Hanken Grotesk', sans-serif", overflow: 'hidden' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: C.bgPanel, fontFamily: FONT.sans, overflow: 'hidden' }}>
         {/* Единая шапка: скрыта только при просмотре файла (у FileViewer своя шапка) */}
         {!openFile && (
           <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.border}`, background: C.bgPanel, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
@@ -311,7 +311,7 @@ export function WorkspacePage({ project, onBack }: Props) {
           </div>
           <div
             onClick={onBack}
-            style={{ padding: '11px 14px', borderTop: '1px solid #DDD4C4', display: 'flex', alignItems: 'center', gap: 11, background: '#E7E0D2', cursor: 'pointer', flexShrink: 0 }}
+            style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 11, background: C.bgInset, cursor: 'pointer', flexShrink: 0 }}
           >
             <ConnectionStatus variant="footer" title={project.name} subtitle={project.rootPath} />
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A8F7E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -346,7 +346,7 @@ export function WorkspacePage({ project, onBack }: Props) {
   );
 
   return (
-    <div style={{ display: 'flex', height: '100vh', background: '#F4F0E8', fontFamily: "'Hanken Grotesk', sans-serif", overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: '100vh', background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden' }}>
       {Sidebar}
 
       {/* Сплиттер между сайдбаром и контентом */}
@@ -395,7 +395,7 @@ export function WorkspacePage({ project, onBack }: Props) {
               <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} dockMode={chatDockExpanded ? 'expanded' : 'collapsed'} onToggleDock={() => setChatDockExpanded(p => !p)} />
             </div>
           ) : (
-            <div style={{ flexShrink: 0, height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8A8070', fontSize: 13, background: '#EDE7DC' }}>
+            <div style={{ flexShrink: 0, height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8A8070', fontSize: 13, background: C.bgPanel }}>
               Выберите или создайте чат
             </div>
           )}

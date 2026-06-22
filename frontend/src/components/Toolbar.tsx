@@ -85,8 +85,8 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
         return (
           <button key={opt.value} onClick={() => onChange(opt.value)}
             style={{
-              flex: fill ? 1 : undefined, padding: isMobile ? '8px 12px' : '5px 12px',
-              minHeight: isMobile ? 40 : 30,
+              flex: fill ? 1 : undefined, padding: isMobile ? '8px 12px' : '6px 12px',
+              minHeight: isMobile ? 40 : 32,
               borderRadius: TB.pillRadius - 2, border: 'none', cursor: 'pointer',
               fontSize: 13, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap',
               transition: 'background 0.15s, color 0.15s',

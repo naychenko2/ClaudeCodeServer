@@ -6,6 +6,8 @@ import { api } from '../lib/api';
 import { modelLabel } from '../lib/models';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
+import { C } from '../lib/design';
+import { Toolbar, ToolbarIconButton } from './Toolbar';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -61,58 +63,42 @@ interface ChatHeaderBarProps {
 
 function ChatHeaderBar({ session, project, isWaiting, online, onInterrupt, onOpenSettings, onToggleDock, isMobile }: ChatHeaderBarProps) {
   return (
-    <div style={{
-      padding: isMobile ? '12px 14px' : '14px 24px', borderBottom: '1px solid #E7E0D2',
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
-    }}>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 17, fontWeight: 600, color: '#2A251F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+    <Toolbar isMobile={isMobile}>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {session.name ?? 'Новый чат'}
         </div>
-        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#9A8F7E', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {project.name} · {session.mode ?? 'auto'} · {modelLabel(session.model)}
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-        {online && (
-        <button
-          onClick={onOpenSettings}
-          title="Настройки чата"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9A8F7E', padding: 6, borderRadius: 8, display: 'flex', alignItems: 'center' }}
-          onMouseEnter={e => { e.currentTarget.style.color = '#5A5040'; e.currentTarget.style.background = '#EDE7DC'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = '#9A8F7E'; e.currentTarget.style.background = 'none'; }}
-        >
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {online && (
+        <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
+        </ToolbarIconButton>
+      )}
+      {isWaiting && (
+        <button
+          onClick={onInterrupt}
+          style={{
+            fontSize: 13, fontWeight: 600, height: 32, display: 'inline-flex', alignItems: 'center', gap: 6,
+            color: '#FBF8F2', background: C.danger, border: 'none', borderRadius: 8,
+            padding: '0 12px', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
+          }}
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><rect width="10" height="10" rx="2"/></svg>
+          Остановить
         </button>
-        )}
-        {isWaiting && (
-          <button
-            onClick={onInterrupt}
-            style={{
-              fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 5,
-              color: '#B4452F', background: '#FFF0EE',
-              border: '1px solid #F5C5BC', borderRadius: 8,
-              padding: '5px 12px', cursor: 'pointer', fontWeight: 600,
-            }}
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="#B4452F"><rect width="10" height="10" rx="2"/></svg>
-            Остановить
-          </button>
-        )}
-        {onToggleDock && (
-          <button
-            onClick={onToggleDock}
-            title="Свернуть чат"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#756B5E', padding: 4, borderRadius: 6, display: 'flex', alignItems: 'center' }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 9l6 6 6-6"/></svg>
-          </button>
-        )}
-      </div>
-    </div>
+      )}
+      {onToggleDock && (
+        <ToolbarIconButton onClick={onToggleDock} title="Свернуть чат" isMobile={isMobile}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 9l6 6 6-6"/></svg>
+        </ToolbarIconButton>
+      )}
+    </Toolbar>
   );
 }
 
@@ -367,11 +353,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     };
 
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', height: 56, background: '#EDE7DC', boxSizing: 'border-box' }}>
-        <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#D97757', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <Toolbar noBorder style={{ height: 56, gap: 10 }}>
+        <div style={{ width: 28, height: 28, borderRadius: '50%', background: C.accent, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#F4F0E8' }} />
         </div>
-        <span style={{ flex: 1, fontSize: 13, color: isWaiting ? '#9A8F7E' : '#5A5040', fontStyle: isWaiting ? 'italic' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: isWaiting ? C.textMuted : C.textSecondary, fontStyle: isWaiting ? 'italic' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {isWaiting ? 'Claude печатает…' : (lastAnswer || session.name || 'Новый чат')}
         </span>
         <input
@@ -380,23 +366,19 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleMiniSend(); } }}
           placeholder={online ? 'Ответить…' : 'Офлайн'}
           disabled={!online}
-          style={{ width: 180, padding: '6px 10px', border: '1px solid #D4CFC4', borderRadius: 8, fontSize: 13, background: '#F4F0E8', outline: 'none', fontFamily: 'inherit', color: '#2A251F' }}
+          style={{ width: 180, padding: '6px 10px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, background: '#F4F0E8', outline: 'none', fontFamily: 'inherit', color: C.textHeading }}
         />
         <button
           onClick={handleMiniSend}
           disabled={!miniText.trim() || isWaiting || !online}
-          style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: miniText.trim() && !isWaiting && online ? 'pointer' : 'default', background: miniText.trim() && !isWaiting && online ? '#D97757' : '#DDD4C4', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+          style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: miniText.trim() && !isWaiting && online ? 'pointer' : 'default', background: miniText.trim() && !isWaiting && online ? C.accent : '#DDD4C4', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5" strokeLinecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
         </button>
-        <button
-          onClick={onToggleDock}
-          title="Развернуть чат"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#756B5E', padding: 4, borderRadius: 6, display: 'flex', alignItems: 'center', flexShrink: 0 }}
-        >
+        <ToolbarIconButton onClick={onToggleDock} title="Развернуть чат">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 15l-6-6-6 6"/></svg>
-        </button>
-      </div>
+        </ToolbarIconButton>
+      </Toolbar>
     );
   }
 

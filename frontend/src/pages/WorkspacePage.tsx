@@ -7,6 +7,8 @@ import { FileViewer } from '../components/FileViewer';
 import { ConnectionStatus } from '../components/ConnectionStatus';
 import { joinProject, leaveProject, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
+import { C } from '../lib/design';
+import { PillSwitch } from '../components/Toolbar';
 
 interface Props {
   project: Project;
@@ -229,37 +231,26 @@ export function WorkspacePage({ project, onBack }: Props) {
   };
 
   const TabSwitcher = (
-    <div style={{ display: 'flex', gap: 3, background: '#E1D9CA', borderRadius: 10, padding: 3 }}>
-      {(['sessions', 'files'] as LeftTab[]).map(tab => (
-        <button key={tab}
-          onClick={() => handleTabSwitch(tab)}
-          style={{
-            flex: 1, textAlign: 'center', fontSize: 13, fontWeight: 600,
-            padding: 8, cursor: 'pointer', border: 'none',
-            borderRadius: 7, transition: 'all 0.15s',
-            background: leftTab === tab ? '#FFFFFF' : 'transparent',
-            color: leftTab === tab ? '#2A251F' : '#756B5E',
-            boxShadow: leftTab === tab ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
-          }}
-        >
-          {tab === 'sessions' ? 'Сессии' : 'Файлы'}
-        </button>
-      ))}
-    </div>
+    <PillSwitch<LeftTab>
+      value={leftTab}
+      options={[{ value: 'sessions', label: 'Сессии' }, { value: 'files', label: 'Файлы' }]}
+      onChange={handleTabSwitch}
+      fill
+    />
   );
 
   const Sidebar = (
     <div style={{ width: isMobile ? '100%' : sidebarWidth, display: 'flex', flexDirection: 'column', background: '#EDE7DC', flexShrink: 0, height: '100%' }}>
       {/* Планшет/десктоп: логотип + tabs в одном header блоке */}
       {!isMobile && (
-        <div style={{ padding: '18px 16px 14px', flexShrink: 0 }}>
+        <div style={{ padding: '16px 16px 14px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 15, padding: '0 2px' }}>
-            <div style={{ width: 28, height: 28, borderRadius: 8, background: '#D97757', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <div style={{ width: 28, height: 28, borderRadius: 8, background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F4F0E8" strokeWidth="2.2" strokeLinecap="round">
                 <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>
               </svg>
             </div>
-            <span style={{ fontFamily: "'PT Serif', serif", fontSize: 18, fontWeight: 500, color: '#2A251F' }}>Claude Code Server</span>
+            <span style={{ fontFamily: "'PT Serif', serif", fontSize: 18, fontWeight: 500, color: C.textHeading }}>Claude Code Server</span>
           </div>
           {TabSwitcher}
         </div>
@@ -289,35 +280,25 @@ export function WorkspacePage({ project, onBack }: Props) {
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#EDE7DC', fontFamily: "'Hanken Grotesk', sans-serif", overflow: 'hidden' }}>
         {/* Единая шапка: скрыта только при просмотре файла (у FileViewer своя шапка) */}
         {!openFile && (
-          <div style={{ padding: '10px 14px', borderBottom: '1px solid #DDD4C4', background: '#EDE7DC', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.border}`, background: C.bgPanel, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
             <button
               onClick={mobileView === 'sidebar' ? onBack : handleMobileBack}
-              style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', flex: 1, minWidth: 0, padding: 0, gap: 2 }}
+              style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', flex: 1, minWidth: 0, minHeight: 40, padding: 0, gap: 2 }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                <span style={{ fontSize: 20, color: '#8A8070', lineHeight: 1, flexShrink: 0 }}>‹</span>
-                <span style={{ fontWeight: 700, fontSize: 15, color: '#2A251F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</span>
+                <span style={{ fontSize: 20, color: C.textMuted, lineHeight: 1, flexShrink: 0 }}>‹</span>
+                <span style={{ fontWeight: 700, fontSize: 15, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</span>
               </div>
               {activeSession && mobileView === 'chat' && (
-                <span style={{ fontSize: 12, color: '#9A8F7E', paddingLeft: 22, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>{activeSession.name}</span>
+                <span style={{ fontSize: 12, color: C.textMuted, paddingLeft: 22, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>{activeSession.name}</span>
               )}
             </button>
-            <div style={{ display: 'flex', gap: 2, background: '#E1D9CA', borderRadius: 10, padding: 3, flexShrink: 0 }}>
-              {(['sessions', 'files'] as LeftTab[]).map(tab => (
-                <button key={tab}
-                  onClick={() => handleTabSwitch(tab)}
-                  style={{
-                    fontSize: 13, fontWeight: 600, padding: '6px 10px', cursor: 'pointer', border: 'none',
-                    borderRadius: 7, transition: 'all 0.15s', whiteSpace: 'nowrap',
-                    background: leftTab === tab ? '#FFFFFF' : 'transparent',
-                    color: leftTab === tab ? '#2A251F' : '#756B5E',
-                    boxShadow: leftTab === tab ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
-                  }}
-                >
-                  {tab === 'sessions' ? 'Сессии' : 'Файлы'}
-                </button>
-              ))}
-            </div>
+            <PillSwitch<LeftTab>
+              value={leftTab}
+              options={[{ value: 'sessions', label: 'Сессии' }, { value: 'files', label: 'Файлы' }]}
+              onChange={handleTabSwitch}
+              isMobile
+            />
           </div>
         )}
         {/* Sidebar — ВСЕГДА в DOM: FileExplorer не теряет текущий путь при смене вида */}

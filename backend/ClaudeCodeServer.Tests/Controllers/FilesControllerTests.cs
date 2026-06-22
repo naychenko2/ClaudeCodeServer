@@ -41,6 +41,33 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         return (json.GetProperty("id").GetString()!, dir);
     }
 
+    private async Task<string> SetupProjectWithBinaryAsync(string fileName, byte[] bytes)
+    {
+        var dir = Path.Combine(_tempDir, "proj_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, fileName), bytes);
+
+        var response = await _client.PostAsJsonAsync("/api/projects", new { name = "DocProject", rootPath = dir });
+        response.EnsureSuccessStatusCode();
+        var json = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        return json.GetProperty("id").GetString()!;
+    }
+
+    private async Task AssertDocumentAsync(string fileName, byte[] bytes, string expectedKind, string expectedMime)
+    {
+        var id = await SetupProjectWithBinaryAsync(fileName, bytes);
+        var response = await _client.GetAsync($"/api/projects/{id}/files/content?path={fileName}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("isDocument").GetBoolean().Should().BeTrue();
+        body.GetProperty("docKind").GetString().Should().Be(expectedKind);
+        body.GetProperty("isBinary").GetBoolean().Should().BeTrue();
+        body.GetProperty("isImage").GetBoolean().Should().BeFalse();
+        body.GetProperty("mimeType").GetString().Should().Be(expectedMime);
+        // base64 декодируется обратно в исходные байты
+        Convert.FromBase64String(body.GetProperty("base64").GetString()!).Should().Equal(bytes);
+    }
+
     [Fact]
     public async Task List_NonExistentProject_Returns404()
     {
@@ -94,6 +121,28 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
         body.GetProperty("content").GetString().Should().Be("file content here");
         body.GetProperty("isBinary").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetContent_PdfFile_ReturnsDocumentBase64()
+    {
+        await AssertDocumentAsync("doc.pdf", System.Text.Encoding.UTF8.GetBytes("%PDF-1.4 fake"),
+            "pdf", "application/pdf");
+    }
+
+    [Fact]
+    public async Task GetContent_DocxFile_ReturnsDocumentBase64()
+    {
+        // PK — сигнатура zip-контейнера OOXML
+        await AssertDocumentAsync("doc.docx", [0x50, 0x4B, 0x03, 0x04, 1, 2, 3],
+            "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    }
+
+    [Fact]
+    public async Task GetContent_XlsxFile_ReturnsDocumentBase64()
+    {
+        await AssertDocumentAsync("book.xlsx", [0x50, 0x4B, 0x03, 0x04, 9, 8, 7],
+            "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     }
 
     [Fact]

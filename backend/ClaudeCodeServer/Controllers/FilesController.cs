@@ -47,6 +47,18 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         try
         {
             var root = GetRoot(projectId);
+
+            // Просматриваемые документы (pdf/docx/xlsx) — отдаём base64 для клиентского рендеринга
+            var doc = files.GetDocumentInfo(path);
+            if (doc is { } d)
+            {
+                var size = files.GetFileSize(root, path);
+                // Слишком большой документ — только метаданные + скачивание, без base64
+                var docBase64 = size > FileService.MaxDocumentBytes ? null : files.GetFileBase64(root, path);
+                return Ok(new { content = (string?)null, isBinary = true, isImage = false,
+                    isDocument = true, docKind = d.Kind, mimeType = d.Mime, base64 = docBase64, fileSize = size });
+            }
+
             if (files.IsBinaryFile(root, path))
             {
                 if (files.IsImageFile(root, path))

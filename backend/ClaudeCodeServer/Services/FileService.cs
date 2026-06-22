@@ -125,6 +125,30 @@ public class FileService
         return new[] { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp" }.Contains(ext);
     }
 
+    // Документы, которые рендерим на клиенте (pdf.js / docx-preview / SheetJS).
+    // Отдаём их как base64 + mimeType, чтобы фронт собрал Blob и отрисовал, а офлайн-кеш сработал.
+    private static readonly Dictionary<string, (string Kind, string Mime)> ViewableDocuments = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [".pdf"] = ("pdf", "application/pdf"),
+        [".docx"] = ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        [".xlsx"] = ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    };
+
+    // Предельный размер документа для отдачи base64; больше — только скачивание.
+    public const long MaxDocumentBytes = 25 * 1024 * 1024;
+
+    public (string Kind, string Mime)? GetDocumentInfo(string relativePath)
+    {
+        var ext = Path.GetExtension(relativePath).ToLowerInvariant();
+        return ViewableDocuments.TryGetValue(ext, out var info) ? info : null;
+    }
+
+    public long GetFileSize(string rootPath, string relativePath)
+    {
+        var path = SafeJoin(rootPath, relativePath);
+        return new FileInfo(path).Length;
+    }
+
     public string GetFileBase64(string rootPath, string relativePath)
     {
         var path = SafeJoin(rootPath, relativePath);

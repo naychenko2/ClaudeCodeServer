@@ -46,8 +46,9 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
   | { type: 'ask_question'; toolUseId: string; input: unknown }
   | { type: 'file_changed'; path: string; added: number; removed: number }
-  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number }
+  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string }
   | { type: 'error'; text: string }
+  | { type: 'rate_limit'; limitType: string; resetsAt?: string }
   | { type: 'exited' }
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
 );
@@ -69,7 +70,8 @@ export type ChatItem =
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean }
   | { kind: 'file_changed'; path: string; added: number; removed: number }
-  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number }
+  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string }
+  | { kind: 'rate_limit'; limitType: string; resetsAt?: string }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 export interface AuthState {

@@ -43,13 +43,14 @@ public class StoredFileChangedMessage(string path, int added, int removed) : Sto
 }
 
 public class StoredResultMessage(string subtype, long durationMs, int numTurns,
-    UsageInfo? usage = null, double? totalCostUsd = null) : StoredMessage
+    UsageInfo? usage = null, double? totalCostUsd = null, string? apiErrorStatus = null) : StoredMessage
 {
     public string Subtype { get; init; } = subtype;
     public long DurationMs { get; init; } = durationMs;
     public int NumTurns { get; init; } = numTurns;
     public UsageInfo? Usage { get; init; } = usage;
     public double? TotalCostUsd { get; init; } = totalCostUsd;
+    public string? ApiErrorStatus { get; init; } = apiErrorStatus;
 }
 
 public class StoredErrorMessage(string text) : StoredMessage

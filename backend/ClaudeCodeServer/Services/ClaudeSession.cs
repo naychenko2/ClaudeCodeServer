@@ -332,8 +332,10 @@ public class ClaudeSession : IAsyncDisposable
                 var durationMs = root.TryGetProperty("duration_ms", out var d) ? d.GetInt64() : 0;
                 var numTurns = root.TryGetProperty("num_turns", out var nt) ? nt.GetInt32() : 0;
                 var totalCost = root.TryGetProperty("total_cost_usd", out var tc) ? tc.GetDouble() : (double?)null;
+                var apiErr = root.TryGetProperty("api_error_status", out var ae) && ae.ValueKind == JsonValueKind.String
+                    ? ae.GetString() : null;
                 Info.Status = subtype == "error" ? SessionStatus.Error : SessionStatus.Finished;
-                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, ParseUsage(root), totalCost));
+                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, ParseUsage(root), totalCost, apiErr));
                 // Закрываем stdin: все permission-запросы уже обработаны, Claude может завершить процесс
                 try { _currentProcess?.StandardInput.Close(); } catch { }
                 break;
@@ -349,8 +351,37 @@ public class ClaudeSession : IAsyncDisposable
             case "control_request":
                 await HandleControlRequestAsync(root);
                 break;
+
+            case "rate_limit_event":
+                await HandleRateLimitAsync(root);
+                break;
         }
         } // using (doc)
+    }
+
+    // Мягкий лимит API: claude шлёт rate_limit_event и приостанавливается до сброса окна
+    private async Task HandleRateLimitAsync(JsonElement root)
+    {
+        if (!root.TryGetProperty("rate_limit_info", out var info)) return;
+
+        var limitType =
+            (info.TryGetProperty("rateLimitType", out var lt) ? lt.GetString() : null)
+            ?? (info.TryGetProperty("rate_limit_type", out var lt2) ? lt2.GetString() : null)
+            ?? "";
+
+        // resetsAt может прийти как ISO-строка или unix-время (сек/мс) — нормализуем в ISO
+        string? resetsAt = null;
+        if (info.TryGetProperty("resetsAt", out var ra) || info.TryGetProperty("resets_at", out ra))
+        {
+            if (ra.ValueKind == JsonValueKind.String)
+                resetsAt = ra.GetString();
+            else if (ra.ValueKind == JsonValueKind.Number && ra.TryGetInt64(out var n))
+                resetsAt = (n > 100_000_000_000
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(n)
+                    : DateTimeOffset.FromUnixTimeSeconds(n)).ToString("o");
+        }
+
+        await _onMessage(new RateLimitMessage(limitType, resetsAt));
     }
 
     private async Task HandleUserMessageAsync(JsonElement root)

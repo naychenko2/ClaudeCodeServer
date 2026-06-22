@@ -34,11 +34,15 @@ public record AskQuestionMessage(string ToolUseId, object Input)
 public record FileChangedMessage(string Path, int Added, int Removed)
     : ServerMessage("file_changed");
 
-public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd)
+public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null)
     : ServerMessage("result");
 
 public record ErrorMessage(string Text)
     : ServerMessage("error");
+
+// Мягкий лимит API во время хода: claude приостанавливается до сброса (rate_limit_event)
+public record RateLimitMessage(string LimitType, string? ResetsAt)
+    : ServerMessage("rate_limit");
 
 public record ExitedMessage()
     : ServerMessage("exited");

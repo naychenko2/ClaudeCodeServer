@@ -1231,7 +1231,22 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
           error_max_budget_usd: 'исчерпан бюджет',
           error_max_structured_output_retries: 'не удалось получить структурированный ответ',
         };
-        const reason = REASONS[item.subtype] ?? `ход завершился с ошибкой (${item.subtype})`;
+        // Конкретная причина по api_error_status имеет приоритет над общим subtype
+        const apiReason = (status?: string): string | null => {
+          if (!status) return null;
+          const s = status.toLowerCase();
+          if (s.includes('overload')) return 'серверы Anthropic перегружены';
+          if (s.includes('rate') || s.includes('429')) return 'превышен лимит запросов к API';
+          if (s.includes('credit') || s.includes('billing') || s.includes('payment') || s.includes('402')) return 'проблема с биллингом или кредитами';
+          if (s.includes('401') || s.includes('authentication')) return 'ошибка авторизации — проверьте API-ключ';
+          if (s.includes('403') || s.includes('permission')) return 'доступ запрещён (403)';
+          if (s.includes('404') || s.includes('not_found')) return 'ресурс не найден (404)';
+          if (s.includes('529')) return 'сервис временно перегружен (529)';
+          if (s.includes('500') || s.includes('internal')) return 'внутренняя ошибка сервера';
+          if (s.includes('timeout')) return 'таймаут запроса к API';
+          return `ошибка API: ${status}`;
+        };
+        const reason = apiReason(item.apiErrorStatus) ?? REASONS[item.subtype] ?? `ход завершился с ошибкой (${item.subtype})`;
         return (
           <div style={{
             alignSelf: 'center', maxWidth: '100%',
@@ -1285,6 +1300,38 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
               <span style={{ color: '#B05C38', fontWeight: 700 }}>{fmtCost(item.totalCostUsd)}</span>
             </>
           )}
+        </div>
+      );
+    }
+
+    case 'rate_limit': {
+      // Мягкий лимит API: ход не упал, claude ждёт сброса окна — янтарный информационный баннер
+      const TYPES: Record<string, string> = {
+        five_hour: '5-часовой лимит',
+        seven_day: 'недельный лимит',
+        weekly: 'недельный лимит',
+      };
+      const label = TYPES[item.limitType] ?? (item.limitType ? `лимит (${item.limitType})` : 'лимит запросов');
+      let when = '';
+      if (item.resetsAt) {
+        const dt = new Date(item.resetsAt);
+        if (!isNaN(dt.getTime())) {
+          const sameDay = dt.toDateString() === new Date().toDateString();
+          const hhmm = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+          when = sameDay
+            ? `сбросится в ${hhmm}`
+            : `сбросится ${dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} в ${hhmm}`;
+        }
+      }
+      return (
+        <div style={{
+          alignSelf: 'center', maxWidth: '100%',
+          background: '#FBF0DC', border: '1px solid #EAD2A0', borderRadius: 8,
+          padding: '7px 12px', fontSize: 12.5, color: '#9A6B1E',
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center',
+        }}>
+          <span>⏳</span>
+          <span>Достигнут {label}{when ? <span style={{ opacity: 0.75 }}> · {when}</span> : null}</span>
         </div>
       );
     }

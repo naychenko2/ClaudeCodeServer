@@ -18,7 +18,7 @@ public record TextDeltaMessage(string Text)
 public record ThinkingDeltaMessage(string Text)
     : ServerMessage("thinking_delta");
 
-public record ToolUseMessage(string Id, string Name, object Input)
+public record ToolUseMessage(string Id, string Name, object Input, string? ParentToolUseId = null)
     : ServerMessage("tool_use");
 
 public record ToolResultMessage(string ToolUseId, string Content, bool IsError)
@@ -43,6 +43,10 @@ public record ErrorMessage(string Text)
 // Мягкий лимит API во время хода: claude приостанавливается до сброса (rate_limit_event)
 public record RateLimitMessage(string LimitType, string? ResetsAt)
     : ServerMessage("rate_limit");
+
+// Граница компакции контекста: Claude свернул часть истории (system/compact_boundary)
+public record CompactBoundaryMessage(string Trigger, int? PreTokens)
+    : ServerMessage("compact_boundary");
 
 public record ExitedMessage()
     : ServerMessage("exited");

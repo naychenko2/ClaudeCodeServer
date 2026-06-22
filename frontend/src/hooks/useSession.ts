@@ -89,7 +89,9 @@ function ensureHandler() {
     if (!sid) return;
     switch (msg.type) {
       case 'session_started':
-        if (!msg.isResume)
+        if (msg.isResume)
+          updateItems(sid, items => items.some(i => i.kind === 'resumed') ? items : [...items, { kind: 'resumed' }]);
+        else
           updateItems(sid, items => [...items, { kind: 'session_started', model: msg.model, mode: msg.mode }]);
         break;
       case 'text_delta':
@@ -107,7 +109,7 @@ function ensureHandler() {
         });
         break;
       case 'tool_use':
-        updateItems(sid, items => [...items, { kind: 'tool_use', id: msg.id, name: msg.name, input: msg.input }]);
+        updateItems(sid, items => [...items, { kind: 'tool_use', id: msg.id, name: msg.name, input: msg.input, parentToolUseId: msg.parentToolUseId }]);
         break;
       case 'tool_result':
         updateItems(sid, items => items.map(item =>
@@ -154,6 +156,9 @@ function ensureHandler() {
       case 'rate_limit':
         // Мягкий лимит во время хода — claude приостановился, ждём сброса. isWaiting не трогаем.
         updateItems(sid, items => [...items, { kind: 'rate_limit', limitType: msg.limitType, resetsAt: msg.resetsAt }]);
+        break;
+      case 'compact_boundary':
+        updateItems(sid, items => [...items, { kind: 'compact_boundary', trigger: msg.trigger, preTokens: msg.preTokens }]);
         break;
       case 'error':
         setState(sid, prev => ({
@@ -348,6 +353,14 @@ export function useSession(sessionId: string | null, projectId?: string) {
   const interrupt = useCallback(() => {
     if (!sessionId) return;
     interruptSession(sessionId);
+    // Оптимистично помечаем ход как остановленный пользователем
+    setState(sessionId, prev => ({
+      ...prev,
+      isWaiting: false,
+      items: prev.items[prev.items.length - 1]?.kind === 'interrupted'
+        ? prev.items
+        : [...prev.items, { kind: 'interrupted' }],
+    }));
   }, [sessionId]);
 
   // Ответ на уточняющий вопрос Claude (AskUserQuestion)

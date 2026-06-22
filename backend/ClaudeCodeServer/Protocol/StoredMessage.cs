@@ -66,4 +66,5 @@ public class StoredToolUseMessage : StoredMessage
     public object? Input { get; init; }
     public string? Result { get; set; }
     public bool IsError { get; set; }
+    public string? ParentToolUseId { get; init; }
 }

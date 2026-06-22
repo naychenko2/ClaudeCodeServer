@@ -30,10 +30,10 @@ internal class TurnAccumulator
 
     public void OnThinkingDelta(string text) => _thinkingBuf.Append(text);
 
-    public void OnToolUse(string id, string name, object? input)
+    public void OnToolUse(string id, string name, object? input, string? parentToolUseId = null)
     {
         FlushBuffers();
-        var msg = new StoredToolUseMessage { Id = id, Name = name, Input = input };
+        var msg = new StoredToolUseMessage { Id = id, Name = name, Input = input, ParentToolUseId = parentToolUseId };
         _pendingTools[id] = msg;
         _currentTurn.Add(msg);
     }

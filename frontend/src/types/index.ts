@@ -41,7 +41,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string }
   | { type: 'text_delta'; text: string }
   | { type: 'thinking_delta'; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_use'; id: string; name: string; input: unknown; parentToolUseId?: string }
   | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean }
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
   | { type: 'ask_question'; toolUseId: string; input: unknown }
@@ -49,6 +49,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string }
   | { type: 'error'; text: string }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string }
+  | { type: 'compact_boundary'; trigger: string; preTokens?: number }
   | { type: 'exited' }
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
 );
@@ -66,12 +67,15 @@ export type ChatItem =
   | { kind: 'session_started'; model: string; mode: string }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string; expanded: boolean }
-  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean }
+  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string }
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean }
   | { kind: 'file_changed'; path: string; added: number; removed: number }
   | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string }
+  | { kind: 'compact_boundary'; trigger: string; preTokens?: number }
+  | { kind: 'interrupted' }
+  | { kind: 'resumed' }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 export interface AuthState {

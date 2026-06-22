@@ -317,6 +317,16 @@ public class ClaudeSession : IAsyncDisposable
                     await _onMessage(new SessionStartedMessage(
                         Info.ClaudeSessionId!, isResume, model, Info.Mode.ToString().ToLower()));
                 }
+                else if (sysSubtype == "compact_boundary")
+                {
+                    // Claude свернул контекст — показываем разделитель
+                    var meta = root.TryGetProperty("compact_metadata", out var cm) ? cm : default;
+                    var trigger = meta.ValueKind == JsonValueKind.Object && meta.TryGetProperty("trigger", out var tr)
+                        ? tr.GetString() ?? "auto" : "auto";
+                    int? preTokens = meta.ValueKind == JsonValueKind.Object
+                        && meta.TryGetProperty("pre_tokens", out var pt) && pt.TryGetInt32(out var ptv) ? ptv : null;
+                    await _onMessage(new CompactBoundaryMessage(trigger, preTokens));
+                }
                 break;
 
             case "stream_event":
@@ -443,6 +453,10 @@ public class ClaudeSession : IAsyncDisposable
         if (!root.TryGetProperty("message", out var msg)) return;
         if (!msg.TryGetProperty("content", out var content)) return;
 
+        // Сообщения субагента (Task) несут parent_tool_use_id на уровне строки — для вложенности
+        var parentId = root.TryGetProperty("parent_tool_use_id", out var pid) && pid.ValueKind == JsonValueKind.String
+            ? pid.GetString() : null;
+
         foreach (var block in content.EnumerateArray())
         {
             if (!block.TryGetProperty("type", out var bt)) continue;
@@ -455,7 +469,7 @@ public class ClaudeSession : IAsyncDisposable
 
             // AskUserQuestion приходит ещё и как control_request(can_use_tool) — карточку показываем оттуда, здесь пропускаем
             if (toolName == "AskUserQuestion") continue;
-            await _onMessage(new ToolUseMessage(toolId, toolName, toolInput));
+            await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }
     }
 

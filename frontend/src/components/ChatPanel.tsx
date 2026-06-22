@@ -996,6 +996,44 @@ function AskQuestionView({ item, online, onAnswer }: {
   );
 }
 
+// Ответ ассистента с действиями «Копировать / Повторить» под текстом
+function TextMessageView({ text, online, onRetry }: { text: string; online: boolean; onRetry: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {});
+  };
+  const act: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 7px', borderRadius: 6,
+    border: '1px solid transparent', background: 'transparent', color: '#9A8F7E',
+    fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden' }}>
+      <ClaudeHeader />
+      <div style={{ fontSize: 14, color: '#2A251F', wordBreak: 'break-word', paddingLeft: 30 }}>
+        <MarkdownContent text={text} />
+      </div>
+      <div className="msg-actions" style={{ paddingLeft: 30, display: 'flex', gap: 4 }}>
+        <button onClick={copy} style={act} title="Скопировать ответ"
+          onMouseEnter={e => (e.currentTarget.style.background = '#EDE7DA')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+          {copied
+            ? <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5E8B4E" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg><span style={{ color: '#5E8B4E' }}>Скопировано</span></>
+            : <><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>Копировать</>}
+        </button>
+        {online && (
+          <button onClick={onRetry} style={act} title="Повторить последний запрос"
+            onMouseEnter={e => (e.currentTarget.style.background = '#EDE7DA')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 4v6h6" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
+            Повторить
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface ItemProps {
   item: ChatItem;
   index: number;
@@ -1061,14 +1099,7 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
       );
 
     case 'text':
-      return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden' }}>
-          <ClaudeHeader />
-          <div style={{ fontSize: 14, color: '#2A251F', wordBreak: 'break-word', paddingLeft: 30 }}>
-            <MarkdownContent text={item.text} />
-          </div>
-        </div>
-      );
+      return <TextMessageView text={item.text} online={online} onRetry={onRetry} />;
 
     case 'thinking':
       return (
@@ -1116,10 +1147,14 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
         </div>
       );
 
-    case 'tool_use':
+    case 'tool_use': {
       // План задач рисуем отдельной карточкой-чек-листом
-      if (item.name === 'TodoWrite') return <TodoPlanView input={item.input} />;
-      return <ToolUseView item={item} />;
+      const node = item.name === 'TodoWrite' ? <TodoPlanView input={item.input} /> : <ToolUseView item={item} />;
+      // Дочерние вызовы субагента (Task) — с отступом и линией-коннектором
+      return item.parentToolUseId
+        ? <div style={{ marginLeft: 8, paddingLeft: 14, borderLeft: '2px solid #E0D7C8' }}>{node}</div>
+        : node;
+    }
 
     case 'ask_question':
       return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} />;
@@ -1384,6 +1419,49 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
         </div>
       );
     }
+
+    case 'compact_boundary': {
+      const fmtTok = (nn: number) => nn >= 1000 ? (nn / 1000).toFixed(nn >= 10000 ? 0 : 1) + 'k' : String(nn);
+      return (
+        <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center', gap: 10, color: '#9A8F7E', fontSize: 11, margin: '2px 0' }}>
+          <div style={{ flex: 1, height: 1, background: '#E0D7C8' }} />
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+            <span style={{ color: '#B89B6E' }}>✦</span>
+            контекст свёрнут
+            {typeof item.preTokens === 'number' && item.preTokens > 0 && <span style={{ opacity: 0.7 }}>· было {fmtTok(item.preTokens)} токенов</span>}
+          </span>
+          <div style={{ flex: 1, height: 1, background: '#E0D7C8' }} />
+        </div>
+      );
+    }
+
+    case 'resumed':
+      return (
+        <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center', gap: 10, color: '#9A8F7E', fontSize: 11, margin: '2px 0' }}>
+          <div style={{ flex: 1, height: 1, background: '#E0D7C8' }} />
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+            <span style={{ color: '#B89B6E' }}>✦</span>
+            продолжение сессии
+          </span>
+          <div style={{ flex: 1, height: 1, background: '#E0D7C8' }} />
+        </div>
+      );
+
+    case 'interrupted':
+      return (
+        <div style={{
+          alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
+          background: '#F3ECE2', border: '1px solid #E0D7C8', borderRadius: 8, padding: '6px 12px', fontSize: 12, color: '#756B5E',
+        }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="#9A8F7E"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+            Ход остановлен пользователем
+          </span>
+          {online && (
+            <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: '1px solid #C9BEAD', background: '#FFF', cursor: 'pointer', color: '#5A5043', whiteSpace: 'nowrap' }}>Повторить</button>
+          )}
+        </div>
+      );
 
     case 'error':
       return (

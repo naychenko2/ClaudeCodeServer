@@ -4,7 +4,7 @@ import { C, TB } from '../lib/design';
 
 // Компактные текстовые кнопки тулбара (выравниваются по 32px-линии icon-кнопок)
 export const tbBtnPrimary: CSSProperties = {
-  border: 'none', background: C.accent, color: '#FBF8F2',
+  border: 'none', background: C.accent, color: C.onAccent,
   borderRadius: 8, padding: '0 14px', height: 32, fontSize: 13, fontWeight: 600,
   cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', flexShrink: 0,
 };

@@ -233,7 +233,7 @@ export function WorkspacePage({ project, onBack }: Props) {
   const TabSwitcher = (
     <PillSwitch<LeftTab>
       value={leftTab}
-      options={[{ value: 'sessions', label: 'Сессии' }, { value: 'files', label: 'Файлы' }]}
+      options={[{ value: 'sessions', label: 'Чаты' }, { value: 'files', label: 'Файлы' }]}
       onChange={handleTabSwitch}
       fill
     />
@@ -295,7 +295,7 @@ export function WorkspacePage({ project, onBack }: Props) {
             </button>
             <PillSwitch<LeftTab>
               value={leftTab}
-              options={[{ value: 'sessions', label: 'Сессии' }, { value: 'files', label: 'Файлы' }]}
+              options={[{ value: 'sessions', label: 'Чаты' }, { value: 'files', label: 'Файлы' }]}
               onChange={handleTabSwitch}
               isMobile
             />

@@ -83,3 +83,24 @@ export const BTN = {
     cursor: 'pointer',
   },
 } as const
+
+// Тулбары — единая система (высота, паддинги, icon-кнопка, pill-переключатель)
+export const TB = {
+  heightDesktop: 52,
+  heightMobile: 56,
+  padX: 16,
+  padXMobile: 14,
+  gap: 8,
+  bg: C.bgPanel,
+  borderBottom: `1px solid ${C.border}`,
+  iconHitDesktop: 32,
+  iconHitMobile: 40,
+  iconColor: C.textMuted,
+  iconColorHover: C.textPrimary,
+  iconHoverBg: C.bgSelected,
+  iconRadius: 8,
+  pillTrack: C.bgSelected,
+  pillRadius: 9,
+  pillThumbBg: C.bgWhite,
+  pillThumbShadow: '0 1px 3px rgba(42,37,31,0.12)',
+} as const

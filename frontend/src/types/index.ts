@@ -43,6 +43,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'text_delta'; text: string }
   | { type: 'thinking_delta'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown; parentToolUseId?: string }
+  | { type: 'tool_input_delta'; toolUseId: string; partialJson: string }
   | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean }
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
   | { type: 'ask_question'; toolUseId: string; input: unknown }
@@ -70,7 +71,7 @@ export type ChatItem =
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string; expanded: boolean }
-  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string }
+  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string }
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean }
   | { kind: 'file_changed'; path: string; added: number; removed: number }

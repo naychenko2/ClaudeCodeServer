@@ -109,7 +109,22 @@ function ensureHandler() {
         });
         break;
       case 'tool_use':
-        updateItems(sid, items => [...items, { kind: 'tool_use', id: msg.id, name: msg.name, input: msg.input, parentToolUseId: msg.parentToolUseId }]);
+        // Дедуп по id: ранняя карточка из стрима + финальный assistant с тем же id → обновляем
+        updateItems(sid, items => {
+          const idx = items.findIndex(it => it.kind === 'tool_use' && it.id === msg.id);
+          if (idx >= 0) {
+            const next = [...items];
+            const ex = next[idx] as Extract<ChatItem, { kind: 'tool_use' }>;
+            next[idx] = { ...ex, name: msg.name, input: msg.input, streamingArg: undefined };
+            return next;
+          }
+          return [...items, { kind: 'tool_use', id: msg.id, name: msg.name, input: msg.input, parentToolUseId: msg.parentToolUseId }];
+        });
+        break;
+      case 'tool_input_delta':
+        updateItems(sid, items => items.map(it =>
+          it.kind === 'tool_use' && it.id === msg.toolUseId ? { ...it, streamingArg: msg.partialJson } : it
+        ));
         break;
       case 'tool_result':
         updateItems(sid, items => items.map(item =>

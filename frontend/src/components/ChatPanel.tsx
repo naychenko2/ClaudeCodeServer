@@ -743,7 +743,8 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
   const [open, setOpen] = useState(false);
   const n = item.name.toLowerCase();
   const inp = (item.input ?? {}) as Record<string, any>;
-  const toolArg = String(inp.command ?? inp.file_path ?? inp.path ?? inp.pattern ?? inp.query ?? inp.url ?? inp.notebook_path ?? inp.description ?? inp.prompt ?? '');
+  // Во время стриминга показываем накопленный partial_json («печатает команду»), затем — разобранный аргумент
+  const toolArg = item.streamingArg ?? String(inp.command ?? inp.file_path ?? inp.path ?? inp.pattern ?? inp.query ?? inp.url ?? inp.notebook_path ?? inp.description ?? inp.prompt ?? '');
   // MCP-инструменты приходят как mcp__server__tool — показываем «server · tool»
   const displayName = item.name.startsWith('mcp__') ? item.name.slice(5).replace(/__/g, ' · ') : item.name;
   // Inline-diff из input (доступен сразу, не дожидаясь tool_result)

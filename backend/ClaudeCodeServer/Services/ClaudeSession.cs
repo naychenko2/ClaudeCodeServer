@@ -17,6 +17,8 @@ public class ClaudeSession : IAsyncDisposable
     private readonly HashSet<string> _autoAllowTools = new();
     // tool_use_id → request_id вопросов AskUserQuestion (приходят как control_request can_use_tool, ждут control_response)
     private readonly Dictionary<string, string> _pendingQuestions = new();
+    // Стриминг tool_use: индекс content-блока → (id инструмента, накопленный partial_json)
+    private readonly Dictionary<int, (string Id, System.Text.StringBuilder Sb)> _toolStream = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _turnLock = new(1, 1);
     private Process? _currentProcess;
@@ -450,7 +452,25 @@ public class ClaudeSession : IAsyncDisposable
     {
         if (!root.TryGetProperty("event", out var evt)) return;
         if (!evt.TryGetProperty("type", out var et)) return;
-        if (et.GetString() != "content_block_delta") return;
+        var eventType = et.GetString();
+        var index = evt.TryGetProperty("index", out var ix) && ix.TryGetInt32(out var ixv) ? ixv : -1;
+
+        // Начало блока tool_use — показываем карточку сразу (до прихода полного assistant-сообщения)
+        if (eventType == "content_block_start")
+        {
+            if (!evt.TryGetProperty("content_block", out var cb)) return;
+            if (!cb.TryGetProperty("type", out var cbt) || cbt.GetString() != "tool_use") return;
+            var id = cb.TryGetProperty("id", out var cid) ? cid.GetString() ?? "" : "";
+            var name = cb.TryGetProperty("name", out var cn) ? cn.GetString() ?? "" : "";
+            if (id.Length == 0 || name == "AskUserQuestion") return;
+            _toolStream[index] = (id, new System.Text.StringBuilder());
+            await _onMessage(new ToolUseMessage(id, name, new { }));
+            return;
+        }
+
+        if (eventType == "content_block_stop") { _toolStream.Remove(index); return; }
+
+        if (eventType != "content_block_delta") return;
         if (!evt.TryGetProperty("delta", out var delta)) return;
         if (!delta.TryGetProperty("type", out var dt)) return;
 
@@ -464,6 +484,14 @@ public class ClaudeSession : IAsyncDisposable
             case "thinking_delta":
                 if (delta.TryGetProperty("thinking", out var thinking))
                     await _onMessage(new ThinkingDeltaMessage(thinking.GetString() ?? ""));
+                break;
+
+            case "input_json_delta":
+                if (_toolStream.TryGetValue(index, out var ts) && delta.TryGetProperty("partial_json", out var pj))
+                {
+                    ts.Sb.Append(pj.GetString());
+                    await _onMessage(new ToolInputDeltaMessage(ts.Id, ts.Sb.ToString()));
+                }
                 break;
         }
     }

@@ -33,6 +33,12 @@ internal class TurnAccumulator
     public void OnToolUse(string id, string name, object? input, string? parentToolUseId = null)
     {
         FlushBuffers();
+        // Дедуп: ранняя карточка из стрима (пустой input) + финальный assistant с тем же id → обновляем, не дублируем
+        if (_pendingTools.TryGetValue(id, out var existing))
+        {
+            existing.Input = input;
+            return;
+        }
         var msg = new StoredToolUseMessage { Id = id, Name = name, Input = input, ParentToolUseId = parentToolUseId };
         _pendingTools[id] = msg;
         _currentTurn.Add(msg);

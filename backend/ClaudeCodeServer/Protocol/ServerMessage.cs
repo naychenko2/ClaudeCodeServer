@@ -24,6 +24,10 @@ public record ThinkingDeltaMessage(string Text)
 public record ToolUseMessage(string Id, string Name, object Input, string? ParentToolUseId = null)
     : ServerMessage("tool_use");
 
+// Стриминг аргументов инструмента (input_json_delta) — накопленный частичный JSON
+public record ToolInputDeltaMessage(string ToolUseId, string PartialJson)
+    : ServerMessage("tool_input_delta");
+
 public record ToolResultMessage(string ToolUseId, string Content, bool IsError)
     : ServerMessage("tool_result");
 

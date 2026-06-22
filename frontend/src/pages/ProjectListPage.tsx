@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { ProjectSyncToggle } from '../components/ProjectSyncToggle';
 import { ConnectionStatus } from '../components/ConnectionStatus';
+import { toggleSyncMark } from '../lib/sync';
 
 interface Props {
   onOpen: (project: Project) => void;
@@ -34,6 +35,7 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newPath, setNewPath] = useState('');
+  const [newSync, setNewSync] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
   const [editTarget, setEditTarget] = useState<Project | null>(null);
   const [editName, setEditName] = useState('');
@@ -54,9 +56,12 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
     try {
       const p = await api.projects.create(newName.trim(), newPath.trim());
       setProjects(prev => [...prev, p]);
+      // Включаем синхронизацию всего проекта сразу при создании, если выбрано
+      if (newSync) toggleSyncMark(p.id, { name: '', path: '', isDirectory: true, modified: '', isModified: false });
       setShowCreate(false);
       setNewName('');
       setNewPath('');
+      setNewSync(false);
     } catch (e: any) {
       setError(e.message);
     }
@@ -437,10 +442,22 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
               placeholder="Путь к папке"
               value={newPath}
               onChange={e => setNewPath(e.target.value)}
-              style={{ ...dialogInput, marginBottom: 18 }}
+              style={{ ...dialogInput, marginBottom: 12 }}
             />
+            {/* Включить синхронизацию всего проекта сразу при создании */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 12px', background: '#FFFFFF', border: '1px solid #E0D7C8', borderRadius: 12, marginBottom: 18 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: '#2A251F' }}>Синхронизировать для офлайна</div>
+                <div style={{ fontSize: 12, color: '#9A8F7E', marginTop: 2 }}>Скачать все файлы проекта сразу после создания</div>
+              </div>
+              <button type="button" onClick={() => setNewSync(v => !v)}
+                title={newSync ? 'Не синхронизировать' : 'Синхронизировать весь проект'}
+                style={{ position: 'relative', width: 44, height: 26, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: newSync ? '#D97757' : '#D8CFBE', transition: 'background 0.15s' }}>
+                <span style={{ position: 'absolute', top: 3, left: newSync ? 21 : 3, width: 20, height: 20, borderRadius: '50%', background: '#FFF', transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
+              </button>
+            </div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => { setShowCreate(false); setError(''); }} style={btnCancel}>Отмена</button>
+              <button onClick={() => { setShowCreate(false); setError(''); setNewSync(false); }} style={btnCancel}>Отмена</button>
               <button onClick={handleCreate} style={btnAccent}>Добавить</button>
             </div>
           </div>

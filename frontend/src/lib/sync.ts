@@ -1,13 +1,15 @@
 // Логика офлайн-синхронизации:
 // - runOfflineSnapshot — проактивная докачка метаданных всех проектов и содержимого
 //   синхронизированных файлов в IndexedDB-кэш (режим «всё заранее»).
-// - toggleSync — пометить/снять файл или папку + докачать содержимое помеченного.
-// - computeSyncState — клиентский расчёт состояния синхронизации по меткам (зеркало бэкенда).
+// - реактивный стор меток (useSyncMarks/toggleSyncMark) — общий источник для дерева и тулбара.
+// - toggleSyncMark — оптимистичная пометка + фоновая докачка с состоянием «синхронизируется».
+// - computeSyncState — клиентский расчёт состояния (зеркало бэкенда; корневая метка = весь проект).
 
+import { useSyncExternalStore } from 'react';
 import type { FileEntry, SyncMark } from '../types';
 import { api } from './api';
 import { isOnline } from './offline';
-import { idbSet } from './idb';
+import { idbSet, idbKeys } from './idb';
 
 function parentDir(path: string): string {
   const i = path.lastIndexOf('/');
@@ -71,6 +73,117 @@ async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<v
   await Promise.all(workers);
 }
 
+// --- Реактивный стор: метки, активные докачки, скачанные файлы, токены отмены ---
+// Общий источник правды для дерева, тулбара FileViewer и тоггла проекта.
+
+const _marks = new Map<string, SyncMark[]>();          // projectId -> метки
+const _syncing = new Set<string>();                    // `${projectId}:${path}` — идёт докачка (для подписей)
+const _downloaded = new Map<string, Set<string>>();    // projectId -> пути файлов, чьё содержимое уже в кэше
+const _cancelTokens = new Map<string, { cancelled: boolean }>(); // `${projectId}:${path}` -> токен отмены
+const _markListeners = new Set<() => void>();
+let _marksVersion = 0;
+let _flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Уведомление с throttle (leading): мгновенно + не чаще раза в 100мс — чтобы массовая
+// докачка (весь проект) не вызывала шторм перерисовок.
+function notifyMarks() {
+  _marksVersion++;
+  if (_flushTimer) return;
+  _markListeners.forEach(fn => fn());
+  _flushTimer = setTimeout(() => { _flushTimer = null; _markListeners.forEach(fn => fn()); }, 100);
+}
+
+const skey = (projectId: string, path: string) => projectId + ':' + path;
+const norm = (p: string) => (p ?? '').replace(/\\/g, '/');
+
+export function getMarks(projectId: string): SyncMark[] {
+  return _marks.get(projectId) ?? [];
+}
+
+// Идёт ли докачка по этому пути (для подписи «синхронизируется»)
+export function isSyncing(projectId: string, path: string): boolean {
+  return _syncing.has(skey(projectId, path));
+}
+
+// Содержимое файла уже скачано (есть в кэше)
+export function isDownloaded(projectId: string, path: string): boolean {
+  return _downloaded.get(projectId)?.has(norm(path)) ?? false;
+}
+
+function markDownloaded(projectId: string, path: string) {
+  const set = _downloaded.get(projectId) ?? new Set<string>();
+  set.add(norm(path));
+  _downloaded.set(projectId, set);
+  notifyMarks();
+}
+
+// Заполнить набор скачанных файлов из IndexedDB (по ключам content-запросов проекта)
+export async function loadDownloadedSet(projectId: string): Promise<void> {
+  const keys = await idbKeys().catch(() => [] as string[]);
+  const prefix = `/projects/${projectId}/files/content?path=`;
+  const set = new Set<string>();
+  for (const k of keys) {
+    if (k.startsWith(prefix)) {
+      try { set.add(decodeURIComponent(k.slice(prefix.length))); } catch { /* битый ключ */ }
+    }
+  }
+  _downloaded.set(projectId, set);
+  notifyMarks();
+}
+
+// Загрузить метки проекта в стор (GET кэшируется → работает и офлайн)
+export async function loadSyncMarks(projectId: string): Promise<void> {
+  const marks = await api.sync.list(projectId).catch(() => null);
+  if (marks) { _marks.set(projectId, marks); notifyMarks(); }
+}
+
+// React-хук подписки на стор. Возвращает метки проекта; перерисовка при любом изменении стора.
+export function useSyncMarks(projectId: string): SyncMark[] {
+  useSyncExternalStore(
+    cb => { _markListeners.add(cb); return () => { _markListeners.delete(cb); }; },
+    () => _marksVersion,
+    () => _marksVersion,
+  );
+  return getMarks(projectId);
+}
+
+// --- Клиентский расчёт состояния (зеркало SyncService.GetSyncState) ---
+// Корневая метка (path === '') = синхронизация всего проекта → всё вложенное inherited.
+export function computeSyncState(marks: SyncMark[], path: string): 'direct' | 'inherited' | null {
+  const p = norm(path);
+  if (marks.some(m => m.path === p)) return 'direct';
+  if (p !== '' && marks.some(m => m.isDirectory && m.path === '')) return 'inherited';
+  if (marks.some(m => m.isDirectory && m.path !== '' && p.startsWith(m.path + '/'))) return 'inherited';
+  return null;
+}
+
+// --- Докачка содержимого ---
+
+// Минимальное время показа спиннера: на localhost докачка мгновенна, без этого спиннер незаметен.
+const MIN_SPINNER_MS = 500;
+
+// Пометить файл скачанным с небольшой задержкой — чтобы спиннер успел стать заметным.
+function markDownloadedSoon(projectId: string, path: string) {
+  setTimeout(() => markDownloaded(projectId, path), MIN_SPINNER_MS);
+}
+
+// Файл — один запрос, папка/корень — все файлы рекурсивно. token — для отмены на лету.
+async function downloadSyncedContent(projectId: string, entry: { path: string; isDirectory: boolean }, token?: { cancelled: boolean }): Promise<void> {
+  if (entry.isDirectory) {
+    const tree = await api.files.tree(projectId, entry.path).catch(() => [] as FileEntry[]);
+    const files = tree.filter(e => !e.isDirectory);
+    await mapLimit(files, 4, async f => {
+      if (token?.cancelled) return;
+      await api.files.getContent(projectId, f.path).catch(() => {});
+      markDownloadedSoon(projectId, f.path);
+    });
+  } else {
+    if (token?.cancelled) return;
+    await api.files.getContent(projectId, entry.path).catch(() => {});
+    markDownloadedSoon(projectId, entry.path);
+  }
+}
+
 // --- Снапшот ---
 
 let _snapshotRunning = false;
@@ -92,10 +205,7 @@ export async function runOfflineSnapshot(): Promise<void> {
         api.files.tree(p.id).catch(() => [] as FileEntry[]),
       ]).then(([s, , t]) => [s, t] as const);
 
-      // История всех чатов проекта
       await mapLimit(sessions, 4, async s => { await api.sessions.getHistory(p.id, s.id).catch(() => {}); });
-
-      // Раскладываем дерево по per-directory кэшу для офлайн-навигации
       await cacheTreeAsListings(p.id, treeEntries);
 
       // Содержимое синхронизированных файлов (по флагу synced из дерева)
@@ -108,6 +218,7 @@ export async function runOfflineSnapshot(): Promise<void> {
     let done = 0;
     await mapLimit(contentTasks, 4, async t => {
       await api.files.getContent(t.projectId, t.path).catch(() => {});
+      markDownloaded(t.projectId, t.path); // помечаем файл как скачанный → спиннер в дереве гаснет
       setProgress({ done: ++done });
     });
   } catch {
@@ -118,31 +229,45 @@ export async function runOfflineSnapshot(): Promise<void> {
   }
 }
 
-// --- Переключение синхронизации ---
+// --- Переключение метки ---
+// Оптимистично обновляем стор (маркеры появляются сразу). При выключении — отменяем
+// активную докачку этого пути (через токен), чтобы синхронизацию можно было прервать в любой момент.
+export async function toggleSyncMark(projectId: string, entry: FileEntry): Promise<void> {
+  const enabling = computeSyncState(getMarks(projectId), entry.path) !== 'direct';
+  const k = skey(projectId, entry.path);
+  const rest = getMarks(projectId).filter(m => m.path !== entry.path);
 
-// Пометить/снять синхронизацию файла или папки.
-// При включении сразу докачивает содержимое (файл — один запрос, папка — все файлы рекурсивно).
-export async function toggleSync(projectId: string, entry: FileEntry): Promise<void> {
-  if (entry.synced === 'direct') {
-    await api.sync.remove(projectId, entry.path);
+  // --- Выключение / отмена ---
+  if (!enabling) {
+    const token = _cancelTokens.get(k);
+    if (token) token.cancelled = true; // прерываем идущую докачку
+    _syncing.delete(k);
+    _marks.set(projectId, rest);
+    notifyMarks();
+    try { await api.sync.remove(projectId, entry.path); } catch { /* сеть — согласуем ниже */ }
+    await loadSyncMarks(projectId);
     return;
   }
 
-  await api.sync.add(projectId, entry.path, entry.isDirectory);
+  // --- Включение ---
+  // Токен создаём СРАЗУ (до запроса), чтобы отмена сработала в любой момент, в т.ч. во время api.sync.add.
+  const token = { cancelled: false };
+  _cancelTokens.set(k, token);
+  _marks.set(projectId, [...rest, { path: entry.path, isDirectory: entry.isDirectory }]);
+  _syncing.add(k); notifyMarks();
 
-  if (entry.isDirectory) {
-    const tree = await api.files.tree(projectId, entry.path).catch(() => [] as FileEntry[]);
-    const files = tree.filter(e => !e.isDirectory);
-    await mapLimit(files, 4, async f => { await api.files.getContent(projectId, f.path).catch(() => {}); });
-  } else {
-    await api.files.getContent(projectId, entry.path).catch(() => {});
+  try {
+    if (token.cancelled) return;
+    await api.sync.add(projectId, entry.path, entry.isDirectory);
+    if (token.cancelled) { await api.sync.remove(projectId, entry.path).catch(() => {}); return; }
+    await downloadSyncedContent(projectId, entry, token);
+  } catch {
+    /* сетевой сбой — состояние согласуем ниже */
+  } finally {
+    _syncing.delete(k);
+    _cancelTokens.delete(k);
+    notifyMarks();
   }
-}
 
-// Клиентский расчёт состояния синхронизации пути (зеркало SyncService.GetSyncState)
-export function computeSyncState(marks: SyncMark[], path: string): 'direct' | 'inherited' | null {
-  const norm = path.replace(/\\/g, '/');
-  if (marks.some(m => m.path === norm)) return 'direct';
-  if (marks.some(m => m.isDirectory && norm.startsWith(m.path + '/'))) return 'inherited';
-  return null;
+  await loadSyncMarks(projectId); // согласование с сервером (дедуп вложенных меток)
 }

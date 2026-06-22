@@ -24,19 +24,20 @@ public class SyncService
     public IReadOnlyList<SyncMark> GetMarks(string projectId) =>
         _marks.TryGetValue(projectId, out var list) ? list.ToList() : [];
 
+    // path == "" + isDirectory == true → синхронизация всего проекта (корневая метка)
     public void Add(string projectId, string path, bool isDirectory)
     {
         path = Normalize(path);
-        if (path.Length == 0) return;
         lock (_lock)
         {
             var list = _marks.GetOrAdd(projectId, _ => []);
             if (!list.Any(m => string.Equals(m.Path, path, StringComparison.OrdinalIgnoreCase)))
                 list.Add(new SyncMark(path, isDirectory));
-            // Папка покрывает всё содержимое — убираем ставшие избыточными метки потомков
+            // Папка покрывает всё содержимое — убираем ставшие избыточными метки потомков.
+            // Корневая метка ("") покрывает весь проект → убираем все остальные.
             if (isDirectory)
                 list.RemoveAll(m => !string.Equals(m.Path, path, StringComparison.OrdinalIgnoreCase)
-                    && m.Path.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase));
+                    && (path.Length == 0 || m.Path.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase)));
             Save();
         }
     }
@@ -52,14 +53,19 @@ public class SyncService
         }
     }
 
-    // Состояние синхронизации пути: "direct" (помечен сам), "inherited" (помечена папка-предок), null.
+    // Состояние синхронизации пути: "direct" (помечен сам), "inherited" (через папку-предок
+    // или корневую метку всего проекта), null.
     public string? GetSyncState(string projectId, string path)
     {
         if (!_marks.TryGetValue(projectId, out var list) || list.Count == 0) return null;
         path = Normalize(path);
         if (list.Any(m => string.Equals(m.Path, path, StringComparison.OrdinalIgnoreCase)))
             return "direct";
-        if (list.Any(m => m.IsDirectory && path.StartsWith(m.Path + "/", StringComparison.OrdinalIgnoreCase)))
+        // Корневая метка ("") синхронизирует весь проект
+        if (path.Length != 0 && list.Any(m => m.IsDirectory && m.Path.Length == 0))
+            return "inherited";
+        if (list.Any(m => m.IsDirectory && m.Path.Length != 0
+                && path.StartsWith(m.Path + "/", StringComparison.OrdinalIgnoreCase)))
             return "inherited";
         return null;
     }

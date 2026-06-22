@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Project } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
+import { ProjectSyncToggle } from '../components/ProjectSyncToggle';
 
 interface Props {
   onOpen: (project: Project) => void;
@@ -447,8 +448,9 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
               placeholder="Путь к папке"
               value={editPath}
               onChange={e => setEditPath(e.target.value)}
-              style={{ ...dialogInput, marginBottom: 18 }}
+              style={{ ...dialogInput, marginBottom: 14 }}
             />
+            <ProjectSyncToggle projectId={editTarget.id} online={online} />
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => { setEditTarget(null); setError(''); }} style={btnCancel}>Отмена</button>
               <button onClick={handleEdit} style={btnAccent}>Сохранить</button>

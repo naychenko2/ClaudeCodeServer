@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
-import { toggleSync } from '../lib/sync';
+import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 
@@ -56,14 +56,24 @@ function FolderIcon() {
 }
 
 // Иконка облака — маркер/тоггл синхронизации.
-// filled — синхронизирован напрямую (accent); muted — по наследству; иначе — outline (вкл).
+// direct — залит акцентом (помечен сам); inherited — залит светлым акцентом (через папку/проект);
+// idle — контур (можно включить).
 function CloudIcon({ variant }: { variant: 'direct' | 'inherited' | 'idle' }) {
-  const color = variant === 'direct' ? '#D97757' : variant === 'inherited' ? '#B9AE9C' : '#B0A697';
-  const fill = variant === 'direct' ? '#D97757' : 'none';
+  const color = variant === 'direct' ? '#D97757' : variant === 'inherited' ? '#D7A78D' : '#B0A697';
+  const fill = variant === 'direct' ? '#D97757' : variant === 'inherited' ? '#EAC6B2' : 'none';
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill={fill} stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
     </svg>
+  );
+}
+
+// Спиннер — состояние «синхронизируется» (идёт докачка содержимого). Контрастный, чтобы был заметен.
+function SyncSpinner() {
+  return (
+    <span style={{ display: 'flex', width: 16, height: 16, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2.5px solid #DACDB9', borderTopColor: '#C2532E', animation: 'spin 0.6s linear infinite' }} />
+    </span>
   );
 }
 
@@ -74,6 +84,7 @@ interface TreeNode {
 
 export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
   const online = useOnline();
+  const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
   const [dirCache, setDirCache] = useState<Map<string, FileEntry[]>>(() => initial?.dirCache ?? new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => initial?.expanded ?? new Set());
@@ -102,6 +113,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
       setLoadingDirs(prev => { const n = new Set(prev); n.delete(path); return n; });
     }
   }, [project.id]);
+
+  // Метки синхронизации + набор уже скачанных файлов — в общий стор (для маркеров/спиннеров)
+  useEffect(() => { loadSyncMarks(project.id); loadDownloadedSet(project.id); }, [project.id]);
 
   // Переключение проекта: восстанавливаем сохранённое состояние либо грузим корень заново
   const mountedProjectRef = useRef<string | null>(null);
@@ -170,25 +184,13 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
     setSearchResults(results);
   };
 
-  // Переключение синхронизации файла/папки. После — перечитываем загруженные папки,
-  // т.к. флаги synced меняются каскадно (пометка папки → inherited у всех потомков).
-  const handleToggleSync = useCallback(async (entry: FileEntry, e: React.MouseEvent) => {
+  // Переключение синхронизации файла/папки. Маркеры (direct + inherited у вложенных)
+  // обновляются мгновенно через общий стор; содержимое докачивается фоном.
+  const handleToggleSync = useCallback((entry: FileEntry, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!online) return;
-    try {
-      await toggleSync(project.id, entry);
-      const paths = Array.from(dirCache.keys());
-      const next = new Map(dirCache);
-      await Promise.all(paths.map(async p => {
-        const entries = await api.files.list(project.id, p).catch(() => null);
-        if (entries) next.set(p, entries);
-      }));
-      setDirCache(next);
-      if (searchResults !== null && search.trim()) {
-        api.files.search(project.id, search).then(setSearchResults).catch(() => {});
-      }
-    } catch { /* игнорируем сбой переключения */ }
-  }, [project.id, online, dirCache, searchResults, search]);
+    toggleSyncMark(project.id, entry);
+  }, [project.id, online]);
 
   const handleCreateFile = async () => {
     const path = createInDir ? `${createInDir}/${newFileName}` : newFileName;
@@ -221,6 +223,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
     const isLoading = loadingDirs.has(entry.path);
     const em = entry.isDirectory ? null : getExtMeta(entry.name);
     const isActive = !entry.isDirectory && activeNorm !== '' && normPath(entry.path) === activeNorm;
+    // Состояние синхронизации — из общего стора (не из устаревшего entry.synced листинга)
+    const sstate = computeSyncState(marks, entry.path);
+    // Файл помечен, но содержимое ещё не скачано → спиннер; папка в активной докачке → спиннер
+    const pending = !entry.isDirectory && !!sstate && !isDownloaded(project.id, entry.path);
+    const folderSyncing = entry.isDirectory && isSyncing(project.id, entry.path);
     return (
       <div
         key={entry.path}
@@ -232,7 +239,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
           paddingLeft: 8 + depth * 16, paddingRight: 8,
           paddingTop: 6, paddingBottom: 6,
           borderRadius: 8, cursor: 'pointer',
-          background: isActive ? '#F1DDD1' : hoveredPath === entry.path ? '#E8E1D4' : entry.synced ? '#F4ECE3' : 'transparent',
+          background: isActive ? '#F1DDD1' : hoveredPath === entry.path ? '#E8E1D4' : (sstate || folderSyncing) ? '#F4ECE3' : 'transparent',
           boxShadow: isActive ? 'inset 2px 0 0 #D97757' : 'none',
           transition: 'background 0.1s',
         }}
@@ -264,13 +271,21 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
         )}
         {/* Маркер/тоггл синхронизации */}
         {(() => {
-          const s = entry.synced ?? null;
           const btnStyle: React.CSSProperties = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', flexShrink: 0 };
-          if (s === 'inherited') {
-            return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизируется (через папку)"><CloudIcon variant="inherited" /></span>;
+          // Идёт докачка: файл ещё не скачан или папка активно синхронизируется → спиннер.
+          // direct (можно управлять) — кликом отменяем; inherited — статичный индикатор.
+          if (pending || folderSyncing) {
+            if (online && sstate === 'direct') {
+              return <button onClick={e => handleToggleSync(entry, e)} title="Отменить синхронизацию" style={btnStyle}><SyncSpinner /></button>;
+            }
+            return <span style={{ ...btnStyle, cursor: 'default' }} title="Загружается…"><SyncSpinner /></span>;
+          }
+          // Синхронизирован (содержимое скачано)
+          if (sstate === 'inherited') {
+            return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизируется (через папку/проект)"><CloudIcon variant="inherited" /></span>;
           }
           if (online) {
-            if (s === 'direct') {
+            if (sstate === 'direct') {
               return <button onClick={e => handleToggleSync(entry, e)} title="Отключить синхронизацию" style={btnStyle}><CloudIcon variant="direct" /></button>;
             }
             if (hoveredPath === entry.path) {
@@ -278,7 +293,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
             }
             return null;
           }
-          if (s === 'direct') {
+          if (sstate === 'direct') {
             return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизирован"><CloudIcon variant="direct" /></span>;
           }
           return null;

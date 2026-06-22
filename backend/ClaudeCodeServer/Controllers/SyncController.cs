@@ -22,8 +22,9 @@ public class SyncController(SyncService sync, ProjectManager projects) : Control
         return Ok();
     }
 
+    // path по умолчанию "" — снятие корневой метки (синхронизация всего проекта)
     [HttpDelete]
-    public IActionResult Remove(string projectId, [FromQuery] string path)
+    public IActionResult Remove(string projectId, [FromQuery] string path = "")
     {
         sync.Remove(projectId, path);
         return NoContent();

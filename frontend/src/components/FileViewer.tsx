@@ -18,9 +18,9 @@ import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';
 import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml';
 import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
 import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
-import type { Project, SyncMark } from '../types';
+import type { Project } from '../types';
 import { api } from '../lib/api';
-import { toggleSync, computeSyncState } from '../lib/sync';
+import { toggleSyncMark, useSyncMarks, computeSyncState, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
@@ -125,11 +125,13 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
   const [editContent, setEditContent] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [unsavedConfirm, setUnsavedConfirm] = useState(false);
-  const [syncMarks, setSyncMarks] = useState<SyncMark[]>([]);
+  const marks = useSyncMarks(project.id);
 
   const content = fileContent?.content ?? '';
   const hasUnsavedChanges = editing && editContent !== content;
-  const syncState = computeSyncState(syncMarks, filePath);
+  const syncState = computeSyncState(marks, filePath);
+  // Помечен, но содержимое ещё не скачано → спиннер
+  const pending = !!syncState && !isDownloaded(project.id, filePath);
 
   useEffect(() => {
     setEditing(false);
@@ -145,18 +147,17 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
     api.files.getDiff(project.id, filePath).then(r => setDiff(r.diff)).catch(() => setDiff(null));
   }, [project.id, filePath]);
 
-  // Метки синхронизации проекта (для состояния кнопки в тулбаре)
+  // Метки синхронизации + набор скачанных файлов — в общий стор (синхронно с деревом)
   useEffect(() => {
-    api.sync.list(project.id).then(setSyncMarks).catch(() => setSyncMarks([]));
+    loadSyncMarks(project.id);
+    loadDownloadedSet(project.id);
   }, [project.id]);
 
-  const handleToggleSync = async () => {
-    await toggleSync(project.id, {
+  const handleToggleSync = () => {
+    toggleSyncMark(project.id, {
       name: fileName, path: filePath, isDirectory: false,
-      modified: '', isModified: false, synced: syncState,
+      modified: '', isModified: false,
     });
-    const marks = await api.sync.list(project.id).catch(() => syncMarks);
-    setSyncMarks(marks);
   };
 
   const handleSave = async () => {
@@ -307,8 +308,19 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
 
           {/* Синхронизация для офлайна */}
           {online && !editing && (
-            syncState === 'inherited' ? (
-              <span title="Синхронизируется через папку" style={{ display: 'flex', alignItems: 'center', padding: 4, color: '#B9AE9C' }}>
+            pending ? (
+              syncState === 'direct' ? (
+                <button onClick={handleToggleSync} title="Отменить синхронизацию"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 6 }}>
+                  <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2.5px solid #DACDB9', borderTopColor: '#C2532E', animation: 'spin 0.6s linear infinite' }} />
+                </button>
+              ) : (
+                <span title="Загружается…" style={{ display: 'flex', alignItems: 'center', padding: 4 }}>
+                  <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2.5px solid #DACDB9', borderTopColor: '#C2532E', animation: 'spin 0.6s linear infinite' }} />
+                </span>
+              )
+            ) : syncState === 'inherited' ? (
+              <span title="Синхронизируется через папку/проект" style={{ display: 'flex', alignItems: 'center', padding: 4, color: '#D7A78D' }}>
                 <CloudGlyph filled />
               </span>
             ) : (

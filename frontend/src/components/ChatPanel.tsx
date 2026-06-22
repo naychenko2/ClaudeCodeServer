@@ -288,7 +288,7 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile }: Props) {
-  const { items, isWaiting, isJoined, send, allowPermission, denyPermission, interrupt, toggleThinking } = useSession(session.id, project.id);
+  const { items, isWaiting, isJoined, send, allowPermission, denyPermission, allowAlways, interrupt, toggleThinking } = useSession(session.id, project.id);
   const online = useOnline();
   const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
@@ -427,6 +427,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
                 onToggleThinking={toggleThinking}
                 onAllowPermission={allowPermission}
                 onDenyPermission={denyPermission}
+                onAllowAlways={allowAlways}
                 onOpenFile={onOpenFile}
                 onRevert={path => api.files.revert(project.id, path)}
                 onRetry={handleRetry}
@@ -552,6 +553,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onToggleThinking={toggleThinking}
             onAllowPermission={allowPermission}
             onDenyPermission={denyPermission}
+            onAllowAlways={allowAlways}
             onOpenFile={onOpenFile}
             onRevert={path => api.files.revert(project.id, path)}
             onRetry={handleRetry}
@@ -605,6 +607,117 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   );
 }
 
+// Карточка плана задач (TodoWrite) — закреплённый чек-лист с прогрессом
+interface TodoEntry { content: string; status: string; activeForm?: string }
+
+function TodoPlanView({ input }: { input: unknown }) {
+  const todos = (() => {
+    const t = (input as { todos?: unknown } | null)?.todos;
+    return Array.isArray(t) ? (t as TodoEntry[]) : [];
+  })();
+  if (todos.length === 0) return null;
+  const done = todos.filter(t => t.status === 'completed').length;
+
+  return (
+    <div style={{
+      border: '1px solid #E8E1D4', borderRadius: 12, background: '#FFFFFF',
+      overflow: 'hidden', boxShadow: '0 2px 8px rgba(60,50,35,0.04)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderBottom: '1px solid #EFE9DD' }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+        </svg>
+        <span style={{ fontFamily: "'PT Serif', serif", fontSize: 14, fontWeight: 700, color: '#2A251F' }}>План</span>
+        <span style={{ marginLeft: 'auto', fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: '#9A8F7E' }}>
+          {done}/{todos.length}
+        </span>
+      </div>
+      <div style={{ padding: '7px 13px 10px', display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {todos.map((t, i) => {
+          const isDone = t.status === 'completed';
+          const isActive = t.status === 'in_progress';
+          const label = isActive && t.activeForm ? t.activeForm : t.content;
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '4px 0' }}>
+              <span style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}>
+                {isDone ? (
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="8" fill="#5E8B4E" />
+                    <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                ) : isActive ? (
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="7" fill="#D97757" />
+                    <circle cx="8" cy="8" r="2.6" fill="#FBF1EA" />
+                  </svg>
+                ) : (
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="6.5" stroke="#C9BFAD" strokeWidth="1.5" />
+                  </svg>
+                )}
+              </span>
+              <span style={{
+                fontSize: 13, lineHeight: 1.4,
+                color: isDone ? '#9A8F7E' : isActive ? '#2A251F' : '#756B5E',
+                textDecoration: isDone ? 'line-through' : 'none',
+                fontWeight: isActive ? 600 : 400,
+              }}>
+                {label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Строка инструмента с раскрываемым телом результата (вывод Bash/Read и т.п.)
+function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }) {
+  const [open, setOpen] = useState(false);
+  const toolArg = (() => {
+    if (!item.input) return '';
+    const inp = item.input as Record<string, unknown>;
+    return String(inp.path ?? inp.command ?? inp.file_path ?? inp.pattern ?? '');
+  })();
+  const hasBody = item.result !== undefined && item.result.trim().length > 0;
+
+  return (
+    <div style={{ borderTop: '1px solid #E7E0D2', borderBottom: '1px solid #E7E0D2' }}>
+      <div
+        style={{ padding: '9px 0', display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
+        onClick={() => hasBody && setOpen(o => !o)}
+      >
+        {item.result === undefined && <ToolSpinner />}
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: '#3E7CA6', fontWeight: 600, flexShrink: 0 }}>
+          {item.name}
+        </span>
+        {toolArg
+          ? <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, flex: 1, color: '#39332B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolArg}</span>
+          : <span style={{ flex: 1 }} />}
+        {item.result !== undefined && (
+          <span style={{ fontSize: 11, color: item.isError ? '#C0392B' : '#9A8F7E', flexShrink: 0 }}>
+            {item.isError ? 'ошибка' : 'готово'}
+          </span>
+        )}
+        {hasBody && (
+          <span style={{ color: '#9A8F7E', fontSize: 11, flexShrink: 0, display: 'inline-block', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
+        )}
+      </div>
+      {open && hasBody && (
+        <pre style={{
+          margin: '0 0 9px', padding: '8px 10px', background: '#2A251F', borderRadius: 7,
+          color: item.isError ? '#F0B8AC' : '#D8CFC0', fontFamily: "'JetBrains Mono', monospace",
+          fontSize: 11.5, lineHeight: 1.5, maxHeight: 280, overflow: 'auto',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        }}>
+          {item.result!.length > 4000 ? item.result!.slice(0, 4000) + '\n…(обрезано)' : item.result}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 interface ItemProps {
   item: ChatItem;
   index: number;
@@ -612,12 +725,13 @@ interface ItemProps {
   onToggleThinking: (i: number) => void;
   onAllowPermission: (id: string) => void;
   onDenyPermission: (id: string) => void;
+  onAllowAlways: (id: string) => void;
   onOpenFile: (path: string) => void;
   onRevert: (path: string) => void;
   onRetry: () => void;
 }
 
-function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission, onDenyPermission, onOpenFile, onRevert, onRetry }: ItemProps) {
+function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onOpenFile, onRevert, onRetry }: ItemProps) {
   switch (item.kind) {
     case 'user_message':
       return (
@@ -723,46 +837,21 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
         </div>
       );
 
-    case 'tool_use': {
-      // Получаем краткое отображение аргумента инструмента (путь, команда и т.п.)
-      const toolArg = (() => {
-        if (!item.input) return '';
-        const inp = item.input as Record<string, unknown>;
-        return String(inp.path ?? inp.command ?? inp.file_path ?? inp.pattern ?? '');
-      })();
-      return (
-        <div style={{
-          padding: '9px 0',
-          borderTop: '1px solid #E7E0D2', borderBottom: '1px solid #E7E0D2',
-          display: 'flex', alignItems: 'center', gap: 10,
-        }}>
-          {item.result === undefined && <ToolSpinner />}
-          <span style={{
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 10, color: '#3E7CA6', fontWeight: 600,
-            flexShrink: 0,
-          }}>
-            {item.name}
-          </span>
-          {toolArg && (
-            <span style={{
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 12.5, flex: 1, color: '#39332B',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {toolArg}
-            </span>
-          )}
-          {item.result !== undefined && (
-            <span style={{ fontSize: 11, color: item.isError ? '#C0392B' : '#9A8F7E', flexShrink: 0 }}>
-              {item.isError ? 'ошибка' : 'готово'}
-            </span>
-          )}
-        </div>
-      );
-    }
+    case 'tool_use':
+      // План задач рисуем отдельной карточкой-чек-листом
+      if (item.name === 'TodoWrite') return <TodoPlanView input={item.input} />;
+      return <ToolUseView item={item} />;
 
-    case 'permission_request':
+    case 'permission_request': {
+      // Что именно собирается выполнить Claude — команда/путь/аргументы
+      const detail = (() => {
+        const inp = item.toolInput as Record<string, unknown> | null;
+        if (!inp) return '';
+        if (typeof inp.command === 'string') return inp.command;
+        if (typeof inp.file_path === 'string') return inp.file_path;
+        if (typeof inp.path === 'string') return inp.path;
+        try { const s = JSON.stringify(inp, null, 2); return s === '{}' ? '' : s; } catch { return ''; }
+      })();
       return (
         <div style={{
           border: '1px solid #E6C9B8', borderLeft: '3px solid #D97757',
@@ -772,45 +861,58 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
             Запрос разрешения
           </div>
           <div style={{ fontSize: 12, color: '#5A5040', marginBottom: 10 }}>
-            Claude хочет выполнить:
+            Claude хочет выполнить <span style={{ fontWeight: 600 }}>{item.toolName}</span>:
           </div>
           <div style={{
-            background: '#2A251F', borderRadius: 7, padding: '7px 10px',
+            background: '#2A251F', borderRadius: 7, padding: '8px 11px',
             color: '#E8E1D4', fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 12, marginBottom: 12,
+            fontSize: 12, marginBottom: 12, lineHeight: 1.5,
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto',
           }}>
-            {item.toolName}
+            {detail || item.toolName}
           </div>
           {item.resolved ? (
             <div style={{ fontSize: 12, color: '#8A8070' }}>Решение принято</div>
           ) : online ? (
-            <div style={{ display: 'flex', gap: 8 }}>
+            <>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => onAllowPermission(item.requestId)}
+                  style={{
+                    flex: 1, background: '#D97757', color: '#FBF8F2',
+                    borderRadius: 9, padding: 9, border: 'none',
+                    cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                  }}
+                >
+                  Разрешить
+                </button>
+                <button
+                  onClick={() => onDenyPermission(item.requestId)}
+                  style={{
+                    flex: 1, background: '#FFFFFF', border: '1px solid #E0D7C8',
+                    color: '#756B5E', borderRadius: 9, padding: 9,
+                    cursor: 'pointer', fontSize: 13,
+                  }}
+                >
+                  Отклонить
+                </button>
+              </div>
               <button
-                onClick={() => onAllowPermission(item.requestId)}
+                onClick={() => onAllowAlways(item.requestId)}
                 style={{
-                  flex: 1, background: '#D97757', color: '#FBF8F2',
-                  borderRadius: 9, padding: 9, border: 'none',
-                  cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                  marginTop: 8, width: '100%', background: 'none', border: 'none',
+                  cursor: 'pointer', fontSize: 12, color: '#B05C38', padding: '4px 0',
                 }}
               >
-                Разрешить
+                Всегда разрешать «{item.toolName}» в этой сессии
               </button>
-              <button
-                onClick={() => onDenyPermission(item.requestId)}
-                style={{
-                  flex: 1, background: '#FFFFFF', border: '1px solid #E0D7C8',
-                  color: '#756B5E', borderRadius: 9, padding: 9,
-                  cursor: 'pointer', fontSize: 13,
-                }}
-              >
-                Отклонить
-              </button>
-            </div>
+            </>
           ) : (
             <div style={{ fontSize: 12, color: '#9A8F7E' }}>Недоступно офлайн</div>
           )}
         </div>
       );
+    }
 
     case 'file_changed': {
       const fileName = item.path.replace(/\\/g, '/').split('/').pop() ?? item.path;
@@ -874,15 +976,45 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
       );
     }
 
-    case 'result':
+    case 'result': {
+      const ok = item.subtype === 'success';
+      // Склонение числительного: 1 шаг, 2 шага, 5 шагов
+      const stepWord = (n: number) => {
+        const m10 = n % 10, m100 = n % 100;
+        if (m10 === 1 && m100 !== 11) return 'шаг';
+        if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'шага';
+        return 'шагов';
+      };
+      const fmtTok = (n: number) => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
+      const fmtCost = (c: number) => '$' + (c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2));
+      const u = item.usage;
+      const sep = <span style={{ opacity: 0.45 }}>·</span>;
       return (
         <div style={{
           fontSize: 11, color: '#8A8070', alignSelf: 'center',
-          background: '#E8E2D6', borderRadius: 8, padding: '4px 10px',
+          background: '#E8E2D6', borderRadius: 8, padding: '4px 11px',
+          fontFamily: "'JetBrains Mono', monospace",
+          display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', justifyContent: 'center',
         }}>
-          {item.subtype === 'success' ? '✓' : '✗'} {item.numTurns} шагов · {(item.durationMs / 1000).toFixed(1)}с
+          <span style={{ color: ok ? '#5E8B4E' : '#C0392B', fontWeight: 700 }}>{ok ? '✓' : '✗'}</span>
+          <span>{item.numTurns} {stepWord(item.numTurns)}</span>
+          {sep}
+          <span>{(item.durationMs / 1000).toFixed(1)}с</span>
+          {u && (u.inputTokens > 0 || u.outputTokens > 0) && (
+            <>
+              {sep}
+              <span title="входные · выходные токены">↑{fmtTok(u.inputTokens)} ↓{fmtTok(u.outputTokens)}</span>
+            </>
+          )}
+          {typeof item.totalCostUsd === 'number' && item.totalCostUsd > 0 && (
+            <>
+              {sep}
+              <span style={{ color: '#B05C38', fontWeight: 700 }}>{fmtCost(item.totalCostUsd)}</span>
+            </>
+          )}
         </div>
       );
+    }
 
     case 'error':
       return (

@@ -73,7 +73,7 @@ export async function sendMessage(sessionId: string, text: string, attachedPaths
 export async function respondPermission(
   sessionId: string,
   requestId: string,
-  behavior: 'allow' | 'deny',
+  behavior: 'allow' | 'deny' | 'allow_always',
 ): Promise<void> {
   const conn = await ensureConnected();
   await conn.invoke('RespondPermission', sessionId, requestId, behavior);

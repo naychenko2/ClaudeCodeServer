@@ -53,10 +53,11 @@ internal class TurnAccumulator
         _currentTurn.Add(new StoredFileChangedMessage(path, added, removed));
     }
 
-    public async Task OnResultAsync(string subtype, long durationMs, int numTurns, ChatHistoryService svc)
+    public async Task OnResultAsync(string subtype, long durationMs, int numTurns,
+        UsageInfo? usage, double? totalCostUsd, ChatHistoryService svc)
     {
         FlushBuffers();
-        _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns));
+        _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns, usage, totalCostUsd));
         await FlushAsync(svc);
     }
 

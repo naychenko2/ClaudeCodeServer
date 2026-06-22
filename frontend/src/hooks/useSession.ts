@@ -136,7 +136,7 @@ function ensureHandler() {
         setState(sid, prev => ({
           ...prev,
           isWaiting: false,
-          items: [...prev.items, { kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns }],
+          items: [...prev.items, { kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd }],
         }));
         break;
       case 'error':
@@ -314,6 +314,21 @@ export function useSession(sessionId: string | null, projectId?: string) {
     await respondPermission(sessionId, requestId, 'deny');
   }, [sessionId]);
 
+  // Разрешить и больше не спрашивать про этот инструмент в текущей сессии
+  const allowAlways = useCallback(async (requestId: string) => {
+    if (!sessionId) return;
+    setState(sessionId, prev => ({
+      ...prev,
+      isWaiting: false,
+      items: prev.items.map(item =>
+        item.kind === 'permission_request' && item.requestId === requestId
+          ? { ...item, resolved: true } : item
+      ),
+    }));
+    await joinSession(sessionId); // гарантируем группу перед ответом
+    await respondPermission(sessionId, requestId, 'allow_always');
+  }, [sessionId]);
+
   const interrupt = useCallback(() => {
     if (!sessionId) return;
     interruptSession(sessionId);
@@ -326,5 +341,5 @@ export function useSession(sessionId: string | null, projectId?: string) {
     ));
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, send, allowPermission, denyPermission, interrupt, toggleThinking };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, send, allowPermission, denyPermission, allowAlways, interrupt, toggleThinking };
 }

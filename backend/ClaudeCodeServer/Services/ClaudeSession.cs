@@ -13,6 +13,8 @@ public class ClaudeSession : IAsyncDisposable
     private readonly string _rootPath;
     private readonly Func<ServerMessage, Task> _onMessage;
     private readonly Dictionary<string, TaskCompletionSource<string>> _permissionWaiters = new();
+    // Инструменты, для которых пользователь выбрал «всегда разрешать» в этой сессии
+    private readonly HashSet<string> _autoAllowTools = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _turnLock = new(1, 1);
     private Process? _currentProcess;
@@ -113,8 +115,14 @@ public class ClaudeSession : IAsyncDisposable
         if (Info.ClaudeSessionId is not null)
             args.AddRange(["--resume", Info.ClaudeSessionId]);
 
-        if (Info.Mode != ClaudeMode.Auto)
-            args.AddRange(["--mode", Info.Mode.ToString().ToLower()]);
+        // Режим прав у claude CLI задаётся флагом --permission-mode (plan/default),
+        // а НЕ --mode (такого флага нет — claude падает с "unknown option '--mode'").
+        // Auto — без флага (поведение по умолчанию); Plan — режим планирования;
+        // Ask — default, при котором claude спрашивает разрешение через permission-prompt-tool.
+        if (Info.Mode == ClaudeMode.Plan)
+            args.AddRange(["--permission-mode", "plan"]);
+        else if (Info.Mode == ClaudeMode.Ask)
+            args.AddRange(["--permission-mode", "default"]);
 
         if (!string.IsNullOrWhiteSpace(Info.Model))
             args.AddRange(["--model", Info.Model]);
@@ -269,8 +277,9 @@ public class ClaudeSession : IAsyncDisposable
                 var subtype = root.TryGetProperty("subtype", out var st) ? st.GetString() ?? "success" : "success";
                 var durationMs = root.TryGetProperty("duration_ms", out var d) ? d.GetInt64() : 0;
                 var numTurns = root.TryGetProperty("num_turns", out var nt) ? nt.GetInt32() : 0;
+                var totalCost = root.TryGetProperty("total_cost_usd", out var tc) ? tc.GetDouble() : (double?)null;
                 Info.Status = subtype == "error" ? SessionStatus.Error : SessionStatus.Finished;
-                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, ParseUsage(root)));
+                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, ParseUsage(root), totalCost));
                 // Закрываем stdin: все permission-запросы уже обработаны, Claude может завершить процесс
                 try { _currentProcess?.StandardInput.Close(); } catch { }
                 break;
@@ -369,33 +378,49 @@ public class ClaudeSession : IAsyncDisposable
         var toolInput = root.TryGetProperty("tool_input", out var ti)
             ? JsonSerializer.Deserialize<object>(ti.GetRawText())! : new object();
 
-        var tcs = new TaskCompletionSource<string>();
-        _permissionWaiters[requestId] = tcs;
-        Info.Status = SessionStatus.Waiting;
-
-        await _onMessage(new PermissionRequestMessage(requestId, toolName, toolInput));
-
         string behavior;
-        try
+        if (_autoAllowTools.Contains(toolName))
         {
-            // Ждём ответа пользователя или таймаута 60 минут
-            behavior = await tcs.Task.WaitAsync(TimeSpan.FromMinutes(60));
+            // Пользователь ранее выбрал «всегда разрешать» этот инструмент — не спрашиваем повторно
+            behavior = "allow";
         }
-        catch (TaskCanceledException)
+        else
         {
-            // Interrupt() отменил TCS через TrySetCanceled() — процесс уже убит
-            _permissionWaiters.Remove(requestId);
-            return;
-        }
-        catch (TimeoutException)
-        {
-            // Пользователь не ответил 5 минут — deny и продолжаем
-            _permissionWaiters.Remove(requestId);
-            behavior = "deny";
-        }
+            var tcs = new TaskCompletionSource<string>();
+            _permissionWaiters[requestId] = tcs;
+            Info.Status = SessionStatus.Waiting;
 
-        _permissionWaiters.Remove(requestId);
-        Info.Status = SessionStatus.Working;
+            await _onMessage(new PermissionRequestMessage(requestId, toolName, toolInput));
+
+            try
+            {
+                // Ждём ответа пользователя или таймаута 60 минут
+                behavior = await tcs.Task.WaitAsync(TimeSpan.FromMinutes(60));
+            }
+            catch (TaskCanceledException)
+            {
+                // Interrupt() отменил TCS через TrySetCanceled() — процесс уже убит
+                _permissionWaiters.Remove(requestId);
+                return;
+            }
+            catch (TimeoutException)
+            {
+                // Пользователь не ответил — deny и продолжаем
+                _permissionWaiters.Remove(requestId);
+                behavior = "deny";
+            }
+
+            _permissionWaiters.Remove(requestId);
+
+            // «Всегда разрешать»: запоминаем инструмент и отвечаем claude обычным allow
+            if (behavior == "allow_always")
+            {
+                _autoAllowTools.Add(toolName);
+                behavior = "allow";
+            }
+
+            Info.Status = SessionStatus.Working;
+        }
 
         var response = JsonSerializer.Serialize(new
         {

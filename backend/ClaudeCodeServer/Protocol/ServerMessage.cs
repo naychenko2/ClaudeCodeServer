@@ -30,7 +30,7 @@ public record PermissionRequestMessage(string RequestId, string ToolName, object
 public record FileChangedMessage(string Path, int Added, int Removed)
     : ServerMessage("file_changed");
 
-public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage)
+public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd)
     : ServerMessage("result");
 
 public record ErrorMessage(string Text)

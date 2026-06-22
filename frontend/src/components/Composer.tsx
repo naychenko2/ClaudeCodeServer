@@ -12,13 +12,22 @@ export interface ComposerProps {
   isMobile?: boolean;
 }
 
-const MODE_LABELS: Record<string, string> = {
-  auto: '⚡ Авто',
-  plan: '📋 План',
-  ask: '❓ Спросить',
+type Mode = 'auto' | 'plan' | 'ask';
+const MODE_META: Record<Mode, { label: string; desc: string }> = {
+  auto: { label: 'Авто', desc: 'Claude действует сам и применяет правки' },
+  plan: { label: 'План', desc: 'Сначала показывает план, ждёт подтверждения' },
+  ask: { label: 'Спросить', desc: 'Спрашивает разрешение на каждое действие' },
 };
 
-const MODES: Array<'auto' | 'plan' | 'ask'> = ['auto', 'plan', 'ask'];
+const MODES: Mode[] = ['auto', 'plan', 'ask'];
+
+// Штриховые иконки режимов (вместо цветных эмодзи) — монохромная иконографика эталона
+function ModeIcon({ mode }: { mode: Mode }) {
+  const p = { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+  if (mode === 'auto') return <svg {...p}><path d="M13 3v7h6l-8 11v-7H5l8-11z" /></svg>;
+  if (mode === 'plan') return <svg {...p}><rect x="9" y="3" width="6" height="4" rx="1" /><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /><path d="M9 12h6M9 16h4" /></svg>;
+  return <svg {...p}><circle cx="12" cy="12" r="9" /><path d="M9.2 9.2a3 3 0 0 1 5.6 1c0 2-2.8 2.4-2.8 2.4" /><line x1="12" y1="17.2" x2="12.01" y2="17.2" /></svg>;
+}
 
 // Получить имя файла из пути
 function basename(filePath: string): string {
@@ -89,8 +98,20 @@ export function Composer({
 }: ComposerProps) {
   const [text, setText] = useState('');
   const [isListening, setIsListening] = useState(false);
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
+  const modeRef = useRef<HTMLDivElement>(null);
+
+  // Закрытие меню режимов по клику вне него
+  useEffect(() => {
+    if (!modeMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (modeRef.current && !modeRef.current.contains(e.target as Node)) setModeMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [modeMenuOpen]);
 
   const hasSpeech = typeof window !== 'undefined' &&
     ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
@@ -155,12 +176,6 @@ export function Composer({
     setIsListening(true);
   };
 
-  // Цикл по режимам при клике на кнопку режима
-  const handleModeClick = () => {
-    const idx = MODES.indexOf(mode);
-    onModeChange(MODES[(idx + 1) % MODES.length]);
-  };
-
   // Стили контейнера
   const containerStyle: React.CSSProperties = {
     background: isGenerating ? '#FBF8F2' : '#FFFFFF',
@@ -193,10 +208,13 @@ export function Composer({
       style={{
         width: 32, height: 32, borderRadius: 9, border: 'none', background: 'none',
         cursor: 'pointer', color: '#8A8072', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', flexShrink: 0, fontSize: 20, lineHeight: 1,
+        justifyContent: 'center', flexShrink: 0,
       }}
     >
-      +
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+      </svg>
     </button>
   );
 
@@ -206,6 +224,12 @@ export function Composer({
       <span style={{ fontStyle: 'italic', color: '#9A8F7E', fontSize: 14 }}>
         Claude печатает…
       </span>
+    </div>
+  ) : isListening ? (
+    <div style={{ ...dotsStyle, gap: 9 }}>
+      <span style={{ width: 9, height: 9, borderRadius: '50%', background: '#D9534F', animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
+      <span style={{ fontSize: 14, color: '#C2532E', fontWeight: 500, flexShrink: 0 }}>Слушаю… говорите</span>
+      {text && <span style={{ fontSize: 13, color: '#9A8F7E', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>{text}</span>}
     </div>
   ) : (
     <textarea
@@ -237,25 +261,56 @@ export function Composer({
   );
 
   const modeButton = (
-    <button
-      onClick={handleModeClick}
-      title="Режим"
-      style={{
-        height: isMobile ? 32 : 28,
-        padding: '0 12px',
-        borderRadius: 8,
-        border: 'none',
-        background: '#F4ECE1',
-        color: '#756B5E',
-        fontSize: 12.5,
-        fontWeight: 600,
-        cursor: 'pointer',
-        whiteSpace: 'nowrap',
-        flexShrink: 0,
-      }}
-    >
-      {MODE_LABELS[mode]}
-    </button>
+    <div ref={modeRef} style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        onClick={() => setModeMenuOpen(o => !o)}
+        title="Режим работы"
+        style={{
+          height: isMobile ? 32 : 28, padding: '0 10px', borderRadius: 8, border: 'none',
+          background: modeMenuOpen ? '#EBE3D6' : '#F4ECE1', color: '#756B5E',
+          fontSize: 12.5, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}
+      >
+        <ModeIcon mode={mode} />
+        {MODE_META[mode].label}
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
+          style={{ opacity: 0.55, transform: modeMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </button>
+      {modeMenuOpen && (
+        <div style={{
+          position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, minWidth: 248,
+          background: '#FFFFFF', border: '1px solid #E0D7C8', borderRadius: 12,
+          boxShadow: '0 8px 28px rgba(60,50,35,0.16)', padding: 5, zIndex: 50,
+        }}>
+          {MODES.map(m => {
+            const active = m === mode;
+            return (
+              <button key={m} onClick={() => { onModeChange(m); setModeMenuOpen(false); }}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 9px',
+                  borderRadius: 9, border: 'none', background: active ? '#F4ECE1' : 'transparent',
+                  cursor: 'pointer', textAlign: 'left',
+                }}
+                onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#F7F2EA'; }}
+                onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+              >
+                <span style={{ color: active ? '#D97757' : '#9A8F7E', display: 'flex', marginTop: 1, flexShrink: 0 }}><ModeIcon mode={m} /></span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#2A251F' }}>{MODE_META[m].label}</span>
+                  <span style={{ display: 'block', fontSize: 11.5, color: '#9A8F7E', marginTop: 1, lineHeight: 1.35 }}>{MODE_META[m].desc}</span>
+                </span>
+                {active && (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M20 6L9 17l-5-5" /></svg>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 
   const micButton = hasSpeech ? (

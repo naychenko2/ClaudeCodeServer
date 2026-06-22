@@ -8,6 +8,8 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       devOptions: { enabled: true },
+      // .mjs включён в precache — иначе pdf.worker.min.mjs выпадает и PDF не работает офлайн
+      workbox: { globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,webmanifest}'] },
       manifest: {
         name: 'Claude Code Server',
         short_name: 'ClaudeCode',

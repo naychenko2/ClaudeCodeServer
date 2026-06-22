@@ -351,11 +351,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
   // Dock: свёрнутая полоска
   if (dockMode === 'collapsed') {
-    const lastPreview = (() => {
+    // Свежий ответ Claude (а не эхо запроса пользователя) — для превью в свёрнутом доке
+    const lastAnswer = (() => {
       for (let i = items.length - 1; i >= 0; i--) {
-        const it = items[i];
-        if (it.kind === 'text') return it.text;
-        if (it.kind === 'user_message') return it.text;
+        if (items[i].kind === 'text') return (items[i] as Extract<ChatItem, { kind: 'text' }>).text;
       }
       return '';
     })();
@@ -372,8 +371,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#D97757', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#F4F0E8' }} />
         </div>
-        <span style={{ flex: 1, fontSize: 13, color: '#5A5040', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {lastPreview || (session.name ?? 'Новый чат')}
+        <span style={{ flex: 1, fontSize: 13, color: isWaiting ? '#9A8F7E' : '#5A5040', fontStyle: isWaiting ? 'italic' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {isWaiting ? 'Claude печатает…' : (lastAnswer || session.name || 'Новый чат')}
         </span>
         <input
           value={miniText}

@@ -46,7 +46,7 @@ export const api = {
     search: (projectId: string, q: string) =>
       request<FileEntry[]>(`/projects/${projectId}/files/search?q=${encodeURIComponent(q)}`),
     getContent: (projectId: string, path: string) =>
-      request<{ content: string | null; isBinary: boolean; isImage: boolean; mimeType?: string; base64?: string; fileSize?: number }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`),
+      request<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: 'pdf' | 'docx' | 'xlsx'; mimeType?: string; base64?: string; fileSize?: number }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`),
     saveContent: (projectId: string, path: string, content: string) =>
       request<void>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`, {
         method: 'PUT',

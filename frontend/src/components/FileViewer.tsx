@@ -26,6 +26,8 @@ import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
+import { DocumentViewer, type DocKind } from './DocumentViewer';
+import { base64ToBytes } from '../lib/binary';
 
 SyntaxHighlighter.registerLanguage('tsx', tsx);
 SyntaxHighlighter.registerLanguage('typescript', typescript);
@@ -57,6 +59,8 @@ interface FileContent {
   content: string | null;
   isBinary: boolean;
   isImage: boolean;
+  isDocument?: boolean;
+  docKind?: DocKind;
   mimeType?: string;
   base64?: string;
   fileSize?: number;
@@ -112,6 +116,14 @@ const EditIcon = () => (
 const CloudGlyph = ({ filled }: { filled?: boolean }) => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+  </svg>
+);
+
+const DownloadIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
   </svg>
 );
 
@@ -214,10 +226,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
 
   const handleDownload = () => {
     if (!fileContent?.base64) return;
-    const byteStr = atob(fileContent.base64);
-    const bytes = new Uint8Array(byteStr.length);
-    for (let i = 0; i < byteStr.length; i++) bytes[i] = byteStr.charCodeAt(i);
-    const blob = new Blob([bytes], { type: fileContent.mimeType ?? 'application/octet-stream' });
+    const blob = new Blob([base64ToBytes(fileContent.base64)], { type: fileContent.mimeType ?? 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -346,6 +355,17 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
             )
           )}
 
+          {/* Скачать — для документов и картинок (когда есть данные) */}
+          {!editing && fileContent?.base64 && (
+            <button
+              onClick={handleDownload}
+              title="Скачать"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#756B5E', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 6 }}
+            >
+              <DownloadIcon />
+            </button>
+          )}
+
           {/* Кнопка expand / split-view */}
           {onToggleFullscreen && !editing && (
             <button
@@ -409,7 +429,18 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
               </div>
             )}
 
-            {fileContent?.isBinary && !fileContent.isImage && (
+            {/* Документы: PDF / Word / Excel — клиентский рендеринг */}
+            {fileContent?.isDocument && (
+              fileContent.base64 && fileContent.docKind
+                ? <DocumentViewer docKind={fileContent.docKind} base64={fileContent.base64} />
+                : <EmptyState
+                    icon={<FileSvg />}
+                    title="Документ слишком большой"
+                    subtitle={`${fileName}${fileSizeMb ? ` — ${fileSizeMb} МБ` : ''}. Просмотр недоступен для файлов больше 25 МБ.`}
+                  />
+            )}
+
+            {fileContent?.isBinary && !fileContent.isImage && !fileContent.isDocument && (
               <EmptyState
                 icon={<FileSvg />}
                 title="Нельзя показать"

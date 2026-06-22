@@ -4,6 +4,7 @@ import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
 import { FileViewer } from '../components/FileViewer';
+import { ConnectionStatus } from '../components/ConnectionStatus';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
 
 interface Props {
@@ -40,7 +41,31 @@ export function WorkspacePage({ project, onBack }: Props) {
   const windowWidth = useWindowWidth();
   const isMobile = windowWidth < 768;
   const isTablet = windowWidth >= 768 && windowWidth < 1100;
-  const sidebarWidth = isTablet ? 288 : 300;
+  // Ширина сайдбара — перетаскиваемая, сохраняется между сессиями
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const v = localStorage.getItem('cc_sidebar_width');
+    return v ? Math.max(220, Math.min(520, Number(v))) : 300;
+  });
+  useEffect(() => { localStorage.setItem('cc_sidebar_width', String(sidebarWidth)); }, [sidebarWidth]);
+
+  const handleSidebarSplitterMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    const onMove = (ev: MouseEvent) => {
+      setSidebarWidth(Math.max(220, Math.min(520, startW + (ev.clientX - startX))));
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
@@ -197,13 +222,7 @@ export function WorkspacePage({ project, onBack }: Props) {
         onClick={onBack}
         style={{ padding: '11px 14px', borderTop: '1px solid #DDD4C4', display: 'flex', alignItems: 'center', gap: 11, background: '#E7E0D2', cursor: 'pointer', flexShrink: 0 }}
       >
-        <div style={{ width: 32, height: 32, borderRadius: 9, background: '#FFFFFF', border: '1px solid #E0D7C8', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <div style={{ width: 9, height: 9, borderRadius: '50%', background: '#5E8B4E' }} />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#2A251F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</div>
-          <div style={{ fontSize: 11, color: '#9A8F7E', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: "'JetBrains Mono', monospace" }}>{project.rootPath}</div>
-        </div>
+        <ConnectionStatus variant="footer" title={project.name} subtitle={project.rootPath} />
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A8F7E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M7 10l5-5 5 5M7 14l5 5 5-5" />
         </svg>
@@ -259,13 +278,7 @@ export function WorkspacePage({ project, onBack }: Props) {
             onClick={onBack}
             style={{ padding: '11px 14px', borderTop: '1px solid #DDD4C4', display: 'flex', alignItems: 'center', gap: 11, background: '#E7E0D2', cursor: 'pointer', flexShrink: 0 }}
           >
-            <div style={{ width: 32, height: 32, borderRadius: 9, background: '#FFFFFF', border: '1px solid #E0D7C8', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <div style={{ width: 9, height: 9, borderRadius: '50%', background: '#5E8B4E' }} />
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#2A251F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</div>
-              <div style={{ fontSize: 11, color: '#9A8F7E', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: "'JetBrains Mono', monospace" }}>{project.rootPath}</div>
-            </div>
+            <ConnectionStatus variant="footer" title={project.name} subtitle={project.rootPath} />
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A8F7E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M7 10l5-5 5 5M7 14l5 5 5-5" />
             </svg>
@@ -300,6 +313,16 @@ export function WorkspacePage({ project, onBack }: Props) {
   return (
     <div style={{ display: 'flex', height: '100vh', background: '#F4F0E8', fontFamily: "'Hanken Grotesk', sans-serif", overflow: 'hidden' }}>
       {Sidebar}
+
+      {/* Сплиттер между сайдбаром и контентом */}
+      <div
+        onMouseDown={handleSidebarSplitterMouseDown}
+        style={{ flex: '0 0 5px', background: '#D4CFC4', cursor: 'col-resize', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        onMouseEnter={e => (e.currentTarget.style.background = '#BDB7AC')}
+        onMouseLeave={e => (e.currentTarget.style.background = '#D4CFC4')}
+      >
+        <div style={{ width: 1, height: 32, background: '#A8A09A', borderRadius: 1, pointerEvents: 'none' }} />
+      </div>
 
       {/* Нет открытого файла — только чат */}
       {!openFile && (

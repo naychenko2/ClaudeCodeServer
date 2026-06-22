@@ -9,7 +9,7 @@ import { useSyncExternalStore } from 'react';
 import type { FileEntry, SyncMark } from '../types';
 import { api } from './api';
 import { isOnline } from './offline';
-import { idbSet, idbKeys } from './idb';
+import { idbSet, idbKeys, idbDelete } from './idb';
 
 function parentDir(path: string): string {
   const i = path.lastIndexOf('/');
@@ -58,6 +58,17 @@ export function subscribeSyncProgress(fn: () => void): () => void {
 function setProgress(patch: Partial<SyncProgress>) {
   _progress = { ..._progress, ...patch };
   _listeners.forEach(fn => fn());
+}
+
+// Компактный счётчик прогресса «done/total» (для badge — всегда виден целиком).
+// Пока total неизвестен — многоточие.
+export function syncCount(p: SyncProgress): string {
+  return p.total > 0 ? `${p.done}/${p.total}` : '…';
+}
+
+// Полная подпись «Синхронизация done/total» (для footer, где места достаточно).
+export function syncLabel(p: SyncProgress): string {
+  return p.total > 0 ? `Синхронизация ${p.done}/${p.total}` : 'Синхронизация…';
 }
 
 // Параллельный обход с ограничением одновременных задач
@@ -114,6 +125,25 @@ function markDownloaded(projectId: string, path: string) {
   const set = _downloaded.get(projectId) ?? new Set<string>();
   set.add(norm(path));
   _downloaded.set(projectId, set);
+  notifyMarks();
+}
+
+// Удалить локальные копии (содержимое из IDB) при снятии синхронизации.
+// path === '' → весь проект; иначе сам путь и всё вложенное.
+async function dropSyncedContent(projectId: string, path: string): Promise<void> {
+  const p = norm(path);
+  const prefix = `/projects/${projectId}/files/content?path=`;
+  const keys = await idbKeys().catch(() => [] as string[]);
+  const set = _downloaded.get(projectId);
+  for (const k of keys) {
+    if (!k.startsWith(prefix)) continue;
+    let fp: string;
+    try { fp = decodeURIComponent(k.slice(prefix.length)); } catch { continue; }
+    if (p === '' || fp === p || fp.startsWith(p + '/')) {
+      await idbDelete(k).catch(() => {});
+      set?.delete(fp);
+    }
+  }
   notifyMarks();
 }
 
@@ -189,16 +219,21 @@ async function downloadSyncedContent(projectId: string, entry: { path: string; i
 let _snapshotRunning = false;
 
 // Прогон офлайн-снапшота. Идемпотентен: повторный вызов во время работы игнорируется.
-export async function runOfflineSnapshot(): Promise<void> {
+// priorityProjectId — проект, с которого начать (текущий открытый при выходе из офлайна).
+export async function runOfflineSnapshot(priorityProjectId?: string): Promise<void> {
   if (_snapshotRunning || !isOnline()) return;
   _snapshotRunning = true;
   setProgress({ active: true, done: 0, total: 0 });
 
   try {
     const projects = await api.projects.list();
+    // Начинаем с текущего проекта, остальные — следом
+    const ordered = priorityProjectId
+      ? [...projects].sort((a, b) => (a.id === priorityProjectId ? -1 : b.id === priorityProjectId ? 1 : 0))
+      : projects;
     const contentTasks: { projectId: string; path: string }[] = [];
 
-    for (const p of projects) {
+    for (const p of ordered) {
       const [sessions, treeEntries] = await Promise.all([
         api.sessions.list(p.id).catch(() => []),
         api.sync.list(p.id).catch(() => []), // прогрев кэша меток
@@ -245,6 +280,7 @@ export async function toggleSyncMark(projectId: string, entry: FileEntry): Promi
     _marks.set(projectId, rest);
     notifyMarks();
     try { await api.sync.remove(projectId, entry.path); } catch { /* сеть — согласуем ниже */ }
+    await dropSyncedContent(projectId, entry.path); // удаляем локальные копии содержимого
     await loadSyncMarks(projectId);
     return;
   }

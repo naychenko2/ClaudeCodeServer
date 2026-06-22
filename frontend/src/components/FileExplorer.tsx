@@ -239,6 +239,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
           paddingLeft: 8 + depth * 16, paddingRight: 8,
           paddingTop: 6, paddingBottom: 6,
           borderRadius: 8, cursor: 'pointer',
+          // растём по содержимому + не уже контейнера → длинные имена дают горизонтальный скролл
+          width: 'max-content', minWidth: '100%', boxSizing: 'border-box',
           background: isActive ? '#F1DDD1' : hoveredPath === entry.path ? '#E8E1D4' : (sstate || folderSyncing) ? '#F4ECE3' : 'transparent',
           boxShadow: isActive ? 'inset 2px 0 0 #D97757' : 'none',
           transition: 'background 0.1s',
@@ -264,7 +266,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
           fontSize: 13, flex: 1,
           fontWeight: entry.isDirectory ? 700 : 500,
           color: '#39332B',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          whiteSpace: 'nowrap',
         }}>{entry.name}</span>
         {entry.isModified && (
           <span style={{ fontSize: 9, fontWeight: 700, color: '#C2693B', background: '#FBEBE0', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
@@ -333,7 +335,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
       </div>
 
       {/* Tree / результаты поиска */}
-      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', padding: '0 4px 12px' }}>
+      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflow: 'auto', padding: '0 4px 12px' }}>
         {rootLoading ? (
           <div style={{ padding: '24px 12px', color: '#9A8F7E', fontSize: 13, textAlign: 'center', fontFamily: "'JetBrains Mono', monospace" }}>Загрузка…</div>
         ) : searchResults !== null ? (

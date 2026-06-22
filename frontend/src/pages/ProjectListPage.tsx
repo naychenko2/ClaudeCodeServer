@@ -3,6 +3,7 @@ import type { Project } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { ProjectSyncToggle } from '../components/ProjectSyncToggle';
+import { ConnectionStatus } from '../components/ConnectionStatus';
 
 interface Props {
   onOpen: (project: Project) => void;
@@ -156,7 +157,7 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
       <div style={{ maxWidth: 640, margin: '0 auto' }}>
 
         {/* Шапка */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingTop: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 20, paddingTop: 20 }}>
           <h1 style={{
             fontFamily: "'PT Serif', serif",
             fontSize: 30,
@@ -164,11 +165,12 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
             margin: 0,
             letterSpacing: '-0.01em',
             color: '#2A251F',
+            flexShrink: 0,
           }}>
             Проекты
           </h1>
 
-          {/* Badge с аватаром */}
+          {/* Badge с аватаром — сжимается, текст внутри обрезается многоточием */}
           <div
             onClick={onLogout}
             style={{
@@ -179,6 +181,10 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
               borderRadius: 20,
               padding: '6px 12px 6px 8px',
               cursor: 'pointer',
+              minWidth: 0,
+              flexShrink: 1,
+              maxWidth: 260,
+              overflow: 'hidden',
             }}
           >
             <div style={{
@@ -196,9 +202,7 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
             }}>
               AD
             </div>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: '#756B5E' }}>
-              {serverUrl || 'localhost'}
-            </span>
+            <ConnectionStatus variant="badge" label={serverUrl || 'localhost'} />
           </div>
         </div>
 

@@ -1,40 +1,59 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { Project, AuthState } from './types'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { WorkspacePage } from './pages/WorkspacePage'
-import { OfflineBanner } from './components/OfflineBanner'
-import { SyncIndicator } from './components/SyncIndicator'
 import { initConnectivity } from './lib/offline'
 import { useOnline } from './hooks/useOnline'
 import { runOfflineSnapshot } from './lib/sync'
 
-export default function App() {
-  const [auth, setAuth] = useState<AuthState | null>(null)
-  const [project, setProject] = useState<Project | null>(null)
-  const online = useOnline()
+const OPEN_PROJECT_KEY = 'cc_open_project'
 
-  useEffect(() => {
-    initConnectivity()
+export default function App() {
+  // Авторизация — сразу из localStorage (без вспышки логина при рефреше)
+  const [auth, setAuth] = useState<AuthState | null>(() => {
     const url = localStorage.getItem('cc_server_url')
     const key = localStorage.getItem('cc_api_key')
-    if (url && key) setAuth({ serverUrl: url, apiKey: key })
-  }, [])
+    return url && key ? { serverUrl: url, apiKey: key } : null
+  })
+  // Открытый проект — восстанавливаем из localStorage, чтобы рефреш возвращал туда, где был.
+  // Состояние внутри проекта (активный чат/файл/панели) восстанавливает сама WorkspacePage.
+  const [project, setProject] = useState<Project | null>(() => {
+    try {
+      const raw = localStorage.getItem(OPEN_PROJECT_KEY)
+      return raw ? (JSON.parse(raw) as Project) : null
+    } catch {
+      return null
+    }
+  })
 
-  // Прогрев офлайн-снапшота: при входе и при возврате в онлайн (после reconnect)
+  const online = useOnline()
+  // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
+  const projectIdRef = useRef<string | undefined>(undefined)
+  projectIdRef.current = project?.id
+
+  useEffect(() => { initConnectivity() }, [])
+
+  // Прогрев/синхронизация: при входе и при возврате в онлайн — все проекты, начиная с текущего
   useEffect(() => {
-    if (auth && online) runOfflineSnapshot()
+    if (auth && online) runOfflineSnapshot(projectIdRef.current)
   }, [auth, online])
 
-  return (
-    <>
-      <OfflineBanner />
-      <SyncIndicator />
-      {!auth
-        ? <LoginPage onConnect={setAuth} />
-        : project
-          ? <WorkspacePage project={project} onBack={() => setProject(null)} />
-          : <ProjectListPage onOpen={setProject} onLogout={() => { localStorage.removeItem('cc_server_url'); setAuth(null) }} />}
-    </>
-  )
+  const openProject = (p: Project) => {
+    localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
+    setProject(p)
+  }
+  const closeProject = () => {
+    localStorage.removeItem(OPEN_PROJECT_KEY)
+    setProject(null)
+  }
+  const logout = () => {
+    localStorage.removeItem('cc_server_url')
+    closeProject()
+    setAuth(null)
+  }
+
+  if (!auth) return <LoginPage onConnect={setAuth} />
+  if (project) return <WorkspacePage project={project} onBack={closeProject} />
+  return <ProjectListPage onOpen={openProject} onLogout={logout} />
 }

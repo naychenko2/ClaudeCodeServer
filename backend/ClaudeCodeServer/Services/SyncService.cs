@@ -1,0 +1,93 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using ClaudeCodeServer.Models;
+
+namespace ClaudeCodeServer.Services;
+
+// Хранит метки синхронизации (общие для всех устройств) в data/sync.json.
+// Метки на сервере → один и тот же набор офлайн-файлов на любом устройстве.
+public class SyncService
+{
+    private readonly ConcurrentDictionary<string, List<SyncMark>> _marks = new();
+    private readonly string _storePath;
+    private readonly Lock _lock = new();
+
+    public SyncService(IConfiguration config)
+    {
+        var dataDir = Path.GetDirectoryName(
+            config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
+            ?? Path.Combine(AppContext.BaseDirectory, "data");
+        _storePath = Path.Combine(dataDir, "sync.json");
+        Load();
+    }
+
+    public IReadOnlyList<SyncMark> GetMarks(string projectId) =>
+        _marks.TryGetValue(projectId, out var list) ? list.ToList() : [];
+
+    public void Add(string projectId, string path, bool isDirectory)
+    {
+        path = Normalize(path);
+        if (path.Length == 0) return;
+        lock (_lock)
+        {
+            var list = _marks.GetOrAdd(projectId, _ => []);
+            if (!list.Any(m => string.Equals(m.Path, path, StringComparison.OrdinalIgnoreCase)))
+                list.Add(new SyncMark(path, isDirectory));
+            // Папка покрывает всё содержимое — убираем ставшие избыточными метки потомков
+            if (isDirectory)
+                list.RemoveAll(m => !string.Equals(m.Path, path, StringComparison.OrdinalIgnoreCase)
+                    && m.Path.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase));
+            Save();
+        }
+    }
+
+    public void Remove(string projectId, string path)
+    {
+        path = Normalize(path);
+        lock (_lock)
+        {
+            if (_marks.TryGetValue(projectId, out var list) &&
+                list.RemoveAll(m => string.Equals(m.Path, path, StringComparison.OrdinalIgnoreCase)) > 0)
+                Save();
+        }
+    }
+
+    // Состояние синхронизации пути: "direct" (помечен сам), "inherited" (помечена папка-предок), null.
+    public string? GetSyncState(string projectId, string path)
+    {
+        if (!_marks.TryGetValue(projectId, out var list) || list.Count == 0) return null;
+        path = Normalize(path);
+        if (list.Any(m => string.Equals(m.Path, path, StringComparison.OrdinalIgnoreCase)))
+            return "direct";
+        if (list.Any(m => m.IsDirectory && path.StartsWith(m.Path + "/", StringComparison.OrdinalIgnoreCase)))
+            return "inherited";
+        return null;
+    }
+
+    private static string Normalize(string p) => p.Replace('\\', '/').Trim('/');
+
+    private void Load()
+    {
+        if (!File.Exists(_storePath)) return;
+        try
+        {
+            var json = File.ReadAllText(_storePath);
+            var data = JsonSerializer.Deserialize<Dictionary<string, List<SyncMark>>>(json);
+            if (data is null) return;
+            foreach (var (projectId, list) in data)
+                _marks[projectId] = list;
+        }
+        catch { /* первый запуск или повреждённый файл */ }
+    }
+
+    private void Save()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
+            File.WriteAllText(_storePath, JsonSerializer.Serialize(
+                _marks.ToDictionary(kv => kv.Key, kv => kv.Value)));
+        }
+        catch { }
+    }
+}

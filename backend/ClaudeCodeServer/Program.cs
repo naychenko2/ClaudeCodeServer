@@ -16,6 +16,7 @@ builder.Services.AddSignalR()
 
 builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<FileService>();
+builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<ChatHistoryService>();
 builder.Services.AddSingleton<SessionManager>();
 

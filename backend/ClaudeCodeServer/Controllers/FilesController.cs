@@ -5,7 +5,7 @@ namespace ClaudeCodeServer.Controllers;
 
 [ApiController]
 [Route("api/projects/{projectId}/files")]
-public class FilesController(FileService files, ProjectManager projects) : ControllerBase
+public class FilesController(FileService files, ProjectManager projects, SyncService sync) : ControllerBase
 {
     private string GetRoot(string projectId)
     {
@@ -14,10 +14,22 @@ public class FilesController(FileService files, ProjectManager projects) : Contr
         return p.RootPath;
     }
 
+    // Проставляет состояние синхронизации (direct/inherited/null) каждой записи
+    private IEnumerable<FileEntry> Annotate(string projectId, IEnumerable<FileEntry> entries) =>
+        entries.Select(e => e with { Synced = sync.GetSyncState(projectId, e.Path) });
+
     [HttpGet]
     public IActionResult List(string projectId, [FromQuery] string path = "")
     {
-        try { return Ok(files.List(GetRoot(projectId), path)); }
+        try { return Ok(Annotate(projectId, files.List(GetRoot(projectId), path))); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (DirectoryNotFoundException) { return NotFound(); }
+    }
+
+    [HttpGet("tree")]
+    public IActionResult Tree(string projectId, [FromQuery] string path = "")
+    {
+        try { return Ok(Annotate(projectId, files.Tree(GetRoot(projectId), path))); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }
     }
@@ -25,7 +37,7 @@ public class FilesController(FileService files, ProjectManager projects) : Contr
     [HttpGet("search")]
     public IActionResult Search(string projectId, [FromQuery] string q = "")
     {
-        try { return Ok(files.Search(GetRoot(projectId), q)); }
+        try { return Ok(Annotate(projectId, files.Search(GetRoot(projectId), q))); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 

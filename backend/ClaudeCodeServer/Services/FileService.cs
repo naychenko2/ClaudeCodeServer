@@ -1,9 +1,19 @@
 namespace ClaudeCodeServer.Services;
 
-public record FileEntry(string Name, string Path, bool IsDirectory, long? Size, DateTime Modified, bool IsModified);
+public record FileEntry(string Name, string Path, bool IsDirectory, long? Size, DateTime Modified, bool IsModified, string? Synced = null);
 
 public class FileService
 {
+    // Папки, которые не обходим при рекурсивном Tree (тяжёлые/нерелевантные для офлайна)
+    private static readonly HashSet<string> TreeExcludes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".git", "node_modules", "bin", "obj", "dist", "dev-dist",
+        ".vs", ".idea", "publish", ".next", "target", ".cache",
+    };
+
+    // Предохранитель от патологически больших деревьев
+    private const int TreeMaxEntries = 20000;
+
     // Защита от path traversal
     internal static string SafeJoin(string root, string relativePath)
     {
@@ -52,6 +62,44 @@ public class FileService
                 return new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
                     modified.Contains(rel));
             });
+    }
+
+    // Рекурсивный листинг всего поддерева — для prefetch офлайн-снапшота и синхронизации папок.
+    // Исключает тяжёлые папки (TreeExcludes), ограничен TreeMaxEntries.
+    public IEnumerable<FileEntry> Tree(string rootPath, string relativePath = "")
+    {
+        var start = SafeJoin(rootPath, relativePath);
+        if (!Directory.Exists(start)) throw new DirectoryNotFoundException();
+
+        var modified = GetModifiedFiles(rootPath);
+        var result = new List<FileEntry>();
+
+        void Walk(string dir)
+        {
+            if (result.Count >= TreeMaxEntries) return;
+
+            foreach (var d in Directory.GetDirectories(dir).OrderBy(x => x))
+            {
+                if (result.Count >= TreeMaxEntries) return;
+                var info = new DirectoryInfo(d);
+                if (TreeExcludes.Contains(info.Name)) continue;
+                result.Add(new FileEntry(info.Name, Path.GetRelativePath(rootPath, d).Replace('\\', '/'),
+                    true, null, info.LastWriteTimeUtc, false));
+                Walk(d);
+            }
+
+            foreach (var f in Directory.GetFiles(dir).OrderBy(x => x))
+            {
+                if (result.Count >= TreeMaxEntries) return;
+                var info = new FileInfo(f);
+                var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
+                result.Add(new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
+                    modified.Contains(rel)));
+            }
+        }
+
+        Walk(start);
+        return result;
     }
 
     public string ReadFile(string rootPath, string relativePath)

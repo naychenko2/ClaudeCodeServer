@@ -399,7 +399,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Dock: развёрнутая панель
   if (dockMode === 'expanded') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#F4F0E8' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#F4F0E8', position: 'relative' }}>
         <ChatHeaderBar
           session={session}
           project={project}
@@ -410,8 +410,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           onToggleDock={onToggleDock}
         />
 
-        {/* Сообщения */}
-        <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '12px 16px' }}>
+        {/* Сообщения (нижний отступ = высота плавающего composer) */}
+        <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {items.map((item, i) => (
               <ChatItemView
@@ -439,20 +439,22 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           </div>
         </div>
 
-        {/* Composer */}
-        <div style={{ padding: '10px 16px 14px', borderTop: '1px solid #E7E0D2', flexShrink: 0 }}>
-          {online ? (
-            <Composer
-              onSend={handleSend}
-              onStop={interrupt}
-              onAttach={() => setShowAttachPicker(true)}
-              isGenerating={isWaiting}
-              mode={mode}
-              onModeChange={setMode}
-              attachments={attachedFiles}
-              onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
-            />
-          ) : <OfflineComposerStub />}
+        {/* Composer — плавающий над доком, контент виден под ним */}
+        <div ref={composerWrapRef} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '0 16px 12px', pointerEvents: 'none' }}>
+          <div style={{ pointerEvents: 'auto', borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
+            {online ? (
+              <Composer
+                onSend={handleSend}
+                onStop={interrupt}
+                onAttach={() => setShowAttachPicker(true)}
+                isGenerating={isWaiting}
+                mode={mode}
+                onModeChange={setMode}
+                attachments={attachedFiles}
+                onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
+              />
+            ) : <OfflineComposerStub />}
+          </div>
         </div>
 
         {showAttachPicker && (

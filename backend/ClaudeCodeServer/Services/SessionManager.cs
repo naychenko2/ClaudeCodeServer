@@ -167,6 +167,15 @@ public class SessionManager
             entry.Process?.Interrupt();
     }
 
+    public void AnswerQuestion(string sessionId, string toolUseId, string answerText)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        entry.Process?.AnswerQuestion(toolUseId, answerText);
+        entry.Info.Status = SessionStatus.Working;
+        _ = BroadcastStatusChangeAsync(sessionId, entry.Info.ProjectId,
+            SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
+    }
+
     public async Task DeleteAsync(string sessionId)
     {
         if (_sessions.TryRemove(sessionId, out var entry) && entry.Process is not null)
@@ -228,7 +237,7 @@ public class SessionManager
         {
             SessionStatus? newStatus = null;
 
-            if (msg is PermissionRequestMessage)
+            if (msg is PermissionRequestMessage or AskQuestionMessage)
                 newStatus = SessionStatus.Waiting;
             else if (msg is ResultMessage rm)
                 newStatus = rm.Subtype == "error" ? SessionStatus.Error : SessionStatus.Active;

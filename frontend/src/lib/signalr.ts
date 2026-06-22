@@ -84,6 +84,11 @@ export async function interruptSession(sessionId: string): Promise<void> {
   await conn.invoke('Interrupt', sessionId);
 }
 
+export async function answerQuestion(sessionId: string, toolUseId: string, answerText: string): Promise<void> {
+  const conn = await ensureConnected();
+  await conn.invoke('AnswerQuestion', sessionId, toolUseId, answerText);
+}
+
 export function onMessage(handler: (msg: ServerMessage) => void): () => void {
   const conn = getConnection();
   conn.on('message', handler);

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { ChatItem, ServerMessage } from '../types';
-import { joinSession, joinProject, onMessage, onReconnected, sendMessage, respondPermission, interruptSession } from '../lib/signalr';
+import { joinSession, joinProject, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, answerQuestion as sendAnswer } from '../lib/signalr';
 import { api } from '../lib/api';
 
 // --- Модульный персистентный стор ---
@@ -125,6 +125,18 @@ function ensureHandler() {
             requestId: msg.requestId,
             toolName: msg.toolName,
             toolInput: msg.toolInput,
+            resolved: false,
+          }],
+        }));
+        break;
+      case 'ask_question':
+        setState(sid, prev => ({
+          ...prev,
+          isWaiting: true,
+          items: [...prev.items, {
+            kind: 'ask_question',
+            toolUseId: msg.toolUseId,
+            input: msg.input,
             resolved: false,
           }],
         }));
@@ -334,6 +346,21 @@ export function useSession(sessionId: string | null, projectId?: string) {
     interruptSession(sessionId);
   }, [sessionId]);
 
+  // Ответ на уточняющий вопрос Claude (AskUserQuestion)
+  const answerQuestion = useCallback(async (toolUseId: string, answerText: string) => {
+    if (!sessionId) return;
+    setState(sessionId, prev => ({
+      ...prev,
+      isWaiting: true,
+      items: prev.items.map(item =>
+        item.kind === 'ask_question' && item.toolUseId === toolUseId
+          ? { ...item, resolved: true } : item
+      ),
+    }));
+    await joinSession(sessionId); // гарантируем группу перед ответом
+    await sendAnswer(sessionId, toolUseId, answerText);
+  }, [sessionId]);
+
   const toggleThinking = useCallback((index: number) => {
     if (!sessionId) return;
     updateItems(sessionId, items => items.map((item, i) =>
@@ -341,5 +368,5 @@ export function useSession(sessionId: string | null, projectId?: string) {
     ));
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, send, allowPermission, denyPermission, allowAlways, interrupt, toggleThinking };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, interrupt, toggleThinking };
 }

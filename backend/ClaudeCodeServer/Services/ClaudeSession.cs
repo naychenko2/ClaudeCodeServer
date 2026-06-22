@@ -15,6 +15,8 @@ public class ClaudeSession : IAsyncDisposable
     private readonly Dictionary<string, TaskCompletionSource<string>> _permissionWaiters = new();
     // Инструменты, для которых пользователь выбрал «всегда разрешать» в этой сессии
     private readonly HashSet<string> _autoAllowTools = new();
+    // tool_use_id → request_id вопросов AskUserQuestion (приходят как control_request can_use_tool, ждут control_response)
+    private readonly Dictionary<string, string> _pendingQuestions = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _turnLock = new(1, 1);
     private Process? _currentProcess;
@@ -89,6 +91,57 @@ public class ClaudeSession : IAsyncDisposable
             tcs.TrySetResult(behavior);
     }
 
+    // Ответ пользователя на AskUserQuestion — control_response на исходный can_use_tool запрос
+    public void AnswerQuestion(string toolUseId, string updatedInputJson)
+    {
+        if (!_pendingQuestions.Remove(toolUseId, out var requestId)) return;
+        Info.Status = SessionStatus.Working;
+        object updatedInput;
+        try { updatedInput = JsonSerializer.Deserialize<object>(updatedInputJson)!; }
+        catch { updatedInput = new { }; }
+        SendControlResponse(requestId, new { behavior = "allow", updatedInput });
+    }
+
+    // Обработка control_request(can_use_tool): AskUserQuestion → интерактивная карточка; прочее → авто-allow
+    private async Task HandleControlRequestAsync(JsonElement root)
+    {
+        var requestId = root.TryGetProperty("request_id", out var rid) ? rid.GetString() ?? "" : "";
+        if (!root.TryGetProperty("request", out var req)) return;
+        var subtype = req.TryGetProperty("subtype", out var st) ? st.GetString() : null;
+        if (subtype != "can_use_tool") return;
+
+        var toolName = req.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
+        var toolUseId = req.TryGetProperty("tool_use_id", out var tu) ? tu.GetString() ?? "" : "";
+        var input = req.TryGetProperty("input", out var ti)
+            ? JsonSerializer.Deserialize<object>(ti.GetRawText())! : new object();
+
+        if (toolName == "AskUserQuestion")
+        {
+            // Ждём выбор пользователя — control_response отправит AnswerQuestion
+            _pendingQuestions[toolUseId] = requestId;
+            Info.Status = SessionStatus.Waiting;
+            await _onMessage(new AskQuestionMessage(toolUseId, input));
+            return;
+        }
+
+        // Прочие инструменты авто-разрешаем (поведение по умолчанию), чтобы ход не завис
+        SendControlResponse(requestId, new { behavior = "allow", updatedInput = input });
+    }
+
+    private void SendControlResponse(string requestId, object responsePayload)
+    {
+        var msg = JsonSerializer.Serialize(new
+        {
+            type = "control_response",
+            response = new { subtype = "success", request_id = requestId, response = responsePayload }
+        });
+        if (_currentProcess != null && !_currentProcess.HasExited)
+        {
+            _currentProcess.StandardInput.WriteLine(msg);
+            _currentProcess.StandardInput.Flush();
+        }
+    }
+
     public void Interrupt()
     {
         try { _currentProcess?.Kill(); } catch { }
@@ -96,6 +149,7 @@ public class ClaudeSession : IAsyncDisposable
         foreach (var tcs in _permissionWaiters.Values)
             tcs.TrySetCanceled();
         _permissionWaiters.Clear();
+        _pendingQuestions.Clear();
     }
 
     private async Task RunTurnAsync(string text, CancellationToken ct)
@@ -291,6 +345,10 @@ public class ClaudeSession : IAsyncDisposable
             case "sdk_control_request":
                 await HandlePermissionAsync(root);
                 break;
+
+            case "control_request":
+                await HandleControlRequestAsync(root);
+                break;
         }
         } // using (doc)
     }
@@ -363,6 +421,9 @@ public class ClaudeSession : IAsyncDisposable
             var toolName = block.TryGetProperty("name", out var tn) ? tn.GetString() ?? "" : "";
             var toolInput = block.TryGetProperty("input", out var ti)
                 ? JsonSerializer.Deserialize<object>(ti.GetRawText())! : new object();
+
+            // AskUserQuestion приходит ещё и как control_request(can_use_tool) — карточку показываем оттуда, здесь пропускаем
+            if (toolName == "AskUserQuestion") continue;
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput));
         }
     }

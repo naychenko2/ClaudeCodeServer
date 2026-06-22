@@ -56,4 +56,9 @@ public class SessionHub : Hub
     {
         _sessions.Interrupt(sessionId);
     }
+
+    public void AnswerQuestion(string sessionId, string toolUseId, string answerText)
+    {
+        _sessions.AnswerQuestion(sessionId, toolUseId, answerText);
+    }
 }

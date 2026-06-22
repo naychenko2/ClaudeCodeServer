@@ -288,7 +288,7 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile }: Props) {
-  const { items, isWaiting, isJoined, send, allowPermission, denyPermission, allowAlways, interrupt, toggleThinking } = useSession(session.id, project.id);
+  const { items, isWaiting, isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, interrupt, toggleThinking } = useSession(session.id, project.id);
   const online = useOnline();
   const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
@@ -428,6 +428,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
                 onAllowPermission={allowPermission}
                 onDenyPermission={denyPermission}
                 onAllowAlways={allowAlways}
+                onAnswerQuestion={answerQuestion}
                 onOpenFile={onOpenFile}
                 onRevert={path => api.files.revert(project.id, path)}
                 onRetry={handleRetry}
@@ -554,6 +555,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onAllowPermission={allowPermission}
             onDenyPermission={denyPermission}
             onAllowAlways={allowAlways}
+            onAnswerQuestion={answerQuestion}
             onOpenFile={onOpenFile}
             onRevert={path => api.files.revert(project.id, path)}
             onRetry={handleRetry}
@@ -741,6 +743,97 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
   );
 }
 
+// Уточняющий вопрос Claude (AskUserQuestion) — интерактивная карточка выбора
+interface QuestionDef { question: string; header?: string; multiSelect?: boolean; options: Array<{ label: string; description?: string }> }
+
+function AskQuestionView({ item, online, onAnswer }: {
+  item: Extract<ChatItem, { kind: 'ask_question' }>;
+  online: boolean;
+  onAnswer: (toolUseId: string, answerText: string) => void;
+}) {
+  const questions = (() => {
+    const q = (item.input as { questions?: unknown } | null)?.questions;
+    return Array.isArray(q) ? (q as QuestionDef[]) : [];
+  })();
+  const [selected, setSelected] = useState<Record<number, string[]>>({});
+  if (questions.length === 0) return null;
+
+  const toggle = (qi: number, label: string, multi: boolean) => {
+    setSelected(prev => {
+      const cur = prev[qi] ?? [];
+      if (multi) return { ...prev, [qi]: cur.includes(label) ? cur.filter(l => l !== label) : [...cur, label] };
+      return { ...prev, [qi]: [label] };
+    });
+  };
+  const allAnswered = questions.every((_, qi) => (selected[qi]?.length ?? 0) > 0);
+  const submit = () => {
+    // Формат ответа как updatedInput в SDK: исходные questions + answers (вопрос → label)
+    const answers: Record<string, string | string[]> = {};
+    questions.forEach((q, qi) => {
+      const labels = selected[qi] ?? [];
+      answers[q.question] = q.multiSelect ? labels : (labels[0] ?? '');
+    });
+    onAnswer(item.toolUseId, JSON.stringify({ questions, answers }));
+  };
+  const disabled = item.resolved || !online;
+
+  return (
+    <div style={{ border: '1px solid #E6C9B8', borderLeft: '3px solid #D97757', borderRadius: 12, padding: '13px 14px', background: '#FBF1EA' }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11, color: '#2A251F', display: 'flex', alignItems: 'center', gap: 7 }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+        </svg>
+        Claude уточняет
+      </div>
+      {questions.map((q, qi) => (
+        <div key={qi} style={{ marginBottom: qi < questions.length - 1 ? 14 : 11 }}>
+          <div style={{ fontSize: 13, color: '#2A251F', fontWeight: 600, marginBottom: 7 }}>
+            {q.question}
+            {q.multiSelect && <span style={{ fontWeight: 400, color: '#9A8F7E', fontSize: 11 }}> · можно несколько</span>}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {q.options.map(opt => {
+              const isSel = (selected[qi] ?? []).includes(opt.label);
+              return (
+                <button key={opt.label}
+                  disabled={disabled}
+                  onClick={() => toggle(qi, opt.label, !!q.multiSelect)}
+                  style={{
+                    textAlign: 'left', padding: '9px 12px', borderRadius: 9,
+                    cursor: disabled ? 'default' : 'pointer',
+                    border: isSel ? '1.5px solid #D97757' : '1px solid #E0D7C8',
+                    background: isSel ? '#F4ECE1' : '#FFFFFF',
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#2A251F' }}>{opt.label}</div>
+                  {opt.description && <div style={{ fontSize: 12, color: '#756B5E', marginTop: 2, lineHeight: 1.4 }}>{opt.description}</div>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      {item.resolved ? (
+        <div style={{ fontSize: 12, color: '#8A8070' }}>Ответ отправлен</div>
+      ) : online ? (
+        <button
+          onClick={submit}
+          disabled={!allAnswered}
+          style={{
+            width: '100%', background: '#D97757', color: '#FBF8F2', borderRadius: 9,
+            padding: 9, border: 'none', cursor: allAnswered ? 'pointer' : 'default',
+            fontSize: 13, fontWeight: 600, opacity: allAnswered ? 1 : 0.5,
+          }}
+        >
+          Ответить
+        </button>
+      ) : (
+        <div style={{ fontSize: 12, color: '#9A8F7E' }}>Недоступно офлайн</div>
+      )}
+    </div>
+  );
+}
+
 interface ItemProps {
   item: ChatItem;
   index: number;
@@ -749,12 +842,13 @@ interface ItemProps {
   onAllowPermission: (id: string) => void;
   onDenyPermission: (id: string) => void;
   onAllowAlways: (id: string) => void;
+  onAnswerQuestion: (toolUseId: string, answerText: string) => void;
   onOpenFile: (path: string) => void;
   onRevert: (path: string) => void;
   onRetry: () => void;
 }
 
-function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onOpenFile, onRevert, onRetry }: ItemProps) {
+function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onOpenFile, onRevert, onRetry }: ItemProps) {
   switch (item.kind) {
     case 'user_message':
       return (
@@ -864,6 +958,9 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
       // План задач рисуем отдельной карточкой-чек-листом
       if (item.name === 'TodoWrite') return <TodoPlanView input={item.input} />;
       return <ToolUseView item={item} />;
+
+    case 'ask_question':
+      return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} />;
 
     case 'permission_request': {
       // Что именно собирается выполнить Claude — команда/путь/аргументы

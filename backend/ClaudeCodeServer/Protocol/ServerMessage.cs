@@ -27,6 +27,10 @@ public record ToolResultMessage(string ToolUseId, string Content, bool IsError)
 public record PermissionRequestMessage(string RequestId, string ToolName, object ToolInput)
     : ServerMessage("permission_request");
 
+// AskUserQuestion: в режиме stdio приходит как обычный tool_use, ответ — tool_result в stdin
+public record AskQuestionMessage(string ToolUseId, object Input)
+    : ServerMessage("ask_question");
+
 public record FileChangedMessage(string Path, int Added, int Removed)
     : ServerMessage("file_changed");
 

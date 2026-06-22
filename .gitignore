@@ -5,9 +5,14 @@ backend/**/obj/
 .vs/
 data/
 
+# Артефакты публикации и TLS-сертификаты
+publish/
+certs/
+
 # Node / Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/dev-dist/
 
 # Playwright MCP
 .playwright-mcp/

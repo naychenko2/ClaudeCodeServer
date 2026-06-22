@@ -9,6 +9,8 @@ public class Session
     public string ProjectId { get; init; } = "";
     public string? ClaudeSessionId { get; set; }
     public ClaudeMode Mode { get; init; } = ClaudeMode.Auto;
+    // Псевдоним или полный id модели для флага --model. null → дефолтная модель CLI
+    public string? Model { get; set; }
     public SessionStatus Status { get; set; } = SessionStatus.Starting;
     public string? LastMessage { get; set; }
     public int MessageCount { get; set; }

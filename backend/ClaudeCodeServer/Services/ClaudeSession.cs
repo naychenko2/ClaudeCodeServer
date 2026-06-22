@@ -116,6 +116,9 @@ public class ClaudeSession : IAsyncDisposable
         if (Info.Mode != ClaudeMode.Auto)
             args.AddRange(["--mode", Info.Mode.ToString().ToLower()]);
 
+        if (!string.IsNullOrWhiteSpace(Info.Model))
+            args.AddRange(["--model", Info.Model]);
+
         var process = new Process
         {
             StartInfo = new ProcessStartInfo

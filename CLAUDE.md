@@ -86,7 +86,8 @@ WorkingDirectory = `project.RootPath`
 ```
 POST /api/auth/ping             { serverUrl, apiKey } → { ok }
 GET/POST/PUT/DELETE /api/projects
-GET/POST/DELETE     /api/projects/{id}/sessions       POST body: { mode, name?, resumeSessionId? }
+GET/POST/DELETE     /api/projects/{id}/sessions       POST body: { mode, name?, resumeSessionId?, model? }
+PUT                 /api/projects/{id}/sessions/{sid} body: { name?, model? } → обновлённая сессия
 GET                 /api/projects/{id}/files          ?path=
 GET                 /api/projects/{id}/files/search   ?q=
 GET/PUT             /api/projects/{id}/files/content  ?path=  → { content, isBinary, isImage, base64?, ... }
@@ -107,7 +108,7 @@ DELETE              /api/projects/{id}/files          ?path=
 
 - Auth: LoginPage (URL + API key → localStorage) → ProjectListPage
 - Проекты: CRUD, редактирование, выход
-- Сессии: создание с именем/режимом, статусы (starting/active/waiting/finished/error)
+- Сессии: создание с именем/режимом/моделью, редактирование названия и модели (шапка чата + список), статусы (starting/active/waiting/finished/error)
 - Чат: Composer (вложения, режим ⚡/📋/❓, голосовой ввод, стоп, «Claude печатает…»)
 - Сообщения: text, thinking, tool_use (spinner), permission_request, file_changed, result, error+retry
 - Empty states: нет сессий, пустой чат с подсказками, пустая папка, нет результатов поиска

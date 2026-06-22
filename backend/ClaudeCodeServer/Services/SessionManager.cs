@@ -79,7 +79,7 @@ public class SessionManager
         _sessions.TryGetValue(id, out var entry) ? entry.Info : null;
 
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
-        string? resumeSessionId = null, string? name = null)
+        string? resumeSessionId = null, string? name = null, string? model = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -90,6 +90,7 @@ public class SessionManager
             Mode = mode,
             ClaudeSessionId = resumeSessionId,
             Name = name,
+            Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
         };
 
         var existingHistory = resumeSessionId != null
@@ -137,6 +138,18 @@ public class SessionManager
 
         entry.Accumulator?.OnUserMessage(text, attachedPaths);
         await entry.Process.SendMessageAsync(text, attachedPaths);
+    }
+
+    // Редактирование названия и модели. Модель применяется со следующего хода
+    // (процесс claude пересоздаётся в RunTurnAsync), Info — общая ссылка с ClaudeSession.
+    public Session? Update(string sessionId, string? name, string? model)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        entry.Info.Name = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+        entry.Info.Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        return entry.Info;
     }
 
     public void RespondPermission(string sessionId, string requestId, string behavior)

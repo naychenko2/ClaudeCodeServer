@@ -281,7 +281,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
           }}>{em!.label}</span>
         )}
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <span style={{
+          <span title={entry.name} style={{
             fontFamily: "'JetBrains Mono', monospace",
             fontSize: 13,
             fontWeight: entry.isDirectory ? 700 : 500,
@@ -289,7 +289,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>{entry.name}</span>
           {parentDir && (
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: '#9A8F7E', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{parentDir}</span>
+            <span title={normPath(entry.path)} style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: '#9A8F7E', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{parentDir}</span>
           )}
         </span>
         {entry.isModified && (

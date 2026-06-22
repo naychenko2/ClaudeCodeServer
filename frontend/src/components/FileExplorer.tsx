@@ -5,7 +5,8 @@ import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
-import { C } from '../lib/design';
+import { C, R, FONT } from '../lib/design';
+import { Modal, TextField, Button } from './ui';
 
 interface Props {
   project: Project;
@@ -340,7 +341,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Search */}
       <div style={{ padding: '4px 12px 10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', background: '#FFFFFF', border: `1px solid ${C.border}`, borderRadius: 10, padding: '0 11px', height: 36 }}>
+        <div style={{ display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
           <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           </span>
@@ -348,7 +349,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             placeholder="Поиск…"
             value={search}
             onChange={e => handleSearch(e.target.value)}
-            style={{ flex: 1, border: 'none', background: 'none', fontSize: 13, fontFamily: "'JetBrains Mono', monospace", color: C.textHeading, outline: 'none' }}
+            style={{ flex: 1, border: 'none', background: 'none', fontSize: 13, fontFamily: FONT.mono, color: C.textHeading, outline: 'none' }}
           />
           {search && (
             <button onClick={() => handleSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 13, padding: 0 }}>✕</button>
@@ -358,7 +359,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {online && (
           <div
             onClick={() => setShowCreateFile(true)}
-            style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 36, border: '1.5px dashed #D0C6B4', borderRadius: 10, color: C.accent, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+            style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 36, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
             Новый файл
@@ -369,7 +370,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       {/* Tree / результаты поиска */}
       <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflow: 'auto', padding: '0 4px 12px' }}>
         {rootLoading ? (
-          <div style={{ padding: '24px 12px', color: '#9A8F7E', fontSize: 13, textAlign: 'center', fontFamily: "'JetBrains Mono', monospace" }}>Загрузка…</div>
+          <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
         ) : searchResults !== null ? (
           searchResults.length === 0 ? (
             <EmptyState
@@ -393,26 +394,31 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
       {/* Диалог создания файла */}
       {showCreateFile && (
-        <div onClick={() => setShowCreateFile(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div onClick={e => e.stopPropagation()} style={{ width: 420, background: '#F4F0E8', borderRadius: 20, padding: 24, boxShadow: '0 24px 60px rgba(23,19,15,0.4)' }}>
-            <h2 style={{ fontFamily: "'PT Serif', serif", fontWeight: 500, fontSize: 22, margin: '0 0 6px', letterSpacing: '-0.01em' }}>Новый файл</h2>
-            {createInDir && (
-              <div style={{ fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: '#9A8F7E', marginBottom: 12 }}>{createInDir}/</div>
-            )}
-            <input
-              placeholder="name.py"
-              value={newFileName}
-              onChange={e => setNewFileName(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleCreateFile()}
-              autoFocus
-              style={{ width: '100%', height: 48, border: '1px solid #E0D7C8', borderRadius: 12, background: '#FFFFFF', padding: '0 14px', fontSize: 15, color: '#2A251F', fontFamily: "'JetBrains Mono', monospace", boxSizing: 'border-box', marginBottom: 20, outline: 'none' }}
-            />
-            <div style={{ display: 'flex', gap: 10 }}>
-              <div onClick={() => setShowCreateFile(false)} style={{ flex: 1, textAlign: 'center', fontSize: 14, fontWeight: 600, color: '#756B5E', background: '#EDE7DC', borderRadius: 12, padding: 13, cursor: 'pointer' }}>Отмена</div>
-              <div onClick={handleCreateFile} style={{ flex: 1, textAlign: 'center', fontSize: 14, fontWeight: 600, color: '#FBF8F2', background: '#D97757', borderRadius: 12, padding: 13, cursor: 'pointer' }}>Создать</div>
-            </div>
+        <Modal
+          width={420}
+          onClose={() => setShowCreateFile(false)}
+          title={
+            <>
+              Новый файл
+              {createInDir && (
+                <div style={{ fontSize: 12, fontFamily: FONT.mono, color: C.textMuted, marginTop: 6, fontWeight: 400 }}>{createInDir}/</div>
+              )}
+            </>
+          }
+        >
+          <TextField
+            value={newFileName}
+            onChange={setNewFileName}
+            placeholder="name.py"
+            mono
+            autoFocus
+            onEnter={handleCreateFile}
+          />
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Button variant="secondary" fullWidth onClick={() => setShowCreateFile(false)}>Отмена</Button>
+            <Button variant="primary" fullWidth onClick={handleCreateFile}>Создать</Button>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

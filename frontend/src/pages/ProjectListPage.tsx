@@ -5,6 +5,8 @@ import { useOnline } from '../hooks/useOnline';
 import { ProjectSyncToggle } from '../components/ProjectSyncToggle';
 import { ConnectionStatus } from '../components/ConnectionStatus';
 import { toggleSyncMark } from '../lib/sync';
+import { C, R, FONT, SHADOW } from '../lib/design';
+import { Modal, TextField, Toggle, Button } from '../components/ui';
 
 interface Props {
   onOpen: (project: Project) => void;
@@ -94,92 +96,17 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
     }
   };
 
-  // Стиль input для диалогов
-  const dialogInput: React.CSSProperties = {
-    width: '100%',
-    height: 48,
-    border: '1px solid #E0D7C8',
-    borderRadius: 12,
-    background: '#FFFFFF',
-    padding: '0 14px',
-    fontSize: 15,
-    fontFamily: "'JetBrains Mono', monospace",
-    marginBottom: 10,
-    boxSizing: 'border-box',
-    outline: 'none',
-    color: '#2A251F',
-  };
-
-  const btnCancel: React.CSSProperties = {
-    flex: 1,
-    background: '#EDE7DC',
-    color: '#756B5E',
-    borderRadius: 13,
-    padding: 14,
-    border: 'none',
-    cursor: 'pointer',
-    fontSize: 14,
-    fontWeight: 600,
-    fontFamily: "'Hanken Grotesk', sans-serif",
-  };
-
-  const btnAccent: React.CSSProperties = {
-    flex: 1,
-    background: '#D97757',
-    color: '#FBF8F2',
-    borderRadius: 13,
-    padding: 14,
-    border: 'none',
-    cursor: 'pointer',
-    fontSize: 14,
-    fontWeight: 600,
-    fontFamily: "'Hanken Grotesk', sans-serif",
-  };
-
-  const btnDanger: React.CSSProperties = {
-    flex: 1,
-    background: '#B4452F',
-    color: '#FBF8F2',
-    borderRadius: 13,
-    padding: 14,
-    border: 'none',
-    cursor: 'pointer',
-    fontSize: 14,
-    fontWeight: 600,
-    fontFamily: "'Hanken Grotesk', sans-serif",
-  };
-
-  const overlayStyle: React.CSSProperties = {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(23,19,15,0.42)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  };
-
-  const modalStyle: React.CSSProperties = {
-    background: '#F4F0E8',
-    borderRadius: 20,
-    padding: 24,
-    width: 400,
-    boxShadow: '0 24px 60px rgba(23,19,15,0.4)',
-  };
+  const errorLine = error ? <div style={{ color: C.danger, fontSize: 13 }}>{error}</div> : null;
 
   return (
-    <div style={{ minHeight: '100vh', background: '#F4F0E8', fontFamily: "'Hanken Grotesk', sans-serif", padding: '4px 22px 14px' }}>
+    <div style={{ minHeight: '100vh', background: C.bgMain, fontFamily: FONT.sans, padding: '4px 22px 14px' }}>
       <div style={{ maxWidth: 640, margin: '0 auto' }}>
 
         {/* Шапка */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 20, paddingTop: 20 }}>
           <h1 style={{
-            fontFamily: "'PT Serif', serif",
-            fontSize: 30,
-            fontWeight: 500,
-            margin: 0,
-            letterSpacing: '-0.01em',
-            color: '#2A251F',
-            flexShrink: 0,
+            fontFamily: FONT.serif, fontSize: 30, fontWeight: 500, margin: 0,
+            letterSpacing: '-0.01em', color: C.textHeading, flexShrink: 0,
           }}>
             Проекты
           </h1>
@@ -188,31 +115,15 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
           <div
             onClick={onLogout}
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 7,
-              background: '#EDE7DC',
-              borderRadius: 20,
-              padding: '6px 12px 6px 8px',
-              cursor: 'pointer',
-              minWidth: 0,
-              flexShrink: 1,
-              maxWidth: 260,
-              overflow: 'hidden',
+              display: 'flex', alignItems: 'center', gap: 7, background: C.bgPanel,
+              borderRadius: 20, padding: '6px 12px 6px 8px', cursor: 'pointer',
+              minWidth: 0, flexShrink: 1, maxWidth: 260, overflow: 'hidden',
             }}
           >
             <div style={{
-              width: 22,
-              height: 22,
-              borderRadius: '50%',
-              background: '#D97757',
-              color: '#FBF8F2',
-              fontSize: 11,
-              fontWeight: 700,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
+              width: 22, height: 22, borderRadius: '50%', background: C.accent,
+              color: C.onAccent, fontSize: 11, fontWeight: 700,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
             }}>
               AD
             </div>
@@ -222,16 +133,10 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
 
         {/* Поиск */}
         <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          background: '#FFFFFF',
-          border: '1px solid #E0D7C8',
-          borderRadius: 12,
-          padding: '0 13px',
-          height: 44,
-          marginBottom: 16,
+          display: 'flex', alignItems: 'center', background: C.bgWhite,
+          border: `1px solid ${C.border}`, borderRadius: R.xl, padding: '0 13px', height: 44, marginBottom: 16,
         }}>
-          <span style={{ color: '#9A8F7E', marginRight: 8, display: 'flex', alignItems: 'center' }}>
+          <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', alignItems: 'center' }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="11" cy="11" r="7"/>
               <path d="m21 21-4.3-4.3"/>
@@ -241,15 +146,7 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
             placeholder="Поиск проектов…"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            style={{
-              border: 'none',
-              background: 'none',
-              flex: 1,
-              fontSize: 14.5,
-              color: '#9A8F7E',
-              fontFamily: 'inherit',
-              outline: 'none',
-            }}
+            style={{ border: 'none', background: 'none', flex: 1, fontSize: 14.5, color: C.textHeading, fontFamily: 'inherit', outline: 'none' }}
           />
         </div>
 
@@ -263,63 +160,33 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
                 key={p.id}
                 onClick={() => onOpen(p)}
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 14,
-                  background: '#FFFFFF',
-                  border: '1px solid #E8E1D4',
-                  borderRadius: 16,
-                  padding: 14,
-                  cursor: 'pointer',
-                  boxShadow: '0 2px 8px rgba(60,50,35,0.04)',
+                  display: 'flex', alignItems: 'center', gap: 14, background: C.bgWhite,
+                  border: `1px solid ${C.borderLight}`, borderRadius: 16, padding: 14,
+                  cursor: 'pointer', boxShadow: SHADOW.card,
                 }}
               >
                 {/* Цветная плитка с буквой */}
                 <div style={{
-                  width: 50,
-                  height: 50,
-                  borderRadius: 14,
-                  background: tileBg,
-                  color: tileFg,
-                  fontFamily: "'PT Serif', serif",
-                  fontSize: 22,
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
+                  width: 50, height: 50, borderRadius: R.xxl, background: tileBg, color: tileFg,
+                  fontFamily: FONT.serif, fontSize: 22, fontWeight: 600,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                 }}>
                   {letter}
                 </div>
 
                 {/* Текстовая часть */}
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{
-                    fontSize: 16,
-                    fontWeight: 600,
-                    color: '#2A251F',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}>
+                  <div style={{ fontSize: 16, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {p.name}
                   </div>
-                  <div style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 11.5,
-                    color: '#9A8F7E',
-                    margin: '3px 0 6px',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}>
+                  <div style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.textMuted, margin: '3px 0 6px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {p.rootPath}
                   </div>
-                  {/* Число сессий (как в макете) + дата второй метаданной (MA13) */}
-                  <div style={{ fontSize: 12, color: '#756B5E', display: 'flex', alignItems: 'center', gap: 7 }}>
+                  {/* Число чатов + дата (MA13) */}
+                  <div style={{ fontSize: 12, color: C.textSecondary, display: 'flex', alignItems: 'center', gap: 7 }}>
                     <span>{sessionsLabel(p.sessionCount ?? 0)}</span>
-                    <span style={{ color: '#CFC6B6' }}>·</span>
-                    <span style={{ color: '#9A8F7E' }}>
+                    <span style={{ color: C.border }}>·</span>
+                    <span style={{ color: C.textMuted }}>
                       {new Date(p.updatedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
                     </span>
                   </div>
@@ -328,47 +195,13 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
                 {/* Кнопки действий — только онлайн */}
                 {online && (
                 <div style={{ display: 'flex', gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
-                  {/* Редактировать */}
-                  <button
-                    onClick={e => openEdit(p, e)}
-                    title="Редактировать"
-                    style={{
-                      width: 26,
-                      height: 26,
-                      borderRadius: 7,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: '#B0A697',
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                    }}
-                  >
+                  <button onClick={e => openEdit(p, e)} title="Редактировать" style={cardIconBtn}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                       <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                     </svg>
                   </button>
-                  {/* Удалить */}
-                  <button
-                    onClick={e => { e.stopPropagation(); setDeleteTarget(p); }}
-                    title="Удалить"
-                    style={{
-                      width: 26,
-                      height: 26,
-                      borderRadius: 7,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: '#B0A697',
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                    }}
-                  >
+                  <button onClick={e => { e.stopPropagation(); setDeleteTarget(p); }} title="Удалить" style={cardIconBtn}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                       <polyline points="3 6 5 6 21 6"/>
                       <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
@@ -388,17 +221,9 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
           <div
             onClick={() => setShowCreate(true)}
             style={{
-              border: '1.5px dashed #D0C6B4',
-              borderRadius: 16,
-              padding: 15,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              color: '#BE5536',
-              fontSize: 14.5,
-              fontWeight: 600,
-              cursor: 'pointer',
+              border: `1.5px dashed ${C.dashed}`, borderRadius: 16, padding: 15,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              color: C.accent, fontSize: 14.5, fontWeight: 600, cursor: 'pointer',
             }}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -412,12 +237,12 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
 
         {/* Empty state — только если нет проектов вообще */}
         {filtered.length === 0 && search === '' && (
-          <div style={{ textAlign: 'center', padding: '48px 0 0', color: '#9A8F7E', fontSize: 14 }}>
+          <div style={{ textAlign: 'center', padding: '48px 0 0', color: C.textMuted, fontSize: 14 }}>
             Нет проектов. Создайте первый выше.
           </div>
         )}
         {filtered.length === 0 && search !== '' && (
-          <div style={{ textAlign: 'center', padding: '48px 0 0', color: '#9A8F7E', fontSize: 14 }}>
+          <div style={{ textAlign: 'center', padding: '48px 0 0', color: C.textMuted, fontSize: 14 }}>
             Ничего не найдено по запросу «{search}»
           </div>
         )}
@@ -425,93 +250,57 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
 
       {/* Диалог создания */}
       {showCreate && (
-        <div style={overlayStyle}>
-          <div style={modalStyle}>
-            <div style={{ width: 40, height: 4, borderRadius: 2, background: '#D0C6B4', margin: '0 auto 18px' }} />
-            <h2 style={{ fontFamily: "'PT Serif', serif", fontSize: 24, fontWeight: 500, margin: '0 0 16px', color: '#2A251F' }}>
-              Новый проект
-            </h2>
-            {error && <div style={{ color: '#B4452F', fontSize: 13, marginBottom: 12 }}>{error}</div>}
-            <input
-              placeholder="Название"
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
-              style={dialogInput}
-            />
-            <input
-              placeholder="Путь к папке"
-              value={newPath}
-              onChange={e => setNewPath(e.target.value)}
-              style={{ ...dialogInput, marginBottom: 12 }}
-            />
-            {/* Включить синхронизацию всего проекта сразу при создании */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 12px', background: '#FFFFFF', border: '1px solid #E0D7C8', borderRadius: 12, marginBottom: 18 }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: '#2A251F' }}>Синхронизировать для офлайна</div>
-                <div style={{ fontSize: 12, color: '#9A8F7E', marginTop: 2 }}>Скачать все файлы проекта сразу после создания</div>
-              </div>
-              <button type="button" onClick={() => setNewSync(v => !v)}
-                title={newSync ? 'Не синхронизировать' : 'Синхронизировать весь проект'}
-                style={{ position: 'relative', width: 44, height: 26, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: newSync ? '#D97757' : '#D8CFBE', transition: 'background 0.15s' }}>
-                <span style={{ position: 'absolute', top: 3, left: newSync ? 21 : 3, width: 20, height: 20, borderRadius: '50%', background: '#FFF', transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
-              </button>
+        <Modal title="Новый проект" width={400} onClose={() => { setShowCreate(false); setError(''); setNewSync(false); }}>
+          {errorLine}
+          <TextField value={newName} onChange={setNewName} placeholder="Название" />
+          <TextField value={newPath} onChange={setNewPath} placeholder="Путь к папке" mono />
+          {/* Включить синхронизацию всего проекта сразу при создании */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 12px', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: C.textHeading }}>Синхронизировать для офлайна</div>
+              <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>Скачать все файлы проекта сразу после создания</div>
             </div>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => { setShowCreate(false); setError(''); setNewSync(false); }} style={btnCancel}>Отмена</button>
-              <button onClick={handleCreate} style={btnAccent}>Добавить</button>
-            </div>
+            <Toggle checked={newSync} onChange={setNewSync} width={44} height={26} />
           </div>
-        </div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Button variant="secondary" fullWidth onClick={() => { setShowCreate(false); setError(''); setNewSync(false); }}>Отмена</Button>
+            <Button variant="primary" fullWidth onClick={handleCreate}>Добавить</Button>
+          </div>
+        </Modal>
       )}
 
       {/* Диалог редактирования */}
       {editTarget && (
-        <div style={overlayStyle}>
-          <div style={modalStyle}>
-            <div style={{ width: 40, height: 4, borderRadius: 2, background: '#D0C6B4', margin: '0 auto 18px' }} />
-            <h2 style={{ fontFamily: "'PT Serif', serif", fontSize: 24, fontWeight: 500, margin: '0 0 16px', color: '#2A251F' }}>
-              Редактировать проект
-            </h2>
-            {error && <div style={{ color: '#B4452F', fontSize: 13, marginBottom: 12 }}>{error}</div>}
-            <input
-              placeholder="Название"
-              value={editName}
-              onChange={e => setEditName(e.target.value)}
-              style={dialogInput}
-            />
-            <input
-              placeholder="Путь к папке"
-              value={editPath}
-              onChange={e => setEditPath(e.target.value)}
-              style={{ ...dialogInput, marginBottom: 14 }}
-            />
-            <ProjectSyncToggle projectId={editTarget.id} online={online} />
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => { setEditTarget(null); setError(''); }} style={btnCancel}>Отмена</button>
-              <button onClick={handleEdit} style={btnAccent}>Сохранить</button>
-            </div>
+        <Modal title="Редактировать проект" width={400} onClose={() => { setEditTarget(null); setError(''); }}>
+          {errorLine}
+          <TextField value={editName} onChange={setEditName} placeholder="Название" />
+          <TextField value={editPath} onChange={setEditPath} placeholder="Путь к папке" mono />
+          <ProjectSyncToggle projectId={editTarget.id} online={online} />
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Button variant="secondary" fullWidth onClick={() => { setEditTarget(null); setError(''); }}>Отмена</Button>
+            <Button variant="primary" fullWidth onClick={handleEdit}>Сохранить</Button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* Диалог удаления */}
       {deleteTarget && (
-        <div style={overlayStyle}>
-          <div style={{ ...modalStyle, width: 380 }}>
-            <div style={{ width: 40, height: 4, borderRadius: 2, background: '#D0C6B4', margin: '0 auto 18px' }} />
-            <h2 style={{ fontFamily: "'PT Serif', serif", fontSize: 24, fontWeight: 500, margin: '0 0 8px', color: '#2A251F' }}>
-              Удалить проект?
-            </h2>
-            <p style={{ fontSize: 14, color: '#756B5E', margin: '0 0 20px' }}>
-              «{deleteTarget.name}» будет удалён. Это действие нельзя отменить.
-            </p>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => setDeleteTarget(null)} style={btnCancel}>Отмена</button>
-              <button onClick={handleDelete} style={btnDanger}>Удалить</button>
-            </div>
+        <Modal title="Удалить проект?" width={380} onClose={() => setDeleteTarget(null)}>
+          <p style={{ fontSize: 14, color: C.textSecondary, margin: 0 }}>
+            «{deleteTarget.name}» будет удалён. Это действие нельзя отменить.
+          </p>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Button variant="secondary" fullWidth onClick={() => setDeleteTarget(null)}>Отмена</Button>
+            <Button variant="danger" fullWidth onClick={handleDelete}>Удалить</Button>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );
 }
+
+// Иконка-кнопка действия в карточке проекта
+const cardIconBtn: React.CSSProperties = {
+  width: 26, height: 26, borderRadius: R.sm, display: 'flex', alignItems: 'center', justifyContent: 'center',
+  color: C.textMuted, background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0,
+};

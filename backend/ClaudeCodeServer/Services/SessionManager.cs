@@ -75,6 +75,10 @@ public class SessionManager
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 
+    // Число сессий проекта — для карточки проекта (без аллокации списка)
+    public int CountByProject(string projectId) =>
+        _sessions.Values.Count(e => e.Info.ProjectId == projectId);
+
     public Session? GetById(string id) =>
         _sessions.TryGetValue(id, out var entry) ? entry.Info : null;
 

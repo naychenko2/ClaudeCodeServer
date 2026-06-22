@@ -4,6 +4,7 @@ export interface Project {
   rootPath: string;
   createdAt: string;
   updatedAt: string;
+  sessionCount?: number;
 }
 
 export interface Session {

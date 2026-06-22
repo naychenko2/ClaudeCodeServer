@@ -10,6 +10,15 @@ interface Props {
   onLogout: () => void;
 }
 
+// Склонение: «1 сессия», «3 сессии», «5 сессий»
+function sessionsLabel(n: number): string {
+  const m10 = n % 10, m100 = n % 100;
+  let w = 'сессий';
+  if (m10 === 1 && m100 !== 11) w = 'сессия';
+  else if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) w = 'сессии';
+  return `${n} ${w}`;
+}
+
 // Цветовые плитки для карточек проектов
 const TILE_COLORS: [string, string][] = [
   ['#E7F0E8', '#3F7A4F'],
@@ -301,8 +310,13 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
                   }}>
                     {p.rootPath}
                   </div>
-                  <div style={{ fontSize: 12, color: '#756B5E' }}>
-                    {new Date(p.updatedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
+                  {/* Число сессий (как в макете) + дата второй метаданной (MA13) */}
+                  <div style={{ fontSize: 12, color: '#756B5E', display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <span>{sessionsLabel(p.sessionCount ?? 0)}</span>
+                    <span style={{ color: '#CFC6B6' }}>·</span>
+                    <span style={{ color: '#9A8F7E' }}>
+                      {new Date(p.updatedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
+                    </span>
                   </div>
                 </div>
 

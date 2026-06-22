@@ -296,16 +296,27 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const [showEdit, setShowEdit] = useState(false);
   const [miniText, setMiniText] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Прилипание к низу: автоскролл при новых сообщениях только если пользователь уже внизу
+  const atBottomRef = useRef(true);
   const pendingRef = useRef<string | undefined>(pendingMessage);
   pendingRef.current = pendingMessage;
 
+  const handleMessagesScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+    // Прокручиваем вниз только если пользователь у нижней точки (не отрываем его от истории)
+    if (atBottomRef.current) bottomRef.current?.scrollIntoView({ behavior: 'instant' });
   }, [items]);
 
-  // При раскрытии дока — моментально проматываем в конец
+  // При раскрытии дока — моментально проматываем в конец и возобновляем прилипание
   useEffect(() => {
     if (dockMode === 'expanded') {
+      atBottomRef.current = true;
       bottomRef.current?.scrollIntoView({ behavior: 'instant' });
     }
   }, [dockMode]);
@@ -324,16 +335,18 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     if (!text.trim() && attachedFiles.length === 0) return;
     const paths = [...attachedFiles];
     setAttachedFiles([]);
+    atBottomRef.current = true; // своё сообщение — прыгаем вниз и снова прилипаем
     await send(text, paths);
   };
 
   const handleHint = (hint: string) => {
+    atBottomRef.current = true;
     send(hint, []);
   };
 
   const handleRetry = () => {
     const lastUser = [...items].reverse().find(it => it.kind === 'user_message');
-    if (lastUser && lastUser.kind === 'user_message') send(lastUser.text, lastUser.attachedPaths ?? []);
+    if (lastUser && lastUser.kind === 'user_message') { atBottomRef.current = true; send(lastUser.text, lastUser.attachedPaths ?? []); }
   };
 
   // Dock: свёрнутая полоска
@@ -349,6 +362,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
     const handleMiniSend = () => {
       if (!miniText.trim() || isWaiting || !online) return;
+      atBottomRef.current = true;
       send(miniText, []);
       setMiniText('');
     };
@@ -402,7 +416,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         />
 
         {/* Сообщения */}
-        <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '12px 16px' }}>
+        <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '12px 16px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {items.map((item, i) => (
               <ChatItemView
@@ -476,7 +490,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       />
 
       {/* Сообщения */}
-      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '16px 12px' : '20px 24px' }}><div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '16px 12px' : '20px 24px' }}><div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
         {/* Empty state */}
         {items.length === 0 && online && (
           <div style={{

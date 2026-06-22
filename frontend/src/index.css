@@ -67,3 +67,44 @@ body {
   animation: spin 0.8s linear infinite;
   flex-shrink: 0;
 }
+
+/* Кастомные скроллбары — только десктоп/планшет (>=768px).
+   На мобильных (<768px) остаются нативные оверлей-скроллбары. */
+@media (min-width: 768px) {
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #D4CFC4 transparent;
+  }
+
+  /* WebKit / Chromium */
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: #D4CFC4;
+    border-radius: 8px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: #BDB7AC;
+  }
+
+  *::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}

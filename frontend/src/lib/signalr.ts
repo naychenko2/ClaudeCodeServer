@@ -33,8 +33,9 @@ export async function ensureConnected(): Promise<signalR.HubConnection> {
     await _startPromise;
   } else if (conn.state === signalR.HubConnectionState.Connecting ||
              conn.state === signalR.HubConnectionState.Reconnecting) {
-    // ждём пока не подключится
+    // ждём пока не подключится; таймаут — чтобы офлайн (вечный Reconnecting) не висел бесконечно
     await new Promise<void>((resolve, reject) => {
+      let waited = 0;
       const timer = setInterval(() => {
         if (conn.state === signalR.HubConnectionState.Connected) {
           clearInterval(timer);
@@ -42,6 +43,9 @@ export async function ensureConnected(): Promise<signalR.HubConnection> {
         } else if (conn.state === signalR.HubConnectionState.Disconnected) {
           clearInterval(timer);
           reject(new Error('SignalR disconnected while waiting'));
+        } else if ((waited += 50) >= 8000) {
+          clearInterval(timer);
+          reject(new Error('SignalR connect timeout'));
         }
       }, 50);
     });

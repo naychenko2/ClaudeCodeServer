@@ -69,7 +69,9 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
       throw new Error(err.error ?? res.statusText);
     }
 
-    const data = (res.status === 204 ? undefined : await res.json()) as T;
+    // Тело может быть пустым (Ok() без контента у мутаций) — не парсим пустую строку как JSON
+    const text = res.status === 204 ? '' : await res.text();
+    const data = (text ? JSON.parse(text) : undefined) as T;
     if (isGet) {
       idbSet(url, { data, savedAt: Date.now() }).catch(() => { /* кэш недоступен — не критично */ });
     }

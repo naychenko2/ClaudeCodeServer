@@ -189,31 +189,34 @@ function ensureJoined(sid: string, projectId?: string) {
 }
 
 async function joinAndLoadHistory(sid: string, projectId?: string) {
-  // Офлайн SignalR недоступен — присоединение к группе упадёт, но историю
-  // всё равно грузим из кэша, чтобы чат был доступен для чтения.
-  try {
-    await joinSession(sid);
-    setState(sid, prev => ({ ...prev, isJoined: true, projectId }));
-  } catch {
-    setState(sid, prev => ({ ...prev, projectId }));
+  setState(sid, prev => ({ ...prev, projectId }));
+
+  // История — приоритет и грузится НЕЗАВИСИМО от SignalR. Офлайн соединение
+  // может «зависнуть» в Reconnecting, поэтому join не должен блокировать историю.
+  if (projectId) {
+    try {
+      const raw = await api.sessions.getHistory(projectId, sid);
+      const items = (raw as any[]).map((msg: any): ChatItem => {
+        if (msg.kind === 'thinking') return { ...msg, expanded: false };
+        if (msg.kind === 'error') return { ...msg, canRetry: false };
+        return msg as ChatItem;
+      });
+      setState(sid, prev => {
+        // Сервер — источник истины: используем его данные если их больше.
+        // Иначе оставляем живые сообщения от стриминга (race condition при активном ходе).
+        if (items.length <= prev.items.length) return prev;
+        return { ...prev, items };
+      });
+    } catch {
+      // История недоступна — не блокируем работу
+    }
   }
-  if (!projectId) return;
-  try {
-    const raw = await api.sessions.getHistory(projectId, sid);
-    const items = (raw as any[]).map((msg: any): ChatItem => {
-      if (msg.kind === 'thinking') return { ...msg, expanded: false };
-      if (msg.kind === 'error') return { ...msg, canRetry: false };
-      return msg as ChatItem;
-    });
-    setState(sid, prev => {
-      // Сервер — источник истины: используем его данные если их больше.
-      // Иначе оставляем живые сообщения от стриминга (race condition при активном ходе).
-      if (items.length <= prev.items.length) return prev;
-      return { ...prev, items };
-    });
-  } catch {
-    // История недоступна — не блокируем работу
-  }
+
+  // Присоединение к группе — фоном, не блокирует чтение истории.
+  // Офлайн промис не зарезолвится — это нормально, при reconnect перезайдём.
+  joinSession(sid)
+    .then(() => setState(sid, prev => ({ ...prev, isJoined: true })))
+    .catch(() => { /* офлайн — остаёмся без группы, читаем из кэша */ });
 }
 
 // --- React-хук ---

@@ -461,7 +461,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', background: '#F4F0E8' }}>
       <ChatHeaderBar
         session={session}
         project={project}
@@ -472,8 +472,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         isMobile={isMobile}
       />
 
-      {/* Сообщения */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '16px 12px' : '20px 24px' }}><div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Сообщения (нижний отступ — чтобы лента скроллилась над плавающим composer) */}
+      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '16px 12px 96px' : '20px 24px 104px' }}><div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
         {/* Empty state */}
         {items.length === 0 && online && (
           <div style={{
@@ -552,22 +552,29 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         <div ref={bottomRef} />
       </div></div>
 
-      {/* Composer */}
-      <div style={{ padding: isMobile ? '10px 12px 14px' : '12px 24px 18px', borderTop: '1px solid #E7E0D2' }}><div style={{ maxWidth: 760, margin: '0 auto' }}>
-        {online ? (
-          <Composer
-            onSend={handleSend}
-            onStop={interrupt}
-            onAttach={() => setShowAttachPicker(true)}
-            isGenerating={isWaiting}
-            mode={mode}
-            onModeChange={setMode}
-            attachments={attachedFiles}
-            onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
-            isMobile={isMobile}
-          />
-        ) : <OfflineComposerStub />}
-      </div></div>
+      {/* Composer — плавающий над лентой (сообщения уходят под градиент-затухание) */}
+      <div style={{
+        position: 'absolute', left: 0, right: 0, bottom: 0,
+        padding: isMobile ? '0 12px 12px' : '0 24px 18px',
+        pointerEvents: 'none',
+        background: 'linear-gradient(to top, #F4F0E8 58%, rgba(244,240,232,0.85) 80%, rgba(244,240,232,0))',
+      }}>
+        <div style={{ maxWidth: 760, margin: '0 auto', pointerEvents: 'auto', borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
+          {online ? (
+            <Composer
+              onSend={handleSend}
+              onStop={interrupt}
+              onAttach={() => setShowAttachPicker(true)}
+              isGenerating={isWaiting}
+              mode={mode}
+              onModeChange={setMode}
+              attachments={attachedFiles}
+              onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
+              isMobile={isMobile}
+            />
+          ) : <OfflineComposerStub />}
+        </div>
+      </div>
 
       {/* Пикер вложений */}
       {showAttachPicker && (

@@ -92,7 +92,7 @@ function ensureHandler() {
         if (msg.isResume)
           updateItems(sid, items => items.some(i => i.kind === 'resumed') ? items : [...items, { kind: 'resumed' }]);
         else
-          updateItems(sid, items => [...items, { kind: 'session_started', model: msg.model, mode: msg.mode }]);
+          updateItems(sid, items => [...items, { kind: 'session_started', model: msg.model, mode: msg.mode, cwd: msg.cwd, toolCount: msg.toolCount, mcpServers: msg.mcpServers }]);
         break;
       case 'text_delta':
         updateItems(sid, items => {

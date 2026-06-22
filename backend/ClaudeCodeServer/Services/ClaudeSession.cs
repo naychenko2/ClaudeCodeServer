@@ -314,8 +314,21 @@ public class ClaudeSession : IAsyncDisposable
                     var isResume = Info.ClaudeSessionId is not null;
                     Info.ClaudeSessionId = sid.GetString();
                     var model = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
+                    var cwd = root.TryGetProperty("cwd", out var cw) && cw.ValueKind == JsonValueKind.String ? cw.GetString() : null;
+                    var toolCount = root.TryGetProperty("tools", out var tl) && tl.ValueKind == JsonValueKind.Array ? tl.GetArrayLength() : 0;
+                    List<McpServerInfo>? mcp = null;
+                    if (root.TryGetProperty("mcp_servers", out var ms) && ms.ValueKind == JsonValueKind.Array)
+                    {
+                        mcp = [];
+                        foreach (var s in ms.EnumerateArray())
+                        {
+                            var name = s.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                            var status = s.TryGetProperty("status", out var st2) ? st2.GetString() ?? "" : "";
+                            if (name.Length > 0) mcp.Add(new McpServerInfo(name, status));
+                        }
+                    }
                     await _onMessage(new SessionStartedMessage(
-                        Info.ClaudeSessionId!, isResume, model, Info.Mode.ToString().ToLower()));
+                        Info.ClaudeSessionId!, isResume, model, Info.Mode.ToString().ToLower(), cwd, toolCount, mcp));
                 }
                 else if (sysSubtype == "compact_boundary")
                 {

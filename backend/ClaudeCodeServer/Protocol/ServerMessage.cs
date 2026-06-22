@@ -9,7 +9,10 @@ public abstract record ServerMessage(string Type)
     public string SessionId { get; init; } = "";
 }
 
-public record SessionStartedMessage(string ClaudeSessionId, bool IsResume, string Model, string Mode)
+public record McpServerInfo(string Name, string Status);
+
+public record SessionStartedMessage(string ClaudeSessionId, bool IsResume, string Model, string Mode,
+    string? Cwd = null, int ToolCount = 0, IReadOnlyList<McpServerInfo>? McpServers = null)
     : ServerMessage("session_started");
 
 public record TextDeltaMessage(string Text)

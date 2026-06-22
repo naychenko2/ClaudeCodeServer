@@ -39,7 +39,7 @@ export interface SyncMark {
 
 // WebSocket сообщения от сервера — sessionId присутствует во всех типах
 export type ServerMessage = { sessionId: string } & (
-  | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string }
+  | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   | { type: 'text_delta'; text: string }
   | { type: 'thinking_delta'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown; parentToolUseId?: string }
@@ -65,7 +65,7 @@ export interface UsageInfo {
 // Элементы чата
 export type ChatItem =
   | { kind: 'user_message'; text: string; attachedPaths?: string[] }
-  | { kind: 'session_started'; model: string; mode: string }
+  | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string; expanded: boolean }
   | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string }

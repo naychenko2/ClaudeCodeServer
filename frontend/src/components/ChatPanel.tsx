@@ -1078,7 +1078,7 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
           background: '#FFFFFF', border: '1px solid #E8E1D4',
           borderRadius: 14, padding: '11px 13px',
           boxShadow: '0 2px 8px rgba(60,50,35,0.04)',
-          display: 'flex', alignItems: 'center', gap: 10,
+          display: 'flex', alignItems: 'flex-start', gap: 10,
         }}>
           <div style={{
             width: 26, height: 26, borderRadius: 7, background: '#D97757',
@@ -1086,13 +1086,32 @@ function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission
           }}>
             <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#F4F0E8' }} />
           </div>
-          <div>
+          <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: '#2A251F', marginBottom: 2 }}>
               Чат запущен
             </div>
             <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: '#9A8F7E' }}>
-              {item.model} · {item.mode}
+              {item.model} · {item.mode}{typeof item.toolCount === 'number' && item.toolCount > 0 ? ` · ${item.toolCount} инстр.` : ''}
             </div>
+            {item.cwd && (
+              <div title={item.cwd} style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: '#9A8F7E', overflow: 'hidden' }}>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#B0A697" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.cwd}</span>
+              </div>
+            )}
+            {item.mcpServers && item.mcpServers.length > 0 && (
+              <div style={{ marginTop: 5, display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                {item.mcpServers.map(s => {
+                  const ok = /connect|ready|ok|success|running/i.test(s.status);
+                  return (
+                    <span key={s.name} title={`MCP «${s.name}»: ${s.status || '—'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontFamily: "'JetBrains Mono', monospace", color: '#756B5E', background: '#F0EAE0', borderRadius: 5, padding: '1px 7px' }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: ok ? '#5E8B4E' : '#C0392B', flexShrink: 0 }} />
+                      {s.name}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       );

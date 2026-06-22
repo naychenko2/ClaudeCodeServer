@@ -283,10 +283,24 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const [miniText, setMiniText] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Плавающий composer переменной высоты — измеряем, чтобы лента упиралась ровно под него
+  const composerWrapRef = useRef<HTMLDivElement>(null);
+  const [composerH, setComposerH] = useState(96);
   // Прилипание к низу: автоскролл при новых сообщениях только если пользователь уже внизу
   const atBottomRef = useRef(true);
   const pendingRef = useRef<string | undefined>(pendingMessage);
   pendingRef.current = pendingMessage;
+
+  // Измеряем высоту плавающего composer → задаём нижний отступ ленты (упор ровно под него)
+  useEffect(() => {
+    const el = composerWrapRef.current;
+    if (!el) return;
+    const update = () => setComposerH(el.offsetHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [online, dockMode]);
 
   const handleMessagesScroll = () => {
     const el = scrollRef.current;
@@ -472,8 +486,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         isMobile={isMobile}
       />
 
-      {/* Сообщения (нижний отступ — чтобы лента скроллилась над плавающим composer) */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '16px 12px 96px' : '20px 24px 104px' }}><div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
+      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
         {/* Empty state */}
         {items.length === 0 && online && (
           <div style={{
@@ -552,12 +566,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         <div ref={bottomRef} />
       </div></div>
 
-      {/* Composer — плавающий над лентой (сообщения уходят под градиент-затухание) */}
-      <div style={{
+      {/* Composer — плавающий над лентой; фон прозрачный, контент виден под/вокруг него */}
+      <div ref={composerWrapRef} style={{
         position: 'absolute', left: 0, right: 0, bottom: 0,
         padding: isMobile ? '0 12px 12px' : '0 24px 18px',
         pointerEvents: 'none',
-        background: 'linear-gradient(to top, #F4F0E8 58%, rgba(244,240,232,0.85) 80%, rgba(244,240,232,0))',
       }}>
         <div style={{ maxWidth: 760, margin: '0 auto', pointerEvents: 'auto', borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
           {online ? (

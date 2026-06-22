@@ -1,4 +1,5 @@
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
 
 interface Props {
@@ -83,7 +84,7 @@ const components: Components = {
 export function MarkdownViewer({ content }: Props) {
   return (
     <div style={{ fontFamily: "'Hanken Grotesk', sans-serif", fontSize: 14, lineHeight: 1.7, color: '#2A251F', maxWidth: 760 }}>
-      <ReactMarkdown components={components}>{content}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{content}</ReactMarkdown>
     </div>
   );
 }

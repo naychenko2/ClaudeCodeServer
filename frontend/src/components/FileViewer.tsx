@@ -193,6 +193,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
   const [editContent, setEditContent] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [unsavedConfirm, setUnsavedConfirm] = useState(false);
+  const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
   const marks = useSyncMarks(project.id);
 
   const content = fileContent?.content ?? '';
@@ -207,6 +208,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
     setLoading(true);
     setLoadError(false);
     setFileContent(null);
+    setImgDims(null);
     api.files.getContent(project.id, filePath).then(r => {
       setFileContent(r);
       setEditContent(r.content ?? '');
@@ -475,12 +477,19 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
         {!loading && !loadError && tab === 'file' && (
           <>
             {fileContent?.isImage && fileContent.base64 && (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: 16 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 16 }}>
                 <img
                   src={`data:${fileContent.mimeType};base64,${fileContent.base64}`}
-                  style={{ maxWidth: '100%', borderRadius: 8 }}
+                  onLoad={e => setImgDims({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+                  style={{ maxWidth: '100%', borderRadius: 8, boxShadow: '0 2px 12px rgba(60,50,35,0.10)' }}
                   alt={fileName}
                 />
+                {/* Метаданные изображения: тип · размеры · вес */}
+                <div style={{ fontSize: 12, color: '#9A8F7E', fontFamily: "'JetBrains Mono', monospace", display: 'flex', gap: 7, flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <span>{(fileContent.mimeType?.split('/')[1] ?? fileName.split('.').pop() ?? '').toUpperCase()}</span>
+                  {imgDims && <><span style={{ opacity: 0.5 }}>·</span><span>{imgDims.w}×{imgDims.h}</span></>}
+                  {fileSizeMb && <><span style={{ opacity: 0.5 }}>·</span><span>{fileSizeMb} МБ</span></>}
+                </div>
               </div>
             )}
 

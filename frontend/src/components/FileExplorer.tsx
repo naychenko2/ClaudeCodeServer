@@ -235,7 +235,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
 
   const rootLoading = !dirCache.has('') && loadingDirs.has('');
 
-  const renderFileRow = (entry: FileEntry, depth: number) => {
+  const renderFileRow = (entry: FileEntry, depth: number, showPath = false) => {
+    // Папка-родитель — показываем в результатах поиска, чтобы различать одноимённые файлы (MA5)
+    const parentDir = showPath ? normPath(entry.path).split('/').slice(0, -1).join('/') : '';
     const isExpanded = expanded.has(entry.path);
     const isLoading = loadingDirs.has(entry.path);
     const em = entry.isDirectory ? null : getExtMeta(entry.name);
@@ -256,8 +258,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
           paddingLeft: 8 + depth * 16, paddingRight: 8,
           paddingTop: 6, paddingBottom: 6,
           borderRadius: 8, cursor: 'pointer',
-          // растём по содержимому + не уже контейнера → длинные имена дают горизонтальный скролл
-          width: 'max-content', minWidth: '100%', boxSizing: 'border-box',
+          // во всю ширину панели: длинное имя усекается ellipsis, маркеры (M/облако) всегда видны
+          width: '100%', boxSizing: 'border-box',
           background: isActive ? '#F1DDD1' : hoveredPath === entry.path ? '#E8E1D4' : (sstate || folderSyncing) ? '#F4ECE3' : 'transparent',
           boxShadow: isActive ? 'inset 2px 0 0 #D97757' : 'none',
           transition: 'background 0.1s',
@@ -278,13 +280,18 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
             flexShrink: 0, letterSpacing: '-0.02em',
           }}>{em!.label}</span>
         )}
-        <span style={{
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: 13, flex: 1,
-          fontWeight: entry.isDirectory ? 700 : 500,
-          color: '#39332B',
-          whiteSpace: 'nowrap',
-        }}>{entry.name}</span>
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <span style={{
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 13,
+            fontWeight: entry.isDirectory ? 700 : 500,
+            color: '#39332B',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>{entry.name}</span>
+          {parentDir && (
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: '#9A8F7E', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{parentDir}</span>
+          )}
+        </span>
         {entry.isModified && (
           <span style={{ fontSize: 9, fontWeight: 700, color: '#C2693B', background: '#FBEBE0', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
         )}
@@ -363,7 +370,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
               subtitle={`Нет файлов по запросу «${search}»`}
             />
           ) : (
-            searchResults.map(entry => renderFileRow(entry, 0))
+            searchResults.map(entry => renderFileRow(entry, 0, true))
           )
         ) : flatTree.length === 0 ? (
           <EmptyState

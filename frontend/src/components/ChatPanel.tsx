@@ -412,7 +412,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
         {/* Сообщения (нижний отступ = высота плавающего composer) */}
         <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 760, margin: '0 auto' }}>
             {items.map((item, i) => (
               <ChatItemView
                 key={i}
@@ -441,7 +441,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
         {/* Composer — плавающий над доком, контент виден под ним */}
         <div ref={composerWrapRef} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '0 16px 12px', pointerEvents: 'none' }}>
-          <div style={{ pointerEvents: 'auto', borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
+          <div style={{ maxWidth: 760, margin: '0 auto', pointerEvents: 'auto', borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
             {online ? (
               <Composer
                 onSend={handleSend}

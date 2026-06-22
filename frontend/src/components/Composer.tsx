@@ -312,7 +312,7 @@ export function Composer({
       </button>
       {modeMenuOpen && (
         <div style={{
-          position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, minWidth: 248,
+          position: 'absolute', bottom: 'calc(100% + 6px)', right: 0, minWidth: 248, maxWidth: 'calc(100vw - 32px)',
           background: '#FFFFFF', border: '1px solid #E0D7C8', borderRadius: 12,
           boxShadow: '0 8px 28px rgba(60,50,35,0.16)', padding: 5, zIndex: 50,
         }}>

@@ -348,7 +348,7 @@ export function WorkspacePage({ project, onBack }: Props) {
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <FileViewer project={project} filePath={openFile} onClose={() => {
+            <FileViewer project={project} filePath={openFile} isMobile onClose={() => {
               setOpenFile(null);
               if (leftTab === 'files') setMobileView('sidebar');
             }} />

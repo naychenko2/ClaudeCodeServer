@@ -53,6 +53,7 @@ interface Props {
   onClose: () => void;
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
+  isMobile?: boolean;
 }
 
 interface FileContent {
@@ -182,7 +183,7 @@ function DiffView({ diff }: { diff: string }) {
   );
 }
 
-export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleFullscreen }: Props) {
+export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleFullscreen, isMobile }: Props) {
   const online = useOnline();
   const [fileContent, setFileContent] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(true);
@@ -310,7 +311,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#FBF8F2' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#FBF8F2', position: 'relative' }}>
       {/* Шапка */}
       <div style={{ padding: '10px 14px', borderBottom: '1px solid #E0D8CC', display: 'flex', alignItems: 'center', gap: 8, background: '#EDE7DC', flexShrink: 0 }}>
         {/* Кнопка назад — только в обычном режиме */}
@@ -362,8 +363,8 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
               {diff && (
                 <button onClick={handleRevert} style={btnSecondary}>Откатить</button>
               )}
-              {/* В fullscreen режиме — иконка карандаша, в обычном — текстовая кнопка */}
-              {isFullscreen ? (
+              {/* На мобиле редактирование — через плавающий FAB (см. ниже); в fullscreen — иконка, иначе — текст */}
+              {!isMobile && (isFullscreen ? (
                 <button
                   onClick={() => { setEditing(true); setTab('file'); }}
                   title="Редактировать"
@@ -373,7 +374,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
                 </button>
               ) : (
                 <button onClick={() => { setEditing(true); setTab('file'); }} style={btnPrimary}>Править</button>
-              )}
+              ))}
             </>
           )}
           {!editing && fileContent?.isBinary && null}
@@ -546,6 +547,25 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
             : <div style={{ color: '#8A8070', fontSize: 13, padding: 16 }}>Файл не изменён</div>
         )}
       </div>
+
+      {/* Плавающая кнопка редактирования на мобиле (MA4) */}
+      {isMobile && online && !editing && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && (
+        <button
+          onClick={() => { setEditing(true); setTab('file'); }}
+          title="Редактировать"
+          style={{
+            position: 'absolute', right: 18, bottom: 18, width: 52, height: 52, borderRadius: '50%',
+            border: 'none', background: '#D97757', color: '#FBF8F2', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 6px 18px rgba(217,119,87,0.42)', zIndex: 20,
+          }}
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+          </svg>
+        </button>
+      )}
 
       {/* Диалог удаления */}
       {deleteConfirm && (

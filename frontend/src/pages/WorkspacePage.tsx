@@ -25,6 +25,42 @@ function useWindowWidth() {
   return width;
 }
 
+// Современный ресайз-сплиттер: в покое — тонкая 1px-линия (как граница панели),
+// на hover/drag — accent-линия с точечным grip; широкая невидимая hit-зона ±6px
+function Splitter({ orientation, active, onMouseDown }: {
+  orientation: 'v' | 'h';
+  active: boolean;
+  onMouseDown: (e: React.MouseEvent) => void;
+}) {
+  const vertical = orientation === 'v';
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      style={{
+        position: 'relative', flexShrink: 0, cursor: vertical ? 'col-resize' : 'row-resize',
+        background: active ? '#D97757' : '#E0D7C8', transition: 'background 0.15s ease',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        ...(vertical ? { flex: '0 0 1px', width: 1, alignSelf: 'stretch' } : { height: 1, width: '100%' }),
+      }}
+      onMouseEnter={e => { if (!active) (e.currentTarget.firstElementChild as HTMLElement).style.opacity = '1'; }}
+      onMouseLeave={e => { if (!active) (e.currentTarget.firstElementChild as HTMLElement).style.opacity = '0'; }}
+    >
+      <div style={{
+        position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+        borderRadius: 3, background: '#D97757', opacity: active ? 1 : 0,
+        transition: 'opacity 0.15s ease', pointerEvents: 'none',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
+        ...(vertical ? { width: 4, height: 34, flexDirection: 'column' } : { width: 34, height: 4, flexDirection: 'row' }),
+      }}>
+        {[0, 1, 2].map(i => <span key={i} style={{ width: 2, height: 2, borderRadius: '50%', background: '#FBF8F2' }} />)}
+      </div>
+      <div style={vertical
+        ? { position: 'absolute', top: 0, bottom: 0, left: -6, right: -6, cursor: 'col-resize' }
+        : { position: 'absolute', left: 0, right: 0, top: -6, bottom: -6, cursor: 'row-resize' }} />
+    </div>
+  );
+}
+
 export function WorkspacePage({ project, onBack }: Props) {
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => loadWorkspaceState(project.id)?.leftTab ?? 'sessions');
@@ -48,6 +84,15 @@ export function WorkspacePage({ project, onBack }: Props) {
     return v ? Math.max(220, Math.min(520, Number(v))) : 300;
   });
   useEffect(() => { localStorage.setItem('cc_sidebar_width', String(sidebarWidth)); }, [sidebarWidth]);
+
+  // Какой сплиттер сейчас тащим — для подсветки на всём протяжении drag (даже если курсор соскользнул)
+  const [draggingSplitter, setDraggingSplitter] = useState<null | 'sidebar' | 'split' | 'vertical'>(null);
+  useEffect(() => {
+    if (!draggingSplitter) return;
+    const up = () => setDraggingSplitter(null);
+    window.addEventListener('mouseup', up);
+    return () => window.removeEventListener('mouseup', up);
+  }, [draggingSplitter]);
 
   const handleSidebarSplitterMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -204,7 +249,7 @@ export function WorkspacePage({ project, onBack }: Props) {
   );
 
   const Sidebar = (
-    <div style={{ width: isMobile ? '100%' : sidebarWidth, borderRight: isMobile ? 'none' : '1px solid #DDD4C4', display: 'flex', flexDirection: 'column', background: '#EDE7DC', flexShrink: 0, height: '100%' }}>
+    <div style={{ width: isMobile ? '100%' : sidebarWidth, display: 'flex', flexDirection: 'column', background: '#EDE7DC', flexShrink: 0, height: '100%' }}>
       {/* Планшет/десктоп: логотип + tabs в одном header блоке */}
       {!isMobile && (
         <div style={{ padding: '18px 16px 14px', flexShrink: 0 }}>
@@ -324,14 +369,8 @@ export function WorkspacePage({ project, onBack }: Props) {
       {Sidebar}
 
       {/* Сплиттер между сайдбаром и контентом */}
-      <div
-        onMouseDown={handleSidebarSplitterMouseDown}
-        style={{ flex: '0 0 5px', background: '#D4CFC4', cursor: 'col-resize', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        onMouseEnter={e => (e.currentTarget.style.background = '#BDB7AC')}
-        onMouseLeave={e => (e.currentTarget.style.background = '#D4CFC4')}
-      >
-        <div style={{ width: 1, height: 32, background: '#A8A09A', borderRadius: 1, pointerEvents: 'none' }} />
-      </div>
+      <Splitter orientation="v" active={draggingSplitter === 'sidebar'}
+        onMouseDown={e => { setDraggingSplitter('sidebar'); handleSidebarSplitterMouseDown(e); }} />
 
       {/* Нет открытого файла — только чат */}
       {!openFile && (
@@ -351,14 +390,8 @@ export function WorkspacePage({ project, onBack }: Props) {
               : NoSession}
           </div>
           {/* Сплиттер */}
-          <div
-            onMouseDown={handleSplitterMouseDown}
-            style={{ flex: '0 0 5px', background: '#D4CFC4', cursor: 'col-resize', flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            onMouseEnter={e => (e.currentTarget.style.background = '#BDB7AC')}
-            onMouseLeave={e => (e.currentTarget.style.background = '#D4CFC4')}
-          >
-            <div style={{ width: 1, height: 32, background: '#A8A09A', borderRadius: 1, pointerEvents: 'none' }} />
-          </div>
+          <Splitter orientation="v" active={draggingSplitter === 'split'}
+            onMouseDown={e => { setDraggingSplitter('split'); handleSplitterMouseDown(e); }} />
           <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
             <FileViewer project={project} filePath={openFile} onClose={handleCloseFile} onToggleFullscreen={handleEnterFullscreen} />
           </div>
@@ -373,18 +406,8 @@ export function WorkspacePage({ project, onBack }: Props) {
           </div>
           {/* Горизонтальный сплиттер — только когда чат развёрнут */}
           {chatDockExpanded && (
-            <div
-              onMouseDown={handleVerticalSplitterMouseDown}
-              style={{
-                flexShrink: 0, height: 5, background: '#D4CFC4',
-                cursor: 'row-resize',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#BDB7AC')}
-              onMouseLeave={e => (e.currentTarget.style.background = '#D4CFC4')}
-            >
-              <div style={{ width: 32, height: 1, background: '#A8A09A', borderRadius: 1, pointerEvents: 'none' }} />
-            </div>
+            <Splitter orientation="h" active={draggingSplitter === 'vertical'}
+              onMouseDown={e => { setDraggingSplitter('vertical'); handleVerticalSplitterMouseDown(e); }} />
           )}
           {activeSession ? (
             <div style={{ flexShrink: 0, height: chatDockExpanded ? chatHeight : 56, overflow: 'hidden', transition: chatDockExpanded ? 'none' : 'height 0.2s ease' }}>

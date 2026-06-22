@@ -83,7 +83,7 @@ const components: Components = {
 
 export function MarkdownViewer({ content }: Props) {
   return (
-    <div style={{ fontFamily: "'Hanken Grotesk', sans-serif", fontSize: 14, lineHeight: 1.7, color: '#2A251F', maxWidth: 760 }}>
+    <div style={{ fontFamily: "'Hanken Grotesk', sans-serif", fontSize: 14, lineHeight: 1.7, color: '#2A251F', width: '100%' }}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{content}</ReactMarkdown>
     </div>
   );

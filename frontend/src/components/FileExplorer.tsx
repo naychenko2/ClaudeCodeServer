@@ -10,6 +10,7 @@ interface Props {
   project: Project;
   onOpenFile: (path: string) => void;
   activeFilePath?: string | null;
+  isMobile?: boolean;
 }
 
 // Персистентное состояние дерева на уровне модуля — переживает размонтирование
@@ -83,7 +84,7 @@ interface TreeNode {
   depth: number;
 }
 
-export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false }: Props) {
   const online = useOnline();
   const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
@@ -254,7 +255,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
         onMouseEnter={() => setHoveredPath(entry.path)}
         onMouseLeave={() => setHoveredPath(null)}
         style={{
-          display: 'flex', alignItems: 'center', gap: 6,
+          display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 6,
           paddingLeft: 8 + depth * 16, paddingRight: 8,
           paddingTop: 6, paddingBottom: 6,
           borderRadius: 8, cursor: 'pointer',
@@ -280,16 +281,22 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
             flexShrink: 0, letterSpacing: '-0.02em',
           }}>{em!.label}</span>
         )}
-        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, paddingTop: isMobile ? 3 : 0 }}>
           <span title={entry.name} style={{
             fontFamily: "'JetBrains Mono', monospace",
             fontSize: 13,
             fontWeight: entry.isDirectory ? 700 : 500,
             color: '#39332B',
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            // мобайл: переносим имя целиком (тач без hover); десктоп: ellipsis + тултип
+            ...(isMobile
+              ? { whiteSpace: 'normal', wordBreak: 'break-all', lineHeight: 1.35 }
+              : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
           }}>{entry.name}</span>
           {parentDir && (
-            <span title={normPath(entry.path)} style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: '#9A8F7E', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{parentDir}</span>
+            <span title={normPath(entry.path)} style={{
+              fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: '#9A8F7E',
+              ...(isMobile ? { whiteSpace: 'normal', wordBreak: 'break-all' } : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
+            }}>{parentDir}</span>
           )}
         </span>
         {entry.isModified && (

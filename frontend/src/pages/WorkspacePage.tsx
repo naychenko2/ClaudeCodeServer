@@ -268,7 +268,7 @@ export function WorkspacePage({ project, onBack }: Props) {
         {leftTab === 'sessions' ? (
           <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} />
         ) : (
-          <FileExplorer project={project} activeFilePath={openFile} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} />
+          <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} />
         )}
       </div>
       {/* Project footer — клик возвращает к списку проектов */}
@@ -325,7 +325,7 @@ export function WorkspacePage({ project, onBack }: Props) {
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {leftTab === 'sessions'
               ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} />
-              : <FileExplorer project={project} activeFilePath={openFile} onOpenFile={handleOpenFileFromTree} />
+              : <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={handleOpenFileFromTree} />
             }
           </div>
           <div

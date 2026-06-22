@@ -4,8 +4,9 @@ public record FileEntry(string Name, string Path, bool IsDirectory, long? Size, 
 
 public class FileService
 {
-    // Папки, которые не обходим при рекурсивном Tree (тяжёлые/нерелевантные для офлайна)
-    private static readonly HashSet<string> TreeExcludes = new(StringComparer.OrdinalIgnoreCase)
+    // Папки, которые не обходим при рекурсивном Tree (тяжёлые/нерелевантные для офлайна).
+    // internal — переиспользуется FileWatcherService для фильтрации событий ФС.
+    internal static readonly HashSet<string> TreeExcludes = new(StringComparer.OrdinalIgnoreCase)
     {
         ".git", "node_modules", "bin", "obj", "dist", "dev-dist",
         ".vs", ".idea", "publish", ".next", "target", ".cache",

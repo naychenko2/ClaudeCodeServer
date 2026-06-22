@@ -90,6 +90,13 @@ export function onMessage(handler: (msg: ServerMessage) => void): () => void {
   return () => conn.off('message', handler);
 }
 
+// Watcher: сервер сообщает об изменении файлов проекта (создание/правка/удаление)
+export function onFilesChanged(handler: (data: { projectId: string; paths: string[] }) => void): () => void {
+  const conn = getConnection();
+  conn.on('filesChanged', handler);
+  return () => conn.off('filesChanged', handler);
+}
+
 export async function joinProject(projectId: string): Promise<void> {
   const conn = await ensureConnected();
   await conn.invoke('JoinProject', projectId);

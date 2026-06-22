@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import type { Project, Session } from '../types';
 import { api } from '../lib/api';
-import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
+import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { isOnline } from '../lib/offline';
 import { StatusBadge } from './StatusBadge';
@@ -61,19 +61,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     return () => clearInterval(interval);
   }, [project.id]);
 
-  // Подписка на статусы в реальном времени через project-группу
+  // Подписка на статусы в реальном времени. Членство в project-группе держит WorkspacePage.
   useEffect(() => {
     let mounted = true;
 
-    const doJoin = () => {
-      joinProject(project.id).catch(() => {});
-    };
-    doJoin();
-
-    // Переподключение — перезаходим в группу и рефетчим статусы (могли пропустить status_changed)
+    // Переподключение — рефетчим статусы (могли пропустить status_changed)
     onReconnected(() => {
       if (!mounted) return;
-      doJoin();
       api.sessions.list(project.id).then(list => {
         if (mounted) setSessions(list);
       }).catch(() => {});
@@ -97,7 +91,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     return () => {
       mounted = false;
       unsub();
-      leaveProject(project.id).catch(() => {});
     };
   }, [project.id]);
 

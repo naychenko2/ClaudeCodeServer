@@ -5,7 +5,8 @@ import { ProjectListPage } from './pages/ProjectListPage'
 import { WorkspacePage } from './pages/WorkspacePage'
 import { initConnectivity } from './lib/offline'
 import { useOnline } from './hooks/useOnline'
-import { runOfflineSnapshot } from './lib/sync'
+import { runOfflineSnapshot, syncProjectFiles } from './lib/sync'
+import { onFilesChanged } from './lib/signalr'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 
@@ -38,6 +39,9 @@ export default function App() {
   useEffect(() => {
     if (auth && online) runOfflineSnapshot(projectIdRef.current)
   }, [auth, online])
+
+  // Watcher: сервер уведомил об изменении файлов проекта → инкрементальный ре-синк офлайн-кэша
+  useEffect(() => onFilesChanged(({ projectId }) => { syncProjectFiles(projectId) }), [])
 
   const openProject = (p: Project) => {
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))

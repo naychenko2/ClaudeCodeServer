@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } fr
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
+import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 
@@ -90,6 +91,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(() => initial?.expanded ?? new Set());
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const inFlight = useRef(new Set<string>());
+  const dirCacheRef = useRef(dirCache);
+  dirCacheRef.current = dirCache;
 
   const [search, setSearch] = useState(() => initial?.search ?? '');
   const [searchResults, setSearchResults] = useState<FileEntry[] | null>(() => initial?.searchResults ?? null);
@@ -116,6 +119,20 @@ export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
 
   // Метки синхронизации + набор уже скачанных файлов — в общий стор (для маркеров/спиннеров)
   useEffect(() => { loadSyncMarks(project.id); loadDownloadedSet(project.id); }, [project.id]);
+
+  // Watcher: при изменении файлов проекта перезагружаем затронутые ЗАГРУЖЕННЫЕ папки (дерево живое)
+  useEffect(() => {
+    return onFilesChanged(({ projectId, paths }) => {
+      if (projectId !== project.id) return;
+      const dirs = new Set<string>();
+      for (const raw of paths) {
+        const p = raw.replace(/\\/g, '/');
+        const i = p.lastIndexOf('/');
+        dirs.add(i < 0 ? '' : p.slice(0, i));
+      }
+      for (const d of dirs) if (dirCacheRef.current.has(d)) loadDir(d);
+    });
+  }, [project.id, loadDir]);
 
   // Переключение проекта: восстанавливаем сохранённое состояние либо грузим корень заново
   const mountedProjectRef = useRef<string | null>(null);

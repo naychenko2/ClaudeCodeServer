@@ -21,6 +21,7 @@ import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
 import type { Project } from '../types';
 import { api } from '../lib/api';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
+import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
@@ -152,6 +153,17 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
     loadSyncMarks(project.id);
     loadDownloadedSet(project.id);
   }, [project.id]);
+
+  // Watcher: открытый файл изменился на диске → перечитываем (если не редактируем — не затираем правки)
+  useEffect(() => {
+    return onFilesChanged(({ projectId, paths }) => {
+      if (projectId !== project.id || editing) return;
+      const norm = filePath.replace(/\\/g, '/');
+      if (!paths.some(p => p.replace(/\\/g, '/') === norm)) return;
+      api.files.getContent(project.id, filePath).then(r => { setFileContent(r); setEditContent(r.content ?? ''); setLoadError(false); }).catch(() => {});
+      api.files.getDiff(project.id, filePath).then(r => setDiff(r.diff)).catch(() => {});
+    });
+  }, [project.id, filePath, editing]);
 
   const handleToggleSync = () => {
     toggleSyncMark(project.id, {

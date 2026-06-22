@@ -6,8 +6,13 @@ namespace ClaudeCodeServer.Hubs;
 public class SessionHub : Hub
 {
     private readonly SessionManager _sessions;
+    private readonly FileWatcherService _watcher;
 
-    public SessionHub(SessionManager sessions) => _sessions = sessions;
+    public SessionHub(SessionManager sessions, FileWatcherService watcher)
+    {
+        _sessions = sessions;
+        _watcher = watcher;
+    }
 
     public async Task JoinSession(string sessionId)
     {
@@ -22,11 +27,19 @@ public class SessionHub : Hub
     public async Task JoinProject(string projectId)
     {
         await Groups.AddToGroupAsync(Context.ConnectionId, "project_" + projectId);
+        _watcher.Watch(projectId, Context.ConnectionId);
     }
 
     public async Task LeaveProject(string projectId)
     {
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, "project_" + projectId);
+        _watcher.Unwatch(projectId, Context.ConnectionId);
+    }
+
+    public override Task OnDisconnectedAsync(Exception? exception)
+    {
+        _watcher.RemoveConnection(Context.ConnectionId);
+        return base.OnDisconnectedAsync(exception);
     }
 
     public async Task SendMessage(string sessionId, string text, List<string>? attachedPaths = null)

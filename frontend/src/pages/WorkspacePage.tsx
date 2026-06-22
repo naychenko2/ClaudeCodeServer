@@ -5,6 +5,7 @@ import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
 import { FileViewer } from '../components/FileViewer';
 import { ConnectionStatus } from '../components/ConnectionStatus';
+import { joinProject, leaveProject, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
 
 interface Props {
@@ -86,6 +87,14 @@ export function WorkspacePage({ project, onBack }: Props) {
   useEffect(() => {
     saveWorkspaceState(project.id, { activeSession, openFile, fileFullscreen, leftTab, chatDockExpanded });
   }, [project.id, activeSession, openFile, fileFullscreen, leftTab, chatDockExpanded]);
+
+  // Членство в project-группе на всё время открытия проекта (для статусов и watcher'а файлов).
+  // Владелец — WorkspacePage (не SessionList, который размонтируется при переходе на «Файлы»).
+  useEffect(() => {
+    joinProject(project.id).catch(() => {});
+    onReconnected(() => joinProject(project.id).catch(() => {}));
+    return () => { leaveProject(project.id).catch(() => {}); };
+  }, [project.id]);
 
   // из дерева файлов → всегда fullscreen
   const handleOpenFileFromTree = (filePath: string) => {

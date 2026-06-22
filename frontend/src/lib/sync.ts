@@ -9,7 +9,7 @@ import { useSyncExternalStore } from 'react';
 import type { FileEntry, SyncMark } from '../types';
 import { api } from './api';
 import { isOnline } from './offline';
-import { idbSet, idbKeys, idbDelete } from './idb';
+import { idbGet, idbSet, idbKeys, idbDelete } from './idb';
 
 function parentDir(path: string): string {
   const i = path.lastIndexOf('/');
@@ -144,6 +144,13 @@ async function dropSyncedContent(projectId: string, path: string): Promise<void>
       set?.delete(fp);
     }
   }
+  // Чистим записи mtime, чтобы при повторной синхронизации файлы скачались заново
+  const mtimes = await loadMtimes(projectId);
+  let changed = false;
+  for (const fp of Object.keys(mtimes)) {
+    if (p === '' || fp === p || fp.startsWith(p + '/')) { delete mtimes[fp]; changed = true; }
+  }
+  if (changed) await saveMtimes(projectId, mtimes);
   notifyMarks();
 }
 
@@ -187,6 +194,19 @@ export function computeSyncState(marks: SyncMark[], path: string): 'direct' | 'i
   return null;
 }
 
+// --- mtime скачанных файлов (для инкрементальной синхронизации) ---
+// Храним время модификации (mtime) на момент скачивания содержимого — чтобы качать
+// заново только реально изменившиеся файлы. Запись на проект в IndexedDB.
+
+async function loadMtimes(projectId: string): Promise<Record<string, string>> {
+  const e = await idbGet<Record<string, string>>('synced-mtimes:' + projectId).catch(() => undefined);
+  return e?.data ?? {};
+}
+
+async function saveMtimes(projectId: string, map: Record<string, string>): Promise<void> {
+  await idbSet('synced-mtimes:' + projectId, { data: map, savedAt: Date.now() }).catch(() => {});
+}
+
 // --- Докачка содержимого ---
 
 // Минимальное время показа спиннера: на localhost докачка мгновенна, без этого спиннер незаметен.
@@ -198,19 +218,25 @@ function markDownloadedSoon(projectId: string, path: string) {
 }
 
 // Файл — один запрос, папка/корень — все файлы рекурсивно. token — для отмены на лету.
-async function downloadSyncedContent(projectId: string, entry: { path: string; isDirectory: boolean }, token?: { cancelled: boolean }): Promise<void> {
+// Запоминаем mtime скачанных файлов для последующей инкрементальной синхронизации.
+async function downloadSyncedContent(projectId: string, entry: { path: string; isDirectory: boolean; modified?: string }, token?: { cancelled: boolean }): Promise<void> {
+  const updates: Record<string, string> = {};
   if (entry.isDirectory) {
     const tree = await api.files.tree(projectId, entry.path).catch(() => [] as FileEntry[]);
     const files = tree.filter(e => !e.isDirectory);
     await mapLimit(files, 4, async f => {
       if (token?.cancelled) return;
-      await api.files.getContent(projectId, f.path).catch(() => {});
-      markDownloadedSoon(projectId, f.path);
+      try { await api.files.getContent(projectId, f.path); markDownloadedSoon(projectId, f.path); updates[f.path] = f.modified; }
+      catch { /* пропускаем сбойный файл */ }
     });
   } else {
     if (token?.cancelled) return;
-    await api.files.getContent(projectId, entry.path).catch(() => {});
-    markDownloadedSoon(projectId, entry.path);
+    try { await api.files.getContent(projectId, entry.path); markDownloadedSoon(projectId, entry.path); if (entry.modified) updates[entry.path] = entry.modified; }
+    catch { /* пропускаем */ }
+  }
+  if (Object.keys(updates).length) {
+    const cur = await loadMtimes(projectId);
+    await saveMtimes(projectId, { ...cur, ...updates });
   }
 }
 
@@ -231,7 +257,10 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
     const ordered = priorityProjectId
       ? [...projects].sort((a, b) => (a.id === priorityProjectId ? -1 : b.id === priorityProjectId ? 1 : 0))
       : projects;
-    const contentTasks: { projectId: string; path: string }[] = [];
+    // Задачи на докачку (только новые/изменённые файлы); mtime и валидные пути по проектам
+    const contentTasks: { projectId: string; path: string; mtime: string }[] = [];
+    const mtimeByProject = new Map<string, Record<string, string>>();
+    const validByProject = new Map<string, Set<string>>();
 
     for (const p of ordered) {
       const [sessions, treeEntries] = await Promise.all([
@@ -241,27 +270,103 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
       ]).then(([s, , t]) => [s, t] as const);
 
       await mapLimit(sessions, 4, async s => { await api.sessions.getHistory(p.id, s.id).catch(() => {}); });
+      // Обновляем дерево в кэше — новые файлы появляются, удалённые исчезают из листингов
       await cacheTreeAsListings(p.id, treeEntries);
 
-      // Содержимое синхронизированных файлов (по флагу synced из дерева)
+      const mtimes = await loadMtimes(p.id);
+      mtimeByProject.set(p.id, mtimes);
+      const valid = new Set<string>();
       for (const e of treeEntries) {
-        if (!e.isDirectory && e.synced) contentTasks.push({ projectId: p.id, path: e.path });
+        if (e.isDirectory || !e.synced) continue;
+        valid.add(e.path);
+        // качаем только если файл новый или изменился (mtime отличается)
+        if (mtimes[e.path] !== e.modified) contentTasks.push({ projectId: p.id, path: e.path, mtime: e.modified });
       }
+      validByProject.set(p.id, valid);
     }
 
     setProgress({ total: contentTasks.length, done: 0 });
     let done = 0;
     await mapLimit(contentTasks, 4, async t => {
-      await api.files.getContent(t.projectId, t.path).catch(() => {});
-      markDownloaded(t.projectId, t.path); // помечаем файл как скачанный → спиннер в дереве гаснет
+      try { await api.files.getContent(t.projectId, t.path); markDownloaded(t.projectId, t.path); mtimeByProject.get(t.projectId)![t.path] = t.mtime; }
+      catch { /* сбой — оставим на следующий снапшот */ }
       setProgress({ done: ++done });
     });
+
+    // Чистим устаревшее: содержимое файлов, удалённых с диска или больше не синхронизированных
+    for (const p of ordered) {
+      const mtimes = mtimeByProject.get(p.id) ?? {};
+      const valid = validByProject.get(p.id) ?? new Set<string>();
+      const prefix = `/projects/${p.id}/files/content?path=`;
+      for (const fp of Object.keys(mtimes)) {
+        if (valid.has(fp)) continue;
+        await idbDelete(prefix + encodeURIComponent(fp)).catch(() => {});
+        _downloaded.get(p.id)?.delete(fp);
+        delete mtimes[fp];
+      }
+      await saveMtimes(p.id, mtimes);
+    }
+    notifyMarks();
   } catch {
     /* офлайн или сбой — снапшот частичный, не критично */
   } finally {
     _snapshotRunning = false;
     setProgress({ active: false });
   }
+}
+
+// --- Ре-синхронизация одного проекта (для watcher'а изменений файлов) ---
+
+const _projectSyncing = new Set<string>();
+const _projectResync = new Set<string>();
+
+// Инкрементальный ре-синк одного проекта: обновляет дерево/листинги, докачивает
+// изменённые синхронизированные файлы по mtime, чистит удалённые. Защищён от наложений.
+export async function syncProjectFiles(projectId: string): Promise<void> {
+  if (!isOnline()) return;
+  if (_projectSyncing.has(projectId)) { _projectResync.add(projectId); return; }
+  _projectSyncing.add(projectId);
+  try {
+    await doSyncProjectFiles(projectId);
+  } finally {
+    _projectSyncing.delete(projectId);
+    if (_projectResync.delete(projectId)) syncProjectFiles(projectId); // пришла ещё пачка изменений
+  }
+}
+
+async function doSyncProjectFiles(projectId: string): Promise<void> {
+  const tree = await api.files.tree(projectId).catch(() => null);
+  if (!tree) return;
+  await cacheTreeAsListings(projectId, tree);
+
+  const mtimes = await loadMtimes(projectId);
+  const valid = new Set<string>();
+  const tasks: { path: string; mtime: string }[] = [];
+  for (const e of tree) {
+    if (e.isDirectory || !e.synced) continue;
+    valid.add(e.path);
+    if (mtimes[e.path] !== e.modified) tasks.push({ path: e.path, mtime: e.modified });
+  }
+
+  if (tasks.length) setProgress({ active: true, done: 0, total: tasks.length });
+  let done = 0;
+  await mapLimit(tasks, 4, async t => {
+    try { await api.files.getContent(projectId, t.path); markDownloaded(projectId, t.path); mtimes[t.path] = t.mtime; }
+    catch { /* сбой — на следующий раз */ }
+    if (tasks.length) setProgress({ done: ++done });
+  });
+  if (tasks.length) setProgress({ active: false });
+
+  // Чистим удалённые/рассинхронизированные
+  const prefix = `/projects/${projectId}/files/content?path=`;
+  for (const fp of Object.keys(mtimes)) {
+    if (valid.has(fp)) continue;
+    await idbDelete(prefix + encodeURIComponent(fp)).catch(() => {});
+    _downloaded.get(projectId)?.delete(fp);
+    delete mtimes[fp];
+  }
+  await saveMtimes(projectId, mtimes);
+  notifyMarks();
 }
 
 // --- Переключение метки ---

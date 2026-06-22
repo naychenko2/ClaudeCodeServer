@@ -18,8 +18,10 @@ import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';
 import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml';
 import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
 import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
-import type { Project } from '../types';
+import type { Project, SyncMark } from '../types';
 import { api } from '../lib/api';
+import { toggleSync, computeSyncState } from '../lib/sync';
+import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
@@ -106,30 +108,56 @@ const EditIcon = () => (
   </svg>
 );
 
+const CloudGlyph = ({ filled }: { filled?: boolean }) => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+  </svg>
+);
+
 export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleFullscreen }: Props) {
+  const online = useOnline();
   const [fileContent, setFileContent] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [diff, setDiff] = useState<string | null>(null);
   const [tab, setTab] = useState<ViewTab>('file');
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [unsavedConfirm, setUnsavedConfirm] = useState(false);
+  const [syncMarks, setSyncMarks] = useState<SyncMark[]>([]);
 
   const content = fileContent?.content ?? '';
   const hasUnsavedChanges = editing && editContent !== content;
+  const syncState = computeSyncState(syncMarks, filePath);
 
   useEffect(() => {
     setEditing(false);
     setTab('file');
     setLoading(true);
+    setLoadError(false);
     setFileContent(null);
     api.files.getContent(project.id, filePath).then(r => {
       setFileContent(r);
       setEditContent(r.content ?? '');
-    }).finally(() => setLoading(false));
-    api.files.getDiff(project.id, filePath).then(r => setDiff(r.diff));
+    }).catch(() => setLoadError(true)).finally(() => setLoading(false));
+    // diff недоступен офлайн — мягко игнорируем ошибку
+    api.files.getDiff(project.id, filePath).then(r => setDiff(r.diff)).catch(() => setDiff(null));
   }, [project.id, filePath]);
+
+  // Метки синхронизации проекта (для состояния кнопки в тулбаре)
+  useEffect(() => {
+    api.sync.list(project.id).then(setSyncMarks).catch(() => setSyncMarks([]));
+  }, [project.id]);
+
+  const handleToggleSync = async () => {
+    await toggleSync(project.id, {
+      name: fileName, path: filePath, isDirectory: false,
+      modified: '', isModified: false, synced: syncState,
+    });
+    const marks = await api.sync.list(project.id).catch(() => syncMarks);
+    setSyncMarks(marks);
+  };
 
   const handleSave = async () => {
     await api.files.saveContent(project.id, filePath, editContent);
@@ -250,7 +278,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
 
         {/* Кнопки действий */}
         <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
-          {!editing && !fileContent?.isBinary && (
+          {online && !editing && !fileContent?.isBinary && (
             <>
               {diff && (
                 <button onClick={handleRevert} style={btnSecondary}>Откатить</button>
@@ -277,6 +305,23 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
             </>
           )}
 
+          {/* Синхронизация для офлайна */}
+          {online && !editing && (
+            syncState === 'inherited' ? (
+              <span title="Синхронизируется через папку" style={{ display: 'flex', alignItems: 'center', padding: 4, color: '#B9AE9C' }}>
+                <CloudGlyph filled />
+              </span>
+            ) : (
+              <button
+                onClick={handleToggleSync}
+                title={syncState === 'direct' ? 'Отключить синхронизацию' : 'Синхронизировать для офлайна'}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: syncState === 'direct' ? '#D97757' : '#9A8F7E', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 6 }}
+              >
+                <CloudGlyph filled={syncState === 'direct'} />
+              </button>
+            )
+          )}
+
           {/* Кнопка expand / split-view */}
           {onToggleFullscreen && !editing && (
             <button
@@ -289,7 +334,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
           )}
 
           {/* Корзина */}
-          {!editing && (
+          {online && !editing && (
             <button
               onClick={() => setDeleteConfirm(true)}
               style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9A8F7E', display: 'flex', alignItems: 'center', padding: 4, borderRadius: 6 }}
@@ -318,7 +363,17 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
           </div>
         )}
 
-        {!loading && tab === 'file' && (
+        {!loading && loadError && (
+          <EmptyState
+            icon={<FileSvg />}
+            title={online ? 'Не удалось открыть файл' : 'Файл не синхронизирован'}
+            subtitle={online
+              ? `Не удалось загрузить ${fileName}`
+              : 'Этот файл не сохранён для офлайна. Включите синхронизацию, когда будете онлайн.'}
+          />
+        )}
+
+        {!loading && !loadError && tab === 'file' && (
           <>
             {fileContent?.isImage && fileContent.base64 && (
               <div style={{ display: 'flex', justifyContent: 'center', padding: 16 }}>
@@ -364,7 +419,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
           </>
         )}
 
-        {!loading && tab === 'diff' && (
+        {!loading && !loadError && tab === 'diff' && (
           diff
             ? <pre style={{ margin: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                 {diff.split('\n').map((line, i) => (

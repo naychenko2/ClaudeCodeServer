@@ -1,19 +1,5 @@
-import type { Project, Session, FileEntry } from '../types';
-
-const BASE = '/api';
-
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(BASE + url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error ?? res.statusText);
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json();
-}
+import type { Project, Session, FileEntry, SyncMark } from '../types';
+import { request } from './offline';
 
 // Projects
 export const api = {
@@ -36,10 +22,15 @@ export const api = {
 
   sessions: {
     list: (projectId: string) => request<Session[]>(`/projects/${projectId}/sessions`),
-    create: (projectId: string, mode = 'auto', resumeSessionId?: string, name?: string) =>
+    create: (projectId: string, mode = 'auto', resumeSessionId?: string, name?: string, model?: string) =>
       request<Session>(`/projects/${projectId}/sessions`, {
         method: 'POST',
-        body: JSON.stringify({ mode, resumeSessionId, name }),
+        body: JSON.stringify({ mode, resumeSessionId, name, model }),
+      }),
+    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null }) =>
+      request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
       }),
     delete: (projectId: string, sessionId: string) =>
       request<void>(`/projects/${projectId}/sessions/${sessionId}`, { method: 'DELETE' }),
@@ -50,6 +41,8 @@ export const api = {
   files: {
     list: (projectId: string, path = '') =>
       request<FileEntry[]>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`),
+    tree: (projectId: string, path = '') =>
+      request<FileEntry[]>(`/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}`),
     search: (projectId: string, q: string) =>
       request<FileEntry[]>(`/projects/${projectId}/files/search?q=${encodeURIComponent(q)}`),
     getContent: (projectId: string, path: string) =>
@@ -74,5 +67,16 @@ export const api = {
       }),
     delete: (projectId: string, path: string) =>
       request<void>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+  },
+
+  sync: {
+    list: (projectId: string) => request<SyncMark[]>(`/projects/${projectId}/sync`),
+    add: (projectId: string, path: string, isDirectory: boolean) =>
+      request<void>(`/projects/${projectId}/sync`, {
+        method: 'POST',
+        body: JSON.stringify({ path, isDirectory }),
+      }),
+    remove: (projectId: string, path: string) =>
+      request<void>(`/projects/${projectId}/sync?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
   },
 };

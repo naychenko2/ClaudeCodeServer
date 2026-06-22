@@ -17,6 +17,7 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   name?: string;
+  model?: string;
 }
 
 export interface FileEntry {
@@ -26,6 +27,13 @@ export interface FileEntry {
   size?: number;
   modified: string;
   isModified: boolean;
+  // Состояние синхронизации для офлайна: помечен сам / по наследству от папки / нет
+  synced?: 'direct' | 'inherited' | null;
+}
+
+export interface SyncMark {
+  path: string;
+  isDirectory: boolean;
 }
 
 // WebSocket сообщения от сервера — sessionId присутствует во всех типах

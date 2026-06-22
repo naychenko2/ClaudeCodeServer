@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Project } from '../types';
 import { api } from '../lib/api';
+import { useOnline } from '../hooks/useOnline';
 
 interface Props {
   onOpen: (project: Project) => void;
@@ -16,6 +17,7 @@ const TILE_COLORS: [string, string][] = [
 ];
 
 export function ProjectListPage({ onOpen, onLogout }: Props) {
+  const online = useOnline();
   const [projects, setProjects] = useState<Project[]>([]);
   const [search, setSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
@@ -29,7 +31,7 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
 
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';
 
-  useEffect(() => { api.projects.list().then(setProjects); }, []);
+  useEffect(() => { api.projects.list().then(setProjects).catch(() => {}); }, []);
 
   const filtered = projects.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -299,7 +301,8 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
                   </div>
                 </div>
 
-                {/* Кнопки действий */}
+                {/* Кнопки действий — только онлайн */}
+                {online && (
                 <div style={{ display: 'flex', gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
                   {/* Редактировать */}
                   <button
@@ -351,11 +354,13 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
                     </svg>
                   </button>
                 </div>
+                )}
               </div>
             );
           })}
 
-          {/* Кнопка добавления — всегда в конце списка */}
+          {/* Кнопка добавления — всегда в конце списка, только онлайн */}
+          {online && (
           <div
             onClick={() => setShowCreate(true)}
             style={{
@@ -378,6 +383,7 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
             </svg>
             Добавить проект
           </div>
+          )}
         </div>
 
         {/* Empty state — только если нет проектов вообще */}

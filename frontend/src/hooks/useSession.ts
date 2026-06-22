@@ -189,8 +189,14 @@ function ensureJoined(sid: string, projectId?: string) {
 }
 
 async function joinAndLoadHistory(sid: string, projectId?: string) {
-  await joinSession(sid);
-  setState(sid, prev => ({ ...prev, isJoined: true, projectId }));
+  // Офлайн SignalR недоступен — присоединение к группе упадёт, но историю
+  // всё равно грузим из кэша, чтобы чат был доступен для чтения.
+  try {
+    await joinSession(sid);
+    setState(sid, prev => ({ ...prev, isJoined: true, projectId }));
+  } catch {
+    setState(sid, prev => ({ ...prev, projectId }));
+  }
   if (!projectId) return;
   try {
     const raw = await api.sessions.getHistory(projectId, sid);

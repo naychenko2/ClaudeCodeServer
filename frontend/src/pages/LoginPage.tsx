@@ -65,10 +65,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
+          padding: '24px 20px',
+          boxSizing: 'border-box',
           fontFamily: "'Hanken Grotesk', -apple-system, sans-serif",
         }}
       >
-        <div style={{ width: 440 }}>
+        <div style={{ width: '100%', maxWidth: 440 }}>
           {/* Логотип */}
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 28 }}>
             <div

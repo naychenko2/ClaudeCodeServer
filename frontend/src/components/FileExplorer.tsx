@@ -1,12 +1,29 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
+import { toggleSync } from '../lib/sync';
+import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 
 interface Props {
   project: Project;
   onOpenFile: (path: string) => void;
+  activeFilePath?: string | null;
 }
+
+// Персистентное состояние дерева на уровне модуля — переживает размонтирование
+// при переключении вкладок «Чаты»/«Файлы». Ключ — projectId.
+interface ExplorerState {
+  dirCache: Map<string, FileEntry[]>;
+  expanded: Set<string>;
+  search: string;
+  searchResults: FileEntry[] | null;
+  createInDir: string;
+  scrollTop: number;
+}
+const _explorerStore = new Map<string, ExplorerState>();
+
+const normPath = (p?: string | null) => (p ?? '').replace(/\\/g, '/');
 
 const EXT_META: Record<string, { bg: string; fg: string; label: string }> = {
   ts:   { bg: '#E6EEF5', fg: '#3E7CA6', label: 'ts' },
@@ -38,46 +55,96 @@ function FolderIcon() {
   );
 }
 
+// Иконка облака — маркер/тоггл синхронизации.
+// filled — синхронизирован напрямую (accent); muted — по наследству; иначе — outline (вкл).
+function CloudIcon({ variant }: { variant: 'direct' | 'inherited' | 'idle' }) {
+  const color = variant === 'direct' ? '#D97757' : variant === 'inherited' ? '#B9AE9C' : '#B0A697';
+  const fill = variant === 'direct' ? '#D97757' : 'none';
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill={fill} stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+    </svg>
+  );
+}
+
 interface TreeNode {
   entry: FileEntry;
   depth: number;
 }
 
-export function FileExplorer({ project, onOpenFile }: Props) {
-  const [dirCache, setDirCache] = useState<Map<string, FileEntry[]>>(new Map());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+export function FileExplorer({ project, onOpenFile, activeFilePath }: Props) {
+  const online = useOnline();
+  const initial = _explorerStore.get(project.id);
+  const [dirCache, setDirCache] = useState<Map<string, FileEntry[]>>(() => initial?.dirCache ?? new Map());
+  const [expanded, setExpanded] = useState<Set<string>>(() => initial?.expanded ?? new Set());
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const inFlight = useRef(new Set<string>());
 
-  const [search, setSearch] = useState('');
-  const [searchResults, setSearchResults] = useState<FileEntry[] | null>(null);
+  const [search, setSearch] = useState(() => initial?.search ?? '');
+  const [searchResults, setSearchResults] = useState<FileEntry[] | null>(() => initial?.searchResults ?? null);
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const [showCreateFile, setShowCreateFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');
-  const [createInDir, setCreateInDir] = useState('');
+  const [createInDir, setCreateInDir] = useState(() => initial?.createInDir ?? '');
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const activeNorm = normPath(activeFilePath);
 
   const loadDir = useCallback(async (path: string) => {
     if (inFlight.current.has(path)) return;
     inFlight.current.add(path);
     setLoadingDirs(prev => new Set(prev).add(path));
     try {
-      const entries = await api.files.list(project.id, path);
-      setDirCache(prev => new Map(prev).set(path, entries));
+      // Офлайн-промах кэша не должен ронять загрузку — папка просто не раскроется
+      const entries = await api.files.list(project.id, path).catch(() => null);
+      if (entries) setDirCache(prev => new Map(prev).set(path, entries));
     } finally {
       inFlight.current.delete(path);
       setLoadingDirs(prev => { const n = new Set(prev); n.delete(path); return n; });
     }
   }, [project.id]);
 
+  // Переключение проекта: восстанавливаем сохранённое состояние либо грузим корень заново
+  const mountedProjectRef = useRef<string | null>(null);
   useEffect(() => {
-    setDirCache(new Map());
-    setExpanded(new Set());
-    setCreateInDir('');
-    setSearch('');
-    setSearchResults(null);
+    if (mountedProjectRef.current === project.id) return;
+    mountedProjectRef.current = project.id;
     inFlight.current.clear();
-    loadDir('');
+    const st = _explorerStore.get(project.id);
+    if (st) {
+      setDirCache(st.dirCache);
+      setExpanded(st.expanded);
+      setCreateInDir(st.createInDir);
+      setSearch(st.search);
+      setSearchResults(st.searchResults);
+      if (!st.dirCache.has('')) loadDir('');
+    } else {
+      setDirCache(new Map());
+      setExpanded(new Set());
+      setCreateInDir('');
+      setSearch('');
+      setSearchResults(null);
+      loadDir('');
+    }
   }, [project.id, loadDir]);
+
+  // Сохраняем состояние дерева в модульный стор при любом изменении
+  useEffect(() => {
+    _explorerStore.set(project.id, {
+      dirCache, expanded, search, searchResults, createInDir,
+      scrollTop: scrollRef.current?.scrollTop ?? _explorerStore.get(project.id)?.scrollTop ?? 0,
+    });
+  }, [project.id, dirCache, expanded, search, searchResults, createInDir]);
+
+  // Восстанавливаем позицию прокрутки после монтирования (дерево уже отрисовано из кэша)
+  useLayoutEffect(() => {
+    const st = _explorerStore.get(project.id);
+    if (scrollRef.current && st) scrollRef.current.scrollTop = st.scrollTop;
+  }, [project.id]);
+
+  const handleScroll = () => {
+    const st = _explorerStore.get(project.id);
+    if (st && scrollRef.current) st.scrollTop = scrollRef.current.scrollTop;
+  };
 
   const invalidateDir = useCallback(async (path: string) => {
     inFlight.current.delete(path);
@@ -102,6 +169,26 @@ export function FileExplorer({ project, onOpenFile }: Props) {
     const results = await api.files.search(project.id, q);
     setSearchResults(results);
   };
+
+  // Переключение синхронизации файла/папки. После — перечитываем загруженные папки,
+  // т.к. флаги synced меняются каскадно (пометка папки → inherited у всех потомков).
+  const handleToggleSync = useCallback(async (entry: FileEntry, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!online) return;
+    try {
+      await toggleSync(project.id, entry);
+      const paths = Array.from(dirCache.keys());
+      const next = new Map(dirCache);
+      await Promise.all(paths.map(async p => {
+        const entries = await api.files.list(project.id, p).catch(() => null);
+        if (entries) next.set(p, entries);
+      }));
+      setDirCache(next);
+      if (searchResults !== null && search.trim()) {
+        api.files.search(project.id, search).then(setSearchResults).catch(() => {});
+      }
+    } catch { /* игнорируем сбой переключения */ }
+  }, [project.id, online, dirCache, searchResults, search]);
 
   const handleCreateFile = async () => {
     const path = createInDir ? `${createInDir}/${newFileName}` : newFileName;
@@ -133,6 +220,7 @@ export function FileExplorer({ project, onOpenFile }: Props) {
     const isExpanded = expanded.has(entry.path);
     const isLoading = loadingDirs.has(entry.path);
     const em = entry.isDirectory ? null : getExtMeta(entry.name);
+    const isActive = !entry.isDirectory && activeNorm !== '' && normPath(entry.path) === activeNorm;
     return (
       <div
         key={entry.path}
@@ -144,7 +232,8 @@ export function FileExplorer({ project, onOpenFile }: Props) {
           paddingLeft: 8 + depth * 16, paddingRight: 8,
           paddingTop: 6, paddingBottom: 6,
           borderRadius: 8, cursor: 'pointer',
-          background: hoveredPath === entry.path ? '#E8E1D4' : 'transparent',
+          background: isActive ? '#F1DDD1' : hoveredPath === entry.path ? '#E8E1D4' : entry.synced ? '#F4ECE3' : 'transparent',
+          boxShadow: isActive ? 'inset 2px 0 0 #D97757' : 'none',
           transition: 'background 0.1s',
         }}
       >
@@ -173,6 +262,27 @@ export function FileExplorer({ project, onOpenFile }: Props) {
         {entry.isModified && (
           <span style={{ fontSize: 9, fontWeight: 700, color: '#C2693B', background: '#FBEBE0', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
         )}
+        {/* Маркер/тоггл синхронизации */}
+        {(() => {
+          const s = entry.synced ?? null;
+          const btnStyle: React.CSSProperties = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', flexShrink: 0 };
+          if (s === 'inherited') {
+            return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизируется (через папку)"><CloudIcon variant="inherited" /></span>;
+          }
+          if (online) {
+            if (s === 'direct') {
+              return <button onClick={e => handleToggleSync(entry, e)} title="Отключить синхронизацию" style={btnStyle}><CloudIcon variant="direct" /></button>;
+            }
+            if (hoveredPath === entry.path) {
+              return <button onClick={e => handleToggleSync(entry, e)} title="Синхронизировать для офлайна" style={btnStyle}><CloudIcon variant="idle" /></button>;
+            }
+            return null;
+          }
+          if (s === 'direct') {
+            return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизирован"><CloudIcon variant="direct" /></span>;
+          }
+          return null;
+        })()}
       </div>
     );
   };
@@ -196,17 +306,19 @@ export function FileExplorer({ project, onOpenFile }: Props) {
           )}
         </div>
 
-        <div
-          onClick={() => setShowCreateFile(true)}
-          style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 34, border: '1.5px dashed #D0C6B4', borderRadius: 9, color: '#BE5536', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
-          Новый файл
-        </div>
+        {online && (
+          <div
+            onClick={() => setShowCreateFile(true)}
+            style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 34, border: '1.5px dashed #D0C6B4', borderRadius: 9, color: '#BE5536', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            Новый файл
+          </div>
+        )}
       </div>
 
       {/* Tree / результаты поиска */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '0 4px 12px' }}>
+      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', padding: '0 4px 12px' }}>
         {rootLoading ? (
           <div style={{ padding: '24px 12px', color: '#9A8F7E', fontSize: 13, textAlign: 'center', fontFamily: "'JetBrains Mono', monospace" }}>Загрузка…</div>
         ) : searchResults !== null ? (

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
+import { MODELS } from '../lib/models';
 
 interface NewSessionDialogProps {
   projectId: string;
@@ -20,6 +21,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
   const [name, setName] = useState('');
   const [firstMessage, setFirstMessage] = useState('');
   const [mode, setMode] = useState<Mode>('auto');
+  const [model, setModel] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -48,7 +50,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
     setError(null);
     try {
       const sessionName = name.trim() || undefined;
-      const session = await api.sessions.create(projectId, mode, undefined, sessionName);
+      const session = await api.sessions.create(projectId, mode, undefined, sessionName, model || undefined);
       onCreated(session, firstMessage.trim() || undefined);
       onClose();
     } catch (err) {
@@ -159,6 +161,30 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
                   fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
                   background: mode === value ? '#D97757' : '#EDE7DC',
                   color: mode === value ? '#FBF8F2' : '#756B5E',
+                  transition: 'background 0.15s, color 0.15s',
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Выбор модели */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: '#756B5E', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Модель
+          </label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {MODELS.map(({ value, label }) => (
+              <button
+                key={value}
+                onClick={() => setModel(value)}
+                style={{
+                  flex: '1 1 calc(50% - 4px)', padding: '9px 4px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                  fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+                  background: model === value ? '#D97757' : '#EDE7DC',
+                  color: model === value ? '#FBF8F2' : '#756B5E',
                   transition: 'background 0.15s, color 0.15s',
                 }}
               >

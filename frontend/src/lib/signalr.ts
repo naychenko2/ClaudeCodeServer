@@ -1,5 +1,6 @@
 import * as signalR from '@microsoft/signalr';
 import type { ServerMessage } from '../types';
+import { notifyOnline, notifyOffline } from './offline';
 
 let connection: signalR.HubConnection | null = null;
 
@@ -13,6 +14,10 @@ export function getConnection(): signalR.HubConnection {
           Math.min(1000 * Math.pow(2, ctx.previousRetryCount), 30_000),
       })
       .build();
+    // Состояние соединения двигает глобальный online/offline флаг
+    connection.onreconnecting(() => notifyOffline());
+    connection.onreconnected(() => notifyOnline());
+    connection.onclose(() => notifyOffline());
   }
   return connection;
 }

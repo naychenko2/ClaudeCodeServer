@@ -1,8 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import type { Project, Session, ChatItem, FileEntry } from '../types';
 import { useSession } from '../hooks/useSession';
+import { useOnline } from '../hooks/useOnline';
 import { api } from '../lib/api';
+import { modelLabel } from '../lib/models';
 import { Composer } from './Composer';
+import { EditSessionDialog } from './EditSessionDialog';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -14,8 +17,10 @@ interface Props {
   onOpenFile: (path: string) => void;
   pendingMessage?: string;
   onPendingMessageSent?: () => void;
+  onSessionUpdated?: (session: Session) => void;
   dockMode?: 'expanded' | 'collapsed';
   onToggleDock?: () => void;
+  isMobile?: boolean;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -37,6 +42,94 @@ function ClaudeHeader() {
         fontFamily: "'JetBrains Mono', monospace",
         fontSize: 11, letterSpacing: '0.06em', color: '#9A8F7E',
       }}>CLAUDE</span>
+    </div>
+  );
+}
+
+// Общая шапка чата — одинаковая для полноэкранного режима и дока (split снизу).
+// onToggleDock задаётся только в доке — добавляет кнопку сворачивания.
+interface ChatHeaderBarProps {
+  session: Session;
+  project: Project;
+  isWaiting: boolean;
+  online: boolean;
+  onInterrupt: () => void;
+  onOpenSettings: () => void;
+  onToggleDock?: () => void;
+  isMobile?: boolean;
+}
+
+function ChatHeaderBar({ session, project, isWaiting, online, onInterrupt, onOpenSettings, onToggleDock, isMobile }: ChatHeaderBarProps) {
+  return (
+    <div style={{
+      padding: isMobile ? '12px 14px' : '14px 24px', borderBottom: '1px solid #E7E0D2',
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
+    }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 17, fontWeight: 600, color: '#2A251F', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {session.name ?? 'Новый чат'}
+        </div>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#9A8F7E', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {project.name} · {session.mode ?? 'auto'} · {modelLabel(session.model)}
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+        {online && (
+        <button
+          onClick={onOpenSettings}
+          title="Настройки чата"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9A8F7E', padding: 6, borderRadius: 8, display: 'flex', alignItems: 'center' }}
+          onMouseEnter={e => { e.currentTarget.style.color = '#5A5040'; e.currentTarget.style.background = '#EDE7DC'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = '#9A8F7E'; e.currentTarget.style.background = 'none'; }}
+        >
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
+        )}
+        {isWaiting && (
+          <button
+            onClick={onInterrupt}
+            style={{
+              fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 5,
+              color: '#B4452F', background: '#FFF0EE',
+              border: '1px solid #F5C5BC', borderRadius: 8,
+              padding: '5px 12px', cursor: 'pointer', fontWeight: 600,
+            }}
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="#B4452F"><rect width="10" height="10" rx="2"/></svg>
+            Остановить
+          </button>
+        )}
+        {onToggleDock && (
+          <button
+            onClick={onToggleDock}
+            title="Свернуть чат"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#756B5E', padding: 4, borderRadius: 6, display: 'flex', alignItems: 'center' }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Заглушка вместо Composer в офлайн-режиме
+function OfflineComposerStub() {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+      padding: '14px', borderRadius: 14, background: '#EDE7DC',
+      border: '1px solid #E0D8CC', color: '#9A8F7E', fontSize: 13, fontWeight: 600,
+    }}>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M1 1l22 22" />
+        <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55M5 12.55a10.94 10.94 0 0 1 5.17-2.39M10.71 5.05A16 16 0 0 1 22.58 9M1.42 9a15.91 15.91 0 0 1 4.7-2.88M8.53 16.11a6 6 0 0 1 6.95 0" />
+        <line x1="12" y1="20" x2="12.01" y2="20" />
+      </svg>
+      Отправка недоступна офлайн
     </div>
   );
 }
@@ -68,7 +161,7 @@ function MarkdownContent({ text }: { text: string }) {
               <SyntaxHighlighter
                 language={language}
                 style={oneDark}
-                customStyle={{ borderRadius: 8, fontSize: 12.5, margin: '6px 0', padding: '10px 14px', fontFamily: "'JetBrains Mono', monospace" }}
+                customStyle={{ borderRadius: 8, fontSize: 12.5, margin: '6px 0', padding: '10px 14px', fontFamily: "'JetBrains Mono', monospace", overflowX: 'auto' }}
               >
                 {text}
               </SyntaxHighlighter>
@@ -103,7 +196,9 @@ function MarkdownContent({ text }: { text: string }) {
         strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
         hr: () => <hr style={{ border: 'none', borderTop: '1px solid #E0D7C8', margin: '10px 0' }} />,
         table: ({ children }) => (
-          <table style={{ borderCollapse: 'collapse', width: '100%', margin: '6px 0', fontSize: 13 }}>{children}</table>
+          <div style={{ overflowX: 'auto', margin: '6px 0' }}>
+            <table style={{ borderCollapse: 'collapse', minWidth: '100%', fontSize: 13 }}>{children}</table>
+          </div>
         ),
         th: ({ children }) => (
           <th style={{ border: '1px solid #E0D7C8', padding: '6px 10px', background: '#EDE7DA', fontWeight: 600, textAlign: 'left' }}>{children}</th>
@@ -192,11 +287,13 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, dockMode, onToggleDock }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile }: Props) {
   const { items, isWaiting, isJoined, send, allowPermission, denyPermission, interrupt, toggleThinking } = useSession(session.id, project.id);
+  const online = useOnline();
   const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [showAttachPicker, setShowAttachPicker] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
   const [miniText, setMiniText] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const pendingRef = useRef<string | undefined>(pendingMessage);
@@ -205,6 +302,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'instant' });
   }, [items]);
+
+  // При раскрытии дока — моментально проматываем в конец
+  useEffect(() => {
+    if (dockMode === 'expanded') {
+      bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+    }
+  }, [dockMode]);
 
   // Автоотправка первого сообщения сразу после присоединения к сессии
   useEffect(() => {
@@ -244,7 +348,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     })();
 
     const handleMiniSend = () => {
-      if (!miniText.trim() || isWaiting) return;
+      if (!miniText.trim() || isWaiting || !online) return;
       send(miniText, []);
       setMiniText('');
     };
@@ -261,13 +365,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           value={miniText}
           onChange={e => setMiniText(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleMiniSend(); } }}
-          placeholder="Ответить…"
+          placeholder={online ? 'Ответить…' : 'Офлайн'}
+          disabled={!online}
           style={{ width: 180, padding: '6px 10px', border: '1px solid #D4CFC4', borderRadius: 8, fontSize: 13, background: '#F4F0E8', outline: 'none', fontFamily: 'inherit', color: '#2A251F' }}
         />
         <button
           onClick={handleMiniSend}
-          disabled={!miniText.trim() || isWaiting}
-          style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: miniText.trim() && !isWaiting ? 'pointer' : 'default', background: miniText.trim() && !isWaiting ? '#D97757' : '#DDD4C4', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+          disabled={!miniText.trim() || isWaiting || !online}
+          style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: miniText.trim() && !isWaiting && online ? 'pointer' : 'default', background: miniText.trim() && !isWaiting && online ? '#D97757' : '#DDD4C4', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5" strokeLinecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
         </button>
@@ -286,40 +391,25 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   if (dockMode === 'expanded') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#F4F0E8' }}>
-        {/* Компактный заголовок */}
-        <div style={{ padding: '9px 16px', borderBottom: '1px solid #E7E0D2', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, background: '#EDE7DC' }}>
-          <div style={{ width: 24, height: 24, borderRadius: '50%', background: '#D97757', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div style={{ width: 9, height: 9, borderRadius: '50%', background: '#F4F0E8' }} />
-          </div>
-          <span style={{ fontSize: 13, fontWeight: 600, color: '#2A251F', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {session.name ?? 'Новый чат'}
-          </span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#5E8B4E', flexShrink: 0 }}>
-            <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#5E8B4E' }} />
-            <span>активна</span>
-          </div>
-          {isWaiting && (
-            <button onClick={interrupt} style={{ fontSize: 12, color: '#B4452F', background: '#FFF0EE', border: '1px solid #F5C5BC', borderRadius: 8, padding: '3px 8px', cursor: 'pointer', fontWeight: 600, flexShrink: 0 }}>
-              Стоп
-            </button>
-          )}
-          <button
-            onClick={onToggleDock}
-            title="Свернуть чат"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#756B5E', padding: 4, borderRadius: 6, display: 'flex', alignItems: 'center', flexShrink: 0 }}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 9l6 6 6-6"/></svg>
-          </button>
-        </div>
+        <ChatHeaderBar
+          session={session}
+          project={project}
+          isWaiting={isWaiting}
+          online={online}
+          onInterrupt={interrupt}
+          onOpenSettings={() => setShowEdit(true)}
+          onToggleDock={onToggleDock}
+        />
 
         {/* Сообщения */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '12px 16px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {items.map((item, i) => (
               <ChatItemView
                 key={i}
                 item={item}
                 index={i}
+                online={online}
                 onToggleThinking={toggleThinking}
                 onAllowPermission={allowPermission}
                 onDenyPermission={denyPermission}
@@ -340,16 +430,18 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
         {/* Composer */}
         <div style={{ padding: '10px 16px 14px', borderTop: '1px solid #E7E0D2', flexShrink: 0 }}>
-          <Composer
-            onSend={handleSend}
-            onStop={interrupt}
-            onAttach={() => setShowAttachPicker(true)}
-            isGenerating={isWaiting}
-            mode={mode}
-            onModeChange={setMode}
-            attachments={attachedFiles}
-            onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
-          />
+          {online ? (
+            <Composer
+              onSend={handleSend}
+              onStop={interrupt}
+              onAttach={() => setShowAttachPicker(true)}
+              isGenerating={isWaiting}
+              mode={mode}
+              onModeChange={setMode}
+              attachments={attachedFiles}
+              onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
+            />
+          ) : <OfflineComposerStub />}
         </div>
 
         {showAttachPicker && (
@@ -359,47 +451,34 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onClose={() => setShowAttachPicker(false)}
           />
         )}
+
+        {showEdit && (
+          <EditSessionDialog
+            session={session}
+            onSaved={s => onSessionUpdated?.(s)}
+            onClose={() => setShowEdit(false)}
+          />
+        )}
       </div>
     );
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Шапка */}
-      <div style={{
-        padding: '14px 24px', borderBottom: '1px solid #E7E0D2',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
-      }}>
-        <div>
-          <div style={{ fontSize: 17, fontWeight: 600, color: '#2A251F' }}>
-            {session.name ?? 'Новый чат'}
-          </div>
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#9A8F7E', marginTop: 2 }}>
-            {project.name} · {session.mode ?? 'auto'}
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {isWaiting ? (
-            <button
-              onClick={interrupt}
-              style={{
-                fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 5,
-                color: '#B4452F', background: '#FFF0EE',
-                border: '1px solid #F5C5BC', borderRadius: 8,
-                padding: '5px 12px', cursor: 'pointer', fontWeight: 600,
-              }}
-            >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="#B4452F"><rect width="10" height="10" rx="2"/></svg>
-              Остановить
-            </button>
-          ) : null}
-        </div>
-      </div>
+      <ChatHeaderBar
+        session={session}
+        project={project}
+        isWaiting={isWaiting}
+        online={online}
+        onInterrupt={interrupt}
+        onOpenSettings={() => setShowEdit(true)}
+        isMobile={isMobile}
+      />
 
       {/* Сообщения */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}><div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '16px 12px' : '20px 24px' }}><div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
         {/* Empty state */}
-        {items.length === 0 && (
+        {items.length === 0 && online && (
           <div style={{
             flex: 1, display: 'flex', flexDirection: 'column',
             alignItems: 'center', justifyContent: 'center',
@@ -455,6 +534,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             key={i}
             item={item}
             index={i}
+            online={online}
             onToggleThinking={toggleThinking}
             onAllowPermission={allowPermission}
             onDenyPermission={denyPermission}
@@ -474,17 +554,20 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       </div></div>
 
       {/* Composer */}
-      <div style={{ padding: '12px 24px 18px', borderTop: '1px solid #E7E0D2' }}><div style={{ maxWidth: 760, margin: '0 auto' }}>
-        <Composer
-          onSend={handleSend}
-          onStop={interrupt}
-          onAttach={() => setShowAttachPicker(true)}
-          isGenerating={isWaiting}
-          mode={mode}
-          onModeChange={setMode}
-          attachments={attachedFiles}
-          onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
-        />
+      <div style={{ padding: isMobile ? '10px 12px 14px' : '12px 24px 18px', borderTop: '1px solid #E7E0D2' }}><div style={{ maxWidth: 760, margin: '0 auto' }}>
+        {online ? (
+          <Composer
+            onSend={handleSend}
+            onStop={interrupt}
+            onAttach={() => setShowAttachPicker(true)}
+            isGenerating={isWaiting}
+            mode={mode}
+            onModeChange={setMode}
+            attachments={attachedFiles}
+            onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
+            isMobile={isMobile}
+          />
+        ) : <OfflineComposerStub />}
       </div></div>
 
       {/* Пикер вложений */}
@@ -495,6 +578,15 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           onClose={() => setShowAttachPicker(false)}
         />
       )}
+
+      {/* Настройки чата */}
+      {showEdit && (
+        <EditSessionDialog
+          session={session}
+          onSaved={s => onSessionUpdated?.(s)}
+          onClose={() => setShowEdit(false)}
+        />
+      )}
     </div>
   );
 }
@@ -502,6 +594,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 interface ItemProps {
   item: ChatItem;
   index: number;
+  online: boolean;
   onToggleThinking: (i: number) => void;
   onAllowPermission: (id: string) => void;
   onDenyPermission: (id: string) => void;
@@ -510,7 +603,7 @@ interface ItemProps {
   onRetry: () => void;
 }
 
-function ChatItemView({ item, index, onToggleThinking, onAllowPermission, onDenyPermission, onOpenFile, onRevert, onRetry }: ItemProps) {
+function ChatItemView({ item, index, online, onToggleThinking, onAllowPermission, onDenyPermission, onOpenFile, onRevert, onRetry }: ItemProps) {
   switch (item.kind) {
     case 'user_message':
       return (
@@ -562,7 +655,7 @@ function ChatItemView({ item, index, onToggleThinking, onAllowPermission, onDeny
 
     case 'text':
       return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '90%' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden' }}>
           <ClaudeHeader />
           <div style={{ fontSize: 14, color: '#2A251F', wordBreak: 'break-word', paddingLeft: 30 }}>
             <MarkdownContent text={item.text} />
@@ -674,7 +767,9 @@ function ChatItemView({ item, index, onToggleThinking, onAllowPermission, onDeny
           }}>
             {item.toolName}
           </div>
-          {!item.resolved ? (
+          {item.resolved ? (
+            <div style={{ fontSize: 12, color: '#8A8070' }}>Решение принято</div>
+          ) : online ? (
             <div style={{ display: 'flex', gap: 8 }}>
               <button
                 onClick={() => onAllowPermission(item.requestId)}
@@ -698,7 +793,7 @@ function ChatItemView({ item, index, onToggleThinking, onAllowPermission, onDeny
               </button>
             </div>
           ) : (
-            <div style={{ fontSize: 12, color: '#8A8070' }}>Решение принято</div>
+            <div style={{ fontSize: 12, color: '#9A8F7E' }}>Недоступно офлайн</div>
           )}
         </div>
       );
@@ -748,16 +843,18 @@ function ChatItemView({ item, index, onToggleThinking, onAllowPermission, onDeny
             >
               Открыть
             </button>
-            <button
-              onClick={() => onRevert(item.path)}
-              style={{
-                fontSize: 12, padding: '4px 10px', borderRadius: 6,
-                border: '1px solid #E0D8CC', background: '#FFF',
-                cursor: 'pointer', color: '#C0392B',
-              }}
-            >
-              Откатить
-            </button>
+            {online && (
+              <button
+                onClick={() => onRevert(item.path)}
+                style={{
+                  fontSize: 12, padding: '4px 10px', borderRadius: 6,
+                  border: '1px solid #E0D8CC', background: '#FFF',
+                  cursor: 'pointer', color: '#C0392B',
+                }}
+              >
+                Откатить
+              </button>
+            )}
           </div>
         </div>
       );
@@ -781,7 +878,7 @@ function ChatItemView({ item, index, onToggleThinking, onAllowPermission, onDeny
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
         }}>
           <span>⚠ {item.text}</span>
-          {item.canRetry && (
+          {item.canRetry && online && (
             <button
               onClick={onRetry}
               style={{

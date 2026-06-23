@@ -28,6 +28,27 @@ function useWindowWidth() {
   return width;
 }
 
+// Высота ВИДИМОЙ области (над клавиатурой). При открытии мобильной клавиатуры
+// visualViewport ужимается — привязав к нему высоту контейнера, прижимаем композер
+// к низу видимой части и убираем прокрутку поля ввода за экран.
+function useViewportHeight() {
+  const [h, setH] = useState(() => window.visualViewport?.height ?? window.innerHeight);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const update = () => setH(vv?.height ?? window.innerHeight);
+    update();
+    vv?.addEventListener('resize', update);
+    vv?.addEventListener('scroll', update);
+    window.addEventListener('resize', update);
+    return () => {
+      vv?.removeEventListener('resize', update);
+      vv?.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+    };
+  }, []);
+  return h;
+}
+
 // Современный ресайз-сплиттер: в покое — тонкая 1px-линия (как граница панели),
 // на hover/drag — accent-линия с точечным grip; широкая невидимая hit-зона ±6px
 function Splitter({ orientation, active, onMouseDown }: {
@@ -79,6 +100,7 @@ export function WorkspacePage({ project, onBack }: Props) {
   const [mobileView, setMobileView] = useState<'sidebar' | 'chat'>('sidebar');
 
   const windowWidth = useWindowWidth();
+  const viewportH = useViewportHeight();
   const isMobile = windowWidth < 768;
   const isTablet = windowWidth >= 768 && windowWidth < 1100;
   // Ширина сайдбара — перетаскиваемая, сохраняется между сессиями
@@ -269,7 +291,7 @@ export function WorkspacePage({ project, onBack }: Props) {
 
   if (isMobile) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: C.bgPanel, fontFamily: FONT.sans, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: viewportH, background: C.bgPanel, fontFamily: FONT.sans, overflow: 'hidden' }}>
         {/* Верхняя шапка — только в режиме списка (sidebar). В режиме чата своя
             самодостаточная шапка ChatHeaderBar с кнопкой «назад»; у файла — шапка FileViewer */}
         {!openFile && mobileView === 'sidebar' && (

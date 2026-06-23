@@ -32,24 +32,6 @@ function ToolSpinner() {
   return <div className="tool-spinner" />;
 }
 
-// Заголовок блока Claude: аватар + подпись
-function ClaudeHeader() {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <div style={{
-        width: 22, height: 22, borderRadius: 6, background: C.accent,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        <div style={{ width: 9, height: 9, borderRadius: '50%', background: C.bgMain }} />
-      </div>
-      <span style={{
-        fontFamily: FONT.mono,
-        fontSize: 11, letterSpacing: '0.06em', color: C.textMuted,
-      }}>CLAUDE</span>
-    </div>
-  );
-}
-
 // 200 шутливых вариантов «процесса» — синонимы к думаю/рассуждаю/синтезирую/создаю
 const THINKING_VERBS = [
   'Думаю', 'Размышляю', 'Мыслю', 'Соображаю', 'Кумекаю', 'Раздумываю', 'Обмозговываю', 'Прикидываю', 'Мозгую', 'Раскидываю мозгами',
@@ -1128,8 +1110,7 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
   };
   return (
     <div className="cc-msg" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden' }}>
-      <ClaudeHeader />
-      <div style={{ fontSize: 14, color: C.textHeading, wordBreak: 'break-word', paddingLeft: 30 }}>
+      <div style={{ fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
         <MarkdownContent text={text} />
         {/* Мигающая каретка стриминга (B2) */}
         {streaming && <span style={{ display: 'inline-block', width: 7, height: 15, marginTop: 3, borderRadius: 1, background: C.accent, animation: 'blink 1s step-start infinite', verticalAlign: 'text-bottom' }} />}
@@ -1199,43 +1180,8 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
       );
 
     case 'session_started':
-      return (
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-          <div style={{
-            width: 22, height: 22, borderRadius: 6, background: C.accent,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1,
-          }}>
-            <div style={{ width: 9, height: 9, borderRadius: '50%', background: C.bgMain }} />
-          </div>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, marginBottom: 2 }}>
-              Чат запущен
-            </div>
-            <div style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
-              {item.model} · {item.mode}{typeof item.toolCount === 'number' && item.toolCount > 0 ? ` · ${item.toolCount} инстр.` : ''}
-            </div>
-            {item.cwd && (
-              <div title={item.cwd} style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden' }}>
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#B0A697" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.cwd}</span>
-              </div>
-            )}
-            {item.mcpServers && item.mcpServers.length > 0 && (
-              <div style={{ marginTop: 5, display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                {item.mcpServers.map(s => {
-                  const ok = /connect|ready|ok|success|running/i.test(s.status);
-                  return (
-                    <span key={s.name} title={`MCP «${s.name}»: ${s.status || '—'}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontFamily: FONT.mono, color: C.textSecondary, background: '#F0EAE0', borderRadius: 5, padding: '1px 7px' }}>
-                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: ok ? C.success : '#C0392B', flexShrink: 0 }} />
-                      {s.name}
-                    </span>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      );
+      // Старт чата не показываем — тех-инфа (модель/режим/cwd/MCP) дублирует шапку и раздувает чат
+      return null;
 
     case 'text':
       return <TextMessageView text={item.text} online={online} onRetry={onRetry} streaming={streaming} />;
@@ -1594,16 +1540,8 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
     }
 
     case 'resumed':
-      return (
-        <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center', gap: 10, color: C.textMuted, fontSize: 11, margin: '2px 0' }}>
-          <div style={{ flex: 1, height: 1, background: C.border }} />
-          <span style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
-            <span style={{ color: '#B89B6E' }}>✦</span>
-            продолжение чата
-          </span>
-          <div style={{ flex: 1, height: 1, background: C.border }} />
-        </div>
-      );
+      // Разделитель «продолжение чата» убран — декоративный, без полезной нагрузки
+      return null;
 
     case 'interrupted':
       return (

@@ -17,7 +17,9 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(TempDir, "projects.json"),
-                ["Auth:ApiKey"] = ApiKey
+                ["Auth:ApiKey"] = ApiKey,
+                // высокий лимит, чтобы rate-limit не флакал обычные тесты ping
+                ["Auth:PingRateLimit"] = "1000"
             });
         });
     }

@@ -84,10 +84,11 @@ WorkingDirectory = `project.RootPath`
 ## REST API
 
 Все эндпоинты (кроме `/api/auth/ping`) и SignalR-хаб защищены `[Authorize]` —
-доступ только по API-ключу. См. [docs/remote-access.md](docs/remote-access.md).
+доступ только по API-ключу. `ping` дополнительно под rate-limit (`Auth:PingRateLimit`,
+по умолчанию 10/мин на IP). См. [docs/remote-access.md](docs/remote-access.md).
 
 ```
-POST /api/auth/ping             { serverUrl, apiKey } → { ok } | 401  (валидирует ключ)
+POST /api/auth/ping             { serverUrl, apiKey } → { ok } | 401 | 429  (ключ + rate-limit)
 GET/POST/PUT/DELETE /api/projects
 GET/POST/DELETE     /api/projects/{id}/sessions       POST body: { mode, name?, resumeSessionId?, model? }
 PUT                 /api/projects/{id}/sessions/{sid} body: { name?, model? } → обновлённая сессия

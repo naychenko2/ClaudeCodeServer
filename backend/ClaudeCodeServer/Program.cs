@@ -70,6 +70,21 @@ var app = builder.Build();
 app.Services.GetRequiredService<ApiKeyAuthService>();
 
 app.UseForwardedHeaders();
+// Принудительный HTTPS только для публичного домена naychenko.me;
+// доступ из локальной сети по IP остаётся по HTTP (сертификат на IP не выдан)
+if (!app.Environment.IsDevelopment())
+    app.Use(async (ctx, next) =>
+    {
+        if (!ctx.Request.IsHttps &&
+            ctx.Request.Host.Host.EndsWith("naychenko.me", StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.Response.Redirect(
+                $"https://{ctx.Request.Host.Host}{ctx.Request.PathBase}{ctx.Request.Path}{ctx.Request.QueryString}",
+                permanent: false);
+            return;
+        }
+        await next();
+    });
 app.UseRouting();
 app.UseCors();
 // UseRateLimiter — после UseRouting, иначе эндпоинт-политика [EnableRateLimiting] не видна

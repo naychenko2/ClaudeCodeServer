@@ -7,6 +7,8 @@ import { initConnectivity } from './lib/offline'
 import { useOnline } from './hooks/useOnline'
 import { runOfflineSnapshot, syncProjectFiles } from './lib/sync'
 import { onFilesChanged } from './lib/signalr'
+import { loadWorkspaceState } from './lib/workspaceState'
+import { navPush, navReplace, type NavSnapshot } from './lib/nav'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 
@@ -35,6 +37,37 @@ export default function App() {
 
   useEffect(() => { initConnectivity() }, [])
 
+  // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
+  // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
+  useEffect(() => {
+    navReplace({ screen: 'projects' })
+    if (project) {
+      navPush({ screen: 'project', project, view: 'sidebar', file: null })
+      const ws = loadWorkspaceState(project.id)
+      if (ws?.openFile) navPush({ screen: 'project', project, view: 'sidebar', file: ws.openFile })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Кнопки «назад/вперёд» браузера: восстанавливаем уровень проекта из снимка истории.
+  // Вложенную навигацию (sidebar/chat/file) обрабатывает WorkspacePage из того же popstate.
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      const s = e.state as NavSnapshot | null
+      if (s?.screen === 'project' && s.project) {
+        if (project?.id !== s.project.id) {
+          localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(s.project))
+          setProject(s.project)
+        }
+      } else if (project) {
+        localStorage.removeItem(OPEN_PROJECT_KEY)
+        setProject(null)
+      }
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [project])
+
   // Прогрев/синхронизация: при входе и при возврате в онлайн — все проекты, начиная с текущего
   useEffect(() => {
     if (auth && online) runOfflineSnapshot(projectIdRef.current)
@@ -45,19 +78,19 @@ export default function App() {
 
   const openProject = (p: Project) => {
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
+    navPush({ screen: 'project', project: p, view: 'sidebar', file: null })
     setProject(p)
-  }
-  const closeProject = () => {
-    localStorage.removeItem(OPEN_PROJECT_KEY)
-    setProject(null)
   }
   const logout = () => {
     localStorage.removeItem('cc_server_url')
-    closeProject()
+    localStorage.removeItem(OPEN_PROJECT_KEY)
+    navReplace({ screen: 'projects' })
+    setProject(null)
     setAuth(null)
   }
 
   if (!auth) return <LoginPage onConnect={setAuth} />
-  if (project) return <WorkspacePage project={project} onBack={closeProject} />
+  // onBack ведёт через историю — едино с кнопкой «назад» браузера
+  if (project) return <WorkspacePage project={project} onBack={() => window.history.back()} />
   return <ProjectListPage onOpen={openProject} onLogout={logout} />
 }

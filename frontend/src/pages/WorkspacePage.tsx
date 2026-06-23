@@ -10,6 +10,7 @@ import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
 import { C, FONT } from '../lib/design';
 import { PillSwitch } from '../components/Toolbar';
 import { BackButton } from '../components/ui';
+import { navPush, type NavSnapshot } from '../lib/nav';
 
 interface Props {
   project: Project;
@@ -141,7 +142,11 @@ export function WorkspacePage({ project, onBack }: Props) {
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
     setPendingMessage(firstMessage);
-    if (isMobile && !autoSelect) setMobileView('chat');
+    // На мобиле явный выбор чата — переход «вглубь»: пишем запись истории (для кнопки «назад»)
+    if (isMobile && !autoSelect) {
+      setMobileView('chat');
+      navPush({ screen: 'project', project, view: 'chat', file: null });
+    }
     if (!autoSelect) {
       // явный выбор — закрываем файл, показываем чат во весь экран
       setOpenFile(null);
@@ -166,11 +171,27 @@ export function WorkspacePage({ project, onBack }: Props) {
     return () => { leaveProject(project.id).catch(() => {}); };
   }, [project.id]);
 
+  // Кнопки «назад/вперёд» браузера внутри проекта: восстанавливаем вид (sidebar/chat)
+  // и открытый файл из снимка истории. Уровень проекта обрабатывает App из того же popstate.
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      const s = e.state as NavSnapshot | null;
+      if (s?.screen !== 'project') return; // выход из проекта — обработает App
+      setMobileView(s.view ?? 'sidebar');
+      const f = s.file ?? null;
+      setOpenFile(f);
+      if (f === null) setFileFullscreen(false);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
   // из дерева файлов → всегда fullscreen
   const handleOpenFileFromTree = (filePath: string) => {
     setOpenFile(filePath);
     setFileFullscreen(true);
     if (!openFile) setChatDockExpanded(true);  // при первом открытии — раскрыть; при переключении — сохранить
+    navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
   // из чата → split-режим (на планшете/мобайле — fullscreen)
@@ -182,11 +203,7 @@ export function WorkspacePage({ project, onBack }: Props) {
     } else {
       setFileFullscreen(false);
     }
-  };
-
-  const handleCloseFile = () => {
-    setOpenFile(null);
-    setFileFullscreen(false);
+    navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
   const handleEnterFullscreen = () => {
@@ -328,17 +345,14 @@ export function WorkspacePage({ project, onBack }: Props) {
         {/* Чат — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {activeSession
-            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => setMobileView('sidebar')} />
+            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} />
             : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>Выберите или создайте чат</div>
           }
         </div>
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={() => {
-              setOpenFile(null);
-              if (leftTab === 'files') setMobileView('sidebar');
-            }} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={() => window.history.back()} />
           </div>
         )}
       </div>
@@ -380,7 +394,7 @@ export function WorkspacePage({ project, onBack }: Props) {
           <Splitter orientation="v" active={draggingSplitter === 'split'}
             onMouseDown={e => { setDraggingSplitter('split'); handleSplitterMouseDown(e); }} />
           <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
-            <FileViewer project={project} filePath={openFile} onClose={handleCloseFile} onToggleFullscreen={handleEnterFullscreen} />
+            <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} onToggleFullscreen={handleEnterFullscreen} />
           </div>
         </div>
       )}
@@ -389,7 +403,7 @@ export function WorkspacePage({ project, onBack }: Props) {
       {openFile && (fileFullscreen || isTablet) && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', minHeight: 100 }}>
-            <FileViewer project={project} filePath={openFile} onClose={handleCloseFile} isFullscreen onToggleFullscreen={isTablet ? undefined : () => setFileFullscreen(false)} />
+            <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} isFullscreen onToggleFullscreen={isTablet ? undefined : () => setFileFullscreen(false)} />
           </div>
           {/* Горизонтальный сплиттер — только когда чат развёрнут */}
           {chatDockExpanded && (

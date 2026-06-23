@@ -549,9 +549,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     if (lastUser && lastUser.kind === 'user_message') { atBottomRef.current = true; send(lastUser.text, lastUser.attachedPaths ?? [], mode); }
   };
 
-  // Одобрение плана выводит чат из режима планирования — дальше работаем в «Авто»
+  // Режим «План» — персистентный: после одобрения остаёмся в нём (следующие задачи тоже
+  // планируются). Исполнение именно этого плана гарантирует backend (один ход без plan-режима).
   const handleRespondPlan = (requestId: string, approve: boolean, feedback?: string) => {
-    if (approve) setMode('auto');
     respondPlan(requestId, approve, feedback);
   };
 

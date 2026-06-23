@@ -71,8 +71,9 @@ public class TurnAccumulatorTests : IDisposable
         var acc = new TurnAccumulator([]);
         acc.OnTextDelta("hello ");
         acc.OnTextDelta("world");
-        // ещё не сброшено
-        acc.GetAll().Should().BeEmpty();
+        // буфер ещё не зафиксирован в ход, но виден в снимке как единый текст
+        acc.GetAll().Should().ContainSingle()
+            .Which.Should().BeOfType<StoredTextMessage>().Which.Text.Should().Be("hello world");
 
         // OnToolUse триггерит FlushBuffers
         acc.OnToolUse("t1", "bash", new { });
@@ -137,7 +138,7 @@ public class TurnAccumulatorTests : IDisposable
         acc.OnUserMessage("hi", []);
         acc.OnTextDelta("response text");
 
-        await acc.OnResultAsync("success", 1000, 1, _histSvc);
+        await acc.OnResultAsync("success", 1000, 1, null, null, null, null, _histSvc);
 
         var loaded = await _histSvc.LoadAsync(sessionId);
         loaded.Should().HaveCount(3); // user + text + result
@@ -180,7 +181,7 @@ public class TurnAccumulatorTests : IDisposable
         var sessionId = Guid.NewGuid().ToString();
         var acc = new TurnAccumulator([], sessionId);
         acc.OnUserMessage("msg1", []);
-        await acc.OnResultAsync("done", 500, 1, _histSvc);
+        await acc.OnResultAsync("done", 500, 1, null, null, null, null, _histSvc);
 
         // второй тёрн
         acc.OnUserMessage("msg2", []);

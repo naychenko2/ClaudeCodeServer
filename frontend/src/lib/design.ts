@@ -55,6 +55,12 @@ export const C = {
   info:        '#3E7CA6',
   infoBg:      '#E7EFF5',
 
+  // Режим «План» (индиго-фиолет) — отдельный от accent
+  plan:        '#6C5CB0',
+  planLight:   '#EEEBF8',   // фон чипа/карточки плана
+  planText:    '#4E4196',   // текст на planLight
+  planBorder:  '#D6CFEF',
+
   // Diff
   diffAddBg:   '#E8F5E9',
   diffAddText: '#1B5E20',

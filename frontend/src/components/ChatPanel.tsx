@@ -32,6 +32,71 @@ function ToolSpinner() {
   return <div className="tool-spinner" />;
 }
 
+// Иконка режима «План» — прямоугольник с линиями (как ModeIcon plan в Composer)
+function PlanIcon({ size = 13, color = 'currentColor', strokeWidth = 2 }: { size?: number; color?: string; strokeWidth?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="3" width="6" height="4" rx="1" />
+      <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+      <path d="M9 12h6M9 16h4" />
+    </svg>
+  );
+}
+
+// Инлайн-чип «План» в подзаголовке шапки чата (отдельный индиго-цвет, не accent)
+function PlanModeChip() {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      background: C.planLight, color: C.planText, borderRadius: R.sm,
+      padding: '1px 6px', fontFamily: FONT.sans, fontWeight: 600, fontSize: 11,
+      verticalAlign: 'baseline',
+    }}>
+      <PlanIcon size={11} color={C.planText} />
+      План
+    </span>
+  );
+}
+
+// Фаза работы режима «План» — выводится из ленты, mode и isWaiting (сервер фазу не присылает)
+type PlanPhase = 'review' | 'executing' | 'done' | 'replanning' | 'planning' | 'idle' | null;
+
+function derivePlanPhase(items: ChatItem[], mode: 'auto' | 'plan' | 'ask', isWaiting: boolean): PlanPhase {
+  // «Текущий ход» — от последнего user_message
+  let turnStart = -1;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].kind === 'user_message') { turnStart = i; break; }
+  }
+  const turn = turnStart >= 0 ? items.slice(turnStart) : items;
+
+  // Незакрытый запрос на согласование — на согласовании
+  const pendingReview = items.some(it => it.kind === 'plan_review' && !it.resolved);
+  if (pendingReview) return 'review';
+
+  // Последний plan_review (по всей ленте) и его позиция
+  let lastReviewIdx = -1;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].kind === 'plan_review') { lastReviewIdx = i; break; }
+  }
+  if (lastReviewIdx >= 0) {
+    const lastReview = items[lastReviewIdx] as Extract<ChatItem, { kind: 'plan_review' }>;
+    if (lastReview.approved) {
+      const hasResultAfter = items.slice(lastReviewIdx + 1).some(it => it.kind === 'result');
+      if (hasResultAfter) return 'done';
+      if (isWaiting) return 'executing';
+    } else if (lastReview.resolved && lastReview.approved === false && isWaiting) {
+      return 'replanning';
+    }
+  }
+
+  if (mode === 'plan' && isWaiting) {
+    const reviewInTurn = turn.some(it => it.kind === 'plan_review');
+    if (!reviewInTurn) return 'planning';
+  }
+  if (mode === 'plan') return 'idle';
+  return null;
+}
+
 // 200 шутливых вариантов «процесса» — синонимы к думаю/рассуждаю/синтезирую/создаю
 const THINKING_VERBS = [
   'Думаю', 'Размышляю', 'Мыслю', 'Соображаю', 'Кумекаю', 'Раздумываю', 'Обмозговываю', 'Прикидываю', 'Мозгую', 'Раскидываю мозгами',
@@ -67,12 +132,17 @@ const pickVerb = (exclude?: string) => {
 // Живой индикатор ожидания: пульс-аватар Claude + «печатная машинка» по синонимам.
 // Текст печатается посимвольно с курсором, в конце дописывается «…», держит паузу,
 // затем стирается и сменяется новым случайным синонимом.
-function WaitingIndicator() {
+function WaitingIndicator({ planning }: { planning?: 'planning' | 'replanning' } = {}) {
   const [text, setText] = useState('');
   const reduced = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  // В режиме планирования — спокойная фиксированная подпись и индиго-пульс (не рандомные глаголы auto)
+  const planLabel = planning === 'replanning' ? 'Перепланирую с учётом правок…'
+    : planning === 'planning' ? 'Обдумываю план…' : null;
+  const pulseColor = planning ? C.plan : C.accent;
 
   useEffect(() => {
+    if (planLabel) { setText(planLabel); return; }
     // При reduced-motion — статичная подпись без анимации печати
     if (reduced) { setText(pickVerb() + '…'); return; }
     let timer = 0;
@@ -98,25 +168,28 @@ function WaitingIndicator() {
     };
     timer = window.setTimeout(tick, 140);
     return () => clearTimeout(timer);
-  }, [reduced]);
+  }, [reduced, planLabel]);
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <span className="cc-pulse-ring" style={{
-        width: 22, height: 22, borderRadius: 6, background: C.accent,
+        width: 22, height: 22, borderRadius: 6, background: pulseColor,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
       }}>
         <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.bgMain }} />
       </span>
       <span style={{ display: 'inline-flex', alignItems: 'baseline', minHeight: 17 }}>
-        <span className="cc-shimmer-text" style={{ fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+        <span className="cc-shimmer-text" style={{ fontSize: 13, fontWeight: 600, fontFamily: 'inherit', color: planLabel ? C.planText : undefined }}>
           {text}
         </span>
-        <span style={{
-          display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2,
-          background: C.accent, borderRadius: 1, alignSelf: 'center',
-          animation: reduced ? 'none' : 'blink 1s step-start infinite',
-        }} />
+        {/* В режиме планирования подпись фиксированная — курсор «печатной машинки» не нужен */}
+        {!planLabel && (
+          <span style={{
+            display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2,
+            background: C.accent, borderRadius: 1, alignSelf: 'center',
+            animation: reduced ? 'none' : 'blink 1s step-start infinite',
+          }} />
+        )}
       </span>
     </div>
   );
@@ -143,9 +216,11 @@ function ChatHeaderBar({ session, project, online, mode, onOpenSettings, onToggl
       <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {session.name ?? 'Новый чат'}
       </div>
-      <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 0 }}>
         {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
-        {isMobile ? `${mode} · ${modelLabel(session.model)}` : `${project.name} · ${mode} · ${modelLabel(session.model)}`}
+        {!isMobile && <span>{project.name} · </span>}
+        {mode === 'plan' ? <PlanModeChip /> : <span>{mode}</span>}
+        <span>&nbsp;· {modelLabel(session.model)}</span>
       </div>
     </div>
   );
@@ -482,6 +557,45 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
   // Индекс последнего result — у него показываем плашку токенов/времени, у прошлых скрываем
   const lastResultIndex = items.reduce((acc, it, i) => (it.kind === 'result' ? i : acc), -1);
+
+  // Фаза режима «План» (для контекстного индикатора и подписи WaitingIndicator)
+  const planPhase = derivePlanPhase(items, mode, isWaiting);
+  const planningKind = planPhase === 'planning' ? 'planning' : planPhase === 'replanning' ? 'replanning' : undefined;
+
+  // Номера версий plan_review: счётчик с последнего user_message включительно (1, 2, …).
+  // Также помечаем, был ли в текущем ходе отклонённый план — тогда показываем бейдж даже для v1.
+  const planVersions = useMemo(() => {
+    let counter = 0;
+    let rejectedSeen = false;
+    const result = new Map<number, { version: number; hadRejected: boolean }>();
+    items.forEach((it, i) => {
+      if (it.kind === 'user_message') { counter = 0; rejectedSeen = false; }
+      if (it.kind === 'plan_review') {
+        counter++;
+        result.set(i, { version: counter, hadRejected: rejectedSeen });
+        if (it.resolved && it.approved === false) rejectedSeen = true;
+      }
+    });
+    return result;
+  }, [items]);
+
+  // Индекс последнего одобренного plan_review и конец «зоны реализации» (до следующего
+  // user_message или result) — действия в этой зоне оборачиваем success-коннектором.
+  const execZone = useMemo(() => {
+    let approvedIdx = -1;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === 'plan_review' && it.resolved && it.approved) { approvedIdx = i; break; }
+      if (it.kind === 'user_message') break;
+    }
+    if (approvedIdx < 0) return null;
+    let endIdx = items.length;
+    for (let i = approvedIdx + 1; i < items.length; i++) {
+      if (items[i].kind === 'user_message' || items[i].kind === 'result') { endIdx = i; break; }
+    }
+    return { start: approvedIdx + 1, end: endIdx };
+  }, [items]);
+
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке)
   const renderItem = (item: ChatItem, i: number) => (
     <ChatItemView
@@ -497,6 +611,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onAllowAlways={allowAlways}
       onAnswerQuestion={answerQuestion}
       onRespondPlan={handleRespondPlan}
+      planVersion={planVersions.get(i)?.version}
+      planShowBadge={!!planVersions.get(i) && (planVersions.get(i)!.version > 1 || planVersions.get(i)!.hadRejected)}
       onOpenFile={onOpenFile}
       onRevert={path => api.files.revert(project.id, path)}
       onRetry={handleRetry}
@@ -512,7 +628,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     const inBlock = (it: ChatItem) => isTool(it) || it.kind === 'file_changed';
     // Дочерние вызовы субагента (Task) — рисуем единой непрерывной линией-коннектором слева
     const isSubTool = (it: ChatItem) => it.kind === 'tool_use' && !!it.parentToolUseId;
-    const out: React.ReactNode[] = [];
+    // Узлы ленты с пометкой стартового индекса — нужно для обёртки success-коннектором
+    const nodes: Array<{ node: React.ReactNode; start: number }> = [];
+    const pushNode = (node: React.ReactNode, start: number) => nodes.push({ node, start });
     let i = 0;
     while (i < items.length) {
       if (isSubTool(items[i])) {
@@ -520,12 +638,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const sub: Array<[ChatItem, number]> = [];
         while (i < items.length && isSubTool(items[i])) { sub.push([items[i], i]); i++; }
         // Один контейнер с borderLeft на всю стопку дочерних → линия не прерывается gap'ом ленты
-        out.push(
+        pushNode(
           <div key={`sub-${start}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `2px solid ${C.border}` }}>
             {sub.map(([it, idx], gi) => (
               <div key={idx} style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>{renderItem(it, idx)}</div>
             ))}
-          </div>
+          </div>,
+          start
         );
       } else if (inBlock(items[i])) {
         const start = i;
@@ -534,7 +653,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const hasTool = slice.some(([it]) => isTool(it));
         if (hasTool) {
           // Один контур на блок: file_changed внутри — компактной строкой (без своей рамки)
-          out.push(
+          pushNode(
             <div key={`grp-${start}`} style={{ borderTop: `1px solid ${C.bgInset}`, borderBottom: `1px solid ${C.bgInset}` }}>
               {slice.map(([it, idx], gi) => (
                 <div key={idx} style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
@@ -543,17 +662,39 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
                     : renderItem(it, idx)}
                 </div>
               ))}
-            </div>
+            </div>,
+            start
           );
         } else {
           // Только изменения файлов без инструментов — оставляем обычными карточками
-          slice.forEach(([it, idx]) => out.push(renderItem(it, idx)));
+          slice.forEach(([it, idx]) => pushNode(renderItem(it, idx), idx));
         }
       } else {
-        out.push(renderItem(items[i], i)); i++;
+        pushNode(renderItem(items[i], i), i); i++;
       }
     }
-    return out;
+
+    // success-коннектор: непрерывные узлы из «зоны реализации» (после одобренного плана)
+    // оборачиваем в одну левую зелёную линию — «эти правки реализуют план».
+    if (!execZone) return nodes.map(n => n.node);
+    const result: React.ReactNode[] = [];
+    let j = 0;
+    while (j < nodes.length) {
+      const inZone = (n: { start: number }) => n.start >= execZone.start && n.start < execZone.end;
+      if (inZone(nodes[j])) {
+        const group: React.ReactNode[] = [];
+        const groupStart = nodes[j].start;
+        while (j < nodes.length && inZone(nodes[j])) { group.push(nodes[j].node); j++; }
+        result.push(
+          <div key={`exec-${groupStart}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `3px solid ${C.success}`, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {group}
+          </div>
+        );
+      } else {
+        result.push(nodes[j].node); j++;
+      }
+    }
+    return result;
   };
 
   // Dock: свёрнутая полоска
@@ -621,7 +762,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
             {isWaiting && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved) && (
-              <WaitingIndicator />
+              <WaitingIndicator planning={planningKind} />
             )}
             <div ref={bottomRef} />
           </div>
@@ -732,8 +873,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
         <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
 
-        {isWaiting && !items.some(it => it.kind === 'permission_request' && !it.resolved) && (
-          <WaitingIndicator />
+        {isWaiting && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved) && (
+          <WaitingIndicator planning={planningKind} />
         )}
         <div ref={bottomRef} />
       </div></div>
@@ -1229,78 +1370,161 @@ function AskQuestionView({ item, online, onAnswer }: {
   );
 }
 
+// Свёрнутый блок исходного плана (disclosure) — для решённых состояний карточки
+function CollapsedPlanBody({ plan }: { plan: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5, background: 'none', border: 'none',
+          cursor: 'pointer', padding: 0, fontSize: 12, fontWeight: 600, color: C.textSecondary, fontFamily: 'inherit',
+        }}
+      >
+        <span style={{ display: 'inline-block', transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>▾</span>
+        {open ? 'Скрыть план' : 'Показать план'}
+      </button>
+      {open && (
+        <div style={{
+          marginTop: 8, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+          padding: '10px 12px', maxHeight: 320, overflow: 'auto', fontSize: 13, color: C.textHeading, wordBreak: 'break-word',
+        }}>
+          <MarkdownContent text={plan || '_(пустой план)_'} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Карточка согласования плана (ExitPlanMode в режиме «План»):
 // показывает план и кнопки «Одобрить и выполнить» / «Отклонить» (с комментарием).
-function PlanReviewView({ item, online, onRespond }: {
+function PlanReviewView({ item, online, onRespond, version, showBadge }: {
   item: Extract<ChatItem, { kind: 'plan_review' }>;
   online: boolean;
   onRespond: (requestId: string, approve: boolean, feedback?: string) => void;
+  version?: number;
+  showBadge?: boolean;
 }) {
   const [rejecting, setRejecting] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const planBodyRef = useRef<HTMLDivElement>(null);
+  // fade-оверлей снизу появляется только если контент плана не помещается в maxHeight
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const el = planBodyRef.current;
+    if (!el) return;
+    setOverflowing(el.scrollHeight - el.clientHeight > 8);
+  }, [item.plan, rejecting]);
 
-  // Решённое состояние: явная плашка результата
-  if (item.resolved) {
-    const approved = item.approved;
+  // === Решённое состояние: одобрено → компактная шапка выполнения ===
+  if (item.resolved && item.approved) {
     return (
       <div style={{
-        border: `1px solid ${approved ? '#CADFC4' : C.border}`,
-        borderLeft: `3px solid ${approved ? '#5E8B4E' : C.textMuted}`,
-        borderRadius: 12, padding: '13px 14px', background: approved ? '#EEF4EA' : C.bgWhite,
+        border: `1px solid ${C.successBg}`, borderLeft: `3px solid ${C.success}`,
+        borderRadius: R.xl, padding: '11px 14px', background: C.successBg,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: approved ? '#3F6B33' : C.textSecondary }}>
-          {approved ? (
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill="#5E8B4E" /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
-          ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-          )}
-          {approved ? 'План одобрен — выполняется' : 'План отклонён — Claude уточнит'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: C.successText }}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill={C.success} /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          План одобрен — выполняется
         </div>
-        {!approved && item.feedback?.trim() && (
-          <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 8, whiteSpace: 'pre-wrap' }}>
-            Комментарий: {item.feedback}
-          </div>
-        )}
+        <CollapsedPlanBody plan={item.plan} />
       </div>
     );
   }
 
+  // === Решённое состояние: отклонено → компактная строка + комментарий ===
+  if (item.resolved && item.approved === false) {
+    return (
+      <div style={{
+        border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.textMuted}`,
+        borderRadius: R.xl, padding: '11px 14px', background: C.bgWhite,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: C.textSecondary }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 2v6h6" /><path d="M3 8a9 9 0 1 0 3-6.7L3 4" /></svg>
+          План{version ? ` v${version}` : ''} — отклонён
+        </div>
+        {item.feedback?.trim() && (
+          <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 7, whiteSpace: 'pre-wrap' }}>
+            Комментарий: {item.feedback}
+          </div>
+        )}
+        <CollapsedPlanBody plan={item.plan} />
+      </div>
+    );
+  }
+
+  // === На согласовании ===
   return (
-    <div style={{ border: '1px solid #E6C9B8', borderLeft: `3px solid ${C.accent}`, borderRadius: 12, padding: '13px 14px', background: '#FBF1EA' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10, fontSize: 13, fontWeight: 600, color: C.textHeading }}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="9" y="3" width="6" height="4" rx="1" /><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /><path d="M9 12h6M9 16h4" />
-        </svg>
-        План готов — на согласование
+    <div style={{
+      border: `1px solid ${C.planBorder}`, borderLeft: `4px solid ${C.plan}`,
+      borderRadius: R.xl, padding: '14px 16px', background: C.bgCard, boxShadow: SHADOW.card,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 4 }}>
+        <span style={{
+          width: 28, height: 28, borderRadius: R.md, background: C.plan, flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <PlanIcon size={15} color="#FFF" />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: FONT.serif, fontSize: 15, fontWeight: 700, color: C.textHeading, lineHeight: 1.2 }}>
+            План готов
+          </div>
+          <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
+            Claude предлагает план. Файлы пока не изменялись.
+          </div>
+        </div>
+        {showBadge && version && (
+          <span style={{
+            flexShrink: 0, background: C.planLight, color: C.planText, borderRadius: R.sm,
+            padding: '2px 8px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+          }}>
+            v{version} · на согласовании
+          </span>
+        )}
       </div>
 
-      <div style={{
-        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: 9,
-        padding: '10px 12px', marginBottom: 12, maxHeight: 360, overflow: 'auto',
-        fontSize: 13.5, color: C.textHeading, wordBreak: 'break-word',
-      }}>
-        <MarkdownContent text={item.plan || '_(пустой план)_'} />
+      <div style={{ position: 'relative', margin: '12px 0' }}>
+        <div ref={planBodyRef} style={{
+          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+          padding: '10px 12px', maxHeight: 360, overflow: 'auto',
+          fontSize: 13.5, color: C.textHeading, wordBreak: 'break-word',
+        }}>
+          <MarkdownContent text={item.plan || '_(пустой план)_'} />
+        </div>
+        {overflowing && (
+          // Градиентный fade снизу — подсказка, что план длиннее видимой области
+          <div style={{
+            position: 'absolute', left: 1, right: 1, bottom: 1, height: 40, borderRadius: `0 0 ${R.lg}px ${R.lg}px`,
+            background: `linear-gradient(to bottom, rgba(255,255,255,0), ${C.bgCard})`,
+            pointerEvents: 'none',
+          }} />
+        )}
       </div>
 
       {!online ? (
         <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
       ) : rejecting ? (
         <div>
+          <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 7 }}>
+            Claude учтёт это и предложит новый план
+          </div>
           <textarea
             value={feedback}
             onChange={e => setFeedback(e.target.value)}
             autoFocus
             placeholder="Что поправить в плане? (необязательно)"
             rows={3}
-            style={{ width: '100%', boxSizing: 'border-box', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 10px', fontSize: 13, color: C.textHeading, fontFamily: 'inherit', resize: 'none', outline: 'none', marginBottom: 8 }}
+            style={{ width: '100%', boxSizing: 'border-box', borderRadius: R.lg, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 10px', fontSize: 13, color: C.textHeading, fontFamily: 'inherit', resize: 'none', outline: 'none', marginBottom: 8 }}
           />
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => onRespond(item.requestId, false, feedback.trim() || undefined)}
-              style={{ flex: 1, minHeight: 40, background: C.accent, color: C.onAccent, borderRadius: 9, padding: 9, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-              Отправить на доработку
+              style={{ flex: 1, minHeight: 40, background: C.plan, color: '#FFF', borderRadius: R.lg, padding: 9, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+              Переработать план
             </button>
             <button onClick={() => { setRejecting(false); setFeedback(''); }}
-              style={{ flex: 'none', minHeight: 40, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textSecondary, borderRadius: 9, padding: '9px 16px', cursor: 'pointer', fontSize: 13 }}>
+              style={{ flex: 'none', minHeight: 40, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textSecondary, borderRadius: R.lg, padding: '9px 16px', cursor: 'pointer', fontSize: 13 }}>
               Назад
             </button>
           </div>
@@ -1308,11 +1532,17 @@ function PlanReviewView({ item, online, onRespond }: {
       ) : (
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => onRespond(item.requestId, true)}
-            style={{ flex: 1, minHeight: 40, background: C.accent, color: C.onAccent, borderRadius: 9, padding: 9, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+            style={{
+              flex: 1, minHeight: 42, background: C.plan, color: '#FFF', borderRadius: R.lg,
+              padding: 9, border: 'none', cursor: 'pointer', fontSize: 13.5, fontWeight: 700,
+              boxShadow: '0 4px 14px rgba(108,92,176,0.30)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+            }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
             Одобрить и выполнить
           </button>
           <button onClick={() => setRejecting(true)}
-            style={{ flex: 'none', minHeight: 40, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textSecondary, borderRadius: 9, padding: '9px 16px', cursor: 'pointer', fontSize: 13 }}>
+            style={{ flex: 'none', minHeight: 42, background: 'transparent', border: `1px solid ${C.planBorder}`, color: C.planText, borderRadius: R.lg, padding: '9px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
             Отклонить
           </button>
         </div>
@@ -1408,12 +1638,14 @@ interface ItemProps {
   onAllowAlways: (id: string) => void;
   onAnswerQuestion: (toolUseId: string, answerText: string) => void;
   onRespondPlan: (requestId: string, approve: boolean, feedback?: string) => void;
+  planVersion?: number;
+  planShowBadge?: boolean;
   onOpenFile: (path: string) => void;
   onRevert: (path: string) => void;
   onRetry: () => void;
 }
 
-function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, onOpenFile, onRevert, onRetry }: ItemProps) {
+function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, onOpenFile, onRevert, onRetry }: ItemProps) {
   switch (item.kind) {
     case 'user_message':
       return (
@@ -1500,7 +1732,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
       return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} />;
 
     case 'plan_review':
-      return <PlanReviewView item={item} online={online} onRespond={onRespondPlan} />;
+      return <PlanReviewView item={item} online={online} onRespond={onRespondPlan} version={planVersion} showBadge={planShowBadge} />;
 
     case 'permission_request': {
       // Что именно собирается выполнить Claude — команда/путь/аргументы

@@ -596,6 +596,16 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return { start: approvedIdx + 1, end: endIdx };
   }, [items]);
 
+  // Индекс последнего одобренного плана во всей ленте — только у него показываем
+  // подсказку «Перейти в Авто» (у старых одобренных планов она неактуальна)
+  const lastApprovedPlanIdx = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === 'plan_review' && it.resolved && it.approved) return i;
+    }
+    return -1;
+  }, [items]);
+
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке)
   const renderItem = (item: ChatItem, i: number) => (
     <ChatItemView
@@ -613,6 +623,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onRespondPlan={handleRespondPlan}
       planVersion={planVersions.get(i)?.version}
       planShowBadge={!!planVersions.get(i) && (planVersions.get(i)!.version > 1 || planVersions.get(i)!.hadRejected)}
+      planShowSwitch={i === lastApprovedPlanIdx && mode === 'plan'}
+      onSwitchToAuto={() => setMode('auto')}
       onOpenFile={onOpenFile}
       onRevert={path => api.files.revert(project.id, path)}
       onRetry={handleRetry}
@@ -1445,12 +1457,14 @@ function CollapsedPlanBody({ plan }: { plan: string }) {
 
 // Карточка согласования плана (ExitPlanMode в режиме «План»):
 // показывает план и кнопки «Одобрить и выполнить» / «Отклонить» (с комментарием).
-function PlanReviewView({ item, online, onRespond, version, showBadge }: {
+function PlanReviewView({ item, online, onRespond, version, showBadge, showSwitch, onSwitchToAuto }: {
   item: Extract<ChatItem, { kind: 'plan_review' }>;
   online: boolean;
   onRespond: (requestId: string, approve: boolean, feedback?: string) => void;
   version?: number;
   showBadge?: boolean;
+  showSwitch?: boolean;
+  onSwitchToAuto?: () => void;
 }) {
   const [rejecting, setRejecting] = useState(false);
   const [feedback, setFeedback] = useState('');
@@ -1478,6 +1492,16 @@ function PlanReviewView({ item, online, onRespond, version, showBadge }: {
           План одобрен — выполняется
         </div>
         <CollapsedPlanBody plan={plan} />
+        {/* Подсказка про выход в Авто — только у актуального (последнего) одобренного плана */}
+        {showSwitch && onSwitchToAuto && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, paddingTop: 9, borderTop: '1px solid #CFE3CA', fontSize: 12, color: C.textSecondary }}>
+            <span style={{ flex: 1 }}>Чат остаётся в режиме «План» — следующие задачи тоже будут согласованы.</span>
+            <button onClick={onSwitchToAuto}
+              style={{ flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: C.plan, padding: '2px 4px' }}>
+              Перейти в Авто
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -1690,12 +1714,14 @@ interface ItemProps {
   onRespondPlan: (requestId: string, approve: boolean, feedback?: string) => void;
   planVersion?: number;
   planShowBadge?: boolean;
+  planShowSwitch?: boolean;
+  onSwitchToAuto: () => void;
   onOpenFile: (path: string) => void;
   onRevert: (path: string) => void;
   onRetry: () => void;
 }
 
-function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, onOpenFile, onRevert, onRetry }: ItemProps) {
+function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchToAuto, onOpenFile, onRevert, onRetry }: ItemProps) {
   const project = useContext(ChatProjectContext);
   switch (item.kind) {
     case 'user_message':
@@ -1783,7 +1809,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
       return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} />;
 
     case 'plan_review':
-      return <PlanReviewView item={item} online={online} onRespond={onRespondPlan} version={planVersion} showBadge={planShowBadge} />;
+      return <PlanReviewView item={item} online={online} onRespond={onRespondPlan} version={planVersion} showBadge={planShowBadge} showSwitch={planShowSwitch} onSwitchToAuto={onSwitchToAuto} />;
 
     case 'permission_request': {
       // Что именно собирается выполнить Claude — команда/путь/аргументы

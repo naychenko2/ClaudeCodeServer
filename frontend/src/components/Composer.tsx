@@ -208,13 +208,13 @@ export function Composer({
     } catch { /* noop */ }
   };
 
-  // Стили контейнера
+  // Стили контейнера — поле всегда активно (доступно для ввода и во время генерации)
   const containerStyle: React.CSSProperties = {
-    background: isGenerating ? C.bgCard : C.bgWhite,
-    border: `1px solid ${isGenerating ? C.bgSelected : hasText ? C.accent : C.border}`,
+    background: C.bgWhite,
+    border: `1px solid ${hasText ? C.accent : C.border}`,
     borderRadius: R.xxl,
     padding: isMobile ? '8px 10px' : '7px 8px',
-    boxShadow: hasText && !isGenerating ? '0 3px 12px rgba(217,119,87,0.10)' : 'none',
+    boxShadow: hasText ? '0 3px 12px rgba(217,119,87,0.10)' : 'none',
     display: 'flex',
     flexDirection: 'column',
     gap: 0,
@@ -250,14 +250,7 @@ export function Composer({
     </button>
   );
 
-  const inputArea = isGenerating ? (
-    <div style={dotsStyle}>
-      <ThreeDots />
-      <span style={{ fontStyle: 'italic', color: C.textMuted, fontSize: 14 }}>
-        Claude печатает…
-      </span>
-    </div>
-  ) : isListening ? (
+  const inputArea = isListening ? (
     <div style={{ ...dotsStyle, gap: 10 }}>
       <span style={{ width: 9, height: 9, borderRadius: '50%', background: '#D9534F', animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
       <span style={{ fontSize: 13, color: '#C2532E', fontWeight: 600, fontFamily: FONT.mono, flexShrink: 0, minWidth: 34 }}>{fmtRecTime(recSeconds)}</span>
@@ -374,7 +367,10 @@ export function Composer({
     </button>
   );
 
-  const sendButton = isGenerating ? (
+  const canSend = hasText || attachments.length > 0;
+  // «Стоп» показываем, только когда чат активен и в поле ничего не введено.
+  // Как только появился текст — кнопка становится «Отправить» (даже во время генерации).
+  const sendButton = isGenerating && !canSend ? (
     <button
       onClick={onStop}
       title="Остановить"
@@ -397,16 +393,16 @@ export function Composer({
   ) : (
     <button
       onClick={handleSend}
-      disabled={!hasText && attachments.length === 0}
+      disabled={!canSend}
       title="Отправить (Enter)"
       style={{
         width: isMobile ? 38 : 34,
         height: isMobile ? 38 : 34,
         borderRadius: R.pill,
         border: 'none',
-        background: hasText || attachments.length > 0 ? C.accent : C.bgSelected,
-        color: hasText || attachments.length > 0 ? C.onAccent : C.textMuted,
-        cursor: hasText || attachments.length > 0 ? 'pointer' : 'default',
+        background: canSend ? C.accent : C.bgSelected,
+        color: canSend ? C.onAccent : C.textMuted,
+        cursor: canSend ? 'pointer' : 'default',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -495,17 +491,6 @@ export function Composer({
           {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
         </div>
       )}
-    </div>
-  );
-}
-
-// Анимация трёх точек
-function ThreeDots() {
-  return (
-    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-      <div className="composer-dot" />
-      <div className="composer-dot" />
-      <div className="composer-dot" />
     </div>
   );
 }

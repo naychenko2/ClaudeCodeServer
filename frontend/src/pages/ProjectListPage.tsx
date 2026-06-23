@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Project } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
+import { OfflineError } from '../lib/offline';
 import { ProjectSyncToggle } from '../components/ProjectSyncToggle';
 import { ConnectionStatus } from '../components/ConnectionStatus';
 import { toggleSyncMark } from '../lib/sync';
@@ -43,10 +44,19 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
   const [editName, setEditName] = useState('');
   const [editPath, setEditPath] = useState('');
   const [error, setError] = useState('');
+  const [loadState, setLoadState] = useState<'loading' | 'ok' | 'offline' | 'error'>('loading');
+  const [retryKey, setRetryKey] = useState(0);
 
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';
 
-  useEffect(() => { api.projects.list().then(setProjects).catch(() => {}); }, []);
+  useEffect(() => {
+    setLoadState('loading');
+    api.projects.list()
+      .then(list => { setProjects(list); setLoadState('ok'); })
+      .catch(e => setLoadState(e instanceof OfflineError ? 'offline' : 'error'));
+  // При возврате в онлайн или ручном retry — перезагружаем список
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [online, retryKey]);
 
   const filtered = projects.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -235,13 +245,39 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
           )}
         </div>
 
-        {/* Empty state — только если нет проектов вообще */}
-        {filtered.length === 0 && search === '' && (
+        {/* Empty state */}
+        {loadState === 'offline' && (
+          <div style={{ textAlign: 'center', padding: '48px 0 0' }}>
+            <div style={{ color: C.textMuted, fontSize: 14, marginBottom: 12 }}>
+              Сервер недоступен — нет сохранённых данных для офлайн-доступа
+            </div>
+            <button
+              onClick={() => setRetryKey(k => k + 1)}
+              style={{ fontSize: 13, color: C.accent, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontFamily: 'inherit' }}
+            >
+              Повторить
+            </button>
+          </div>
+        )}
+        {loadState === 'error' && (
+          <div style={{ textAlign: 'center', padding: '48px 0 0' }}>
+            <div style={{ color: C.textMuted, fontSize: 14, marginBottom: 12 }}>
+              Ошибка загрузки проектов
+            </div>
+            <button
+              onClick={() => setRetryKey(k => k + 1)}
+              style={{ fontSize: 13, color: C.accent, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontFamily: 'inherit' }}
+            >
+              Повторить
+            </button>
+          </div>
+        )}
+        {loadState === 'ok' && filtered.length === 0 && search === '' && (
           <div style={{ textAlign: 'center', padding: '48px 0 0', color: C.textMuted, fontSize: 14 }}>
             Нет проектов. Создайте первый выше.
           </div>
         )}
-        {filtered.length === 0 && search !== '' && (
+        {loadState === 'ok' && filtered.length === 0 && search !== '' && (
           <div style={{ textAlign: 'center', padding: '48px 0 0', color: C.textMuted, fontSize: 14 }}>
             Ничего не найдено по запросу «{search}»
           </div>

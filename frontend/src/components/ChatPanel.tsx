@@ -497,25 +497,38 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     />
   );
 
-  // Подряд идущие карточки инструментов объединяем в один контур: внешние линии
-  // сверху/снизу + по одной линии-разделителю между соседями (без двойных бордеров)
+  // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем
+  // в один контур (внешние линии сверху/снизу + разделители между соседями), чтобы
+  // file_changed между инструментами не разрывал стопку. Контур рисуем только если в
+  // блоке есть хотя бы один инструмент; одиночные file_changed остаются обычными карточками.
   const renderItems = () => {
-    const stackable = (it: ChatItem) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && !it.parentToolUseId;
+    const isTool = (it: ChatItem) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && !it.parentToolUseId;
+    const inBlock = (it: ChatItem) => isTool(it) || it.kind === 'file_changed';
     const out: React.ReactNode[] = [];
     let i = 0;
     while (i < items.length) {
-      if (stackable(items[i])) {
+      if (inBlock(items[i])) {
         const start = i;
-        const group: React.ReactNode[] = [];
-        while (i < items.length && stackable(items[i])) { group.push(renderItem(items[i], i)); i++; }
-        // Один контур на стопку: внешние линии сверху/снизу + по одному разделителю между соседями
-        out.push(
-          <div key={`grp-${start}`} style={{ borderTop: `1px solid ${C.bgInset}`, borderBottom: `1px solid ${C.bgInset}` }}>
-            {group.map((node, gi) => (
-              <div key={gi} style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>{node}</div>
-            ))}
-          </div>
-        );
+        const slice: Array<[ChatItem, number]> = [];
+        while (i < items.length && inBlock(items[i])) { slice.push([items[i], i]); i++; }
+        const hasTool = slice.some(([it]) => isTool(it));
+        if (hasTool) {
+          // Один контур на блок: file_changed внутри — компактной строкой (без своей рамки)
+          out.push(
+            <div key={`grp-${start}`} style={{ borderTop: `1px solid ${C.bgInset}`, borderBottom: `1px solid ${C.bgInset}` }}>
+              {slice.map(([it, idx], gi) => (
+                <div key={idx} style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
+                  {it.kind === 'file_changed'
+                    ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={path => api.files.revert(project.id, path)} />
+                    : renderItem(it, idx)}
+                </div>
+              ))}
+            </div>
+          );
+        } else {
+          // Только изменения файлов без инструментов — оставляем обычными карточками
+          slice.forEach(([it, idx]) => out.push(renderItem(it, idx)));
+        }
       } else {
         out.push(renderItem(items[i], i)); i++;
       }
@@ -1253,6 +1266,39 @@ function PlanReviewView({ item, online, onRespond }: {
             Отклонить
           </button>
         </div>
+      )}
+    </div>
+  );
+}
+
+// Компактная строка изменённого файла — для использования внутри общего контура
+// блока действий (рядом с карточками инструментов). Один ритм со строкой ToolUseView.
+function FileChangedRow({ item, online, onOpenFile, onRevert }: {
+  item: Extract<ChatItem, { kind: 'file_changed' }>;
+  online: boolean;
+  onOpenFile: (path: string) => void;
+  onRevert: (path: string) => void;
+}) {
+  const fileName = item.path.replace(/\\/g, '/').split('/').pop() ?? item.path;
+  return (
+    <div style={{ padding: '9px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: '#C2693B' }}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+        </svg>
+      </span>
+      <span onClick={() => onOpenFile(item.path)}
+        style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+        {fileName}
+      </span>
+      <span style={{ fontSize: 11.5, color: '#27AE60', fontFamily: FONT.mono, flexShrink: 0 }}>+{item.added}</span>
+      <span style={{ fontSize: 11.5, color: '#C0392B', fontFamily: FONT.mono, flexShrink: 0 }}>-{item.removed}</span>
+      {online && (
+        <button onClick={() => onRevert(item.path)}
+          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid #E0D8CC', background: '#FFF', cursor: 'pointer', color: '#C0392B', flexShrink: 0 }}>
+          Откатить
+        </button>
       )}
     </div>
   );

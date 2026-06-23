@@ -175,8 +175,13 @@ function ensureHandler() {
         updateItems(sid, items => [...items, { kind: 'redacted_thinking' }]);
         break;
       case 'rate_limit':
-        // Мягкий лимит во время хода — claude приостановился, ждём сброса. isWaiting не трогаем.
-        updateItems(sid, items => [...items, { kind: 'rate_limit', limitType: msg.limitType, resetsAt: msg.resetsAt }]);
+        // Реальный лимит/предупреждение во время хода (status != allowed). isWaiting не трогаем.
+        // Дедуп: если последний элемент — такой же баннер лимита, не дублируем.
+        updateItems(sid, items => {
+          const last = items[items.length - 1];
+          if (last?.kind === 'rate_limit' && last.limitType === msg.limitType && last.status === msg.status) return items;
+          return [...items, { kind: 'rate_limit', limitType: msg.limitType, resetsAt: msg.resetsAt, status: msg.status }];
+        });
         break;
       case 'compact_boundary':
         updateItems(sid, items => [...items, { kind: 'compact_boundary', trigger: msg.trigger, preTokens: msg.preTokens }]);

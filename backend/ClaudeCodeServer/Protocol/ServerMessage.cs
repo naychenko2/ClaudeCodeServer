@@ -53,8 +53,9 @@ public record RedactedThinkingMessage() : ServerMessage("redacted_thinking");
 public record ErrorMessage(string Text)
     : ServerMessage("error");
 
-// Мягкий лимит API во время хода: claude приостанавливается до сброса (rate_limit_event)
-public record RateLimitMessage(string LimitType, string? ResetsAt)
+// Мягкий лимит API во время хода: claude приостанавливается до сброса (rate_limit_event).
+// Status: "rejected" — лимит достигнут; "allowed_warning" — приближается. "allowed" сюда не доходит.
+public record RateLimitMessage(string LimitType, string? ResetsAt, string? Status = null)
     : ServerMessage("rate_limit");
 
 // Граница компакции контекста: Claude свернул часть истории (system/compact_boundary)

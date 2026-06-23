@@ -1550,6 +1550,9 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
         weekly: 'недельный лимит',
       };
       const label = TYPES[item.limitType] ?? (item.limitType ? `лимит (${item.limitType})` : 'лимит запросов');
+      // "rejected" — лимит реально достигнут; всё прочее (allowed_warning) — приближение
+      const reached = !item.status || item.status === 'rejected';
+      const verb = reached ? 'Достигнут' : 'Приближается';
       let when = '';
       if (item.resetsAt) {
         const dt = new Date(item.resetsAt);
@@ -1569,7 +1572,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
           display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center',
         }}>
           <span>⏳</span>
-          <span>Достигнут {label}{when ? <span style={{ opacity: 0.75 }}> · {when}</span> : null}</span>
+          <span>{verb} {label}{when ? <span style={{ opacity: 0.75 }}> · {when}</span> : null}</span>
         </div>
       );
     }

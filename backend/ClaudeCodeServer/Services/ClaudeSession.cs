@@ -396,6 +396,12 @@ public class ClaudeSession : IAsyncDisposable
     {
         if (!root.TryGetProperty("rate_limit_info", out var info)) return;
 
+        // status: "allowed" — это просто телеметрия об остатке окна (лимит НЕ достигнут),
+        // такие события приходят регулярно. Баннер показываем только при реальном ограничении
+        // ("rejected") или предупреждении ("allowed_warning"); "allowed"/без статуса — игнорируем.
+        var status = info.TryGetProperty("status", out var stEl) ? stEl.GetString() : null;
+        if (string.IsNullOrEmpty(status) || status == "allowed") return;
+
         var limitType =
             (info.TryGetProperty("rateLimitType", out var lt) ? lt.GetString() : null)
             ?? (info.TryGetProperty("rate_limit_type", out var lt2) ? lt2.GetString() : null)
@@ -413,7 +419,7 @@ public class ClaudeSession : IAsyncDisposable
                     : DateTimeOffset.FromUnixTimeSeconds(n)).ToString("o");
         }
 
-        await _onMessage(new RateLimitMessage(limitType, resetsAt));
+        await _onMessage(new RateLimitMessage(limitType, resetsAt, status));
     }
 
     private async Task HandleUserMessageAsync(JsonElement root)

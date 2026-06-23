@@ -1,6 +1,7 @@
 using ClaudeCodeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace ClaudeCodeServer.Controllers;
 
@@ -11,6 +12,7 @@ public class AuthController(ApiKeyAuthService auth) : ControllerBase
     // Анонимный: проверяет ключ, введённый на странице входа.
     // Ключ принимается из тела (страница входа) или из заголовка Authorization.
     [AllowAnonymous]
+    [EnableRateLimiting("auth-ping")]
     [HttpPost("ping")]
     public IActionResult Ping([FromBody] PingRequest req)
     {

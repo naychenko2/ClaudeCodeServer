@@ -1,8 +1,10 @@
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using ClaudeCodeServer.Auth;
 using ClaudeCodeServer.Hubs;
 using ClaudeCodeServer.Services;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -30,6 +32,32 @@ builder.Services.AddAuthentication(ApiKeyAuthService.SchemeName)
         ApiKeyAuthService.SchemeName, _ => { });
 builder.Services.AddAuthorization();
 
+// За reverse-proxy (Caddy/туннель) берём реальный IP клиента из X-Forwarded-For,
+// иначе rate-limit считал бы все запросы с адреса прокси как один
+builder.Services.Configure<ForwardedHeadersOptions>(o =>
+    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto);
+
+// Защита /api/auth/ping от перебора ключа — фиксированное окно на IP.
+// Лимит читаем в момент запроса (через DI), чтобы видеть конфигурацию,
+// добавленную после старта builder (в т.ч. тестовую).
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("auth-ping", ctx =>
+    {
+        var limit = ctx.RequestServices.GetRequiredService<IConfiguration>()
+            .GetValue("Auth:PingRateLimit", 10);
+        return RateLimitPartition.GetFixedWindowLimiter(
+            ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = limit,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            });
+    });
+});
+
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.SetIsOriginAllowed(_ => true)
      .AllowAnyHeader()
@@ -41,7 +69,11 @@ var app = builder.Build();
 // Прогрев сервиса ключа на старте — печатает сгенерированный ключ в консоль
 app.Services.GetRequiredService<ApiKeyAuthService>();
 
+app.UseForwardedHeaders();
+app.UseRouting();
 app.UseCors();
+// UseRateLimiter — после UseRouting, иначе эндпоинт-политика [EnableRateLimiting] не видна
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 

@@ -43,17 +43,27 @@ function PlanIcon({ size = 13, color = 'currentColor', strokeWidth = 2 }: { size
   );
 }
 
-// Инлайн-чип «План» в подзаголовке шапки чата (отдельный индиго-цвет, не accent)
-function PlanModeChip() {
+// Русские названия режимов для подзаголовка шапки чата
+const MODE_LABELS: Record<'auto' | 'plan' | 'ask', string> = {
+  auto: 'Авто',
+  plan: 'План',
+  ask: 'Спросить',
+};
+
+// Инлайн-чип режима в подзаголовке шапки чата
+function ModeChip({ mode }: { mode: 'auto' | 'plan' | 'ask' }) {
+  const isPlan = mode === 'plan';
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 4,
-      background: C.planLight, color: C.planText, borderRadius: R.sm,
+      background: isPlan ? C.planLight : C.accentLight,
+      color: isPlan ? C.planText : C.textMuted,
+      borderRadius: R.sm,
       padding: '1px 6px', fontFamily: FONT.sans, fontWeight: 600, fontSize: 11,
       verticalAlign: 'baseline',
     }}>
-      <PlanIcon size={11} color={C.planText} />
-      План
+      {isPlan && <PlanIcon size={11} color={C.planText} />}
+      {MODE_LABELS[mode]}
     </span>
   );
 }
@@ -213,8 +223,8 @@ function ChatHeaderBar({ session, project, online, mode, onOpenSettings, onToggl
       <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 0 }}>
         {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
         {!isMobile && <span>{project.name} · </span>}
-        {mode === 'plan' ? <PlanModeChip /> : <span>{mode}</span>}
-        <span>&nbsp;· {modelLabel(session.model)}</span>
+        <ModeChip mode={mode} />
+        <span style={{ marginLeft: 4 }}>· {modelLabel(session.model)}</span>
       </div>
     </div>
   );

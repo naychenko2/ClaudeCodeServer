@@ -259,6 +259,7 @@ export function Composer({
   ) : (
     <textarea
       ref={textareaRef}
+      className="cc-composer-input"
       value={text}
       onChange={(e) => setText(e.target.value)}
       onKeyDown={handleKeyDown}

@@ -71,6 +71,15 @@ body {
 .composer-dot:nth-child(2) { animation-delay: 0.2s; }
 .composer-dot:nth-child(3) { animation-delay: 0.4s; }
 
+/* Поле ввода чата: прячем скроллбар (поле растёт до maxHeight, дальше скроллится
+   касанием) — иначе на части браузеров виден серый трек; каретку красим в accent */
+.cc-composer-input {
+  scrollbar-width: none;        /* Firefox */
+  -ms-overflow-style: none;     /* старый Edge */
+  caret-color: #D97757;
+}
+.cc-composer-input::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
 .tool-spinner {
   width: 18px;
   height: 18px;

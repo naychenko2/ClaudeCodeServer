@@ -596,17 +596,26 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
 }
 
 // Три исхода для диалога несохранённых изменений: сохранить / не сохранять / остаться.
-//  • Десктоп: в ряд (Отмена · Не сохранять · Сохранить), основное справа.
-//  • Мобила (шторка): в колонку — Сохранить сверху, ниже «Не сохранять», затем «Отмена».
+//  • Десктоп: один ряд (Отмена · Не сохранять · Сохранить), основное справа.
+//  • Мобила (шторка): «Сохранить» отдельной строкой-акцентом сверху, ниже в ряд «Не сохранять» и «Отмена» — компактно по вертикали.
 function UnsavedActions({ onSave, onDiscard, onCancel }: {
   onSave: () => void; onDiscard: () => void; onCancel: () => void;
 }) {
   const isMobile = useIsMobileModal();
-  const size = isMobile ? 'lg' : 'md';
-  const save = <Button variant="primary" size={size} fullWidth onClick={onSave}>Сохранить</Button>;
-  const discard = <Button variant="ghost" size={size} fullWidth onClick={onDiscard}>Не сохранять</Button>;
-  const cancel = <Button variant="secondary" size={size} fullWidth onClick={onCancel}>Отмена</Button>;
-  if (isMobile) return <>{save}{discard}{cancel}</>;
+  const save = <Button variant="primary" size="md" fullWidth onClick={onSave}>Сохранить</Button>;
+  const discard = <Button variant="ghost" size="md" fullWidth onClick={onDiscard}>Не сохранять</Button>;
+  const cancel = <Button variant="secondary" size="md" fullWidth onClick={onCancel}>Отмена</Button>;
+  if (isMobile) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
+        {save}
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}>{cancel}</div>
+          <div style={{ flex: 1 }}>{discard}</div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', gap: 10, width: '100%' }}>
       {cancel}{discard}{save}

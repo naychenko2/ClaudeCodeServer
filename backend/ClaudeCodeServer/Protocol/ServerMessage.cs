@@ -38,6 +38,11 @@ public record PermissionRequestMessage(string RequestId, string ToolName, object
 public record AskQuestionMessage(string ToolUseId, object Input)
     : ServerMessage("ask_question");
 
+// ExitPlanMode в режиме «План»: Claude представляет готовый план и ждёт решения пользователя
+// (одобрить → продолжить выполнение; отклонить → остаться в планировании)
+public record PlanReviewMessage(string RequestId, string Plan)
+    : ServerMessage("plan_review");
+
 public record FileChangedMessage(string Path, int Added, int Removed)
     : ServerMessage("file_changed");
 

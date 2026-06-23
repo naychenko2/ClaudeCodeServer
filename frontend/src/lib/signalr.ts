@@ -92,6 +92,11 @@ export async function answerQuestion(sessionId: string, toolUseId: string, answe
   await conn.invoke('AnswerQuestion', sessionId, toolUseId, answerText);
 }
 
+export async function respondPlan(sessionId: string, requestId: string, approve: boolean, feedback?: string): Promise<void> {
+  const conn = await ensureConnected();
+  await conn.invoke('RespondPlan', sessionId, requestId, approve, feedback ?? null);
+}
+
 export function onMessage(handler: (msg: ServerMessage) => void): () => void {
   const conn = getConnection();
   conn.on('message', handler);

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { ChatItem, ServerMessage } from '../types';
-import { joinSession, joinProject, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, answerQuestion as sendAnswer } from '../lib/signalr';
+import { joinSession, joinProject, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision } from '../lib/signalr';
 import { api } from '../lib/api';
 
 // --- Модульный персистентный стор ---
@@ -154,6 +154,18 @@ function ensureHandler() {
             kind: 'ask_question',
             toolUseId: msg.toolUseId,
             input: msg.input,
+            resolved: false,
+          }],
+        }));
+        break;
+      case 'plan_review':
+        setState(sid, prev => ({
+          ...prev,
+          isWaiting: true,
+          items: [...prev.items, {
+            kind: 'plan_review',
+            requestId: msg.requestId,
+            plan: msg.plan,
             resolved: false,
           }],
         }));
@@ -409,6 +421,20 @@ export function useSession(sessionId: string | null, projectId?: string) {
     await sendAnswer(sessionId, toolUseId, answerText);
   }, [sessionId]);
 
+  const respondPlan = useCallback(async (requestId: string, approve: boolean, feedback?: string) => {
+    if (!sessionId) return;
+    setState(sessionId, prev => ({
+      ...prev,
+      isWaiting: true,
+      items: prev.items.map(item =>
+        item.kind === 'plan_review' && item.requestId === requestId
+          ? { ...item, resolved: true, approved: approve, feedback } : item
+      ),
+    }));
+    await joinSession(sessionId); // гарантируем группу перед ответом
+    await sendPlanDecision(sessionId, requestId, approve, feedback);
+  }, [sessionId]);
+
   const toggleThinking = useCallback((index: number) => {
     if (!sessionId) return;
     updateItems(sessionId, items => items.map((item, i) =>
@@ -416,5 +442,5 @@ export function useSession(sessionId: string | null, projectId?: string) {
     ));
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, interrupt, toggleThinking };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking };
 }

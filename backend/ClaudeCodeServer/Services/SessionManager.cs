@@ -189,6 +189,15 @@ public class SessionManager
             SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
     }
 
+    public void RespondPlan(string sessionId, string requestId, bool approve, string? feedback)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        entry.Process?.RespondPlan(requestId, approve, feedback);
+        entry.Info.Status = SessionStatus.Working;
+        _ = BroadcastStatusChangeAsync(sessionId, entry.Info.ProjectId,
+            SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
+    }
+
     public async Task DeleteAsync(string sessionId)
     {
         if (_sessions.TryRemove(sessionId, out var entry) && entry.Process is not null)
@@ -250,7 +259,7 @@ public class SessionManager
         {
             SessionStatus? newStatus = null;
 
-            if (msg is PermissionRequestMessage or AskQuestionMessage)
+            if (msg is PermissionRequestMessage or AskQuestionMessage or PlanReviewMessage)
                 newStatus = SessionStatus.Waiting;
             else if (msg is ResultMessage rm)
                 newStatus = rm.Subtype == "error" ? SessionStatus.Error : SessionStatus.Active;

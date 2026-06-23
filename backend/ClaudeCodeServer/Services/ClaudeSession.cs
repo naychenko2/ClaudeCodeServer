@@ -17,6 +17,8 @@ public class ClaudeSession : IAsyncDisposable
     private readonly HashSet<string> _autoAllowTools = new();
     // tool_use_id → request_id вопросов AskUserQuestion (приходят как control_request can_use_tool, ждут control_response)
     private readonly Dictionary<string, string> _pendingQuestions = new();
+    // request_id → исходный input ожидающего согласования ExitPlanMode (режим «План»)
+    private readonly Dictionary<string, object> _pendingPlans = new();
     // Стриминг tool_use: индекс content-блока → (id инструмента, накопленный partial_json)
     private readonly Dictionary<int, (string Id, System.Text.StringBuilder Sb)> _toolStream = new();
     private readonly CancellationTokenSource _cts = new();
@@ -104,6 +106,25 @@ public class ClaudeSession : IAsyncDisposable
         SendControlResponse(requestId, new { behavior = "allow", updatedInput });
     }
 
+    // Решение пользователя по плану (ExitPlanMode): approve → allow и Claude продолжает выполнение;
+    // reject → deny с комментарием, Claude остаётся в режиме планирования
+    public void RespondPlan(string requestId, bool approve, string? feedback)
+    {
+        if (!_pendingPlans.Remove(requestId, out var input)) return;
+        Info.Status = SessionStatus.Working;
+        if (approve)
+        {
+            SendControlResponse(requestId, new { behavior = "allow", updatedInput = input });
+        }
+        else
+        {
+            var message = string.IsNullOrWhiteSpace(feedback)
+                ? "Пользователь отклонил план. Уточни план с учётом контекста и предложи заново."
+                : $"Пользователь отклонил план с комментарием: {feedback}";
+            SendControlResponse(requestId, new { behavior = "deny", message });
+        }
+    }
+
     // Обработка control_request(can_use_tool): AskUserQuestion → интерактивная карточка; прочее → авто-allow
     private async Task HandleControlRequestAsync(JsonElement root)
     {
@@ -123,6 +144,18 @@ public class ClaudeSession : IAsyncDisposable
             _pendingQuestions[toolUseId] = requestId;
             Info.Status = SessionStatus.Waiting;
             await _onMessage(new AskQuestionMessage(toolUseId, input));
+            return;
+        }
+
+        if (toolName == "ExitPlanMode")
+        {
+            // Режим «План»: Claude представил план — ждём решения пользователя (RespondPlan),
+            // НЕ авто-одобряем, иначе план не выносится на согласование
+            _pendingPlans[requestId] = input;
+            var plan = req.TryGetProperty("input", out var pin) && pin.TryGetProperty("plan", out var pl)
+                ? pl.GetString() ?? "" : "";
+            Info.Status = SessionStatus.Waiting;
+            await _onMessage(new PlanReviewMessage(requestId, plan));
             return;
         }
 
@@ -152,6 +185,7 @@ public class ClaudeSession : IAsyncDisposable
             tcs.TrySetCanceled();
         _permissionWaiters.Clear();
         _pendingQuestions.Clear();
+        _pendingPlans.Clear();
     }
 
     private async Task RunTurnAsync(string text, CancellationToken ct)

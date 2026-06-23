@@ -47,6 +47,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean }
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
   | { type: 'ask_question'; toolUseId: string; input: unknown }
+  | { type: 'plan_review'; requestId: string; plan: string }
   | { type: 'file_changed'; path: string; added: number; removed: number }
   | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[] }
   | { type: 'error'; text: string }
@@ -74,6 +75,7 @@ export type ChatItem =
   | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string }
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean }
+  | { kind: 'plan_review'; requestId: string; plan: string; resolved: boolean; approved?: boolean; feedback?: string }
   | { kind: 'file_changed'; path: string; added: number; removed: number }
   | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[] }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }

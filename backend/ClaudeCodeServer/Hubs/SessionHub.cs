@@ -63,4 +63,9 @@ public class SessionHub : Hub
     {
         _sessions.AnswerQuestion(sessionId, toolUseId, answerText);
     }
+
+    public void RespondPlan(string sessionId, string requestId, bool approve, string? feedback = null)
+    {
+        _sessions.RespondPlan(sessionId, requestId, approve, feedback);
+    }
 }

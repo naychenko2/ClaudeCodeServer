@@ -379,7 +379,7 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile, onBack }: Props) {
-  const { items, isWaiting, isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, interrupt, toggleThinking } = useSession(session.id, project.id);
+  const { items, isWaiting, isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
   const online = useOnline();
   const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
@@ -490,6 +490,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onDenyPermission={denyPermission}
       onAllowAlways={allowAlways}
       onAnswerQuestion={answerQuestion}
+      onRespondPlan={respondPlan}
       onOpenFile={onOpenFile}
       onRevert={path => api.files.revert(project.id, path)}
       onRetry={handleRetry}
@@ -586,7 +587,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
-            {isWaiting && !items.some(it => it.kind === 'permission_request' && !it.resolved) && (
+            {isWaiting && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved) && (
               <WaitingIndicator />
             )}
             <div ref={bottomRef} />
@@ -1165,6 +1166,98 @@ function AskQuestionView({ item, online, onAnswer }: {
   );
 }
 
+// Карточка согласования плана (ExitPlanMode в режиме «План»):
+// показывает план и кнопки «Одобрить и выполнить» / «Отклонить» (с комментарием).
+function PlanReviewView({ item, online, onRespond }: {
+  item: Extract<ChatItem, { kind: 'plan_review' }>;
+  online: boolean;
+  onRespond: (requestId: string, approve: boolean, feedback?: string) => void;
+}) {
+  const [rejecting, setRejecting] = useState(false);
+  const [feedback, setFeedback] = useState('');
+
+  // Решённое состояние: явная плашка результата
+  if (item.resolved) {
+    const approved = item.approved;
+    return (
+      <div style={{
+        border: `1px solid ${approved ? '#CADFC4' : C.border}`,
+        borderLeft: `3px solid ${approved ? '#5E8B4E' : C.textMuted}`,
+        borderRadius: 12, padding: '13px 14px', background: approved ? '#EEF4EA' : C.bgWhite,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: approved ? '#3F6B33' : C.textSecondary }}>
+          {approved ? (
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill="#5E8B4E" /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+          )}
+          {approved ? 'План одобрен — выполняется' : 'План отклонён — Claude уточнит'}
+        </div>
+        {!approved && item.feedback?.trim() && (
+          <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 8, whiteSpace: 'pre-wrap' }}>
+            Комментарий: {item.feedback}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ border: '1px solid #E6C9B8', borderLeft: `3px solid ${C.accent}`, borderRadius: 12, padding: '13px 14px', background: '#FBF1EA' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10, fontSize: 13, fontWeight: 600, color: C.textHeading }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="3" width="6" height="4" rx="1" /><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /><path d="M9 12h6M9 16h4" />
+        </svg>
+        План готов — на согласование
+      </div>
+
+      <div style={{
+        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: 9,
+        padding: '10px 12px', marginBottom: 12, maxHeight: 360, overflow: 'auto',
+        fontSize: 13.5, color: C.textHeading, wordBreak: 'break-word',
+      }}>
+        <MarkdownContent text={item.plan || '_(пустой план)_'} />
+      </div>
+
+      {!online ? (
+        <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
+      ) : rejecting ? (
+        <div>
+          <textarea
+            value={feedback}
+            onChange={e => setFeedback(e.target.value)}
+            autoFocus
+            placeholder="Что поправить в плане? (необязательно)"
+            rows={3}
+            style={{ width: '100%', boxSizing: 'border-box', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 10px', fontSize: 13, color: C.textHeading, fontFamily: 'inherit', resize: 'none', outline: 'none', marginBottom: 8 }}
+          />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => onRespond(item.requestId, false, feedback.trim() || undefined)}
+              style={{ flex: 1, minHeight: 40, background: C.accent, color: C.onAccent, borderRadius: 9, padding: 9, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+              Отправить на доработку
+            </button>
+            <button onClick={() => { setRejecting(false); setFeedback(''); }}
+              style={{ flex: 'none', minHeight: 40, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textSecondary, borderRadius: 9, padding: '9px 16px', cursor: 'pointer', fontSize: 13 }}>
+              Назад
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => onRespond(item.requestId, true)}
+            style={{ flex: 1, minHeight: 40, background: C.accent, color: C.onAccent, borderRadius: 9, padding: 9, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+            Одобрить и выполнить
+          </button>
+          <button onClick={() => setRejecting(true)}
+            style={{ flex: 'none', minHeight: 40, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textSecondary, borderRadius: 9, padding: '9px 16px', cursor: 'pointer', fontSize: 13 }}>
+            Отклонить
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Ответ ассистента. Действия «Копировать/Повторить» — иконками в правом верхнем
 // углу: десктоп — fade-in по hover на сообщении, мобайл (тач) — всегда видимы.
 function TextMessageView({ text, online, onRetry, streaming }: { text: string; online: boolean; onRetry: () => void; streaming?: boolean }) {
@@ -1218,12 +1311,13 @@ interface ItemProps {
   onDenyPermission: (id: string) => void;
   onAllowAlways: (id: string) => void;
   onAnswerQuestion: (toolUseId: string, answerText: string) => void;
+  onRespondPlan: (requestId: string, approve: boolean, feedback?: string) => void;
   onOpenFile: (path: string) => void;
   onRevert: (path: string) => void;
   onRetry: () => void;
 }
 
-function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onOpenFile, onRevert, onRetry }: ItemProps) {
+function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, onOpenFile, onRevert, onRetry }: ItemProps) {
   switch (item.kind) {
     case 'user_message':
       return (
@@ -1312,6 +1406,9 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
 
     case 'ask_question':
       return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} />;
+
+    case 'plan_review':
+      return <PlanReviewView item={item} online={online} onRespond={onRespondPlan} />;
 
     case 'permission_request': {
       // Что именно собирается выполнить Claude — команда/путь/аргументы

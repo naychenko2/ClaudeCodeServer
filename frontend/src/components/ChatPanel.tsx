@@ -1030,6 +1030,47 @@ function toolMeta(name: string): { color: string; icon: React.ReactNode } {
   return { color: C.info, icon: svg(<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6 2 2 6-6a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3z" />) };
 }
 
+// Русские названия инструментов для ленты чата
+const TOOL_LABELS: Record<string, string> = {
+  read: 'Чтение', edit: 'Правка', write: 'Запись', multiedit: 'Правки',
+  notebookedit: 'Правка ноутбука', bash: 'Команда', bashoutput: 'Вывод команды',
+  glob: 'Поиск файлов', grep: 'Поиск', ls: 'Список', task: 'Субагент', agent: 'Субагент',
+  websearch: 'Веб-поиск', webfetch: 'Загрузка страницы', skill: 'Навык',
+  todowrite: 'План задач', exitplanmode: 'План', toolsearch: 'Поиск инструментов',
+  killshell: 'Остановка команды',
+};
+// Имя инструмента для показа: MCP → «server · tool», известные — по-русски, прочее — как есть
+function toolLabel(name: string): string {
+  if (name.startsWith('mcp__')) return name.slice(5).replace(/__/g, ' · ');
+  return TOOL_LABELS[name.toLowerCase()] ?? name;
+}
+
+// Путь относительно корня проекта (везде в чате показываем относительные пути).
+// Вне проекта — возвращаем как есть. Регистронезависимо (Windows: C:\ vs c:\).
+function relPath(p: string, root?: string | null): string {
+  if (!root || !p) return p;
+  const np = p.replace(/\\/g, '/');
+  const nr = root.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (np.toLowerCase() === nr.toLowerCase()) return '.';
+  if (np.toLowerCase().startsWith(nr.toLowerCase() + '/')) return np.slice(nr.length + 1);
+  return p;
+}
+
+// Убирает абсолютный корень проекта из произвольного текста (плана) — делает пути относительными.
+// Учитывает оба варианта разделителей и регистр (Windows).
+function stripRoot(text: string, root?: string | null): string {
+  if (!root || !text) return text;
+  const nr = root.replace(/[\\/]+$/, '');
+  const variants = Array.from(new Set([nr, nr.replace(/\\/g, '/'), nr.replace(/\//g, '\\')]));
+  let out = text;
+  for (const v of variants) {
+    if (!v) continue;
+    const esc = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(new RegExp(esc + '[\\\\/]?', 'gi'), '');
+  }
+  return out;
+}
+
 // Inline-diff для Edit/MultiEdit/Write: удалённые строки красным, добавленные зелёным
 function DiffBody({ hunks }: { hunks: Array<{ old?: string; new?: string }> }) {
   const MAX = 240;
@@ -1069,12 +1110,17 @@ function DiffBody({ hunks }: { hunks: Array<{ old?: string; new?: string }> }) {
 function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }) {
   const meta = toolMeta(item.name);
   const [open, setOpen] = useState(false);
+  const project = useContext(ChatProjectContext);
   const n = item.name.toLowerCase();
   const inp = (item.input ?? {}) as Record<string, any>;
-  // Во время стриминга показываем накопленный partial_json («печатает команду»), затем — разобранный аргумент
-  const toolArg = item.streamingArg ?? String(inp.command ?? inp.file_path ?? inp.path ?? inp.pattern ?? inp.query ?? inp.url ?? inp.notebook_path ?? inp.description ?? inp.prompt ?? '');
-  // MCP-инструменты приходят как mcp__server__tool — показываем «server · tool»
-  const displayName = item.name.startsWith('mcp__') ? item.name.slice(5).replace(/__/g, ' · ') : item.name;
+  // Во время стриминга показываем накопленный partial_json («печатает команду»), затем — разобранный аргумент.
+  // Файловые пути показываем относительно корня проекта.
+  const pathVal = inp.file_path ?? inp.path ?? inp.notebook_path;
+  const toolArg = item.streamingArg ?? String(
+    inp.command ?? (pathVal != null ? relPath(String(pathVal), project?.rootPath) : null)
+    ?? inp.pattern ?? inp.query ?? inp.url ?? inp.description ?? inp.prompt ?? '');
+  // Имя инструмента по-русски (MCP → «server · tool»)
+  const displayName = toolLabel(item.name);
   // Inline-diff из input (доступен сразу, не дожидаясь tool_result)
   const editHunks: Array<{ old?: string; new?: string }> =
     n === 'edit' && (typeof inp.old_string === 'string' || typeof inp.new_string === 'string')
@@ -1408,6 +1454,9 @@ function PlanReviewView({ item, online, onRespond, version, showBadge }: {
 }) {
   const [rejecting, setRejecting] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const project = useContext(ChatProjectContext);
+  // В тексте плана пути показываем относительно корня проекта
+  const plan = stripRoot(item.plan, project?.rootPath);
   const planBodyRef = useRef<HTMLDivElement>(null);
   // fade-оверлей снизу появляется только если контент плана не помещается в maxHeight
   const [overflowing, setOverflowing] = useState(false);
@@ -1415,7 +1464,7 @@ function PlanReviewView({ item, online, onRespond, version, showBadge }: {
     const el = planBodyRef.current;
     if (!el) return;
     setOverflowing(el.scrollHeight - el.clientHeight > 8);
-  }, [item.plan, rejecting]);
+  }, [plan, rejecting]);
 
   // === Решённое состояние: одобрено → компактная шапка выполнения ===
   if (item.resolved && item.approved) {
@@ -1428,7 +1477,7 @@ function PlanReviewView({ item, online, onRespond, version, showBadge }: {
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill={C.success} /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
           План одобрен — выполняется
         </div>
-        <CollapsedPlanBody plan={item.plan} />
+        <CollapsedPlanBody plan={plan} />
       </div>
     );
   }
@@ -1449,7 +1498,7 @@ function PlanReviewView({ item, online, onRespond, version, showBadge }: {
             Комментарий: {item.feedback}
           </div>
         )}
-        <CollapsedPlanBody plan={item.plan} />
+        <CollapsedPlanBody plan={plan} />
       </div>
     );
   }
@@ -1491,7 +1540,7 @@ function PlanReviewView({ item, online, onRespond, version, showBadge }: {
           padding: '10px 12px', maxHeight: 360, overflow: 'auto',
           fontSize: 13.5, color: C.textHeading, wordBreak: 'break-word',
         }}>
-          <MarkdownContent text={item.plan || '_(пустой план)_'} />
+          <MarkdownContent text={plan || '_(пустой план)_'} />
         </div>
         {overflowing && (
           // Градиентный fade снизу — подсказка, что план длиннее видимой области
@@ -1559,7 +1608,8 @@ function FileChangedRow({ item, online, onOpenFile, onRevert }: {
   onOpenFile: (path: string) => void;
   onRevert: (path: string) => void;
 }) {
-  const fileName = item.path.replace(/\\/g, '/').split('/').pop() ?? item.path;
+  const project = useContext(ChatProjectContext);
+  const relativePath = relPath(item.path, project?.rootPath);
   return (
     <div style={{ padding: '9px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
       <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: '#C2693B' }}>
@@ -1570,7 +1620,7 @@ function FileChangedRow({ item, online, onOpenFile, onRevert }: {
       </span>
       <span onClick={() => onOpenFile(item.path)}
         style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>
-        {fileName}
+        {relativePath}
       </span>
       <span style={{ fontSize: 11.5, color: '#27AE60', fontFamily: FONT.mono, flexShrink: 0 }}>+{item.added}</span>
       <span style={{ fontSize: 11.5, color: '#C0392B', fontFamily: FONT.mono, flexShrink: 0 }}>-{item.removed}</span>
@@ -1646,6 +1696,7 @@ interface ItemProps {
 }
 
 function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, onOpenFile, onRevert, onRetry }: ItemProps) {
+  const project = useContext(ChatProjectContext);
   switch (item.kind) {
     case 'user_message':
       return (
@@ -1662,7 +1713,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
                   background: 'rgba(90,51,34,0.1)', borderRadius: 5,
                   padding: '1px 6px', fontSize: 11,
                 }}>
-                  {p.replace(/\\/g, '/').split('/').pop()}
+                  {relPath(p, project?.rootPath)}
                 </span>
               ))}
             </div>
@@ -1740,8 +1791,8 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
         const inp = item.toolInput as Record<string, unknown> | null;
         if (!inp) return '';
         if (typeof inp.command === 'string') return inp.command;
-        if (typeof inp.file_path === 'string') return inp.file_path;
-        if (typeof inp.path === 'string') return inp.path;
+        if (typeof inp.file_path === 'string') return relPath(inp.file_path, project?.rootPath);
+        if (typeof inp.path === 'string') return relPath(inp.path, project?.rootPath);
         try { const s = JSON.stringify(inp, null, 2); return s === '{}' ? '' : s; } catch { return ''; }
       })();
       // Консольная команда (Bash/shell) → тёмный «терминал»; прочее (путь файла и т.п.) → светлая панель
@@ -1812,7 +1863,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
     }
 
     case 'file_changed': {
-      const fileName = item.path.replace(/\\/g, '/').split('/').pop() ?? item.path;
+      const fileName = relPath(item.path, project?.rootPath);
       return (
         <div style={{
           border: `1px solid ${C.borderLight}`, borderRadius: 14, overflow: 'hidden',

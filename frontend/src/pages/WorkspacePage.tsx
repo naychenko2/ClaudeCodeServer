@@ -190,7 +190,7 @@ export function WorkspacePage({ project, onBack }: Props) {
   const handleOpenFileFromTree = (filePath: string) => {
     setOpenFile(filePath);
     setFileFullscreen(true);
-    if (!openFile) setChatDockExpanded(true);  // при первом открытии — раскрыть; при переключении — сохранить
+    // Состояние «свернуть/развернуть» чат не трогаем — уважаем последний выбор пользователя
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
@@ -199,7 +199,6 @@ export function WorkspacePage({ project, onBack }: Props) {
     setOpenFile(filePath);
     if (isTablet) {
       setFileFullscreen(true);
-      setChatDockExpanded(true);
     } else {
       setFileFullscreen(false);
     }
@@ -208,7 +207,6 @@ export function WorkspacePage({ project, onBack }: Props) {
 
   const handleEnterFullscreen = () => {
     setFileFullscreen(true);
-    setChatDockExpanded(true);
   };
 
   const handleSplitterMouseDown = (e: React.MouseEvent) => {

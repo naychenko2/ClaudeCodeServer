@@ -5,8 +5,8 @@ import { useOnline } from '../hooks/useOnline';
 import { ProjectSyncToggle } from '../components/ProjectSyncToggle';
 import { ConnectionStatus } from '../components/ConnectionStatus';
 import { toggleSyncMark } from '../lib/sync';
-import { C, R, FONT, SHADOW } from '../lib/design';
-import { Modal, TextField, Toggle, Button } from '../components/ui';
+import { C, R, FONT, SHADOW, MODAL_W } from '../lib/design';
+import { Modal, ModalActions, TextField, Toggle } from '../components/ui';
 
 interface Props {
   onOpen: (project: Project) => void;
@@ -250,7 +250,18 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
 
       {/* Диалог создания */}
       {showCreate && (
-        <Modal title="Новый проект" width={400} onClose={() => { setShowCreate(false); setError(''); setNewSync(false); }}>
+        <Modal
+          title="Новый проект"
+          width={MODAL_W.form}
+          onClose={() => { setShowCreate(false); setError(''); setNewSync(false); }}
+          footer={
+            <ModalActions
+              confirmLabel="Добавить"
+              onConfirm={handleCreate}
+              onCancel={() => { setShowCreate(false); setError(''); setNewSync(false); }}
+            />
+          }
+        >
           {errorLine}
           <TextField value={newName} onChange={setNewName} placeholder="Название" />
           <TextField value={newPath} onChange={setNewPath} placeholder="Путь к папке" mono />
@@ -262,38 +273,50 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
             </div>
             <Toggle checked={newSync} onChange={setNewSync} width={44} height={26} />
           </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <Button variant="secondary" fullWidth onClick={() => { setShowCreate(false); setError(''); setNewSync(false); }}>Отмена</Button>
-            <Button variant="primary" fullWidth onClick={handleCreate}>Добавить</Button>
-          </div>
         </Modal>
       )}
 
       {/* Диалог редактирования */}
       {editTarget && (
-        <Modal title="Редактировать проект" width={400} onClose={() => { setEditTarget(null); setError(''); }}>
+        <Modal
+          title="Редактировать проект"
+          width={MODAL_W.form}
+          onClose={() => { setEditTarget(null); setError(''); }}
+          footer={
+            <ModalActions
+              confirmLabel="Сохранить"
+              onConfirm={handleEdit}
+              onCancel={() => { setEditTarget(null); setError(''); }}
+            />
+          }
+        >
           {errorLine}
           <TextField value={editName} onChange={setEditName} placeholder="Название" />
           <TextField value={editPath} onChange={setEditPath} placeholder="Путь к папке" mono />
           <ProjectSyncToggle projectId={editTarget.id} online={online} />
-          <div style={{ display: 'flex', gap: 10 }}>
-            <Button variant="secondary" fullWidth onClick={() => { setEditTarget(null); setError(''); }}>Отмена</Button>
-            <Button variant="primary" fullWidth onClick={handleEdit}>Сохранить</Button>
-          </div>
         </Modal>
       )}
 
       {/* Диалог удаления */}
       {deleteTarget && (
-        <Modal title="Удалить проект?" width={380} onClose={() => setDeleteTarget(null)}>
-          <p style={{ fontSize: 14, color: C.textSecondary, margin: 0 }}>
-            «{deleteTarget.name}» будет удалён. Это действие нельзя отменить.
-          </p>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <Button variant="secondary" fullWidth onClick={() => setDeleteTarget(null)}>Отмена</Button>
-            <Button variant="danger" fullWidth onClick={handleDelete}>Удалить</Button>
-          </div>
-        </Modal>
+        <Modal
+          title="Удалить проект?"
+          width={MODAL_W.confirm}
+          onClose={() => setDeleteTarget(null)}
+          subtitle={
+            <>
+              Проект «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{deleteTarget.name}</strong>» будет удалён без возможности восстановления. Файлы на диске не затрагиваются.
+            </>
+          }
+          footer={
+            <ModalActions
+              confirmLabel="Удалить"
+              confirmVariant="danger"
+              onConfirm={handleDelete}
+              onCancel={() => setDeleteTarget(null)}
+            />
+          }
+        />
       )}
     </div>
   );

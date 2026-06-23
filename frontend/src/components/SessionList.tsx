@@ -7,8 +7,8 @@ import { isOnline } from '../lib/offline';
 import { StatusBadge } from './StatusBadge';
 import { EditSessionDialog } from './EditSessionDialog';
 import { modelLabel } from '../lib/models';
-import { C, R, FONT, SHADOW } from '../lib/design';
-import { Modal, Button } from './ui';
+import { C, R, FONT, SHADOW, MODAL_W } from '../lib/design';
+import { Modal, ModalActions } from './ui';
 
 interface Props {
   project: Project;
@@ -272,13 +272,24 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       )}
 
       {deleteTarget && (
-        <Modal title="Удалить чат?" width={340} onClose={() => setDeleteTarget(null)}>
-          <p style={{ fontSize: 13, color: C.textSecondary, margin: 0 }}>Это действие нельзя отменить.</p>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <Button variant="secondary" fullWidth onClick={() => setDeleteTarget(null)}>Отмена</Button>
-            <Button variant="danger" fullWidth onClick={handleDelete}>Удалить</Button>
-          </div>
-        </Modal>
+        <Modal
+          title="Удалить чат?"
+          width={MODAL_W.confirm}
+          onClose={() => setDeleteTarget(null)}
+          subtitle={
+            <>
+              Чат «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{deleteTarget.name ?? 'Новый чат'}</strong>» будет удалён без возможности восстановления.
+            </>
+          }
+          footer={
+            <ModalActions
+              confirmLabel="Удалить"
+              confirmVariant="danger"
+              onConfirm={handleDelete}
+              onCancel={() => setDeleteTarget(null)}
+            />
+          }
+        />
       )}
     </div>
   );

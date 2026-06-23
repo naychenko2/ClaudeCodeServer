@@ -112,6 +112,25 @@ body {
   animation: cc-shimmer-text 1.8s linear infinite;
 }
 
+/* === Модальные окна и мобильные шторки === */
+@keyframes cc-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+/* Карточка (планшет/десктоп): мягкое появление с лёгким подъёмом и масштабом */
+@keyframes cc-modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+/* Шторка (мобила): выезд снизу */
+@keyframes cc-sheet-in {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+.cc-overlay { animation: cc-overlay-in 0.18s ease; }
+.cc-modal-card { animation: cc-modal-in 0.2s cubic-bezier(0.22, 1, 0.36, 1); }
+.cc-sheet-card { animation: cc-sheet-in 0.26s cubic-bezier(0.22, 1, 0.36, 1); }
+
 /* === Действия под ответом Claude (TextMessageView) === */
 /* Десктоп с точным указателем: скрыты, проявляются по hover на сообщении */
 @media (hover: hover) and (pointer: fine) {
@@ -126,6 +145,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .cc-pulse-ring { animation: none; }
   .cc-shimmer-text { animation: none; -webkit-text-fill-color: #9A8F7E; color: #9A8F7E; }
+  .cc-overlay, .cc-modal-card, .cc-sheet-card { animation: none; }
 }
 
 /* Кастомные скроллбары — только десктоп/планшет (>=768px).

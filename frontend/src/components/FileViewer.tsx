@@ -433,10 +433,13 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
             </ToolbarIconButton>
           )}
 
-          {/* Закрыть */}
-          <ToolbarIconButton isMobile={isMobile} onClick={handleClose} title="Закрыть">
-            <CloseIcon />
-          </ToolbarIconButton>
+          {/* Закрыть — на мобиле не нужен: слева уже есть кнопка «‹ Файлы» (обе зовут handleClose).
+              Оставляем только на десктопе, где в fullscreen кнопки «назад» нет. */}
+          {!isMobile && (
+            <ToolbarIconButton isMobile={isMobile} onClick={handleClose} title="Закрыть">
+              <CloseIcon />
+            </ToolbarIconButton>
+          )}
         </div>
       </Toolbar>
 

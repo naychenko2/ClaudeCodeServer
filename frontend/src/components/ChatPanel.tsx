@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo, createContext, useContext } from 'react';
 import type { Project, Session, ChatItem, FileEntry } from '../types';
 import { useSession } from '../hooks/useSession';
 import { useOnline } from '../hooks/useOnline';
@@ -9,7 +9,7 @@ import { EditSessionDialog } from './EditSessionDialog';
 import { C, FONT, R, MODAL_W, SHADOW } from '../lib/design';
 import { Toolbar, ToolbarIconButton } from './Toolbar';
 import { BackButton, Modal } from './ui';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -127,16 +127,14 @@ function WaitingIndicator() {
 interface ChatHeaderBarProps {
   session: Session;
   project: Project;
-  isWaiting: boolean;
   online: boolean;
-  onInterrupt: () => void;
   onOpenSettings: () => void;
   onToggleDock?: () => void;
   isMobile?: boolean;
   onBack?: () => void;
 }
 
-function ChatHeaderBar({ session, project, isWaiting, online, onInterrupt, onOpenSettings, onToggleDock, isMobile, onBack }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, onOpenSettings, onToggleDock, isMobile, onBack }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -162,19 +160,6 @@ function ChatHeaderBar({ session, project, isWaiting, online, onInterrupt, onOpe
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </ToolbarIconButton>
-      )}
-      {isWaiting && (
-        <button
-          onClick={onInterrupt}
-          style={{
-            fontSize: 13, fontWeight: 600, height: 32, display: 'inline-flex', alignItems: 'center', gap: 6,
-            color: C.onAccent, background: C.danger, border: 'none', borderRadius: 8,
-            padding: '0 12px', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
-          }}
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><rect width="10" height="10" rx="2"/></svg>
-          Остановить
-        </button>
       )}
       {onToggleDock && (
         <ToolbarIconButton onClick={onToggleDock} title="Свернуть чат" isMobile={isMobile}>
@@ -203,11 +188,54 @@ function OfflineComposerStub() {
   );
 }
 
+// Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
+const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
+
+// Картинка из markdown: внешние URL (http/https/data) — напрямую; локальный путь файла
+// проекта (например, картинка, скачанная Claude) — грузим через API и показываем как data-URL.
+function ChatImage({ src, alt }: { src?: string; alt?: string }) {
+  const project = useContext(ChatProjectContext);
+  const isRemote = !!src && /^(https?:|data:)/i.test(src);
+  const [resolved, setResolved] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!src || isRemote || !project) return;
+    let cancelled = false;
+    // Путь относительно корня проекта (Claude мог дать абсолютный путь внутри проекта)
+    let rel = src.replace(/\\/g, '/');
+    const root = project.rootPath.replace(/\\/g, '/');
+    if (rel.toLowerCase().startsWith(root.toLowerCase())) rel = rel.slice(root.length);
+    rel = rel.replace(/^\/+/, '');
+    api.files.getContent(project.id, rel)
+      .then(r => {
+        if (cancelled) return;
+        if (r.isImage && r.base64) setResolved(`data:${r.mimeType ?? 'image/png'};base64,${r.base64}`);
+        else setFailed(true);
+      })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+  }, [src, isRemote, project]);
+
+  const finalSrc = isRemote ? src : resolved;
+
+  if (failed) return <span style={{ fontSize: 13, color: C.textMuted }}>🖼 {alt || src}</span>;
+  if (!finalSrc) return <span style={{ fontSize: 13, color: C.textMuted }}>Загрузка изображения…</span>;
+
+  return (
+    <a href={finalSrc} target="_blank" rel="noopener noreferrer" style={{ display: 'block', margin: '6px 0' }}>
+      <img src={finalSrc} alt={alt ?? ''} loading="lazy" onError={() => setFailed(true)}
+        style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 8, border: `1px solid ${C.border}` }} />
+    </a>
+  );
+}
+
 // Рендер текста Claude с поддержкой Markdown
 function MarkdownContent({ text }: { text: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
+      urlTransform={(url, key) => (key === 'src' ? url : defaultUrlTransform(url))}
       components={{
         p: ({ children }) => (
           <p style={{ margin: '0 0 8px 0', lineHeight: 1.6 }}>{children}</p>
@@ -263,6 +291,8 @@ function MarkdownContent({ text }: { text: string }) {
             {children}
           </a>
         ),
+        // Картинки из markdown: внешние URL — напрямую, локальные пути файлов проекта — через API
+        img: ({ src, alt }) => <ChatImage src={typeof src === 'string' ? src : undefined} alt={alt ?? ''} />,
         strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
         hr: () => <hr style={{ border: 'none', borderTop: `1px solid ${C.border}`, margin: '10px 0' }} />,
         table: ({ children }) => (
@@ -363,6 +393,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const atBottomRef = useRef(true);
   // Показывать плавающую кнопку «вниз», когда пользователь отлистал вверх
   const [showScrollDown, setShowScrollDown] = useState(false);
+  // Контекст проекта для резолва локальных путей картинок в сообщениях
+  const projectCtx = useMemo(() => ({ id: project.id, rootPath: project.rootPath }), [project.id, project.rootPath]);
   const pendingRef = useRef<string | undefined>(pendingMessage);
   pendingRef.current = pendingMessage;
 
@@ -542,9 +574,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         <ChatHeaderBar
           session={session}
           project={project}
-          isWaiting={isWaiting}
           online={online}
-          onInterrupt={interrupt}
           onOpenSettings={() => setShowEdit(true)}
           onToggleDock={onToggleDock}
         />
@@ -552,7 +582,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         {/* Сообщения (нижний отступ = высота плавающего composer) */}
         <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {renderItems()}
+            <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
             {isWaiting && !items.some(it => it.kind === 'permission_request' && !it.resolved) && (
               <WaitingIndicator />
             )}
@@ -602,9 +632,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       <ChatHeaderBar
         session={session}
         project={project}
-        isWaiting={isWaiting}
         online={online}
-        onInterrupt={interrupt}
         onOpenSettings={() => setShowEdit(true)}
         isMobile={isMobile}
         onBack={onBack}
@@ -664,7 +692,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           </div>
         )}
 
-        {renderItems()}
+        <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
 
         {isWaiting && !items.some(it => it.kind === 'permission_request' && !it.resolved) && (
           <WaitingIndicator />

@@ -137,9 +137,14 @@ body {
   .cc-actions { opacity: 0; transition: opacity 0.15s ease; }
   .cc-msg:hover .cc-actions, .cc-actions:focus-within { opacity: 1; }
 }
-/* Тач (нет hover): всегда видимы, приглушены */
+/* Тач (нет hover): всегда видимы, отдельным рядом ПОД текстом (не оверлеем) */
 @media (hover: none), (pointer: coarse) {
-  .cc-actions { opacity: 0.6; }
+  .cc-actions {
+    opacity: 0.6;
+    position: static !important;
+    justify-content: flex-end;
+    margin-top: 2px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -136,13 +136,10 @@ function WaitingIndicator({ planning }: { planning?: 'planning' | 'replanning' }
   const [text, setText] = useState('');
   const reduced = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  // В режиме планирования — спокойная фиксированная подпись и индиго-пульс (не рандомные глаголы auto)
-  const planLabel = planning === 'replanning' ? 'Перепланирую с учётом правок…'
-    : planning === 'planning' ? 'Обдумываю план…' : null;
+  // Шутливые глаголы крутятся всегда; в режиме планирования отличается только цвет пульса (индиго)
   const pulseColor = planning ? C.plan : C.accent;
 
   useEffect(() => {
-    if (planLabel) { setText(planLabel); return; }
     // При reduced-motion — статичная подпись без анимации печати
     if (reduced) { setText(pickVerb() + '…'); return; }
     let timer = 0;
@@ -168,7 +165,7 @@ function WaitingIndicator({ planning }: { planning?: 'planning' | 'replanning' }
     };
     timer = window.setTimeout(tick, 140);
     return () => clearTimeout(timer);
-  }, [reduced, planLabel]);
+  }, [reduced]);
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -179,17 +176,14 @@ function WaitingIndicator({ planning }: { planning?: 'planning' | 'replanning' }
         <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.bgMain }} />
       </span>
       <span style={{ display: 'inline-flex', alignItems: 'baseline', minHeight: 17 }}>
-        <span className="cc-shimmer-text" style={{ fontSize: 13, fontWeight: 600, fontFamily: 'inherit', color: planLabel ? C.planText : undefined }}>
+        <span className="cc-shimmer-text" style={{ fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
           {text}
         </span>
-        {/* В режиме планирования подпись фиксированная — курсор «печатной машинки» не нужен */}
-        {!planLabel && (
-          <span style={{
-            display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2,
-            background: C.accent, borderRadius: 1, alignSelf: 'center',
-            animation: reduced ? 'none' : 'blink 1s step-start infinite',
-          }} />
-        )}
+        <span style={{
+          display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2,
+          background: pulseColor, borderRadius: 1, alignSelf: 'center',
+          animation: reduced ? 'none' : 'blink 1s step-start infinite',
+        }} />
       </span>
     </div>
   );

@@ -44,9 +44,9 @@ public class SessionHub : Hub
         return base.OnDisconnectedAsync(exception);
     }
 
-    public async Task SendMessage(string sessionId, string text, List<string>? attachedPaths = null)
+    public async Task SendMessage(string sessionId, string text, List<string>? attachedPaths = null, string? mode = null)
     {
-        await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? []);
+        await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? [], mode);
     }
 
     public void RespondPermission(string sessionId, string requestId, string behavior)

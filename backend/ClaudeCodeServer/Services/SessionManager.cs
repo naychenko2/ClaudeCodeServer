@@ -114,10 +114,19 @@ public class SessionManager
         return session;
     }
 
-    public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths)
+    public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
+
+        // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
+        // пересоздаётся в RunTurnAsync и читает --permission-mode из Info.Mode.
+        if (mode is not null && Enum.TryParse<ClaudeMode>(mode, true, out var parsedMode)
+            && entry.Info.Mode != parsedMode)
+        {
+            entry.Info.Mode = parsedMode;
+            SaveSessions();
+        }
 
         // После перезапуска сервера Process может быть null — восстанавливаем сессию
         if (entry.Process is null)

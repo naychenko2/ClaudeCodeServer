@@ -128,13 +128,15 @@ interface ChatHeaderBarProps {
   session: Session;
   project: Project;
   online: boolean;
+  // Текущий режим из Composer — может отличаться от session.mode до отправки следующего сообщения
+  mode: 'auto' | 'plan' | 'ask';
   onOpenSettings: () => void;
   onToggleDock?: () => void;
   isMobile?: boolean;
   onBack?: () => void;
 }
 
-function ChatHeaderBar({ session, project, online, onOpenSettings, onToggleDock, isMobile, onBack }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, mode, onOpenSettings, onToggleDock, isMobile, onBack }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -143,7 +145,7 @@ function ChatHeaderBar({ session, project, online, onOpenSettings, onToggleDock,
       </div>
       <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
-        {isMobile ? `${session.mode ?? 'auto'} · ${modelLabel(session.model)}` : `${project.name} · ${session.mode ?? 'auto'} · ${modelLabel(session.model)}`}
+        {isMobile ? `${mode} · ${modelLabel(session.model)}` : `${project.name} · ${mode} · ${modelLabel(session.model)}`}
       </div>
     </div>
   );
@@ -450,7 +452,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       const msg = pendingRef.current;
       pendingRef.current = undefined;
       onPendingMessageSent?.();
-      send(msg, []);
+      send(msg, [], mode);
     }
   }, [isJoined]);
 
@@ -459,17 +461,17 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     const paths = [...attachedFiles];
     setAttachedFiles([]);
     atBottomRef.current = true; // своё сообщение — прыгаем вниз и снова прилипаем
-    await send(text, paths);
+    await send(text, paths, mode);
   };
 
   const handleHint = (hint: string) => {
     atBottomRef.current = true;
-    send(hint, []);
+    send(hint, [], mode);
   };
 
   const handleRetry = () => {
     const lastUser = [...items].reverse().find(it => it.kind === 'user_message');
-    if (lastUser && lastUser.kind === 'user_message') { atBottomRef.current = true; send(lastUser.text, lastUser.attachedPaths ?? []); }
+    if (lastUser && lastUser.kind === 'user_message') { atBottomRef.current = true; send(lastUser.text, lastUser.attachedPaths ?? [], mode); }
   };
 
   // Индекс последнего result — у него показываем плашку токенов/времени, у прошлых скрываем
@@ -533,7 +535,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     const handleMiniSend = () => {
       if (!miniText.trim() || isWaiting || !online) return;
       atBottomRef.current = true;
-      send(miniText, []);
+      send(miniText, [], mode);
       setMiniText('');
     };
 
@@ -575,6 +577,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           session={session}
           project={project}
           online={online}
+          mode={mode}
           onOpenSettings={() => setShowEdit(true)}
           onToggleDock={onToggleDock}
         />
@@ -633,6 +636,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         session={session}
         project={project}
         online={online}
+        mode={mode}
         onOpenSettings={() => setShowEdit(true)}
         isMobile={isMobile}
         onBack={onBack}

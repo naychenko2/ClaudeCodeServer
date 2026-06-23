@@ -312,7 +312,7 @@ export function useSession(sessionId: string | null, projectId?: string) {
 
   const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false };
 
-  const send = useCallback(async (text: string, attachedPaths: string[] = []) => {
+  const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string) => {
     if (!sessionId) return;
     setState(sessionId, prev => ({
       ...prev,
@@ -324,7 +324,7 @@ export function useSession(sessionId: string | null, projectId?: string) {
       // защита от потери группы при переподключении или переключении проекта
       await joinSession(sessionId);
       setState(sessionId, prev => ({ ...prev, isJoined: true }));
-      await sendMessage(sessionId, text, attachedPaths);
+      await sendMessage(sessionId, text, attachedPaths, mode);
     } catch (err) {
       setState(sessionId, prev => ({
         ...prev,

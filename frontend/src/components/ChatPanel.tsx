@@ -6,7 +6,7 @@ import { api } from '../lib/api';
 import { modelLabel } from '../lib/models';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
-import { C, FONT, R, MODAL_W } from '../lib/design';
+import { C, FONT, R, MODAL_W, SHADOW } from '../lib/design';
 import { Toolbar, ToolbarIconButton } from './Toolbar';
 import { BackButton, Modal } from './ui';
 import ReactMarkdown from 'react-markdown';
@@ -361,6 +361,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const [composerH, setComposerH] = useState(96);
   // Прилипание к низу: автоскролл при новых сообщениях только если пользователь уже внизу
   const atBottomRef = useRef(true);
+  // Показывать плавающую кнопку «вниз», когда пользователь отлистал вверх
+  const [showScrollDown, setShowScrollDown] = useState(false);
   const pendingRef = useRef<string | undefined>(pendingMessage);
   pendingRef.current = pendingMessage;
 
@@ -378,18 +380,34 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const handleMessagesScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    atBottomRef.current = atBottom;
+    setShowScrollDown(!atBottom);
+  };
+
+  // Программный скролл в конец ленты (клик по плавающей кнопке)
+  const scrollToBottom = () => {
+    atBottomRef.current = true;
+    setShowScrollDown(false);
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
     // Прокручиваем вниз только если пользователь у нижней точки (не отрываем его от истории)
-    if (atBottomRef.current) bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+    if (atBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+      setShowScrollDown(false);
+    } else {
+      // пришёл новый контент, а пользователь читает выше — подсветим кнопку «вниз»
+      setShowScrollDown(true);
+    }
   }, [items]);
 
   // При раскрытии дока — моментально проматываем в конец и возобновляем прилипание
   useEffect(() => {
     if (dockMode === 'expanded') {
       atBottomRef.current = true;
+      setShowScrollDown(false);
       bottomRef.current?.scrollIntoView({ behavior: 'instant' });
     }
   }, [dockMode]);
@@ -653,6 +671,25 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         )}
         <div ref={bottomRef} />
       </div></div>
+
+      {/* Плавающая кнопка «вниз» — появляется, когда лента отлистана вверх */}
+      {showScrollDown && items.length > 0 && (
+        <button
+          onClick={scrollToBottom}
+          title="Вниз чата"
+          style={{
+            position: 'absolute', right: isMobile ? 16 : 24, bottom: composerH + 14,
+            width: 44, height: 44, borderRadius: '50%', border: 'none',
+            background: C.accent, color: C.onAccent, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: SHADOW.fab, zIndex: 15,
+          }}
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14" /><path d="m19 12-7 7-7-7" />
+          </svg>
+        </button>
+      )}
 
       {/* Composer — плавающий над лентой; фон прозрачный, контент виден под/вокруг него */}
       <div ref={composerWrapRef} style={{

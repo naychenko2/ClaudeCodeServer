@@ -306,7 +306,10 @@ export function Composer({
       </button>
       {modeMenuOpen && (
         <div style={{
-          position: 'absolute', bottom: 'calc(100% + 6px)', right: 0, minWidth: 248, maxWidth: 'calc(100vw - 32px)',
+          // На мобиле кнопка режима слева → раскрываем вправо (left:0), иначе ушла бы за левый край.
+          // На десктопе кнопка справа → раскрываем влево (right:0).
+          position: 'absolute', bottom: 'calc(100% + 6px)', ...(isMobile ? { left: 0 } : { right: 0 }),
+          minWidth: 248, maxWidth: 'calc(100vw - 32px)',
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
           boxShadow: SHADOW.dropdown, padding: 5, zIndex: 50,
         }}>

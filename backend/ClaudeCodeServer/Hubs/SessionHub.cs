@@ -1,8 +1,10 @@
 using ClaudeCodeServer.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeCodeServer.Hubs;
 
+[Authorize]
 public class SessionHub : Hub
 {
     private readonly SessionManager _sessions;

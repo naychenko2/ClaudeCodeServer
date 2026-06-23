@@ -56,13 +56,28 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
     throw new OfflineError();
   }
 
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('cc_api_key') : null;
+
   try {
     const res = await fetch(BASE + url, {
-      headers: { 'Content-Type': 'application/json' },
       ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options?.headers as Record<string, string> | undefined),
+      },
     });
     // Сервер ответил (даже ошибкой) → мы онлайн
     setOnline(true);
+
+    // Ключ отвергнут сервером — уводим на экран входа
+    if (res.status === 401) {
+      if (token && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('cc-unauthorized'));
+      }
+      const err = await res.json().catch(() => ({ error: 'Неверный API-ключ' }));
+      throw new Error(err.error ?? 'Неверный API-ключ');
+    }
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));

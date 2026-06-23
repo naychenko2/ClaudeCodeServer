@@ -38,6 +38,20 @@ export default function App() {
 
   useEffect(() => { initConnectivity() }, [])
 
+  // Сервер отверг API-ключ (401) → разлогиниваем и уводим на экран входа
+  useEffect(() => {
+    const onUnauthorized = () => {
+      localStorage.removeItem('cc_api_key')
+      localStorage.removeItem('cc_server_url')
+      localStorage.removeItem(OPEN_PROJECT_KEY)
+      navReplace({ screen: 'projects' })
+      setProject(null)
+      setAuth(null)
+    }
+    window.addEventListener('cc-unauthorized', onUnauthorized)
+    return () => window.removeEventListener('cc-unauthorized', onUnauthorized)
+  }, [])
+
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {

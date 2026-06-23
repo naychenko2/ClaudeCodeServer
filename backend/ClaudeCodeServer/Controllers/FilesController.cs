@@ -1,9 +1,11 @@
 using ClaudeCodeServer.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeCodeServer.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/projects/{projectId}/files")]
 public class FilesController(FileService files, ProjectManager projects, SyncService sync) : ControllerBase
 {

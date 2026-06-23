@@ -1,6 +1,8 @@
 using System.Text.Json.Serialization;
+using ClaudeCodeServer.Auth;
 using ClaudeCodeServer.Hubs;
 using ClaudeCodeServer.Services;
+using Microsoft.AspNetCore.Authentication;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -20,6 +22,13 @@ builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddSingleton<ChatHistoryService>();
 builder.Services.AddSingleton<SessionManager>();
+builder.Services.AddSingleton<ApiKeyAuthService>();
+
+// Аутентификация по единственному API-ключу (Bearer / X-Api-Key / ?access_token=)
+builder.Services.AddAuthentication(ApiKeyAuthService.SchemeName)
+    .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(
+        ApiKeyAuthService.SchemeName, _ => { });
+builder.Services.AddAuthorization();
 
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.SetIsOriginAllowed(_ => true)
@@ -29,7 +38,12 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 
 var app = builder.Build();
 
+// Прогрев сервиса ключа на старте — печатает сгенерированный ключ в консоль
+app.Services.GetRequiredService<ApiKeyAuthService>();
+
 app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
 
 // Раздача фронтенда из frontend/dist/ (production / PWA)
 var distPath = Path.GetFullPath(Path.Combine(

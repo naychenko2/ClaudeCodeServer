@@ -83,8 +83,11 @@ WorkingDirectory = `project.RootPath`
 
 ## REST API
 
+Все эндпоинты (кроме `/api/auth/ping`) и SignalR-хаб защищены `[Authorize]` —
+доступ только по API-ключу. См. [docs/remote-access.md](docs/remote-access.md).
+
 ```
-POST /api/auth/ping             { serverUrl, apiKey } → { ok }
+POST /api/auth/ping             { serverUrl, apiKey } → { ok } | 401  (валидирует ключ)
 GET/POST/PUT/DELETE /api/projects
 GET/POST/DELETE     /api/projects/{id}/sessions       POST body: { mode, name?, resumeSessionId?, model? }
 PUT                 /api/projects/{id}/sessions/{sid} body: { name?, model? } → обновлённая сессия
@@ -106,7 +109,10 @@ DELETE              /api/projects/{id}/files          ?path=
 
 ## Реализовано
 
-- Auth: LoginPage (URL + API key → localStorage) → ProjectListPage
+- Auth: реальная аутентификация по API-ключу — `[Authorize]` на всех API + хабе.
+  Ключ из `Auth:ApiKey` (env/config) или автоген в `data/auth-key.txt` (печатается в консоль).
+  Клиент: `Authorization: Bearer` (REST), `?access_token=` (WS); 401 → авто-логаут.
+  Удалённый доступ (Tailscale + HTTPS): [docs/remote-access.md](docs/remote-access.md)
 - Проекты: CRUD, редактирование, выход
 - Сессии: создание с именем/режимом/моделью, редактирование названия и модели (шапка чата + список), статусы (starting/active/waiting/finished/error)
 - Чат: Composer (вложения, режим ⚡/📋/❓, голосовой ввод, стоп, «Claude печатает…»)

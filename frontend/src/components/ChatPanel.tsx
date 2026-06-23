@@ -255,9 +255,10 @@ function MarkdownContent({ text }: { text: string }) {
             );
           }
           if (text.includes('\n')) {
+            // Код без указания языка — на светлой панели вывода (лёгкий тёплый фон вместо тёмного)
             return (
-              <pre style={{ background: C.textHeading, borderRadius: 8, padding: '10px 14px', margin: '6px 0', overflowX: 'auto' }}>
-                <code style={{ fontFamily: FONT.mono, fontSize: 12.5, color: C.bgSelected, lineHeight: 1.5 }} {...props}>{text}</code>
+              <pre style={{ background: C.outputBg, border: `1px solid ${C.outputBorder}`, borderRadius: 8, padding: '10px 14px', margin: '6px 0', overflowX: 'auto' }}>
+                <code style={{ fontFamily: FONT.mono, fontSize: 12.5, color: C.textPrimary, lineHeight: 1.5 }} {...props}>{text}</code>
               </pre>
             );
           }
@@ -871,6 +872,9 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
   const hasDiff = editHunks.length > 0;
   const hasResult = item.result !== undefined && item.result.trim().length > 0;
   const hasBody = hasDiff || hasResult;
+  // Консольные инструменты (Bash/shell) → тёмный «терминальный» вывод.
+  // Остальные (Read/Grep/Glob/MCP и пр.) → светлая «панель вывода», чтобы текст/код не давил тёмным фоном.
+  const isConsole = n.startsWith('bash') || n.includes('shell');
 
   return (
     <div>
@@ -898,8 +902,15 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
       {open && hasDiff && <DiffBody hunks={editHunks} />}
       {open && !hasDiff && hasResult && (
         <pre style={{
-          margin: '0 0 9px', padding: '8px 10px', background: C.textHeading, borderRadius: 7,
-          color: item.isError ? '#F0B8AC' : '#D8CFC0', fontFamily: FONT.mono,
+          margin: '0 0 9px', padding: '8px 10px', borderRadius: 7,
+          // Bash → тёмный терминал; остальное → светлая панель вывода
+          background: isConsole ? C.termBg : C.outputBg,
+          border: isConsole ? 'none' : `1px solid ${C.outputBorder}`,
+          // На светлой панели ошибку красим в danger; на тёмной — светлый «терминальный» оттенок
+          color: isConsole
+            ? (item.isError ? C.termError : C.termText)
+            : (item.isError ? C.dangerText : C.textPrimary),
+          fontFamily: FONT.mono,
           fontSize: 11.5, lineHeight: 1.5, maxHeight: 280, overflow: 'auto',
           whiteSpace: 'pre-wrap', wordBreak: 'break-word',
         }}>
@@ -1308,6 +1319,9 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
         if (typeof inp.path === 'string') return inp.path;
         try { const s = JSON.stringify(inp, null, 2); return s === '{}' ? '' : s; } catch { return ''; }
       })();
+      // Консольная команда (Bash/shell) → тёмный «терминал»; прочее (путь файла и т.п.) → светлая панель
+      const pn = item.toolName.toLowerCase();
+      const isConsoleReq = pn.startsWith('bash') || pn.includes('shell');
       return (
         <div style={{
           border: '1px solid #E6C9B8', borderLeft: `3px solid ${C.accent}`,
@@ -1320,8 +1334,10 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
             Claude хочет выполнить <span style={{ fontWeight: 600 }}>{item.toolName}</span>:
           </div>
           <div style={{
-            background: C.textHeading, borderRadius: 7, padding: '8px 11px',
-            color: C.bgSelected, fontFamily: FONT.mono,
+            background: isConsoleReq ? C.termBg : C.outputBg,
+            border: isConsoleReq ? 'none' : `1px solid ${C.outputBorder}`,
+            borderRadius: 7, padding: '8px 11px',
+            color: isConsoleReq ? C.termText : C.textPrimary, fontFamily: FONT.mono,
             fontSize: 12, marginBottom: 12, lineHeight: 1.5,
             whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto',
           }}>

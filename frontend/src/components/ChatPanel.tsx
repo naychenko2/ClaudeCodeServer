@@ -1639,8 +1639,8 @@ function FileChangedRow({ item, online, onOpenFile, onRevert }: {
           <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
         </svg>
       </span>
-      <span onClick={() => onOpenFile(item.path)} className="cc-trunc-left"
-        style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+      <span onClick={() => onOpenFile(item.path)}
+        style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', direction: 'rtl', textAlign: 'left' }}>
         {relativePath}
       </span>
       <span style={{ fontSize: 11.5, color: '#27AE60', fontFamily: FONT.mono, flexShrink: 0 }}>+{item.added}</span>

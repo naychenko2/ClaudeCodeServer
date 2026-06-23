@@ -5,8 +5,8 @@ import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
-import { C, R, FONT } from '../lib/design';
-import { Modal, TextField, Button } from './ui';
+import { C, R, FONT, MODAL_W } from '../lib/design';
+import { Modal, ModalActions, TextField } from './ui';
 
 interface Props {
   project: Project;
@@ -395,15 +395,21 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       {/* Диалог создания файла */}
       {showCreateFile && (
         <Modal
-          width={420}
+          width={MODAL_W.form}
           onClose={() => setShowCreateFile(false)}
-          title={
-            <>
-              Новый файл
-              {createInDir && (
-                <div style={{ fontSize: 12, fontFamily: FONT.mono, color: C.textMuted, marginTop: 6, fontWeight: 400 }}>{createInDir}/</div>
-              )}
-            </>
+          title="Новый файл"
+          subtitle={
+            createInDir
+              ? <>В папке <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{createInDir}/</span></>
+              : 'В корне проекта'
+          }
+          footer={
+            <ModalActions
+              confirmLabel="Создать"
+              onConfirm={handleCreateFile}
+              confirmDisabled={!newFileName.trim()}
+              onCancel={() => setShowCreateFile(false)}
+            />
           }
         >
           <TextField
@@ -414,10 +420,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             autoFocus
             onEnter={handleCreateFile}
           />
-          <div style={{ display: 'flex', gap: 10 }}>
-            <Button variant="secondary" fullWidth onClick={() => setShowCreateFile(false)}>Отмена</Button>
-            <Button variant="primary" fullWidth onClick={handleCreateFile}>Создать</Button>
-          </div>
         </Modal>
       )}
     </div>

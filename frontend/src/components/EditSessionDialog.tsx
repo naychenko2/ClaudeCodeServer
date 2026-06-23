@@ -2,8 +2,8 @@ import { useState } from 'react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
 import { MODELS } from '../lib/models';
-import { C } from '../lib/design';
-import { Modal, Field, TextField, SegmentedControl, Button } from './ui';
+import { C, MODAL_W } from '../lib/design';
+import { Modal, ModalActions, Field, TextField, SegmentedControl } from './ui';
 
 interface Props {
   session: Session;
@@ -35,7 +35,19 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
   };
 
   return (
-    <Modal title="Настройки чата" onClose={onClose}>
+    <Modal
+      title="Настройки чата"
+      width={MODAL_W.form}
+      onClose={onClose}
+      footer={
+        <ModalActions
+          confirmLabel={loading ? 'Сохраняем…' : 'Сохранить'}
+          onConfirm={handleSave}
+          loading={loading}
+          onCancel={onClose}
+        />
+      }
+    >
       <Field label="Название">
         <TextField value={name} onChange={setName} placeholder="авто из первого сообщения" autoFocus onEnter={handleSave} />
       </Field>
@@ -45,13 +57,6 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
       </Field>
 
       {error && <p style={{ margin: 0, fontSize: 13, color: C.danger }}>{error}</p>}
-
-      <div style={{ display: 'flex', gap: 10 }}>
-        <Button variant="secondary" fullWidth onClick={onClose}>Отмена</Button>
-        <Button variant="primary" fullWidth loading={loading} onClick={handleSave}>
-          {loading ? 'Сохраняем…' : 'Сохранить'}
-        </Button>
-      </div>
     </Modal>
   );
 }

@@ -6,9 +6,9 @@ import { api } from '../lib/api';
 import { modelLabel } from '../lib/models';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
-import { C, FONT } from '../lib/design';
+import { C, FONT, R, MODAL_W } from '../lib/design';
 import { Toolbar, ToolbarIconButton } from './Toolbar';
-import { BackButton } from './ui';
+import { BackButton, Modal } from './ui';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -321,57 +321,46 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
       .finally(() => setLoading(false));
   }, [projectId]);
 
+  const visibleFiles = files.filter(f => !f.isDirectory);
+
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, background: C.overlay,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 1000,
-      }}
+    <Modal
+      title="Прикрепить файл"
+      width={MODAL_W.form}
+      onClose={onClose}
+      // Контент — это сам список со своими отступами; убираем стандартный паддинг карточки
+      cardStyle={{ maxHeight: '70vh' }}
     >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: C.bgMain, borderRadius: 20, padding: '16px 0',
-          minWidth: 340, maxWidth: 440, maxHeight: '60vh',
-          display: 'flex', flexDirection: 'column',
-          boxShadow: '0 24px 60px rgba(23,19,15,0.4)',
-        }}
-      >
-        <div style={{ padding: '0 18px 12px', fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, letterSpacing: '-0.01em', color: C.textHeading, borderBottom: `1px solid ${C.borderLight}` }}>
-          Прикрепить файл
-        </div>
-        <div style={{ overflowY: 'auto', flex: 1, padding: '8px 0' }}>
-          {loading && (
-            <div style={{ padding: '16px', color: '#8A8070', fontSize: 13, textAlign: 'center' }}>
-              Загрузка…
-            </div>
-          )}
-          {!loading && files.filter(f => !f.isDirectory).map(f => (
-            <div
-              key={f.path}
-              onClick={() => { onPick(f.path); onClose(); }}
-              style={{
-                padding: '8px 16px', cursor: 'pointer', fontSize: 13,
-                color: C.textPrimary, display: 'flex', alignItems: 'center', gap: 8,
-              }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#F0EAE0')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-            >
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {f.path}
-              </span>
-            </div>
-          ))}
-          {!loading && files.filter(f => !f.isDirectory).length === 0 && (
-            <div style={{ padding: '16px', color: '#8A8070', fontSize: 13, textAlign: 'center' }}>
-              Файлы не найдены
-            </div>
-          )}
-        </div>
+      <div style={{ margin: '-4px -8px', maxHeight: '52vh', overflowY: 'auto' }}>
+        {loading && (
+          <div style={{ padding: 16, color: C.textMuted, fontSize: 13, textAlign: 'center' }}>
+            Загрузка…
+          </div>
+        )}
+        {!loading && visibleFiles.map(f => (
+          <div
+            key={f.path}
+            onClick={() => { onPick(f.path); onClose(); }}
+            style={{
+              padding: '10px 12px', cursor: 'pointer', fontSize: 13, borderRadius: R.md,
+              color: C.textPrimary, display: 'flex', alignItems: 'center', gap: 8,
+              fontFamily: FONT.mono,
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = C.accentLight)}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          >
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {f.path}
+            </span>
+          </div>
+        ))}
+        {!loading && visibleFiles.length === 0 && (
+          <div style={{ padding: 16, color: C.textMuted, fontSize: 13, textAlign: 'center' }}>
+            Файлы не найдены
+          </div>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 }
 

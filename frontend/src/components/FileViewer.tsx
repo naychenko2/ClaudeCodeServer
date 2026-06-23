@@ -28,9 +28,9 @@ import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
 import { DocumentViewer, type DocKind } from './DocumentViewer';
 import { base64ToBytes } from '../lib/binary';
-import { C, FONT, SHADOW } from '../lib/design';
+import { C, FONT, MODAL_W } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from './Toolbar';
-import { BackButton } from './ui';
+import { BackButton, Modal, ModalActions, Button, useIsMobileModal } from './ui';
 
 SyntaxHighlighter.registerLanguage('tsx', tsx);
 SyntaxHighlighter.registerLanguage('typescript', typescript);
@@ -551,31 +551,65 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
 
       {/* Диалог удаления */}
       {deleteConfirm && (
-        <div style={{ position: 'fixed', inset: 0, background: C.overlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div style={{ background: C.bgMain, borderRadius: 20, padding: 24, width: 340, boxShadow: SHADOW.modal }}>
-            <h3 style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 20, margin: '0 0 8px', letterSpacing: '-0.01em' }}>Удалить «{fileName}»?</h3>
-            <p style={{ fontSize: 13, color: C.textSecondary, marginBottom: 20 }}>Это действие нельзя отменить.</p>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => setDeleteConfirm(false)} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: C.bgPanel, color: '#5C5246', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Отмена</button>
-              <button onClick={handleDelete} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: '#C0392B', color: '#FFF', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Удалить</button>
-            </div>
-          </div>
-        </div>
+        <Modal
+          title="Удалить файл?"
+          width={MODAL_W.confirm}
+          onClose={() => setDeleteConfirm(false)}
+          subtitle={
+            <>
+              Файл <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{fileName}</span> будет удалён без возможности восстановления.
+            </>
+          }
+          footer={
+            <ModalActions
+              confirmLabel="Удалить"
+              confirmVariant="danger"
+              onConfirm={handleDelete}
+              onCancel={() => setDeleteConfirm(false)}
+            />
+          }
+        />
       )}
 
-      {/* Диалог несохранённых изменений */}
+      {/* Диалог несохранённых изменений (три исхода: сохранить / не сохранять / остаться) */}
       {unsavedConfirm && (
-        <div style={{ position: 'fixed', inset: 0, background: C.overlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div style={{ background: C.bgMain, borderRadius: 20, padding: 24, width: 360, boxShadow: SHADOW.modal }}>
-            <h3 style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 20, margin: '0 0 8px', letterSpacing: '-0.01em' }}>Сохранить изменения?</h3>
-            <p style={{ fontSize: 13, color: C.textSecondary, marginBottom: 20 }}>В файле «{fileName}» есть несохранённые правки.</p>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={handleCloseWithoutSave} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: C.bgPanel, color: '#5C5246', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Не сохранять</button>
-              <button onClick={handleSaveAndClose} style={{ flex: 1, padding: 12, borderRadius: 12, border: 'none', background: C.accent, color: C.onAccent, cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Сохранить</button>
-            </div>
-          </div>
-        </div>
+        <Modal
+          title="Сохранить изменения?"
+          width={MODAL_W.confirm}
+          onClose={() => setUnsavedConfirm(false)}
+          subtitle={
+            <>
+              В файле <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{fileName}</span> есть несохранённые правки.
+            </>
+          }
+          footer={
+            <UnsavedActions
+              onSave={handleSaveAndClose}
+              onDiscard={handleCloseWithoutSave}
+              onCancel={() => setUnsavedConfirm(false)}
+            />
+          }
+        />
       )}
+    </div>
+  );
+}
+
+// Три исхода для диалога несохранённых изменений: сохранить / не сохранять / остаться.
+//  • Десктоп: в ряд (Отмена · Не сохранять · Сохранить), основное справа.
+//  • Мобила (шторка): в колонку — Сохранить сверху, ниже «Не сохранять», затем «Отмена».
+function UnsavedActions({ onSave, onDiscard, onCancel }: {
+  onSave: () => void; onDiscard: () => void; onCancel: () => void;
+}) {
+  const isMobile = useIsMobileModal();
+  const size = isMobile ? 'lg' : 'md';
+  const save = <Button variant="primary" size={size} fullWidth onClick={onSave}>Сохранить</Button>;
+  const discard = <Button variant="ghost" size={size} fullWidth onClick={onDiscard}>Не сохранять</Button>;
+  const cancel = <Button variant="secondary" size={size} fullWidth onClick={onCancel}>Отмена</Button>;
+  if (isMobile) return <>{save}{discard}{cancel}</>;
+  return (
+    <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+      {cancel}{discard}{save}
     </div>
   );
 }

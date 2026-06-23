@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { C, R, FONT, SHADOW } from '../lib/design';
+import { C, R, FONT, SHADOW, Z } from '../lib/design';
 
 export interface ComposerProps {
   onSend: (text: string, attachments: string[]) => void;
@@ -310,20 +310,21 @@ export function Composer({
           // На мобиле кнопка режима слева → раскрываем вправо (left:0), иначе ушла бы за левый край.
           // На десктопе кнопка справа → раскрываем влево (right:0).
           position: 'absolute', bottom: 'calc(100% + 6px)', ...(isMobile ? { left: 0 } : { right: 0 }),
-          minWidth: 248, maxWidth: 'calc(100vw - 32px)',
+          minWidth: isMobile ? 260 : 248, maxWidth: 'calc(100vw - 32px)',
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
-          boxShadow: SHADOW.dropdown, padding: 5, zIndex: 50,
+          boxShadow: SHADOW.dropdown, padding: 5, zIndex: Z.dropdown,
         }}>
           {MODES.map(m => {
             const active = m === mode;
             return (
               <button key={m} onClick={() => { onModeChange(m); setModeMenuOpen(false); }}
                 style={{
-                  width: '100%', display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 9px',
-                  borderRadius: R.pill, border: 'none', background: active ? C.accentLight : 'transparent',
+                  width: '100%', display: 'flex', alignItems: 'flex-start', gap: 9,
+                  padding: isMobile ? '11px 11px' : '8px 9px',
+                  borderRadius: R.md, border: 'none', background: active ? C.accentLight : 'transparent',
                   cursor: 'pointer', textAlign: 'left',
                 }}
-                onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#F7F2EA'; }}
+                onMouseEnter={e => { if (!active) e.currentTarget.style.background = C.accentLight; }}
                 onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
               >
                 <span style={{ color: active ? C.accent : C.textMuted, display: 'flex', marginTop: 1, flexShrink: 0 }}><ModeIcon mode={m} /></span>

@@ -2,8 +2,8 @@ import { useState } from 'react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
 import { MODELS } from '../lib/models';
-import { C } from '../lib/design';
-import { Modal, Field, TextField, TextArea, SegmentedControl, Button } from './ui';
+import { C, MODAL_W } from '../lib/design';
+import { Modal, ModalActions, Field, TextField, TextArea, SegmentedControl } from './ui';
 
 interface NewSessionDialogProps {
   projectId: string;
@@ -43,7 +43,20 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
   };
 
   return (
-    <Modal title="Новый чат" onClose={onClose}>
+    <Modal
+      title="Новый чат"
+      subtitle="Настройте режим и модель — или просто опишите задачу."
+      width={MODAL_W.form}
+      onClose={onClose}
+      footer={
+        <ModalActions
+          confirmLabel={loading ? 'Создаём…' : 'Создать и начать'}
+          onConfirm={handleSubmit}
+          loading={loading}
+          onCancel={onClose}
+        />
+      }
+    >
       <Field label="Название">
         <TextField value={name} onChange={setName} placeholder="авто из первого сообщения" />
       </Field>
@@ -61,10 +74,6 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
       </Field>
 
       {error && <p style={{ margin: 0, fontSize: 13, color: C.danger }}>{error}</p>}
-
-      <Button variant="primary" fullWidth loading={loading} onClick={handleSubmit}>
-        {loading ? 'Создаём…' : 'Создать и начать'}
-      </Button>
     </Modal>
   );
 }

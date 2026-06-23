@@ -528,7 +528,9 @@ public class ClaudeSession : IAsyncDisposable
             if (!cb.TryGetProperty("type", out var cbt) || cbt.GetString() != "tool_use") return;
             var id = cb.TryGetProperty("id", out var cid) ? cid.GetString() ?? "" : "";
             var name = cb.TryGetProperty("name", out var cn) ? cn.GetString() ?? "" : "";
-            if (id.Length == 0 || name == "AskUserQuestion") return;
+            // Служебные инструменты не показываем: AskUserQuestion/ExitPlanMode идут отдельными
+            // карточками (вопрос/план), ToolSearch — внутренний механизм загрузки схем инструментов
+            if (id.Length == 0 || name is "AskUserQuestion" or "ExitPlanMode" or "ToolSearch") return;
             _toolStream[index] = (id, new System.Text.StringBuilder());
             await _onMessage(new ToolUseMessage(id, name, new { }));
             return;
@@ -585,10 +587,11 @@ public class ClaudeSession : IAsyncDisposable
             var toolInput = block.TryGetProperty("input", out var ti)
                 ? JsonSerializer.Deserialize<object>(ti.GetRawText())! : new object();
 
-            // AskUserQuestion приходит ещё и как control_request(can_use_tool) — карточку показываем оттуда, здесь пропускаем
-            if (toolName == "AskUserQuestion") continue;
+            // Служебные инструменты не дублируем в ленте: AskUserQuestion/ExitPlanMode показываем
+            // отдельными карточками (вопрос/план), ToolSearch — внутренняя загрузка схем инструментов
+            if (toolName is "AskUserQuestion" or "ExitPlanMode" or "ToolSearch") continue;
             // После одобрения плана любой реальный инструмент означает, что Claude приступил к реализации
-            if (_awaitPlanExecution && toolName != "ExitPlanMode") _sawToolSinceApprove = true;
+            if (_awaitPlanExecution) _sawToolSinceApprove = true;
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }
 

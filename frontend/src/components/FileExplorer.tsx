@@ -19,7 +19,8 @@ interface Props {
 // при переключении вкладок «Чаты»/«Файлы». Ключ — projectId.
 interface ExplorerState {
   dirCache: Map<string, FileEntry[]>;
-  expanded: Set<string>;
+  expanded: Set<string>;       // только десктоп/планшет (дерево)
+  mobileDir: string;           // текущая папка в мобильной навигации ('' = корень)
   search: string;
   searchResults: FileEntry[] | null;
   createInDir: string;
@@ -59,6 +60,15 @@ function FolderIcon() {
   );
 }
 
+// Шеврон-вправо — намёк «войти в папку» (мобильная навигация).
+function ChevronRight() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
 // Иконка облака — маркер/тоггл синхронизации.
 // direct — залит акцентом (помечен сам); inherited — залит светлым акцентом (через папку/проект);
 // idle — контур (можно включить).
@@ -92,6 +102,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const initial = _explorerStore.get(project.id);
   const [dirCache, setDirCache] = useState<Map<string, FileEntry[]>>(() => initial?.dirCache ?? new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => initial?.expanded ?? new Set());
+  const [mobileDir, setMobileDir] = useState<string>(() => initial?.mobileDir ?? '');
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const inFlight = useRef(new Set<string>());
   const dirCacheRef = useRef(dirCache);
@@ -147,13 +158,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     if (st) {
       setDirCache(st.dirCache);
       setExpanded(st.expanded);
+      setMobileDir(st.mobileDir);
       setCreateInDir(st.createInDir);
       setSearch(st.search);
       setSearchResults(st.searchResults);
       if (!st.dirCache.has('')) loadDir('');
+      // на мобиле могли вернуться во вложенную папку — догрузим её содержимое
+      if (st.mobileDir && !st.dirCache.has(st.mobileDir)) loadDir(st.mobileDir);
     } else {
       setDirCache(new Map());
       setExpanded(new Set());
+      setMobileDir('');
       setCreateInDir('');
       setSearch('');
       setSearchResults(null);
@@ -164,10 +179,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   // Сохраняем состояние дерева в модульный стор при любом изменении
   useEffect(() => {
     _explorerStore.set(project.id, {
-      dirCache, expanded, search, searchResults, createInDir,
+      dirCache, expanded, mobileDir, search, searchResults, createInDir,
       scrollTop: scrollRef.current?.scrollTop ?? _explorerStore.get(project.id)?.scrollTop ?? 0,
     });
-  }, [project.id, dirCache, expanded, search, searchResults, createInDir]);
+  }, [project.id, dirCache, expanded, mobileDir, search, searchResults, createInDir]);
 
   // Восстанавливаем позицию прокрутки после монтирования (дерево уже отрисовано из кэша)
   useLayoutEffect(() => {
@@ -195,6 +210,13 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       if (!dirCache.has(path)) await loadDir(path);
       setExpanded(prev => new Set(prev).add(path));
     }
+  };
+
+  // Мобильная навигация: вход в папку (содержимое уже в кэше — иначе грузим)
+  const enterMobileDir = async (path: string) => {
+    setMobileDir(path);
+    setCreateInDir(path);
+    if (!dirCache.has(path)) await loadDir(path);
   };
 
   const handleSearch = async (q: string) => {
@@ -238,7 +260,35 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const rootLoading = !dirCache.has('') && loadingDirs.has('');
 
-  const renderFileRow = (entry: FileEntry, depth: number, showPath = false) => {
+  // === Мобильная навигация «по папкам» ===
+  // Содержимое текущей папки: сначала директории, затем файлы (по имени)
+  const mobileEntries = useMemo((): FileEntry[] => {
+    const entries = dirCache.get(mobileDir);
+    if (!entries) return [];
+    return [...entries].sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [dirCache, mobileDir]);
+
+  // Сегменты хлебных крошек: [{ label, path }] от корня до текущей папки
+  const breadcrumbs = useMemo(() => {
+    const crumbs: { label: string; path: string }[] = [{ label: 'Файлы', path: '' }];
+    if (mobileDir) {
+      const parts = mobileDir.split('/').filter(Boolean);
+      let acc = '';
+      for (const part of parts) {
+        acc = acc ? `${acc}/${part}` : part;
+        crumbs.push({ label: part, path: acc });
+      }
+    }
+    return crumbs;
+  }, [mobileDir]);
+
+  const mobileDirLoading = !dirCache.has(mobileDir) && loadingDirs.has(mobileDir);
+
+  // mobileNav: папочная навигация (вход в папку вместо toggle, шеврон-вправо, без отступа-depth)
+  const renderFileRow = (entry: FileEntry, depth: number, showPath = false, mobileNav = false) => {
     // Папка-родитель — показываем в результатах поиска, чтобы различать одноимённые файлы (MA5)
     const parentDir = showPath ? normPath(entry.path).split('/').slice(0, -1).join('/') : '';
     const isExpanded = expanded.has(entry.path);
@@ -253,7 +303,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     return (
       <div
         key={entry.path}
-        onClick={() => entry.isDirectory ? handleToggleDir(entry) : onOpenFile(entry.path)}
+        onClick={() => entry.isDirectory ? (mobileNav ? enterMobileDir(entry.path) : handleToggleDir(entry)) : onOpenFile(entry.path)}
         onMouseEnter={() => setHoveredPath(entry.path)}
         onMouseLeave={() => setHoveredPath(null)}
         style={{
@@ -268,9 +318,12 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           transition: 'background 0.1s',
         }}
       >
-        <span style={{ width: 12, flexShrink: 0, textAlign: 'center', userSelect: 'none', color: '#9A8F7E', fontSize: 9, lineHeight: 1 }}>
-          {entry.isDirectory ? (isLoading ? '·' : (isExpanded ? '▾' : '▸')) : ''}
-        </span>
+        {/* toggle-стрелка дерева — только десктоп/планшет; в мобильной навигации её нет */}
+        {!mobileNav && (
+          <span style={{ width: 12, flexShrink: 0, textAlign: 'center', userSelect: 'none', color: '#9A8F7E', fontSize: 9, lineHeight: 1 }}>
+            {entry.isDirectory ? (isLoading ? '·' : (isExpanded ? '▾' : '▸')) : ''}
+          </span>
+        )}
         {entry.isDirectory ? (
           <span style={{ flexShrink: 0, display: 'flex' }}><FolderIcon /></span>
         ) : (
@@ -333,6 +386,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           }
           return null;
         })()}
+        {/* Намёк «войти в папку» — только в мобильной навигации */}
+        {mobileNav && entry.isDirectory && <ChevronRight />}
       </div>
     );
   };
@@ -358,7 +413,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
         {online && (
           <div
-            onClick={() => setShowCreateFile(true)}
+            onClick={() => {
+              // на мобиле создаём в текущей папке навигации
+              if (isMobile) setCreateInDir(mobileDir);
+              setShowCreateFile(true);
+            }}
             style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 36, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -367,11 +426,45 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         )}
       </div>
 
-      {/* Tree / результаты поиска */}
+      {/* Хлебные крошки — только мобила, когда поиск неактивен */}
+      {isMobile && searchResults === null && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 2,
+          padding: '0 10px 8px',
+          overflowX: 'auto', whiteSpace: 'nowrap',
+          // прячем горизонтальный скроллбар, прокрутка остаётся (тач)
+          scrollbarWidth: 'none',
+        }}>
+          {breadcrumbs.map((crumb, i) => {
+            const isLast = i === breadcrumbs.length - 1;
+            return (
+              <span key={crumb.path} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+                {i > 0 && (
+                  <span style={{ color: C.textMuted, fontSize: 13, padding: '0 2px', userSelect: 'none' }}>›</span>
+                )}
+                <span
+                  onClick={isLast ? undefined : () => enterMobileDir(crumb.path)}
+                  style={{
+                    fontFamily: i === 0 ? FONT.sans : FONT.mono,
+                    fontSize: 12.5,
+                    fontWeight: isLast ? 700 : 600,
+                    color: isLast ? C.accent : C.textSecondary,
+                    background: 'none', border: 'none',
+                    padding: '6px 6px', borderRadius: R.md,
+                    cursor: isLast ? 'default' : 'pointer',
+                    minHeight: 32, display: 'flex', alignItems: 'center',
+                  }}
+                >{crumb.label}</span>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Tree (десктоп) / список папки (мобила) / результаты поиска */}
       <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflow: 'auto', padding: '0 4px 12px' }}>
-        {rootLoading ? (
-          <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
-        ) : searchResults !== null ? (
+        {searchResults !== null ? (
+          // Поиск (общий режим для всех форм-факторов)
           searchResults.length === 0 ? (
             <EmptyState
               icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>}
@@ -381,7 +474,23 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           ) : (
             searchResults.map(entry => renderFileRow(entry, 0, true))
           )
+        ) : isMobile ? (
+          // Мобильная навигация «по папкам»: содержимое текущей папки
+          mobileDirLoading ? (
+            <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
+          ) : mobileEntries.length === 0 ? (
+            <EmptyState
+              icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
+              title="Папка пуста"
+              subtitle="Здесь пока нет файлов"
+            />
+          ) : (
+            mobileEntries.map(entry => renderFileRow(entry, 0, false, true))
+          )
+        ) : rootLoading ? (
+          <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
         ) : flatTree.length === 0 ? (
+          // Дерево (десктоп/планшет)
           <EmptyState
             icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
             title="Папка пуста"

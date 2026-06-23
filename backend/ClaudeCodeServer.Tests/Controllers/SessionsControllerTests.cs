@@ -13,7 +13,7 @@ public class SessionsControllerTests : IClassFixture<TestWebApplicationFactory>
 
     public SessionsControllerTests(TestWebApplicationFactory factory)
     {
-        _client = factory.CreateClient();
+        _client = factory.CreateAuthenticatedClient();
         _tempDir = Path.Combine(factory.TempDir, "session_tests");
         Directory.CreateDirectory(_tempDir);
     }

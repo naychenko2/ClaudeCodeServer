@@ -1,10 +1,12 @@
 using ClaudeCodeServer.Models;
 using ClaudeCodeServer.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeCodeServer.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/projects")]
 public class ProjectsController(ProjectManager projects, SessionManager sessions) : ControllerBase
 {

@@ -13,7 +13,7 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 
     public ProjectsControllerTests(TestWebApplicationFactory factory)
     {
-        _client = factory.CreateClient();
+        _client = factory.CreateAuthenticatedClient();
         _tempProjectDir = Path.Combine(factory.TempDir, "projects");
         Directory.CreateDirectory(_tempProjectDir);
     }

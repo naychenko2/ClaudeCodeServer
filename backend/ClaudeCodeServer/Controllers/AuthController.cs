@@ -1,18 +1,32 @@
+using ClaudeCodeServer.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+
 namespace ClaudeCodeServer.Controllers;
 
 [ApiController]
 [Route("api/auth")]
-public class AuthController : ControllerBase
+public class AuthController(ApiKeyAuthService auth) : ControllerBase
 {
+    // Анонимный: проверяет ключ, введённый на странице входа.
+    // Ключ принимается из тела (страница входа) или из заголовка Authorization.
+    [AllowAnonymous]
     [HttpPost("ping")]
     public IActionResult Ping([FromBody] PingRequest req)
     {
-        // Простая проверка — сохраняем серверный URL и API-ключ в сессии
-        // В будущем здесь будет реальная валидация
-        if (string.IsNullOrWhiteSpace(req.ServerUrl) || string.IsNullOrWhiteSpace(req.ApiKey))
-            return BadRequest(new { error = "serverUrl и apiKey обязательны" });
+        var key = req.ApiKey;
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            var authHeader = Request.Headers.Authorization.ToString();
+            if (authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                key = authHeader["Bearer ".Length..].Trim();
+        }
+
+        if (!auth.Validate(key))
+            return Unauthorized(new { error = "Неверный API-ключ" });
+
         return Ok(new { ok = true });
     }
 }
-public record PingRequest(string ServerUrl, string ApiKey);
+
+public record PingRequest(string? ServerUrl, string? ApiKey);

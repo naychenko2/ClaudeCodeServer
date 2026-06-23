@@ -7,7 +7,10 @@ let connection: signalR.HubConnection | null = null;
 export function getConnection(): signalR.HubConnection {
   if (!connection) {
     connection = new signalR.HubConnectionBuilder()
-      .withUrl('/hubs/session')
+      .withUrl('/hubs/session', {
+        // API-ключ для WebSocket уходит как ?access_token= (заголовок задать нельзя)
+        accessTokenFactory: () => localStorage.getItem('cc_api_key') ?? '',
+      })
       .withAutomaticReconnect({
         // Переподключаемся бесконечно с экспоненциальным откатом, макс 30 сек
         nextRetryDelayInMilliseconds: ctx =>

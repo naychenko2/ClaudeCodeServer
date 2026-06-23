@@ -206,7 +206,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                   fontWeight: 500,
                   letterSpacing: '-0.01em',
                   color: isActive ? C.accent : C.textMuted,
-                  background: isActive ? C.accentLight : C.bgPanel,
+                  // в активной карточке фон accentLight совпал бы с фоном чипа — даём белый для контраста
+                  background: isActive ? C.bgWhite : C.bgPanel,
+                  border: isActive ? `1px solid ${C.accentMuted}` : '1px solid transparent',
                   padding: '1px 6px',
                   borderRadius: R.sm,
                   maxWidth: '100%',

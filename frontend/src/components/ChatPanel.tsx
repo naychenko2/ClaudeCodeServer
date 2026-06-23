@@ -510,10 +510,24 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const renderItems = () => {
     const isTool = (it: ChatItem) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && !it.parentToolUseId;
     const inBlock = (it: ChatItem) => isTool(it) || it.kind === 'file_changed';
+    // Дочерние вызовы субагента (Task) — рисуем единой непрерывной линией-коннектором слева
+    const isSubTool = (it: ChatItem) => it.kind === 'tool_use' && !!it.parentToolUseId;
     const out: React.ReactNode[] = [];
     let i = 0;
     while (i < items.length) {
-      if (inBlock(items[i])) {
+      if (isSubTool(items[i])) {
+        const start = i;
+        const sub: Array<[ChatItem, number]> = [];
+        while (i < items.length && isSubTool(items[i])) { sub.push([items[i], i]); i++; }
+        // Один контейнер с borderLeft на всю стопку дочерних → линия не прерывается gap'ом ленты
+        out.push(
+          <div key={`sub-${start}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `2px solid ${C.border}` }}>
+            {sub.map(([it, idx], gi) => (
+              <div key={idx} style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>{renderItem(it, idx)}</div>
+            ))}
+          </div>
+        );
+      } else if (inBlock(items[i])) {
         const start = i;
         const slice: Array<[ChatItem, number]> = [];
         while (i < items.length && inBlock(items[i])) { slice.push([items[i], i]); i++; }
@@ -1477,14 +1491,10 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
         </div>
       );
 
-    case 'tool_use': {
-      // План задач рисуем отдельной карточкой-чек-листом
-      const node = item.name === 'TodoWrite' ? <TodoPlanView input={item.input} /> : <ToolUseView item={item} />;
-      // Дочерние вызовы субагента (Task) — с отступом и линией-коннектором
-      return item.parentToolUseId
-        ? <div style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `2px solid ${C.border}` }}>{node}</div>
-        : node;
-    }
+    case 'tool_use':
+      // План задач рисуем отдельной карточкой-чек-листом. Линию-коннектор для дочерних
+      // вызовов субагента (parentToolUseId) рисует renderItems — единой непрерывной полосой.
+      return item.name === 'TodoWrite' ? <TodoPlanView input={item.input} /> : <ToolUseView item={item} />;
 
     case 'ask_question':
       return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} />;

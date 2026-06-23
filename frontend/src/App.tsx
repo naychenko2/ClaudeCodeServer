@@ -9,6 +9,7 @@ import { runOfflineSnapshot, syncProjectFiles } from './lib/sync'
 import { onFilesChanged } from './lib/signalr'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, type NavSnapshot } from './lib/nav'
+import { api } from './lib/api'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 
@@ -72,6 +73,25 @@ export default function App() {
   useEffect(() => {
     if (auth && online) runOfflineSnapshot(projectIdRef.current)
   }, [auth, online])
+
+  // Восстановленный из localStorage проект мог быть удалён на сервере (или список очищен).
+  // Сверяемся со списком проектов и, если «призрака» там нет, выходим к списку.
+  // Только онлайн: офлайн полагаемся на кэш и не выкидываем пользователя.
+  useEffect(() => {
+    if (!auth || !online || !project) return
+    let cancelled = false
+    api.projects.list()
+      .then(list => {
+        if (cancelled) return
+        if (!list.some(p => p.id === project.id)) {
+          localStorage.removeItem(OPEN_PROJECT_KEY)
+          navReplace({ screen: 'projects' })
+          setProject(null)
+        }
+      })
+      .catch(() => { /* сервер недоступен — остаёмся в проекте, не трогаем состояние */ })
+    return () => { cancelled = true }
+  }, [auth, online, project?.id])
 
   // Watcher: сервер уведомил об изменении файлов проекта → инкрементальный ре-синк офлайн-кэша
   useEffect(() => onFilesChanged(({ projectId }) => { syncProjectFiles(projectId) }), [])

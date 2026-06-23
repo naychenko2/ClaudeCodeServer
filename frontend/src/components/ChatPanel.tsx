@@ -474,6 +474,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     if (lastUser && lastUser.kind === 'user_message') { atBottomRef.current = true; send(lastUser.text, lastUser.attachedPaths ?? [], mode); }
   };
 
+  // Одобрение плана выводит чат из режима планирования — дальше работаем в «Авто»
+  const handleRespondPlan = (requestId: string, approve: boolean, feedback?: string) => {
+    if (approve) setMode('auto');
+    respondPlan(requestId, approve, feedback);
+  };
+
   // Индекс последнего result — у него показываем плашку токенов/времени, у прошлых скрываем
   const lastResultIndex = items.reduce((acc, it, i) => (it.kind === 'result' ? i : acc), -1);
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке)
@@ -490,7 +496,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onDenyPermission={denyPermission}
       onAllowAlways={allowAlways}
       onAnswerQuestion={answerQuestion}
-      onRespondPlan={respondPlan}
+      onRespondPlan={handleRespondPlan}
       onOpenFile={onOpenFile}
       onRevert={path => api.files.revert(project.id, path)}
       onRetry={handleRetry}

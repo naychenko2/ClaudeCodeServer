@@ -19,6 +19,12 @@ public class ClaudeSession : IAsyncDisposable
     private readonly Dictionary<string, string> _pendingQuestions = new();
     // request_id → исходный input ожидающего согласования ExitPlanMode (режим «План»)
     private readonly Dictionary<string, object> _pendingPlans = new();
+    // Гарантированное исполнение одобренного плана:
+    // после approve ждём реализацию; если ход завершится без правок — дошлём команду.
+    private volatile bool _awaitPlanExecution;
+    private volatile bool _sawToolSinceApprove;
+    // Следующий ход запустить без --permission-mode plan (исполнение одобренного плана)
+    private volatile bool _forceNonPlanNextTurn;
     // Стриминг tool_use: индекс content-блока → (id инструмента, накопленный partial_json)
     private readonly Dictionary<int, (string Id, System.Text.StringBuilder Sb)> _toolStream = new();
     private readonly CancellationTokenSource _cts = new();
@@ -114,6 +120,9 @@ public class ClaudeSession : IAsyncDisposable
         Info.Status = SessionStatus.Working;
         if (approve)
         {
+            // Ждём, что Claude реализует план в этом ходу; если завершит без правок — дошлём команду
+            _awaitPlanExecution = true;
+            _sawToolSinceApprove = false;
             SendControlResponse(requestId, new { behavior = "allow", updatedInput = input });
         }
         else
@@ -186,6 +195,8 @@ public class ClaudeSession : IAsyncDisposable
         _permissionWaiters.Clear();
         _pendingQuestions.Clear();
         _pendingPlans.Clear();
+        _awaitPlanExecution = false;
+        _forceNonPlanNextTurn = false;
     }
 
     private async Task RunTurnAsync(string text, CancellationToken ct)
@@ -209,7 +220,10 @@ public class ClaudeSession : IAsyncDisposable
         // а НЕ --mode (такого флага нет — claude падает с "unknown option '--mode'").
         // Auto — без флага (поведение по умолчанию); Plan — режим планирования;
         // Ask — default, при котором claude спрашивает разрешение через permission-prompt-tool.
-        if (Info.Mode == ClaudeMode.Plan)
+        // После одобрения плана один ход выполняем без plan, чтобы Claude реализовал, а не планировал заново.
+        if (_forceNonPlanNextTurn)
+            _forceNonPlanNextTurn = false;
+        else if (Info.Mode == ClaudeMode.Plan)
             args.AddRange(["--permission-mode", "plan"]);
         else if (Info.Mode == ClaudeMode.Ask)
             args.AddRange(["--permission-mode", "default"]);
@@ -404,6 +418,18 @@ public class ClaudeSession : IAsyncDisposable
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, ParseUsage(root), totalCost, apiErr, denials));
                 // Закрываем stdin: все permission-запросы уже обработаны, Claude может завершить процесс
                 try { _currentProcess?.StandardInput.Close(); } catch { }
+                // Гарантия исполнения одобренного плана: если ход завершился, а Claude так и не
+                // приступил к правкам — дошлём команду на реализацию (следующий ход — без plan-режима)
+                if (_awaitPlanExecution)
+                {
+                    var needFollowUp = !_sawToolSinceApprove && subtype != "error";
+                    _awaitPlanExecution = false;
+                    if (needFollowUp)
+                    {
+                        _forceNonPlanNextTurn = true;
+                        _ = SendMessageAsync("Одобренный план согласован. Реализуй его полностью сейчас — без повторного планирования.");
+                    }
+                }
                 break;
 
             case "user":
@@ -561,6 +587,8 @@ public class ClaudeSession : IAsyncDisposable
 
             // AskUserQuestion приходит ещё и как control_request(can_use_tool) — карточку показываем оттуда, здесь пропускаем
             if (toolName == "AskUserQuestion") continue;
+            // После одобрения плана любой реальный инструмент означает, что Claude приступил к реализации
+            if (_awaitPlanExecution && toolName != "ExitPlanMode") _sawToolSinceApprove = true;
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }
 

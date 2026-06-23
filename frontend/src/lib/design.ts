@@ -67,7 +67,7 @@ export const C = {
   termText:    '#D8CFC0',   // обычный вывод на тёмном
   termError:   '#F0B8AC',   // вывод с ошибкой на тёмном
   // Светлая «панель вывода» — для текстовых результатов (Read/Grep/Glob и пр.)
-  outputBg:    '#F3EEE4',   // лёгкий тёплый фон панели вывода
+  outputBg:    '#FFFFFF',   // белый фон панели вывода
   outputBorder:'#DED4C2',   // граница панели вывода
 } as const
 

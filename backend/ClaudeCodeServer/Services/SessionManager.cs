@@ -184,6 +184,20 @@ public class SessionManager
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         entry.Process?.AnswerQuestion(toolUseId, answerText);
+        // Фиксируем ответ в истории, чтобы карточка вопроса пережила перезагрузку
+        if (entry.Accumulator is not null)
+        {
+            object? answers = null;
+            try
+            {
+                using var doc = JsonDocument.Parse(answerText);
+                if (doc.RootElement.TryGetProperty("answers", out var a))
+                    answers = JsonSerializer.Deserialize<object>(a.GetRawText());
+            }
+            catch { }
+            entry.Accumulator.OnQuestionAnswered(toolUseId, answers);
+            _ = entry.Accumulator.SaveSnapshotAsync(_history);
+        }
         entry.Info.Status = SessionStatus.Working;
         _ = BroadcastStatusChangeAsync(sessionId, entry.Info.ProjectId,
             SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
@@ -193,6 +207,12 @@ public class SessionManager
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         entry.Process?.RespondPlan(requestId, approve, feedback);
+        // Фиксируем решение по плану в истории, чтобы карточка пережила перезагрузку
+        if (entry.Accumulator is not null)
+        {
+            entry.Accumulator.OnPlanResolved(requestId, approve, feedback);
+            _ = entry.Accumulator.SaveSnapshotAsync(_history);
+        }
         entry.Info.Status = SessionStatus.Working;
         _ = BroadcastStatusChangeAsync(sessionId, entry.Info.ProjectId,
             SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
@@ -244,6 +264,14 @@ public class SessionManager
                     await acc.SaveSnapshotAsync(_history); // промежуточное сохранение после каждого tool call
                     break;
                 case FileChangedMessage m:  acc.OnFileChanged(m.Path, m.Added, m.Removed); break;
+                case AskQuestionMessage m:
+                    acc.OnAskQuestion(m.ToolUseId, m.Input);
+                    await acc.SaveSnapshotAsync(_history);
+                    break;
+                case PlanReviewMessage m:
+                    acc.OnPlanReview(m.RequestId, m.Plan);
+                    await acc.SaveSnapshotAsync(_history);
+                    break;
                 case ResultMessage m:       await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history); break;
                 case ErrorMessage m:        await acc.OnErrorAsync(m.Text, _history); break;
             }

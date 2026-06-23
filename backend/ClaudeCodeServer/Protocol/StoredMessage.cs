@@ -8,6 +8,8 @@ namespace ClaudeCodeServer.Protocol;
 [JsonDerivedType(typeof(StoredTextMessage), "text")]
 [JsonDerivedType(typeof(StoredThinkingMessage), "thinking")]
 [JsonDerivedType(typeof(StoredToolUseMessage), "tool_use")]
+[JsonDerivedType(typeof(StoredAskQuestionMessage), "ask_question")]
+[JsonDerivedType(typeof(StoredPlanReviewMessage), "plan_review")]
 [JsonDerivedType(typeof(StoredFileChangedMessage), "file_changed")]
 [JsonDerivedType(typeof(StoredResultMessage), "result")]
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
@@ -69,4 +71,23 @@ public class StoredToolUseMessage : StoredMessage
     public string? Result { get; set; }
     public bool IsError { get; set; }
     public string? ParentToolUseId { get; init; }
+}
+
+// AskUserQuestion: Resolved/Answers заполняются при ответе пользователя
+public class StoredAskQuestionMessage : StoredMessage
+{
+    public string ToolUseId { get; init; } = "";
+    public object? Input { get; init; }
+    public bool Resolved { get; set; }
+    public object? Answers { get; set; }
+}
+
+// ExitPlanMode (режим «План»): Resolved/Approved/Feedback заполняются при решении пользователя
+public class StoredPlanReviewMessage : StoredMessage
+{
+    public string RequestId { get; init; } = "";
+    public string Plan { get; init; } = "";
+    public bool Resolved { get; set; }
+    public bool? Approved { get; set; }
+    public string? Feedback { get; set; }
 }

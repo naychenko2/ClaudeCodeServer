@@ -9,6 +9,9 @@ internal class TurnAccumulator
     private readonly List<StoredMessage> _history;
     private readonly List<StoredMessage> _currentTurn = [];
     private readonly Dictionary<string, StoredToolUseMessage> _pendingTools = [];
+    // Для обновления решения (resolved) уже добавленных карточек вопроса/плана
+    private readonly Dictionary<string, StoredAskQuestionMessage> _pendingQuestions = [];
+    private readonly Dictionary<string, StoredPlanReviewMessage> _pendingPlans = [];
     private readonly StringBuilder _textBuf = new();
     private readonly StringBuilder _thinkingBuf = new();
 
@@ -57,6 +60,32 @@ internal class TurnAccumulator
     {
         FlushBuffers();
         _currentTurn.Add(new StoredFileChangedMessage(path, added, removed));
+    }
+
+    public void OnAskQuestion(string toolUseId, object? input)
+    {
+        FlushBuffers();
+        var msg = new StoredAskQuestionMessage { ToolUseId = toolUseId, Input = input };
+        _pendingQuestions[toolUseId] = msg;
+        _currentTurn.Add(msg);
+    }
+
+    public void OnQuestionAnswered(string toolUseId, object? answers)
+    {
+        if (_pendingQuestions.TryGetValue(toolUseId, out var msg)) { msg.Resolved = true; msg.Answers = answers; }
+    }
+
+    public void OnPlanReview(string requestId, string plan)
+    {
+        FlushBuffers();
+        var msg = new StoredPlanReviewMessage { RequestId = requestId, Plan = plan };
+        _pendingPlans[requestId] = msg;
+        _currentTurn.Add(msg);
+    }
+
+    public void OnPlanResolved(string requestId, bool approved, string? feedback)
+    {
+        if (_pendingPlans.TryGetValue(requestId, out var msg)) { msg.Resolved = true; msg.Approved = approved; msg.Feedback = feedback; }
     }
 
     public async Task OnResultAsync(string subtype, long durationMs, int numTurns,
@@ -115,6 +144,8 @@ internal class TurnAccumulator
         _history.AddRange(_currentTurn);
         _currentTurn.Clear();
         _pendingTools.Clear();
+        _pendingQuestions.Clear();
+        _pendingPlans.Clear();
         if (_saveKey is not null)
             await svc.SaveAsync(_saveKey, _history);
     }

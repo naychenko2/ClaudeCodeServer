@@ -140,6 +140,8 @@ body {
 /* Тач (мобайл): действия «копировать/повторить» прячем — на тач они мешают и не нужны */
 @media (hover: none), (pointer: coarse) {
   .cc-actions { display: none !important; }
+  /* Длинные пути обрезаем слева (видно имя файла/конец пути, а не начало) */
+  .cc-trunc-left { direction: rtl; text-align: left; unicode-bidi: plaintext; }
 }
 
 @media (prefers-reduced-motion: reduce) {

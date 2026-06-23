@@ -656,25 +656,19 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const start = i;
         const slice: Array<[ChatItem, number]> = [];
         while (i < items.length && inBlock(items[i])) { slice.push([items[i], i]); i++; }
-        const hasTool = slice.some(([it]) => isTool(it));
-        if (hasTool) {
-          // Один контур на блок: file_changed внутри — компактной строкой (без своей рамки)
-          pushNode(
-            <div key={`grp-${start}`} style={{ borderTop: `1px solid ${C.bgInset}`, borderBottom: `1px solid ${C.bgInset}` }}>
-              {slice.map(([it, idx], gi) => (
-                <div key={idx} style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
-                  {it.kind === 'file_changed'
-                    ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={path => api.files.revert(project.id, path)} />
-                    : renderItem(it, idx)}
-                </div>
-              ))}
-            </div>,
-            start
-          );
-        } else {
-          // Только изменения файлов без инструментов — оставляем обычными карточками
-          slice.forEach(([it, idx]) => pushNode(renderItem(it, idx), idx));
-        }
+        // Один контур: инструменты и изменения файлов — компактными строками (в т.ч. одиночные)
+        pushNode(
+          <div key={`grp-${start}`} style={{ borderTop: `1px solid ${C.bgInset}`, borderBottom: `1px solid ${C.bgInset}` }}>
+            {slice.map(([it, idx], gi) => (
+              <div key={idx} style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
+                {it.kind === 'file_changed'
+                  ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={path => api.files.revert(project.id, path)} />
+                  : renderItem(it, idx)}
+              </div>
+            ))}
+          </div>,
+          start
+        );
       } else {
         pushNode(renderItem(items[i], i), i); i++;
       }
@@ -1129,6 +1123,8 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
     ?? (pathVal != null ? relPath(String(pathVal), project?.rootPath) : null)
     ?? (inp.pattern != null ? stripRoot(String(inp.pattern), project?.rootPath) : null)
     ?? inp.query ?? inp.url ?? inp.description ?? inp.prompt ?? '');
+  // Аргумент-путь (Read/Edit/…) — на мобиле обрезаем слева, чтобы было видно имя файла
+  const argIsPath = inp.command == null && pathVal != null && item.streamingArg == null;
   // Имя инструмента по-русски (MCP → «server · tool»)
   const displayName = toolLabel(item.name);
   // Inline-diff из input (доступен сразу, не дожидаясь tool_result)
@@ -1159,7 +1155,7 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
           <span style={{ fontFamily: FONT.mono, fontSize: 10, fontWeight: 600 }}>{displayName}</span>
         </span>
         {toolArg
-          ? <span style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolArg}</span>
+          ? <span className={argIsPath ? 'cc-trunc-left' : undefined} style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolArg}</span>
           : <span style={{ flex: 1 }} />}
         {item.result !== undefined && (
           <span style={{ fontSize: 11, color: item.isError ? '#C0392B' : C.textMuted, flexShrink: 0 }}>
@@ -1643,7 +1639,7 @@ function FileChangedRow({ item, online, onOpenFile, onRevert }: {
           <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
         </svg>
       </span>
-      <span onClick={() => onOpenFile(item.path)}
+      <span onClick={() => onOpenFile(item.path)} className="cc-trunc-left"
         style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>
         {relativePath}
       </span>

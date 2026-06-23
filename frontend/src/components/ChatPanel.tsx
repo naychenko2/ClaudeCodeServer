@@ -23,6 +23,7 @@ interface Props {
   dockMode?: 'expanded' | 'collapsed';
   onToggleDock?: () => void;
   isMobile?: boolean;
+  onBack?: () => void;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -149,17 +150,31 @@ interface ChatHeaderBarProps {
   onOpenSettings: () => void;
   onToggleDock?: () => void;
   isMobile?: boolean;
+  onBack?: () => void;
 }
 
-function ChatHeaderBar({ session, project, isWaiting, online, onInterrupt, onOpenSettings, onToggleDock, isMobile }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, isWaiting, online, onInterrupt, onOpenSettings, onToggleDock, isMobile, onBack }: ChatHeaderBarProps) {
   return (
     <Toolbar isMobile={isMobile}>
+      {/* Кнопка «назад» — только на мобиле (возврат в сайдбар); как у FileViewer */}
+      {isMobile && onBack && (
+        <button
+          onClick={onBack}
+          title="Назад"
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', color: C.textSecondary, width: 32, height: 32, padding: 0, borderRadius: 8, flexShrink: 0 }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+      )}
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {session.name ?? 'Новый чат'}
         </div>
         <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {project.name} · {session.mode ?? 'auto'} · {modelLabel(session.model)}
+          {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
+          {isMobile ? `${session.mode ?? 'auto'} · ${modelLabel(session.model)}` : `${project.name} · ${session.mode ?? 'auto'} · ${modelLabel(session.model)}`}
         </div>
       </div>
       {online && (
@@ -363,7 +378,7 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile, onBack }: Props) {
   const { items, isWaiting, isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, interrupt, toggleThinking } = useSession(session.id, project.id);
   const online = useOnline();
   const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
@@ -606,6 +621,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         onInterrupt={interrupt}
         onOpenSettings={() => setShowEdit(true)}
         isMobile={isMobile}
+        onBack={onBack}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}

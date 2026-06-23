@@ -216,15 +216,6 @@ export function WorkspacePage({ project, onBack }: Props) {
     document.addEventListener('mouseup', onUp);
   };
 
-  const handleMobileBack = () => {
-    if (openFile) {
-      setOpenFile(null);
-      if (leftTab === 'files') setMobileView('sidebar');
-      return;
-    }
-    setMobileView('sidebar');
-  };
-
   const handleTabSwitch = (tab: LeftTab) => {
     setLeftTab(tab);
     if (isMobile) setMobileView('sidebar');
@@ -278,20 +269,16 @@ export function WorkspacePage({ project, onBack }: Props) {
   if (isMobile) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: C.bgPanel, fontFamily: FONT.sans, overflow: 'hidden' }}>
-        {/* Единая шапка: скрыта только при просмотре файла (у FileViewer своя шапка) */}
-        {!openFile && (
+        {/* Верхняя шапка — только в режиме списка (sidebar). В режиме чата своя
+            самодостаточная шапка ChatHeaderBar с кнопкой «назад»; у файла — шапка FileViewer */}
+        {!openFile && mobileView === 'sidebar' && (
           <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.border}`, background: C.bgPanel, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
             <button
-              onClick={mobileView === 'sidebar' ? onBack : handleMobileBack}
-              style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', flex: 1, minWidth: 0, minHeight: 40, padding: 0, gap: 2 }}
+              onClick={onBack}
+              style={{ display: 'flex', alignItems: 'center', background: 'none', border: 'none', cursor: 'pointer', flex: 1, minWidth: 0, minHeight: 40, padding: 0, gap: 5 }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                <span style={{ fontSize: 20, color: C.textMuted, lineHeight: 1, flexShrink: 0 }}>‹</span>
-                <span style={{ fontWeight: 700, fontSize: 15, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</span>
-              </div>
-              {activeSession && mobileView === 'chat' && (
-                <span style={{ fontSize: 12, color: C.textMuted, paddingLeft: 22, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>{activeSession.name}</span>
-              )}
+              <span style={{ fontSize: 20, color: C.textMuted, lineHeight: 1, flexShrink: 0 }}>‹</span>
+              <span style={{ fontWeight: 700, fontSize: 15, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</span>
             </button>
             <PillSwitch<LeftTab>
               value={leftTab}
@@ -322,7 +309,7 @@ export function WorkspacePage({ project, onBack }: Props) {
         {/* Чат — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {activeSession
-            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} />
+            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => setMobileView('sidebar')} />
             : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>Выберите или создайте чат</div>
           }
         </div>

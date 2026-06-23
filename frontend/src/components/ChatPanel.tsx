@@ -8,6 +8,7 @@ import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, FONT } from '../lib/design';
 import { Toolbar, ToolbarIconButton } from './Toolbar';
+import { BackButton } from './ui';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -154,29 +155,24 @@ interface ChatHeaderBarProps {
 }
 
 function ChatHeaderBar({ session, project, isWaiting, online, onInterrupt, onOpenSettings, onToggleDock, isMobile, onBack }: ChatHeaderBarProps) {
+  // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
+  const titleBlock = (
+    <div style={{ minWidth: 0, flex: 1 }}>
+      <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {session.name ?? 'Новый чат'}
+      </div>
+      <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
+        {isMobile ? `${session.mode ?? 'auto'} · ${modelLabel(session.model)}` : `${project.name} · ${session.mode ?? 'auto'} · ${modelLabel(session.model)}`}
+      </div>
+    </div>
+  );
   return (
     <Toolbar isMobile={isMobile}>
-      {/* Кнопка «назад» — только на мобиле (возврат в сайдбар); как у FileViewer */}
-      {isMobile && onBack && (
-        <button
-          onClick={onBack}
-          title="Назад"
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', color: C.textSecondary, width: 32, height: 32, padding: 0, borderRadius: 8, flexShrink: 0 }}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 18l-6-6 6-6" />
-          </svg>
-        </button>
-      )}
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {session.name ?? 'Новый чат'}
-        </div>
-        <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
-          {isMobile ? `${session.mode ?? 'auto'} · ${modelLabel(session.model)}` : `${project.name} · ${session.mode ?? 'auto'} · ${modelLabel(session.model)}`}
-        </div>
-      </div>
+      {/* На мобиле стрелка + название кликабельны как «назад» в сайдбар; на десктопе — просто заголовок */}
+      {isMobile && onBack
+        ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
+        : titleBlock}
       {online && (
         <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

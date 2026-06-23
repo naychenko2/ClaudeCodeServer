@@ -9,6 +9,7 @@ import { joinProject, leaveProject, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
 import { C, FONT } from '../lib/design';
 import { PillSwitch } from '../components/Toolbar';
+import { BackButton } from '../components/ui';
 
 interface Props {
   project: Project;
@@ -273,13 +274,9 @@ export function WorkspacePage({ project, onBack }: Props) {
             самодостаточная шапка ChatHeaderBar с кнопкой «назад»; у файла — шапка FileViewer */}
         {!openFile && mobileView === 'sidebar' && (
           <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.border}`, background: C.bgPanel, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-            <button
-              onClick={onBack}
-              style={{ display: 'flex', alignItems: 'center', background: 'none', border: 'none', cursor: 'pointer', flex: 1, minWidth: 0, minHeight: 40, padding: 0, gap: 5 }}
-            >
-              <span style={{ fontSize: 20, color: C.textMuted, lineHeight: 1, flexShrink: 0 }}>‹</span>
+            <BackButton onClick={onBack} title={project.name} style={{ flex: 1, minHeight: 40 }}>
               <span style={{ fontWeight: 700, fontSize: 15, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</span>
-            </button>
+            </BackButton>
             <PillSwitch<LeftTab>
               value={leftTab}
               options={[{ value: 'sessions', label: 'Чаты' }, { value: 'files', label: 'Файлы' }]}

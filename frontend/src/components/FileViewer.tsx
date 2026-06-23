@@ -30,6 +30,7 @@ import { DocumentViewer, type DocKind } from './DocumentViewer';
 import { base64ToBytes } from '../lib/binary';
 import { C, FONT, SHADOW } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from './Toolbar';
+import { BackButton } from './ui';
 
 SyntaxHighlighter.registerLanguage('tsx', tsx);
 SyntaxHighlighter.registerLanguage('typescript', typescript);
@@ -321,15 +322,9 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
       <Toolbar isMobile={isMobile}>
         {/* Кнопка назад — только в обычном режиме */}
         {!isFullscreen && (
-          <button
-            onClick={handleClose}
-            style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: C.textSecondary, fontSize: 13, fontWeight: 600, height: 32, padding: '0 6px', borderRadius: 8, flexShrink: 0, fontFamily: 'inherit' }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 18l-6-6 6-6" />
-            </svg>
-            Файлы
-          </button>
+          <BackButton onClick={handleClose} title="К списку файлов" style={{ height: 32 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: C.textSecondary }}>Файлы</span>
+          </BackButton>
         )}
 
         {/* Имя файла */}

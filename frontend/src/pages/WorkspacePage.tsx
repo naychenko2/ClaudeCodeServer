@@ -275,8 +275,15 @@ export function WorkspacePage({ project, onBack }: Props) {
         <div style={{ padding: '16px 16px 14px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 15, padding: '0 2px' }}>
             <div style={{ width: 28, height: 28, borderRadius: 8, background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F4F0E8" strokeWidth="2.2" strokeLinecap="round">
-                <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>
+              <svg width="16" height="16" viewBox="0 0 512 512" fill="none">
+                <rect x="32" y="32" width="448" height="360" rx="64" ry="64" fill="#F4F0E8"/>
+                <path d="M80 392 L48 472 L160 392 Z" fill="#F4F0E8"/>
+                <g stroke="#D97757" strokeWidth="52" strokeLinecap="round" fill="none">
+                  <line x1="256" y1="136" x2="256" y2="376"/>
+                  <line x1="136" y1="256" x2="376" y2="256"/>
+                  <line x1="163" y1="163" x2="349" y2="349"/>
+                  <line x1="349" y1="163" x2="163" y2="349"/>
+                </g>
               </svg>
             </div>
             <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading }}>Claude Code Server</span>

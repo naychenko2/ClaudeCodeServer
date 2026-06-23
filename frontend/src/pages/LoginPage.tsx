@@ -72,8 +72,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
             width: 54, height: 54, borderRadius: 15, background: C.accent,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4" />
+            <svg width="32" height="32" viewBox="0 0 512 512" fill="none">
+              <rect x="32" y="32" width="448" height="360" rx="64" ry="64" fill="#F4F0E8"/>
+              <path d="M80 392 L48 472 L160 392 Z" fill="#F4F0E8"/>
+              <g stroke="#D97757" strokeWidth="52" strokeLinecap="round" fill="none">
+                <line x1="256" y1="136" x2="256" y2="376"/>
+                <line x1="136" y1="256" x2="376" y2="256"/>
+                <line x1="163" y1="163" x2="349" y2="349"/>
+                <line x1="349" y1="163" x2="163" y2="349"/>
+              </g>
             </svg>
           </div>
         </div>

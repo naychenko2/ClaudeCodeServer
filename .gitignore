@@ -8,6 +8,7 @@ data/
 # Артефакты публикации и TLS-сертификаты
 publish/
 certs/
+domain/
 
 # Node / Frontend
 frontend/node_modules/

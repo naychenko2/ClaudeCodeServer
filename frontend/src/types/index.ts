@@ -74,7 +74,7 @@ export type ChatItem =
   | { kind: 'thinking'; text: string; expanded: boolean }
   | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string }
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean }
-  | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean }
+  | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean; answers?: Record<string, string | string[]> }
   | { kind: 'plan_review'; requestId: string; plan: string; resolved: boolean; approved?: boolean; feedback?: string }
   | { kind: 'file_changed'; path: string; added: number; removed: number }
   | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[] }

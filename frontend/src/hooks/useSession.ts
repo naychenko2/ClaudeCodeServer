@@ -409,12 +409,15 @@ export function useSession(sessionId: string | null, projectId?: string) {
   // Ответ на уточняющий вопрос Claude (AskUserQuestion)
   const answerQuestion = useCallback(async (toolUseId: string, answerText: string) => {
     if (!sessionId) return;
+    // Сохраняем выбранные ответы в элемент, чтобы показать сводку даже после перезагрузки
+    let answers: Record<string, string | string[]> | undefined;
+    try { answers = JSON.parse(answerText)?.answers; } catch { /* оставим undefined */ }
     setState(sessionId, prev => ({
       ...prev,
       isWaiting: true,
       items: prev.items.map(item =>
         item.kind === 'ask_question' && item.toolUseId === toolUseId
-          ? { ...item, resolved: true } : item
+          ? { ...item, resolved: true, answers } : item
       ),
     }));
     await joinSession(sessionId); // гарантируем группу перед ответом

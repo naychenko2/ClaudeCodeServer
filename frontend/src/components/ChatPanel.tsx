@@ -1012,6 +1012,38 @@ function AskQuestionView({ item, online, onAnswer }: {
   const disabled = item.resolved || !online;
   const multiQ = questions.length > 1;
 
+  // Отвеченный вопрос — компактная зелёная плашка «принято» со сводкой выбора по всем вопросам
+  if (item.resolved) {
+    return (
+      <div style={{ border: '1px solid #CADFC4', borderLeft: '3px solid #5E8B4E', borderRadius: 12, padding: '13px 14px', background: '#EEF4EA' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10, fontSize: 13, fontWeight: 600, color: '#3F6B33' }}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill="#5E8B4E" /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          Ответ передан Claude
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {questions.map((q, qi) => {
+            const stored = item.answers?.[q.question];
+            const chosen = Array.isArray(stored) ? stored : stored ? [stored] : (selected[qi] ?? []);
+            if (chosen.length === 0) return null;
+            return (
+              <div key={qi}>
+                <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 4 }}>{q.header || q.question}</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {chosen.map((label, li) => (
+                    <span key={li} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#3F6B33', background: C.bgWhite, border: '1px solid #CADFC4', borderRadius: 7, padding: '3px 9px' }}>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#5E8B4E" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                      {label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   const isAnswered = (qi: number) =>
     (selected[qi]?.length ?? 0) > 0 || (!!customOpen[qi] && (customText[qi]?.trim().length ?? 0) > 0);
   const allAnswered = questions.every((_, qi) => isAnswered(qi));
@@ -1159,9 +1191,7 @@ function AskQuestionView({ item, online, onAnswer }: {
         {renderQuestion(questions[multiQ ? activeTab : 0], multiQ ? activeTab : 0)}
       </div>
 
-      {item.resolved ? (
-        <div style={{ fontSize: 12, color: '#8A8070' }}>Ответ отправлен</div>
-      ) : !online ? (
+      {!online ? (
         <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
       ) : multiQ ? (
         <div style={{ display: 'flex', gap: 8 }}>

@@ -1068,8 +1068,8 @@ function relPath(p: string, root?: string | null): string {
   return p;
 }
 
-// Убирает абсолютный корень проекта из произвольного текста (плана) — делает пути относительными.
-// Учитывает оба варианта разделителей и регистр (Windows).
+// Делает пути относительными в произвольном тексте (командах, выводе, плане):
+// «<root>\sub\file» → «sub\file», голый «<root>» → «.». Учитывает оба разделителя и регистр (Windows).
 function stripRoot(text: string, root?: string | null): string {
   if (!root || !text) return text;
   const nr = root.replace(/[\\/]+$/, '');
@@ -1078,7 +1078,8 @@ function stripRoot(text: string, root?: string | null): string {
   for (const v of variants) {
     if (!v) continue;
     const esc = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    out = out.replace(new RegExp(esc + '[\\\\/]?', 'gi'), '');
+    // после корня: разделитель + остаток пути (до пробела/кавычки) → остаток; иначе корень → «.»
+    out = out.replace(new RegExp(esc + '([\\\\/]([^\\s"\'`]*))?', 'gi'), (_m, _g1, rest) => (rest ? rest : '.'));
   }
   return out;
 }
@@ -1126,11 +1127,14 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
   const n = item.name.toLowerCase();
   const inp = (item.input ?? {}) as Record<string, any>;
   // Во время стриминга показываем накопленный partial_json («печатает команду»), затем — разобранный аргумент.
-  // Файловые пути показываем относительно корня проекта.
+  // Пути показываем относительно корня проекта: file_path/path — целиком, в командах и
+  // glob-шаблонах вырезаем абсолютный корень из текста (там путь — часть строки).
   const pathVal = inp.file_path ?? inp.path ?? inp.notebook_path;
   const toolArg = item.streamingArg ?? String(
-    inp.command ?? (pathVal != null ? relPath(String(pathVal), project?.rootPath) : null)
-    ?? inp.pattern ?? inp.query ?? inp.url ?? inp.description ?? inp.prompt ?? '');
+    (inp.command != null ? stripRoot(String(inp.command), project?.rootPath) : null)
+    ?? (pathVal != null ? relPath(String(pathVal), project?.rootPath) : null)
+    ?? (inp.pattern != null ? stripRoot(String(inp.pattern), project?.rootPath) : null)
+    ?? inp.query ?? inp.url ?? inp.description ?? inp.prompt ?? '');
   // Имя инструмента по-русски (MCP → «server · tool»)
   const displayName = toolLabel(item.name);
   // Inline-diff из input (доступен сразу, не дожидаясь tool_result)
@@ -1187,7 +1191,10 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
           fontSize: 11.5, lineHeight: 1.5, maxHeight: 280, overflow: 'auto',
           whiteSpace: 'pre-wrap', wordBreak: 'break-word',
         }}>
-          {item.result!.length > 4000 ? item.result!.slice(0, 4000) + '\n…(обрезано)' : item.result}
+          {(() => {
+            const r = stripRoot(item.result!, project?.rootPath);
+            return r.length > 4000 ? r.slice(0, 4000) + '\n…(обрезано)' : r;
+          })()}
         </pre>
       )}
     </div>
@@ -1816,7 +1823,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
       const detail = (() => {
         const inp = item.toolInput as Record<string, unknown> | null;
         if (!inp) return '';
-        if (typeof inp.command === 'string') return inp.command;
+        if (typeof inp.command === 'string') return stripRoot(inp.command, project?.rootPath);
         if (typeof inp.file_path === 'string') return relPath(inp.file_path, project?.rootPath);
         if (typeof inp.path === 'string') return relPath(inp.path, project?.rootPath);
         try { const s = JSON.stringify(inp, null, 2); return s === '{}' ? '' : s; } catch { return ''; }

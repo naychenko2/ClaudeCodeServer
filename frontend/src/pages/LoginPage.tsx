@@ -11,16 +11,15 @@ interface LoginPageProps {
 type PageState = 'idle' | 'loading' | 'error';
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
-  const [serverUrl, setServerUrl] = useState('');
+  // Адрес сервера = origin, с которого открыта страница (фронт и бэк на одном источнике)
+  const serverUrl = window.location.origin;
   const [apiKey, setApiKey] = useState('');
   const [saveKey, setSaveKey] = useState(false);
   const [pageState, setPageState] = useState<PageState>('idle');
   const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
-    const savedUrl = localStorage.getItem('cc_server_url');
     const savedKey = localStorage.getItem('cc_api_key');
-    if (savedUrl) setServerUrl(savedUrl);
     if (savedKey) {
       setApiKey(savedKey);
       setSaveKey(true);
@@ -56,7 +55,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
 
   const isLoading = pageState === 'loading';
   const isError = pageState === 'error';
-  const isDisabled = isLoading || !serverUrl.trim() || !apiKey.trim();
+  const isDisabled = isLoading || !apiKey.trim();
 
   return (
     <div
@@ -89,25 +88,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
 
         {/* Подзаголовок */}
         <p style={{ fontSize: 15, color: C.textSecondary, margin: '0 0 30px', textAlign: 'center', lineHeight: 1.55 }}>
-          Укажите адрес сервера и API-ключ, чтобы открыть проекты и чаты.
+          Укажите API-ключ, чтобы открыть проекты и чаты.
         </p>
-
-        {/* Поле: Адрес сервера */}
-        <div style={{ marginBottom: 16 }}>
-          <IconField
-            value={serverUrl}
-            onChange={setServerUrl}
-            placeholder="https://code.acme.dev"
-            disabled={isLoading}
-            mono
-            icon={
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="9" />
-                <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" />
-              </svg>
-            }
-          />
-        </div>
 
         {/* Поле: API-ключ */}
         <div style={{ marginBottom: 18 }}>

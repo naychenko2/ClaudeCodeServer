@@ -38,6 +38,14 @@ export default function App() {
 
   useEffect(() => { initConnectivity() }, [])
 
+  // При наличии сохранённых credentials — немедленно зондируем сервер, чтобы _online
+  // выставился правильно ещё до первого рендера страниц (navigator.onLine ≠ «сервер доступен»)
+  useEffect(() => {
+    if (!auth) return
+    api.auth.ping(auth.serverUrl, auth.apiKey).catch(() => { /* результат отразится в _online */ })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth?.serverUrl])
+
   // Сервер отверг API-ключ (401) → разлогиниваем и уводим на экран входа
   useEffect(() => {
     const onUnauthorized = () => {

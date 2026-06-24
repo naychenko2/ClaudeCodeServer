@@ -115,7 +115,7 @@ function ensureHandler() {
           if (idx >= 0) {
             const next = [...items];
             const ex = next[idx] as Extract<ChatItem, { kind: 'tool_use' }>;
-            next[idx] = { ...ex, name: msg.name, input: msg.input, streamingArg: undefined };
+            next[idx] = { ...ex, name: msg.name, input: msg.input, streamingArg: undefined, parentToolUseId: msg.parentToolUseId ?? ex.parentToolUseId };
             return next;
           }
           return [...items, { kind: 'tool_use', id: msg.id, name: msg.name, input: msg.input, parentToolUseId: msg.parentToolUseId }];

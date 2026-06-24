@@ -1761,7 +1761,31 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
     case 'text':
       return <TextMessageView text={item.text} online={online} onRetry={onRetry} streaming={streaming} />;
 
-    case 'thinking':
+    case 'thinking': {
+      const hasText = item.text.trim().length > 0;
+
+      // Завершён без текста — не рендерить
+      if (!streaming && !hasText) return null;
+
+      // Стриминг, текст ещё не накоплен — тихий индикатор «клод думает»
+      if (streaming && !hasText) {
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, height: 24, paddingLeft: 2 }}>
+            {[0, 1, 2].map(i => (
+              <span
+                key={i}
+                style={{
+                  display: 'inline-block', width: 5, height: 5, borderRadius: '50%',
+                  background: C.textMuted,
+                  animation: `thinkingDot 1.2s ease-in-out ${i * 0.2}s infinite`,
+                }}
+              />
+            ))}
+          </div>
+        );
+      }
+
+      // Есть текст (стриминг или завершён) — collapsible карточка
       return (
         <div style={{
           background: '#EFEAE0', border: '1px solid #E4DDCE',
@@ -1783,11 +1807,16 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
             <span style={{ fontSize: 12.5, fontStyle: 'italic', color: C.textSecondary, flex: 1 }}>
               Размышление
             </span>
-            {item.text && (
-              <span title="приблизительно, по объёму текста" style={{ fontSize: 10.5, color: C.textMuted, fontFamily: FONT.mono }}>
-                ~{Math.max(1, Math.round(item.text.length / 4))} ток.
-              </span>
+            {/* Пульсирующая точка пока ещё идёт стриминг */}
+            {streaming && (
+              <span style={{
+                width: 6, height: 6, borderRadius: '50%', background: C.textMuted,
+                animation: 'thinkingDot 1.2s ease-in-out infinite', flexShrink: 0,
+              }} />
             )}
+            <span title="приблизительно, по объёму текста" style={{ fontSize: 10.5, color: C.textMuted, fontFamily: FONT.mono }}>
+              ~{Math.max(1, Math.round(item.text.length / 4))} ток.
+            </span>
             <span style={{
               color: C.textMuted, fontSize: 12,
               transform: item.expanded ? 'rotate(180deg)' : 'rotate(0deg)',
@@ -1806,6 +1835,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
           )}
         </div>
       );
+    }
 
     case 'tool_use':
       // План задач рисуем отдельной карточкой-чек-листом. Линию-коннектор для дочерних

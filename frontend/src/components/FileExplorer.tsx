@@ -457,7 +457,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               onChange={e => handleUploadFiles(e.target.files)}
             />
             <div
-              onClick={() => uploadInputRef.current?.click()}
+              onClick={() => !uploading && uploadInputRef.current?.click()}
               title="Загрузить файлы"
               style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, height: 36, paddingInline: 12, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: uploading ? C.textMuted : C.accent, fontSize: 12.5, fontWeight: 600, cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1, flexShrink: 0 }}
             >
@@ -468,6 +468,13 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               )}
               Загрузить
             </div>
+          </div>
+        )}
+        {/* Хинт целевой папки — только десктоп, когда есть куда */}
+        {online && !isMobile && (
+          <div style={{ marginTop: 5, fontSize: 11.5, color: C.textMuted, fontFamily: FONT.mono, paddingLeft: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            {createInDir ? <span title={createInDir}>{createInDir}</span> : <span style={{ fontStyle: 'italic' }}>корень проекта</span>}
           </div>
         )}
       </div>

@@ -276,13 +276,11 @@ export function WorkspacePage({ project, onBack }: Props) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 15, padding: '0 2px' }}>
             <div style={{ width: 28, height: 28, borderRadius: 8, background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               <svg width="16" height="16" viewBox="0 0 512 512" fill="none">
-                <rect x="32" y="32" width="448" height="360" rx="64" ry="64" fill="#F4F0E8"/>
-                <path d="M80 392 L48 472 L160 392 Z" fill="#F4F0E8"/>
-                <g stroke="#D97757" strokeWidth="52" strokeLinecap="round" fill="none">
-                  <line x1="256" y1="136" x2="256" y2="376"/>
-                  <line x1="136" y1="256" x2="376" y2="256"/>
-                  <line x1="163" y1="163" x2="349" y2="349"/>
-                  <line x1="349" y1="163" x2="163" y2="349"/>
+                <g stroke="#FFFFFF" strokeWidth="52" strokeLinecap="round" fill="none">
+                  <line x1="256" y1="130" x2="256" y2="382"/>
+                  <line x1="130" y1="256" x2="382" y2="256"/>
+                  <line x1="160" y1="160" x2="352" y2="352"/>
+                  <line x1="352" y1="160" x2="160" y2="352"/>
                 </g>
               </svg>
             </div>

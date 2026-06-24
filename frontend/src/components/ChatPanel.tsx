@@ -647,8 +647,20 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         for (const tool of (childrenByParentId.get(agent.id) ?? [])) suppressedByWorkflow.add(tool.id);
       }
     }
-    // Дочерние вызовы субагента (не-Workflow) — рисуем единой непрерывной линией-коннектором слева
-    const isSubTool = (it: ChatItem) => it.kind === 'tool_use' && !!it.parentToolUseId && !suppressedByWorkflow.has(it.id);
+    // Дети top-level agent-вызовов рендерятся inline под родителем в блоке действий:
+    // при параллельных агентах инструменты приходят вперемешку, и без группировки по родителю
+    // все sub-tool строки сливаются в один безымянный блок.
+    const suppressedByAgentParent = new Set<string>();
+    const idxMap = new Map<string, number>();
+    items.forEach((it, k) => { if (it.kind === 'tool_use') idxMap.set(it.id, k); });
+    for (const it of items) {
+      if (it.kind !== 'tool_use' || !!it.parentToolUseId || it.name.toLowerCase() === 'workflow') continue;
+      for (const child of (childrenByParentId.get(it.id) ?? [])) {
+        if (!suppressedByWorkflow.has(child.id)) suppressedByAgentParent.add(child.id);
+      }
+    }
+    // Дочерние вызовы субагента (не-Workflow, не inline) — рисуем единой линией-коннектором слева
+    const isSubTool = (it: ChatItem) => it.kind === 'tool_use' && !!it.parentToolUseId && !suppressedByWorkflow.has(it.id) && !suppressedByAgentParent.has(it.id);
     // Узлы ленты с пометкой стартового индекса — нужно для обёртки success-коннектором
     const nodes: Array<{ node: React.ReactNode; start: number }> = [];
     const pushNode = (node: React.ReactNode, start: number) => nodes.push({ node, start });
@@ -663,6 +675,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       }
       // Субагенты Workflow и их инструменты рендерятся внутри WorkflowBlockView
       if (items[i].kind === 'tool_use' && suppressedByWorkflow.has((items[i] as ToolUseItem).id)) {
+        i++; continue;
+      }
+      // Дочерние инструменты top-level агентов рендерятся inline под родителем — пропускаем здесь
+      if (items[i].kind === 'tool_use' && suppressedByAgentParent.has((items[i] as ToolUseItem).id)) {
         i++; continue;
       }
       if (isSubTool(items[i])) {
@@ -692,16 +708,34 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const start = i;
         const slice: Array<[ChatItem, number]> = [];
         while (i < items.length && inBlock(items[i])) { slice.push([items[i], i]); i++; }
-        // Один контур: инструменты и изменения файлов — компактными строками (в т.ч. одиночные)
+        // Один контур: инструменты и изменения файлов — компактными строками (в т.ч. одиночные).
+        // Для agent-вызовов с детьми сразу рисуем детей inline под родителем — иначе при параллельных
+        // агентах все их инструменты сливаются в один безымянный блок после шапки.
         pushNode(
           <div key={`grp-${start}`} style={{ borderTop: `1px solid ${C.bgInset}`, borderBottom: `1px solid ${C.bgInset}` }}>
-            {slice.map(([it, idx], gi) => (
-              <div key={idx} style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
-                {it.kind === 'file_changed'
-                  ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={path => api.files.revert(project.id, path)} />
-                  : renderItem(it, idx)}
-              </div>
-            ))}
+            {slice.map(([it, idx], gi) => {
+              const inlineChildren = it.kind === 'tool_use'
+                ? (childrenByParentId.get(it.id) ?? []).filter(c => !suppressedByWorkflow.has(c.id))
+                : [];
+              return (
+                <Fragment key={idx}>
+                  <div style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
+                    {it.kind === 'file_changed'
+                      ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={path => api.files.revert(project.id, path)} />
+                      : renderItem(it, idx)}
+                  </div>
+                  {inlineChildren.length > 0 && (
+                    <div style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `2px solid ${C.border}` }}>
+                      {inlineChildren.map((child, ci) => (
+                        <div key={child.id} style={ci === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
+                          {renderItem(child, idxMap.get(child.id) ?? 0)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Fragment>
+              );
+            })}
           </div>,
           start
         );

@@ -640,15 +640,43 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // file_changed между инструментами не разрывал стопку. Контур рисуем только если в
   // блоке есть хотя бы один инструмент; одиночные file_changed остаются обычными карточками.
   const renderItems = () => {
-    const isTool = (it: ChatItem) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && !it.parentToolUseId;
+    const isTool = (it: ChatItem) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow';
     const inBlock = (it: ChatItem) => isTool(it) || it.kind === 'file_changed';
-    // Дочерние вызовы субагента (Task) — рисуем единой непрерывной линией-коннектором слева
-    const isSubTool = (it: ChatItem) => it.kind === 'tool_use' && !!it.parentToolUseId;
+    // Строим карту дочерних tool_use для Workflow-блоков
+    const childrenByParentId = new Map<string, ToolUseItem[]>();
+    for (const it of items) {
+      if (it.kind === 'tool_use' && it.parentToolUseId) {
+        const arr = childrenByParentId.get(it.parentToolUseId) ?? [];
+        arr.push(it as ToolUseItem);
+        childrenByParentId.set(it.parentToolUseId, arr);
+      }
+    }
+    // ID субагентов и их инструментов, которые рендерятся внутри WorkflowBlockView
+    const suppressedByWorkflow = new Set<string>();
+    for (const it of items) {
+      if (it.kind !== 'tool_use' || it.name.toLowerCase() !== 'workflow') continue;
+      for (const agent of (childrenByParentId.get(it.id) ?? [])) {
+        suppressedByWorkflow.add(agent.id);
+        for (const tool of (childrenByParentId.get(agent.id) ?? [])) suppressedByWorkflow.add(tool.id);
+      }
+    }
+    // Дочерние вызовы субагента (не-Workflow) — рисуем единой непрерывной линией-коннектором слева
+    const isSubTool = (it: ChatItem) => it.kind === 'tool_use' && !!it.parentToolUseId && !suppressedByWorkflow.has(it.id);
     // Узлы ленты с пометкой стартового индекса — нужно для обёртки success-коннектором
     const nodes: Array<{ node: React.ReactNode; start: number }> = [];
     const pushNode = (node: React.ReactNode, start: number) => nodes.push({ node, start });
     let i = 0;
     while (i < items.length) {
+      // Workflow-блок рендерим специальным компонентом
+      if (items[i].kind === 'tool_use' && (items[i] as ToolUseItem).name.toLowerCase() === 'workflow') {
+        const wf = items[i] as ToolUseItem;
+        pushNode(<WorkflowBlockView key={`wf-${i}`} workflow={wf} agents={childrenByParentId.get(wf.id) ?? []} childrenByParentId={childrenByParentId} />, i);
+        i++; continue;
+      }
+      // Субагенты Workflow и их инструменты рендерятся внутри WorkflowBlockView
+      if (items[i].kind === 'tool_use' && suppressedByWorkflow.has((items[i] as ToolUseItem).id)) {
+        i++; continue;
+      }
       if (isSubTool(items[i])) {
         const start = i;
         const sub: Array<[ChatItem, number]> = [];
@@ -1055,6 +1083,14 @@ function toolLabel(name: string): string {
   return TOOL_LABELS[name.toLowerCase()] ?? name;
 }
 
+// Склонение слова «действие»
+function toolWord(n: number): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return 'действие';
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'действия';
+  return 'действий';
+}
+
 // Путь относительно корня проекта (везде в чате показываем относительные пути).
 // Вне проекта — возвращаем как есть. Регистронезависимо (Windows: C:\ vs c:\).
 function relPath(p: string, root?: string | null): string {
@@ -1196,6 +1232,114 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
             return r.length > 4000 ? r.slice(0, 4000) + '\n…(обрезано)' : r;
           })()}
         </pre>
+      )}
+    </div>
+  );
+}
+
+type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
+
+function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
+  workflow: ToolUseItem;
+  agents: ToolUseItem[];
+  childrenByParentId: Map<string, ToolUseItem[]>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+
+  const isDone = workflow.result !== undefined;
+  const doneCount = agents.filter(a => a.result !== undefined).length;
+  const totalCount = agents.length;
+  const progress = totalCount > 0 ? doneCount / totalCount : isDone ? 1 : 0;
+
+  const toggleAgent = (id: string) => setExpandedAgents(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const WorkflowIcon = () => isDone
+    ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+    : <div className="tool-spinner" />;
+
+  return (
+    <div style={{ border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden', background: C.bgPanel }}>
+      {/* Шапка */}
+      <div
+        onClick={() => setExpanded(e => !e)}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', cursor: 'pointer', userSelect: 'none' as const }}
+      >
+        <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}><WorkflowIcon /></span>
+        <span style={{ fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, color: C.textPrimary, flexShrink: 0 }}>Workflow</span>
+        {totalCount > 0 && (
+          <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
+            {doneCount}/{totalCount} агентов
+          </span>
+        )}
+        {totalCount > 0 && (
+          <div style={{ flex: 1, height: 4, background: C.border, borderRadius: 2, overflow: 'hidden', minWidth: 40, maxWidth: 100 }}>
+            <div style={{ width: `${Math.round(progress * 100)}%`, height: '100%', background: isDone ? C.success : C.accent, borderRadius: 2, transition: 'width 0.3s ease' }} />
+          </div>
+        )}
+        {totalCount === 0 && <span style={{ flex: 1 }} />}
+        <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{expanded ? '▴ скрыть' : '▾ детали'}</span>
+      </div>
+
+      {/* Список агентов */}
+      {expanded && (
+        <div style={{ borderTop: `1px solid ${C.border}` }}>
+          {agents.length === 0 && (
+            <div style={{ padding: '10px 14px', fontFamily: FONT.sans, fontSize: 12, color: C.textMuted }}>Запуск субагентов…</div>
+          )}
+          {agents.map((agent, idx) => {
+            const tools = childrenByParentId.get(agent.id) ?? [];
+            const isAgentExpanded = expandedAgents.has(agent.id);
+            const inp = (agent.input ?? {}) as Record<string, unknown>;
+            const rawLabel =
+              (typeof inp.description === 'string' ? inp.description : null) ??
+              (typeof inp.label === 'string' ? inp.label : null) ??
+              (typeof inp.prompt === 'string' ? inp.prompt : null) ??
+              (typeof inp.task === 'string' ? inp.task : null) ?? '';
+            const label = rawLabel.split('\n')[0].slice(0, 100);
+            const agentDone = agent.result !== undefined;
+
+            return (
+              <div key={agent.id} style={{ borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
+                <div
+                  onClick={tools.length > 0 ? () => toggleAgent(agent.id) : undefined}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', cursor: tools.length > 0 ? 'pointer' : 'default' }}
+                >
+                  <span style={{ flexShrink: 0, width: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {agentDone
+                      ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                      : <div className="tool-spinner" style={{ width: 11, height: 11 }} />
+                    }
+                  </span>
+                  <span style={{ flex: 1, fontFamily: FONT.sans, fontSize: 12.5, color: label ? C.textPrimary : C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {label || `Агент ${idx + 1}`}
+                  </span>
+                  {tools.length > 0 && (
+                    <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
+                      {tools.length} {toolWord(tools.length)}
+                    </span>
+                  )}
+                  {tools.length > 0 && (
+                    <span style={{ color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', transform: isAgentExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
+                  )}
+                </div>
+                {isAgentExpanded && tools.length > 0 && (
+                  <div style={{ paddingLeft: 22, paddingRight: 14, paddingBottom: 4, borderTop: `1px solid ${C.bgInset}` }}>
+                    {tools.map((tool, ti) => (
+                      <div key={tool.id} style={ti > 0 ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
+                        <ToolUseView item={tool} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, createContext, useContext } from 'react';
+import { useState, useRef, useEffect, useMemo, createContext, useContext, Fragment } from 'react';
 import type { Project, Session, ChatItem, FileEntry } from '../types';
 import { useSession } from '../hooks/useSession';
 import { useOnline } from '../hooks/useOnline';
@@ -671,12 +671,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     const nodes: Array<{ node: React.ReactNode; start: number }> = [];
     const pushNode = (node: React.ReactNode, start: number) => nodes.push({ node, start });
     let i = 0;
+    let prevNodeWasBlock = false;
     while (i < items.length) {
       // Workflow-блок рендерим специальным компонентом
       if (items[i].kind === 'tool_use' && (items[i] as ToolUseItem).name.toLowerCase() === 'workflow') {
         const wf = items[i] as ToolUseItem;
         pushNode(<WorkflowBlockView key={`wf-${i}`} workflow={wf} agents={childrenByParentId.get(wf.id) ?? []} childrenByParentId={childrenByParentId} />, i);
-        i++; continue;
+        i++; prevNodeWasBlock = false; continue;
       }
       // Субагенты Workflow и их инструменты рендерятся внутри WorkflowBlockView
       if (items[i].kind === 'tool_use' && suppressedByWorkflow.has((items[i] as ToolUseItem).id)) {
@@ -687,14 +688,24 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const sub: Array<[ChatItem, number]> = [];
         while (i < items.length && isSubTool(items[i])) { sub.push([items[i], i]); i++; }
         // Один контейнер с borderLeft на всю стопку дочерних → линия не прерывается gap'ом ленты
-        pushNode(
+        const subDiv = (
           <div key={`sub-${start}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `2px solid ${C.border}` }}>
             {sub.map(([it, idx], gi) => (
               <div key={idx} style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>{renderItem(it, idx)}</div>
             ))}
-          </div>,
-          start
+          </div>
         );
+        if (prevNodeWasBlock && nodes.length > 0) {
+          // Прижать к шапке: объединяем дочерние инструменты с предшествующим блоком без gap
+          const prev = nodes[nodes.length - 1];
+          nodes[nodes.length - 1] = {
+            node: <Fragment key={`merged-${prev.start}`}>{prev.node}{subDiv}</Fragment>,
+            start: prev.start,
+          };
+        } else {
+          pushNode(subDiv, start);
+        }
+        prevNodeWasBlock = false;
       } else if (inBlock(items[i])) {
         const start = i;
         const slice: Array<[ChatItem, number]> = [];
@@ -712,8 +723,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           </div>,
           start
         );
+        prevNodeWasBlock = true;
       } else {
         pushNode(renderItem(items[i], i), i); i++;
+        prevNodeWasBlock = false;
       }
     }
 
@@ -729,7 +742,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const groupStart = nodes[j].start;
         while (j < nodes.length && inZone(nodes[j])) { group.push(nodes[j].node); j++; }
         result.push(
-          <div key={`exec-${groupStart}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `3px solid ${C.success}`, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div key={`exec-${groupStart}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `3px solid ${C.success}`, display: 'flex', flexDirection: 'column', gap: 14, marginTop: -14 }}>
             {group}
           </div>
         );
@@ -1203,7 +1216,7 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
         {item.result === undefined && <ToolSpinner />}
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: meta.color }}>
           {meta.icon}
-          <span style={{ fontFamily: FONT.mono, fontSize: 10, fontWeight: 600 }}>{displayName}</span>
+          <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>{displayName}</span>
         </span>
         {toolArg
           ? <span className={argIsPath ? 'cc-trunc-left' : undefined} style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolArg}</span>

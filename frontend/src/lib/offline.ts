@@ -45,6 +45,9 @@ function isNetworkError(e: unknown): boolean {
   return e instanceof TypeError;
 }
 
+// Таймаут fetch: на зависшей сети без него запрос может ждать минутами
+const FETCH_TIMEOUT_MS = 30_000;
+
 // --- Запрос ---
 
 export async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -58,15 +61,22 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
 
   const token = typeof localStorage !== 'undefined' ? localStorage.getItem('cc_api_key') : null;
 
+  // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),
+  // мы не ждём браузерного TCP-таймаута (может быть минуты)
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
   try {
     const res = await fetch(BASE + url, {
       ...options,
+      signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(options?.headers as Record<string, string> | undefined),
       },
     });
+    clearTimeout(timeoutId);
     // Сервер ответил (даже ошибкой) → мы онлайн
     setOnline(true);
 
@@ -92,7 +102,9 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
     }
     return data;
   } catch (e) {
-    if (isNetworkError(e)) {
+    clearTimeout(timeoutId);
+    // AbortError от нашего таймаута трактуем как сетевую проблему
+    if (isNetworkError(e) || (e instanceof DOMException && e.name === 'AbortError')) {
       setOnline(false);
       if (isGet) {
         const cached = await idbGet<T>(url).catch(() => undefined);

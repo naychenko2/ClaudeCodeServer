@@ -4,6 +4,10 @@ import { notifyOnline, notifyOffline } from './offline';
 
 let connection: signalR.HubConnection | null = null;
 
+// Набор подписчиков на событие reconnected: поддерживает отписку (в отличие от
+// прямых conn.onreconnected(), которые не имеют публичного off())
+const _reconnectedCallbacks = new Set<() => void>();
+
 export function getConnection(): signalR.HubConnection {
   if (!connection) {
     connection = new signalR.HubConnectionBuilder()
@@ -19,8 +23,12 @@ export function getConnection(): signalR.HubConnection {
       .build();
     // Состояние соединения двигает глобальный online/offline флаг
     connection.onreconnecting(() => notifyOffline());
-    connection.onreconnected(() => notifyOnline());
     connection.onclose(() => notifyOffline());
+    // Единственный onreconnected-обработчик: notifyOnline + диспатч подписчикам
+    connection.onreconnected(() => {
+      notifyOnline();
+      _reconnectedCallbacks.forEach(cb => { try { cb(); } catch { /* не даём одному упавшему обработчику блокировать остальных */ } });
+    });
   }
   return connection;
 }
@@ -121,6 +129,8 @@ export async function leaveProject(projectId: string): Promise<void> {
     await conn.invoke('LeaveProject', projectId);
 }
 
-export function onReconnected(callback: () => void): void {
-  getConnection().onreconnected(callback);
+// Подписка на reconnected. Возвращает функцию отписки — обязательно вызывать при unmount.
+export function onReconnected(callback: () => void): () => void {
+  _reconnectedCallbacks.add(callback);
+  return () => _reconnectedCallbacks.delete(callback);
 }

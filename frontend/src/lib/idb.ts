@@ -60,3 +60,18 @@ export function idbKeys(): Promise<string[]> {
   return tx('meta', 'readonly', s => s.getAllKeys() as IDBRequest<IDBValidKey[]>)
     .then(keys => keys.map(String));
 }
+
+// Полная очистка кэша (при logout/смене сервера).
+// Закрывает и удаляет саму БД — следующее обращение пересоздаст её чистой.
+export function idbClear(): Promise<void> {
+  return openDb().then(db => {
+    db.close();
+    _dbPromise = null;
+    return new Promise<void>((resolve, reject) => {
+      const req = indexedDB.deleteDatabase(DB_NAME);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => resolve(); // другая вкладка держит БД — пусть GC уберёт позже
+    });
+  }).catch(() => { /* IndexedDB недоступна — не критично */ });
+}

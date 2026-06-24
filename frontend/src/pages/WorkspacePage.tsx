@@ -167,8 +167,10 @@ export function WorkspacePage({ project, onBack }: Props) {
   // Владелец — WorkspacePage (не SessionList, который размонтируется при переходе на «Файлы»).
   useEffect(() => {
     joinProject(project.id).catch(() => {});
-    onReconnected(() => joinProject(project.id).catch(() => {}));
-    return () => { leaveProject(project.id).catch(() => {}); };
+    // onReconnected возвращает cleanup — иначе при смене проекта старый callback остаётся
+    // навсегда и продолжает джойнить уже закрытый проект при каждом реконнекте
+    const unsub = onReconnected(() => joinProject(project.id).catch(() => {}));
+    return () => { leaveProject(project.id).catch(() => {}); unsub(); };
   }, [project.id]);
 
   // Кнопки «назад/вперёд» браузера внутри проекта: восстанавливаем вид (sidebar/chat)

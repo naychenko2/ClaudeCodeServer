@@ -10,6 +10,7 @@ import { onFilesChanged } from './lib/signalr'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
+import { idbClear } from './lib/idb'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 
@@ -52,6 +53,7 @@ export default function App() {
       localStorage.removeItem('cc_api_key')
       localStorage.removeItem('cc_server_url')
       localStorage.removeItem(OPEN_PROJECT_KEY)
+      idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
       navReplace({ screen: 'projects' })
       setProject(null)
       setAuth(null)
@@ -124,8 +126,10 @@ export default function App() {
     setProject(p)
   }
   const logout = () => {
+    localStorage.removeItem('cc_api_key')
     localStorage.removeItem('cc_server_url')
     localStorage.removeItem(OPEN_PROJECT_KEY)
+    idbClear() // чистим кэш при смене аккаунта/сервера
     navReplace({ screen: 'projects' })
     setProject(null)
     setAuth(null)

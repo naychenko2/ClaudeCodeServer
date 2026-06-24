@@ -401,6 +401,9 @@ public class ClaudeSession : IAsyncDisposable
                 break;
 
             case "result":
+                // Результаты субагентов имеют parent_tool_use_id — не завершаем сессию по ним
+                if (root.TryGetProperty("parent_tool_use_id", out var rPid) && rPid.ValueKind == JsonValueKind.String)
+                    break;
                 var subtype = root.TryGetProperty("subtype", out var st) ? st.GetString() ?? "success" : "success";
                 var durationMs = root.TryGetProperty("duration_ms", out var d) ? d.GetInt64() : 0;
                 var numTurns = root.TryGetProperty("num_turns", out var nt) ? nt.GetInt32() : 0;

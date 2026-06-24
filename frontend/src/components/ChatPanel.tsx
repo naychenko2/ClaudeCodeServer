@@ -771,7 +771,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
-            {isWaiting && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved) && (
+            {(isWaiting || items.some(it => it.kind === 'tool_use' && it.result === undefined)) && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved) && (
               <WaitingIndicator planning={planningKind} />
             )}
             <div ref={bottomRef} />
@@ -883,7 +883,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
         <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
 
-        {isWaiting && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved) && (
+        {(isWaiting || items.some(it => it.kind === 'tool_use' && it.result === undefined)) && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved) && (
           <WaitingIndicator planning={planningKind} />
         )}
         <div ref={bottomRef} />

@@ -92,9 +92,11 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Раздача фронтенда из frontend/dist/ (production / PWA)
-var distPath = Path.GetFullPath(Path.Combine(
+// Раздача фронтенда: wwwroot/ рядом с exe (prod) или ../../frontend/dist (dev)
+var wwwrootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+var devDistPath = Path.GetFullPath(Path.Combine(
     Directory.GetCurrentDirectory(), "..", "..", "frontend", "dist"));
+var distPath = Directory.Exists(wwwrootPath) ? wwwrootPath : devDistPath;
 if (Directory.Exists(distPath))
 {
     var fp = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(distPath);

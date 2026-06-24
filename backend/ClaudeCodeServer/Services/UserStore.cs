@@ -1,0 +1,79 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using ClaudeCodeServer.Models;
+using Microsoft.AspNetCore.Identity;
+
+namespace ClaudeCodeServer.Services;
+
+public class UserStore
+{
+    private readonly string _filePath;
+    private readonly PasswordHasher<User> _hasher = new();
+    private List<User> _users = [];
+
+    public UserStore(IConfiguration config, ILogger<UserStore> logger)
+    {
+        var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
+        var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
+        _filePath = Path.Combine(dataDir, "users.json");
+        Load(logger);
+    }
+
+    private void Load(ILogger logger)
+    {
+        if (File.Exists(_filePath))
+        {
+            try
+            {
+                var json = File.ReadAllText(_filePath);
+                var doc = JsonSerializer.Deserialize<UsersFile>(json, JsonOptions);
+                _users = doc?.Users ?? [];
+                return;
+            }
+            catch { /* повреждённый файл — пересоздадим */ }
+        }
+
+        var admin = new User { Username = "admin", Role = "admin" };
+        admin.PasswordHash = _hasher.HashPassword(admin, "admin");
+        _users = [admin];
+        Save();
+
+        logger.LogWarning(
+            "\n╔══════════════════════════════════════════════╗\n" +
+            "║  СОЗДАН ПОЛЬЗОВАТЕЛЬ ПО УМОЛЧАНИЮ           ║\n" +
+            "║  Логин: admin   Пароль: admin               ║\n" +
+            "║  Смените пароль в data/users.json           ║\n" +
+            "╚══════════════════════════════════════════════╝");
+    }
+
+    private void Save()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+        File.WriteAllText(_filePath, JsonSerializer.Serialize(
+            new UsersFile { Users = _users }, JsonOptions));
+    }
+
+    public User? FindByUsername(string username) =>
+        _users.FirstOrDefault(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase));
+
+    public bool VerifyPassword(User user, string password)
+    {
+        var result = _hasher.VerifyHashedPassword(user, user.PasswordHash, password);
+        return result != PasswordVerificationResult.Failed;
+    }
+
+    public User? GetById(string id) =>
+        _users.FirstOrDefault(u => u.Id == id);
+
+    public User? GetFirst() => _users.FirstOrDefault();
+
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+}
+
+file sealed class UsersFile
+{
+    public int Version { get; set; } = 1;
+
+    [JsonPropertyName("users")]
+    public List<User> Users { get; set; } = [];
+}

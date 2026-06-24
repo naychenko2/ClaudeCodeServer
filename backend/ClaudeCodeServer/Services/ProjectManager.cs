@@ -8,23 +8,28 @@ public class ProjectManager
 {
     private readonly ConcurrentDictionary<string, Project> _projects = new();
     private readonly string _storePath;
+    private readonly UserStore _users;
 
-    public ProjectManager(IConfiguration config)
+    public ProjectManager(IConfiguration config, UserStore users)
     {
+        _users = users;
         _storePath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         Load();
     }
 
     public IReadOnlyCollection<Project> GetAll() => _projects.Values.ToList();
 
+    public IReadOnlyCollection<Project> GetByOwner(string userId) =>
+        _projects.Values.Where(p => p.OwnerId == userId).ToList();
+
     public Project? GetById(string id) => _projects.GetValueOrDefault(id);
 
-    public Project Create(string name, string rootPath)
+    public Project Create(string name, string rootPath, string userId)
     {
         if (!Directory.Exists(rootPath))
             throw new DirectoryNotFoundException($"Папка не найдена: {rootPath}");
 
-        var project = new Project { Name = name, RootPath = rootPath };
+        var project = new Project { Name = name, RootPath = rootPath, OwnerId = userId };
         _projects[project.Id] = project;
         Save();
         return project;
@@ -66,6 +71,19 @@ public class ProjectManager
                 _projects[p.Id] = p;
         }
         catch { /* первый запуск или повреждённый файл */ }
+
+        // Миграция: проекты без OwnerId → первый пользователь
+        var firstUser = _users.GetFirst();
+        if (firstUser is not null)
+        {
+            var needsSave = false;
+            foreach (var p in _projects.Values.Where(p => p.OwnerId is null))
+            {
+                p.OwnerId = firstUser.Id;
+                needsSave = true;
+            }
+            if (needsSave) Save();
+        }
     }
 
     private void Save()

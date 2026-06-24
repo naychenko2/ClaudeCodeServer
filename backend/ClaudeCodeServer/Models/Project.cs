@@ -7,4 +7,5 @@ public class Project
     public string RootPath { get; set; } = "";
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public string? OwnerId { get; set; }
 }

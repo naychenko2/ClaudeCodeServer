@@ -1,10 +1,12 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
-using ClaudeCodeServer.Auth;
 using ClaudeCodeServer.Hubs;
 using ClaudeCodeServer.Services;
-using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
+
+JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,18 +20,32 @@ builder.Services.AddSignalR()
         o.PayloadSerializerOptions.Converters.Add(
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
 
+builder.Services.AddSingleton<UserStore>();
+builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<FileService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddSingleton<ChatHistoryService>();
 builder.Services.AddSingleton<SessionManager>();
-builder.Services.AddSingleton<ApiKeyAuthService>();
 
-// Аутентификация по единственному API-ключу (Bearer / X-Api-Key / ?access_token=)
-builder.Services.AddAuthentication(ApiKeyAuthService.SchemeName)
-    .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(
-        ApiKeyAuthService.SchemeName, _ => { });
+// JWT-аутентификация; токен для SignalR берём из ?access_token=
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer();
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .Configure<JwtService>((opts, jwt) =>
+    {
+        opts.TokenValidationParameters = jwt.ValidationParameters;
+        opts.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = ctx =>
+            {
+                var token = ctx.Request.Query["access_token"].ToString();
+                if (!string.IsNullOrWhiteSpace(token)) ctx.Token = token;
+                return Task.CompletedTask;
+            }
+        };
+    });
 builder.Services.AddAuthorization();
 
 // За reverse-proxy (Caddy/туннель) берём реальный IP клиента из X-Forwarded-For,
@@ -37,16 +53,14 @@ builder.Services.AddAuthorization();
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
     o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto);
 
-// Защита /api/auth/ping от перебора ключа — фиксированное окно на IP.
-// Лимит читаем в момент запроса (через DI), чтобы видеть конфигурацию,
-// добавленную после старта builder (в т.ч. тестовую).
+// Защита /api/auth/login от перебора паролей — фиксированное окно на IP.
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddPolicy("auth-ping", ctx =>
+    options.AddPolicy("auth-login", ctx =>
     {
         var limit = ctx.RequestServices.GetRequiredService<IConfiguration>()
-            .GetValue("Auth:PingRateLimit", 10);
+            .GetValue("Auth:LoginRateLimit", 10);
         return RateLimitPartition.GetFixedWindowLimiter(
             ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
             _ => new FixedWindowRateLimiterOptions
@@ -66,8 +80,9 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 
 var app = builder.Build();
 
-// Прогрев сервиса ключа на старте — печатает сгенерированный ключ в консоль
-app.Services.GetRequiredService<ApiKeyAuthService>();
+// Прогрев сервисов на старте — UserStore печатает предупреждение если создал admin/admin
+app.Services.GetRequiredService<UserStore>();
+app.Services.GetRequiredService<JwtService>();
 
 app.UseForwardedHeaders();
 // Принудительный HTTPS только для публичного домена naychenko.me;

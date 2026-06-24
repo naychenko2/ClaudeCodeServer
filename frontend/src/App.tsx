@@ -17,10 +17,11 @@ const OPEN_PROJECT_KEY = 'cc_open_project'
 export default function App() {
   // Авторизация — из localStorage (постоянно) или sessionStorage (saveKey=false)
   const [auth, setAuth] = useState<AuthState | null>(() => {
-    const key = localStorage.getItem('cc_api_key') || sessionStorage.getItem('cc_api_key')
-    if (!key) return null
+    const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
+    if (!token) return null
     const url = localStorage.getItem('cc_server_url') || window.location.origin
-    return { serverUrl: url, apiKey: key }
+    const username = localStorage.getItem('cc_username') || ''
+    return { serverUrl: url, token, username }
   })
   // Открытый проект — восстанавливаем из localStorage, чтобы рефреш возвращал туда, где был.
   // Состояние внутри проекта (активный чат/файл/панели) восстанавливает сама WorkspacePage.
@@ -44,17 +45,18 @@ export default function App() {
   // выставился правильно ещё до первого рендера страниц (navigator.onLine ≠ «сервер доступен»)
   useEffect(() => {
     if (!auth) return
-    api.auth.ping(auth.serverUrl, auth.apiKey).catch(() => { /* результат отразится в _online */ })
+    api.auth.me().catch(() => { /* результат отразится в _online */ })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth?.serverUrl])
 
   // Сервер отверг API-ключ (401) → разлогиниваем и уводим на экран входа
   useEffect(() => {
     const onUnauthorized = () => {
-      localStorage.removeItem('cc_api_key')
+      localStorage.removeItem('cc_token')
+      localStorage.removeItem('cc_username')
       localStorage.removeItem('cc_server_url')
       localStorage.removeItem(OPEN_PROJECT_KEY)
-      sessionStorage.removeItem('cc_api_key')
+      sessionStorage.removeItem('cc_token')
       idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
       navReplace({ screen: 'projects' })
       setProject(null)
@@ -128,10 +130,11 @@ export default function App() {
     setProject(p)
   }
   const logout = () => {
-    localStorage.removeItem('cc_api_key')
+    localStorage.removeItem('cc_token')
+    localStorage.removeItem('cc_username')
     localStorage.removeItem('cc_server_url')
     localStorage.removeItem(OPEN_PROJECT_KEY)
-    sessionStorage.removeItem('cc_api_key')
+    sessionStorage.removeItem('cc_token')
     idbClear() // чистим кэш при смене аккаунта/сервера
     navReplace({ screen: 'projects' })
     setProject(null)

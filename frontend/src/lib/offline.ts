@@ -45,7 +45,7 @@ function startConnectivityProbe() {
   _probeTimer = setInterval(async () => {
     try {
       const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_api_key') || sessionStorage.getItem('cc_api_key'))
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
         : null;
       // HEAD к API: важен сам факт ответа (сеть жива), тело не нужно. Не идёт через
       // request(), чтобы не триггерить IDB-fallback/логаут. SW не кэширует /api.
@@ -100,7 +100,7 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
   }
 
   const token = typeof localStorage !== 'undefined'
-    ? (localStorage.getItem('cc_api_key') || sessionStorage.getItem('cc_api_key'))
+    ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
     : null;
 
   // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),

@@ -7,9 +7,9 @@ using Microsoft.Extensions.Configuration;
 
 namespace ClaudeCodeServer.Tests.Controllers;
 
-// Фабрика с маленьким лимитом ping — отдельный сервер, чтобы тест 429
+// Фабрика с маленьким лимитом login — отдельный сервер, чтобы тест 429
 // не пересекался по rate-limit с остальными тестами
-public class LowPingLimitFactory : TestWebApplicationFactory
+public class LowLoginLimitFactory : TestWebApplicationFactory
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -18,32 +18,32 @@ public class LowPingLimitFactory : TestWebApplicationFactory
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Auth:PingRateLimit"] = "3"
+                ["Auth:LoginRateLimit"] = "3"
             });
         });
     }
 }
 
-public class RateLimitTests : IClassFixture<LowPingLimitFactory>
+public class RateLimitTests : IClassFixture<LowLoginLimitFactory>
 {
     private readonly HttpClient _client;
 
-    public RateLimitTests(LowPingLimitFactory factory)
+    public RateLimitTests(LowLoginLimitFactory factory)
     {
         _client = factory.CreateClient();
     }
 
     [Fact]
-    public async Task Ping_ExceedsLimit_Returns429()
+    public async Task Login_ExceedsLimit_Returns429()
     {
         // лимит 3/мин — на превышении приходит 429
         var statuses = new List<HttpStatusCode>();
         for (int i = 0; i < 6; i++)
         {
-            var resp = await _client.PostAsJsonAsync("/api/auth/ping", new
+            var resp = await _client.PostAsJsonAsync("/api/auth/login", new
             {
-                serverUrl = "http://localhost:5000",
-                apiKey = TestWebApplicationFactory.ApiKey
+                username = "any",
+                password = "any"
             });
             statuses.Add(resp.StatusCode);
         }

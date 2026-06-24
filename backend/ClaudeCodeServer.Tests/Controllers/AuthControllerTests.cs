@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using ClaudeCodeServer.Tests.Helpers;
 using FluentAssertions;
 
@@ -13,71 +14,81 @@ public class AuthControllerTests : IClassFixture<TestWebApplicationFactory>
     public AuthControllerTests(TestWebApplicationFactory factory)
     {
         _factory = factory;
-        _client = factory.CreateClient(); // без заголовка — ключ проверяется из тела
+        _client = factory.CreateClient();
     }
 
     [Fact]
-    public async Task Ping_ValidKey_Returns200()
+    public async Task Login_ValidCredentials_Returns200WithToken()
     {
-        var response = await _client.PostAsJsonAsync("/api/auth/ping", new
+        var response = await _client.PostAsJsonAsync("/api/auth/login", new
         {
-            serverUrl = "http://localhost:5000",
-            apiKey = TestWebApplicationFactory.ApiKey
+            username = TestWebApplicationFactory.TestUsername,
+            password = TestWebApplicationFactory.TestPassword
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadAsStringAsync();
-        body.Should().Contain("true");
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("token").GetString().Should().NotBeNullOrEmpty();
+        body.GetProperty("username").GetString().Should().Be(TestWebApplicationFactory.TestUsername);
     }
 
     [Fact]
-    public async Task Ping_WrongKey_Returns401()
+    public async Task Login_WrongPassword_Returns401()
     {
-        var response = await _client.PostAsJsonAsync("/api/auth/ping", new
+        var response = await _client.PostAsJsonAsync("/api/auth/login", new
         {
-            serverUrl = "http://localhost:5000",
-            apiKey = "wrong-key"
+            username = TestWebApplicationFactory.TestUsername,
+            password = "wrong-password"
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Fact]
-    public async Task Ping_EmptyKey_Returns401()
+    public async Task Login_UnknownUser_Returns401()
     {
-        var response = await _client.PostAsJsonAsync("/api/auth/ping", new
+        var response = await _client.PostAsJsonAsync("/api/auth/login", new
         {
-            serverUrl = "http://localhost:5000",
-            apiKey = ""
+            username = "nobody",
+            password = "whatever"
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Fact]
-    public async Task Ping_KeyFromBearerHeader_Returns200()
+    public async Task Login_EmptyCredentials_Returns400()
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/ping")
+        var response = await _client.PostAsJsonAsync("/api/auth/login", new
         {
-            Content = JsonContent.Create(new { serverUrl = "http://localhost:5000" })
-        };
-        request.Headers.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", TestWebApplicationFactory.ApiKey);
+            username = "",
+            password = ""
+        });
 
-        var response = await _client.SendAsync(request);
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     [Fact]
-    public async Task ProtectedEndpoint_WithoutKey_Returns401()
+    public async Task Me_WithValidToken_Returns200WithUsername()
+    {
+        var authed = _factory.CreateAuthenticatedClient();
+        var response = await authed.GetAsync("/api/auth/me");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("username").GetString().Should().Be(TestWebApplicationFactory.TestUsername);
+        body.GetProperty("userId").GetString().Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task ProtectedEndpoint_WithoutToken_Returns401()
     {
         var response = await _client.GetAsync("/api/projects");
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Fact]
-    public async Task ProtectedEndpoint_WithKey_Returns200()
+    public async Task ProtectedEndpoint_WithToken_Returns200()
     {
         var authed = _factory.CreateAuthenticatedClient();
         var response = await authed.GetAsync("/api/projects");

@@ -99,5 +99,6 @@ export type ChatItem =
 
 export interface AuthState {
   serverUrl: string;
-  apiKey: string;
+  token: string;
+  username: string;
 }

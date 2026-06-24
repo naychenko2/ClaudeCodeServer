@@ -1,11 +1,14 @@
 using ClaudeCodeServer.Services;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeCodeServer.Tests.Services;
 
 public class ProjectManagerTests : IDisposable
 {
+    private const string TestUserId = "test-user-id";
+
     private readonly string _tempDir;
     private readonly ProjectManager _sut;
 
@@ -16,11 +19,21 @@ public class ProjectManagerTests : IDisposable
         _sut = CreateManager();
     }
 
-    private ProjectManager CreateManager() => new(new ConfigurationBuilder()
-        .AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json")
-        }).Build());
+    private UserStore CreateUserStore() => new(
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json")
+            }).Build(),
+        NullLogger<UserStore>.Instance);
+
+    private ProjectManager CreateManager() => new(
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json")
+            }).Build(),
+        CreateUserStore());
 
     private string MkDir(string name)
     {
@@ -45,16 +58,17 @@ public class ProjectManagerTests : IDisposable
     public void Create_ValidDir_ReturnsProject()
     {
         var dir = MkDir("proj1");
-        var p = _sut.Create("MyProject", dir);
+        var p = _sut.Create("MyProject", dir, TestUserId);
         p.Name.Should().Be("MyProject");
         p.RootPath.Should().Be(dir);
         p.Id.Should().NotBeEmpty();
+        p.OwnerId.Should().Be(TestUserId);
     }
 
     [Fact]
     public void Create_NonExistentDir_ThrowsDirectoryNotFound()
     {
-        var act = () => _sut.Create("Bad", @"C:\nonexistent\fake_" + Guid.NewGuid());
+        var act = () => _sut.Create("Bad", @"C:\nonexistent\fake_" + Guid.NewGuid(), TestUserId);
         act.Should().Throw<DirectoryNotFoundException>();
     }
 
@@ -62,7 +76,7 @@ public class ProjectManagerTests : IDisposable
     public void Create_PersistsAcrossInstances()
     {
         var dir = MkDir("persist");
-        _sut.Create("Persisted", dir);
+        _sut.Create("Persisted", dir, TestUserId);
 
         var manager2 = CreateManager();
         manager2.GetAll().Should().ContainSingle(p => p.Name == "Persisted");
@@ -71,15 +85,27 @@ public class ProjectManagerTests : IDisposable
     [Fact]
     public void GetAll_MultipleProjects_ReturnsAll()
     {
-        _sut.Create("A", MkDir("a"));
-        _sut.Create("B", MkDir("b"));
+        _sut.Create("A", MkDir("a"), TestUserId);
+        _sut.Create("B", MkDir("b"), TestUserId);
         _sut.GetAll().Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void GetByOwner_FiltersCorrectly()
+    {
+        _sut.Create("A", MkDir("a1"), "user-1");
+        _sut.Create("B", MkDir("b1"), "user-2");
+        _sut.Create("C", MkDir("c1"), "user-1");
+
+        _sut.GetByOwner("user-1").Should().HaveCount(2);
+        _sut.GetByOwner("user-2").Should().HaveCount(1);
+        _sut.GetByOwner("user-3").Should().BeEmpty();
     }
 
     [Fact]
     public void GetById_ExistingProject_ReturnsProject()
     {
-        var created = _sut.Create("X", MkDir("x"));
+        var created = _sut.Create("X", MkDir("x"), TestUserId);
         _sut.GetById(created.Id).Should().NotBeNull()
             .And.Subject.As<object?>().Should().BeEquivalentTo(new { Name = "X" });
     }
@@ -87,7 +113,7 @@ public class ProjectManagerTests : IDisposable
     [Fact]
     public void Update_Name_UpdatesName()
     {
-        var created = _sut.Create("Old", MkDir("upd"));
+        var created = _sut.Create("Old", MkDir("upd"), TestUserId);
         var updated = _sut.Update(created.Id, "New", null);
         updated.Name.Should().Be("New");
         updated.RootPath.Should().Be(created.RootPath);
@@ -96,7 +122,7 @@ public class ProjectManagerTests : IDisposable
     [Fact]
     public void Update_RootPath_UpdatesPath()
     {
-        var created = _sut.Create("P", MkDir("r1"));
+        var created = _sut.Create("P", MkDir("r1"), TestUserId);
         var dir2 = MkDir("r2");
         var updated = _sut.Update(created.Id, null, dir2);
         updated.RootPath.Should().Be(dir2);
@@ -112,7 +138,7 @@ public class ProjectManagerTests : IDisposable
     [Fact]
     public void Update_NonExistentNewPath_ThrowsDirectoryNotFound()
     {
-        var created = _sut.Create("P", MkDir("valid"));
+        var created = _sut.Create("P", MkDir("valid"), TestUserId);
         var act = () => _sut.Update(created.Id, null, @"C:\fake_" + Guid.NewGuid());
         act.Should().Throw<DirectoryNotFoundException>();
     }
@@ -120,7 +146,7 @@ public class ProjectManagerTests : IDisposable
     [Fact]
     public void Delete_ExistingProject_ReturnsTrueAndRemoves()
     {
-        var created = _sut.Create("D", MkDir("del"));
+        var created = _sut.Create("D", MkDir("del"), TestUserId);
         _sut.Delete(created.Id).Should().BeTrue();
         _sut.GetById(created.Id).Should().BeNull();
     }
@@ -134,7 +160,7 @@ public class ProjectManagerTests : IDisposable
     [Fact]
     public void Delete_PersistsRemoval()
     {
-        var created = _sut.Create("Gone", MkDir("gone"));
+        var created = _sut.Create("Gone", MkDir("gone"), TestUserId);
         _sut.Delete(created.Id);
 
         var manager2 = CreateManager();

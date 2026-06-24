@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using ClaudeCodeServer.Models;
 using ClaudeCodeServer.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -10,21 +12,24 @@ namespace ClaudeCodeServer.Controllers;
 [Route("api/projects")]
 public class ProjectsController(ProjectManager projects, SessionManager sessions) : ControllerBase
 {
-    // Проекция проекта с числом его сессий — для карточки проекта (MA13)
-    private object WithCount(Models.Project p) => new
+    // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
+    private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    private object WithCount(Project p) => new
     {
         p.Id, p.Name, p.RootPath, p.CreatedAt, p.UpdatedAt,
         SessionCount = sessions.CountByProject(p.Id),
     };
 
     [HttpGet]
-    public IActionResult GetAll() => Ok(projects.GetAll().Select(WithCount));
+    public IActionResult GetAll() => Ok(projects.GetByOwner(UserId).Select(WithCount));
 
     [HttpGet("{id}")]
     public IActionResult GetById(string id)
     {
         var p = projects.GetById(id);
-        return p is null ? NotFound() : Ok(WithCount(p));
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        return Ok(WithCount(p));
     }
 
     [HttpPost]
@@ -32,7 +37,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         try
         {
-            var p = projects.Create(req.Name, req.RootPath);
+            var p = projects.Create(req.Name, req.RootPath, UserId);
             return CreatedAtAction(nameof(GetById), new { id = p.Id }, WithCount(p));
         }
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
@@ -41,18 +46,24 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     [HttpPut("{id}")]
     public IActionResult Update(string id, [FromBody] UpdateProjectRequest req)
     {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
         try
         {
-            var p = projects.Update(id, req.Name, req.RootPath);
-            return Ok(WithCount(p));
+            var updated = projects.Update(id, req.Name, req.RootPath);
+            return Ok(WithCount(updated));
         }
-        catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     [HttpDelete("{id}")]
-    public IActionResult Delete(string id) =>
-        projects.Delete(id) ? NoContent() : NotFound();
+    public IActionResult Delete(string id)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        projects.Delete(id);
+        return NoContent();
+    }
 }
 
 public record CreateProjectRequest(string Name, string RootPath);

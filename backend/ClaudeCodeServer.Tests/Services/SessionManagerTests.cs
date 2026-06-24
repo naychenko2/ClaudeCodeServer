@@ -4,12 +4,15 @@ using ClaudeCodeServer.Services;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace ClaudeCodeServer.Tests.Services;
 
 public class SessionManagerTests : IDisposable
 {
+    private const string TestUserId = "test-user-id";
+
     private readonly string _tempDir;
     private readonly ProjectManager _projectManager;
     private readonly ChatHistoryService _historyService;
@@ -27,7 +30,8 @@ public class SessionManagerTests : IDisposable
             })
             .Build();
 
-        _projectManager = new ProjectManager(config);
+        var userStore = new UserStore(config, NullLogger<UserStore>.Instance);
+        _projectManager = new ProjectManager(config, userStore);
         _historyService = new ChatHistoryService(config);
 
         var clients = new Mock<IHubClients>();
@@ -57,7 +61,7 @@ public class SessionManagerTests : IDisposable
     public void GetByProject_NewProject_ReturnsEmpty()
     {
         var dir = MkProjectDir("empty");
-        var project = _projectManager.Create("Empty", dir);
+        var project = _projectManager.Create("Empty", dir, TestUserId);
 
         var result = _sut.GetByProject(project.Id);
 
@@ -68,7 +72,7 @@ public class SessionManagerTests : IDisposable
     public async Task GetByProject_AfterCreate_ReturnsSessions()
     {
         var dir = MkProjectDir("a");
-        var project = _projectManager.Create("A", dir);
+        var project = _projectManager.Create("A", dir, TestUserId);
 
         await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
         await _sut.CreateAsync(project.Id, ClaudeMode.Plan);
@@ -82,8 +86,8 @@ public class SessionManagerTests : IDisposable
     [Fact]
     public async Task GetByProject_FiltersByProjectId()
     {
-        var dir1 = MkProjectDir("p1"); var p1 = _projectManager.Create("P1", dir1);
-        var dir2 = MkProjectDir("p2"); var p2 = _projectManager.Create("P2", dir2);
+        var dir1 = MkProjectDir("p1"); var p1 = _projectManager.Create("P1", dir1, TestUserId);
+        var dir2 = MkProjectDir("p2"); var p2 = _projectManager.Create("P2", dir2, TestUserId);
 
         await _sut.CreateAsync(p1.Id, ClaudeMode.Auto);
         await _sut.CreateAsync(p1.Id, ClaudeMode.Auto);
@@ -97,7 +101,7 @@ public class SessionManagerTests : IDisposable
     public async Task GetByProject_OrderedByUpdatedAtDescending()
     {
         var dir = MkProjectDir("ord");
-        var project = _projectManager.Create("Ord", dir);
+        var project = _projectManager.Create("Ord", dir, TestUserId);
 
         var s1 = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
         var s2 = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
@@ -123,7 +127,7 @@ public class SessionManagerTests : IDisposable
     public async Task GetById_ExistingSession_ReturnsSession()
     {
         var dir = MkProjectDir("gb");
-        var project = _projectManager.Create("GB", dir);
+        var project = _projectManager.Create("GB", dir, TestUserId);
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
 
         var found = _sut.GetById(session.Id);
@@ -138,7 +142,7 @@ public class SessionManagerTests : IDisposable
     public async Task CreateAsync_ValidProject_ReturnsSession()
     {
         var dir = MkProjectDir("cr");
-        var project = _projectManager.Create("CR", dir);
+        var project = _projectManager.Create("CR", dir, TestUserId);
 
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Plan);
 
@@ -152,7 +156,7 @@ public class SessionManagerTests : IDisposable
     public async Task CreateAsync_WithName_SessionHasName()
     {
         var dir = MkProjectDir("nm");
-        var project = _projectManager.Create("NM", dir);
+        var project = _projectManager.Create("NM", dir, TestUserId);
 
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, null, "Мой чат");
 
@@ -171,7 +175,7 @@ public class SessionManagerTests : IDisposable
     public async Task CreateAsync_SessionAppearsBInGetByProject()
     {
         var dir = MkProjectDir("ap");
-        var project = _projectManager.Create("AP", dir);
+        var project = _projectManager.Create("AP", dir, TestUserId);
 
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
 
@@ -184,7 +188,7 @@ public class SessionManagerTests : IDisposable
     public async Task DeleteAsync_ExistingSession_RemovesFromStore()
     {
         var dir = MkProjectDir("del");
-        var project = _projectManager.Create("Del", dir);
+        var project = _projectManager.Create("Del", dir, TestUserId);
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
 
         await _sut.DeleteAsync(session.Id);
@@ -196,7 +200,7 @@ public class SessionManagerTests : IDisposable
     public async Task DeleteAsync_ExistingSession_DisappearsFromGetByProject()
     {
         var dir = MkProjectDir("dp");
-        var project = _projectManager.Create("DP", dir);
+        var project = _projectManager.Create("DP", dir, TestUserId);
         var s1 = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
         var s2 = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
 
@@ -230,7 +234,7 @@ public class SessionManagerTests : IDisposable
     public async Task GetHistoryAsync_NewSession_ReturnsEmpty()
     {
         var dir = MkProjectDir("nh");
-        var project = _projectManager.Create("NH", dir);
+        var project = _projectManager.Create("NH", dir, TestUserId);
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
 
         var history = await _sut.GetHistoryAsync(session.Id);
@@ -244,7 +248,7 @@ public class SessionManagerTests : IDisposable
         // Симулируем сессию после рестарта сервера: у неё нет накопителя (Process=null, Accumulator=null),
         // но ClaudeSessionId задан → история должна подгрузиться с диска
         var dir = MkProjectDir("rh");
-        var project = _projectManager.Create("RH", dir);
+        var project = _projectManager.Create("RH", dir, TestUserId);
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
 
         var claudeSessionId = "test-claude-session-" + Guid.NewGuid().ToString("N");

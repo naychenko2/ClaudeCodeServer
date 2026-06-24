@@ -6,11 +6,13 @@ export type { WorkflowAgentInfo };
 // Projects
 export const api = {
   auth: {
-    ping: (serverUrl: string, apiKey: string) =>
-      request<{ ok: boolean }>('/auth/ping', {
+    login: (username: string, password: string) =>
+      request<{ token: string; expiresAt: string; username: string }>('/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ serverUrl, apiKey }),
+        body: JSON.stringify({ username, password }),
       }),
+    me: () =>
+      request<{ userId: string; username: string; role: string }>('/auth/me'),
   },
 
   projects: {

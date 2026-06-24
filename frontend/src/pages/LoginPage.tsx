@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import type { AuthState } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
@@ -12,39 +12,30 @@ interface LoginPageProps {
 type PageState = 'idle' | 'loading' | 'error';
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
-  // Адрес сервера = origin, с которого открыта страница (фронт и бэк на одном источнике)
   const serverUrl = window.location.origin;
-  const [apiKey, setApiKey] = useState('');
-  const [saveKey, setSaveKey] = useState(false);
+  const [username, setUsername] = useState(() => localStorage.getItem('cc_username') || '');
+  const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(() => !!localStorage.getItem('cc_token'));
   const [pageState, setPageState] = useState<PageState>('idle');
   const [errorMessage, setErrorMessage] = useState('');
-
-  useEffect(() => {
-    const savedKey = localStorage.getItem('cc_api_key');
-    if (savedKey) {
-      setApiKey(savedKey);
-      setSaveKey(true);
-    } else {
-      const sessionKey = sessionStorage.getItem('cc_api_key');
-      if (sessionKey) setApiKey(sessionKey);
-    }
-  }, []);
 
   const handleConnect = async () => {
     setPageState('loading');
     setErrorMessage('');
     try {
-      await api.auth.ping(serverUrl, apiKey);
-      if (saveKey) {
+      const result = await api.auth.login(username, password);
+      if (remember) {
         localStorage.setItem('cc_server_url', serverUrl);
-        localStorage.setItem('cc_api_key', apiKey);
-        sessionStorage.removeItem('cc_api_key');
+        localStorage.setItem('cc_token', result.token);
+        localStorage.setItem('cc_username', result.username);
+        sessionStorage.removeItem('cc_token');
       } else {
-        sessionStorage.setItem('cc_api_key', apiKey);
-        localStorage.removeItem('cc_api_key');
+        sessionStorage.setItem('cc_token', result.token);
+        localStorage.removeItem('cc_token');
         localStorage.removeItem('cc_server_url');
+        localStorage.removeItem('cc_username');
       }
-      onConnect({ serverUrl, apiKey });
+      onConnect({ serverUrl, token: result.token, username: result.username });
     } catch (err: unknown) {
       const message = err instanceof OfflineError
         ? 'Нет соединения с сервером. Проверьте подключение к интернету.'
@@ -54,19 +45,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
     }
   };
 
-  const handleChangeKey = () => {
-    setApiKey('');
+  const handleRetry = () => {
     setPageState('idle');
     setErrorMessage('');
-  };
-
-  const handleRetry = () => {
     handleConnect();
   };
 
   const isLoading = pageState === 'loading';
   const isError = pageState === 'error';
-  const isDisabled = isLoading || !apiKey.trim();
+  const isDisabled = isLoading || !username.trim() || !password.trim();
 
   return (
     <div
@@ -99,24 +86,39 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
           fontFamily: FONT.serif, fontSize: 34, fontWeight: 500, color: C.textHeading,
           margin: '0 0 8px', textAlign: 'center', lineHeight: 1.1, letterSpacing: '-0.01em',
         }}>
-          Подключение к Claude Code Server
+          Вход в Claude Code Server
         </h1>
 
-        {/* Подзаголовок */}
         <p style={{ fontSize: 15, color: C.textSecondary, margin: '0 0 30px', textAlign: 'center', lineHeight: 1.55 }}>
-          Укажите API-ключ, чтобы открыть проекты и чаты.
+          Введите логин и пароль для доступа к проектам.
         </p>
 
-        {/* Поле: API-ключ */}
+        {/* Поле: логин */}
+        <div style={{ marginBottom: 12 }}>
+          <IconField
+            type="text"
+            value={username}
+            onChange={setUsername}
+            placeholder="Имя пользователя"
+            disabled={isLoading}
+            icon={
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <circle cx="12" cy="8" r="4"/>
+                <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+              </svg>
+            }
+          />
+        </div>
+
+        {/* Поле: пароль */}
         <div style={{ marginBottom: 18 }}>
           <IconField
             type="password"
-            value={apiKey}
-            onChange={setApiKey}
-            placeholder="sk-ant-••••••••••••"
+            value={password}
+            onChange={setPassword}
+            placeholder="Пароль"
             disabled={isLoading}
             mono
-            letterSpacing="0.08em"
             icon={
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <rect x="4" y="11" width="16" height="10" rx="2" />
@@ -126,18 +128,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
           />
         </div>
 
-        {/* Toggle «Сохранить ключ» */}
+        {/* Toggle «Запомнить меня» */}
         <div
-          onClick={() => !isLoading && setSaveKey(!saveKey)}
+          onClick={() => !isLoading && setRemember(!remember)}
           style={{ display: 'flex', alignItems: 'center', gap: 11, cursor: isLoading ? 'default' : 'pointer', marginBottom: 28, userSelect: 'none' }}
         >
-          <Toggle checked={saveKey} onChange={setSaveKey} disabled={isLoading} />
+          <Toggle checked={remember} onChange={setRemember} disabled={isLoading} />
           <span style={{ fontSize: 14, color: C.textSecondary }}>
-            Сохранить ключ в связке устройства
+            Запомнить меня на этом устройстве
           </span>
         </div>
 
-        {/* Кнопка «Подключиться» */}
+        {/* Кнопка «Войти» */}
         {!isError && (
           <Button
             variant="primary" size="lg" fullWidth glow
@@ -148,7 +150,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
               </svg>
             }
           >
-            {isLoading ? 'Подключаюсь…' : 'Подключиться'}
+            {isLoading ? 'Вхожу…' : 'Войти'}
           </Button>
         )}
 
@@ -165,13 +167,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
               </span>
             </div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <Button variant="ghostAccent" fullWidth onClick={handleChangeKey}>Изменить ключ</Button>
+              <Button variant="ghostAccent" fullWidth onClick={() => { setPageState('idle'); setErrorMessage(''); }}>
+                Изменить данные
+              </Button>
               <Button variant="primary" fullWidth onClick={handleRetry}>Повторить</Button>
             </div>
           </>
         )}
 
-        {/* Подпись под кнопкой */}
         {!isError && (
           <div style={{ textAlign: 'center', fontSize: 12.5, color: C.textMuted, marginTop: 14 }}>
             Соединение шифруется end-to-end

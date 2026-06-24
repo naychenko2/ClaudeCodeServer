@@ -1310,9 +1310,13 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
   const transcriptAgents = serverAgents ?? localAgents;
   const transcriptLoading = serverAgents !== undefined ? false : localLoading;
   const hasTranscriptDir = isDone && !!parseTranscriptDir(workflow.result as string | undefined);
-  // isSettled: сервер подтвердил завершение ИЛИ фоллбэк загружен ИЛИ нет transcript dir
-  const isSettled = serverDone === true ||
-    (serverAgents === undefined && (localAgents !== null || !hasTranscriptDir || !isDone));
+  // isSettled: result получен И (сервер подтвердил / нет transcript dir / фоллбэк загружен)
+  // isDone=false → спиннер (workflow tool ещё не вернул result)
+  const isSettled = isDone && (
+    serverDone === true ||
+    !hasTranscriptDir ||
+    (serverAgents === undefined && localAgents !== null)
+  );
 
   const meta = parseWorkflowMeta(workflow.input);
   const phases = meta?.phases ?? [];

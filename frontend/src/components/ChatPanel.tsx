@@ -1330,7 +1330,7 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
   const progress = totalCount > 0 ? doneCount / totalCount : isSettled ? 1 : 0;
 
   // Прогресс по фазам: сколько фаз завершено (оцениваем по transcript агентам)
-  const transcriptDone = transcriptAgents?.filter(a => a.summary !== undefined).length ?? 0;
+  const transcriptDone = transcriptAgents?.filter(a => a.isDone === true).length ?? 0;
   const transcriptTotal = transcriptAgents?.length ?? 0;
   const completedPhaseCount = isSettled
     ? phases.length
@@ -1548,8 +1548,8 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
                           onClick={hasDetails ? () => toggleTranscriptAgent(agent.id) : undefined}
                           style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', cursor: hasDetails ? 'pointer' : 'default', userSelect: 'none' as const }}
                         >
-                          {/* Галочка если есть summary (агент завершён), иначе спиннер */}
-                          {agent.summary !== undefined
+                          {/* Галочка только если агент завершён (isDone=true), иначе спиннер */}
+                          {agent.isDone === true
                             ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
                             : <div className="tool-spinner" style={{ width: 11, height: 11, flexShrink: 0 }} />}
                           {/* Иконка типа агента */}

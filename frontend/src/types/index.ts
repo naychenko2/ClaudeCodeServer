@@ -43,6 +43,7 @@ export interface WorkflowAgentInfo {
   summary?: string;
   tools?: { name: string; count: number }[];
   files?: string[];
+  isDone?: boolean;
 }
 
 // WebSocket сообщения от сервера — sessionId присутствует во всех типах

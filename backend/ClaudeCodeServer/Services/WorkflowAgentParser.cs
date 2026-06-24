@@ -33,6 +33,7 @@ public static class WorkflowAgentParser
 
         string? prompt = null;
         string? summary = null;
+        bool isDone = false;
         var toolCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var filesSet = new LinkedList<string>();
         var filesDedup = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -50,7 +51,7 @@ public static class WorkflowAgentParser
                     catch { return null; }
                     continue;
                 }
-                try { ProcessLine(line, ref summary, toolCounts, filesSet, filesDedup); }
+                try { ProcessLine(line, ref summary, ref isDone, toolCounts, filesSet, filesDedup); }
                 catch { }
             }
         }
@@ -65,14 +66,21 @@ public static class WorkflowAgentParser
 
         IReadOnlyList<string>? files = filesSet.Count > 0 ? filesSet.Take(10).ToArray() : null;
 
-        return new WorkflowAgentDto(agentId, prompt, summary, tools, files);
+        return new WorkflowAgentDto(agentId, prompt, summary, tools, files, isDone);
     }
 
-    private static void ProcessLine(string jsonLine, ref string? summary,
+    private static void ProcessLine(string jsonLine, ref string? summary, ref bool isDone,
         Dictionary<string, int> toolCounts, LinkedList<string> filesSet, HashSet<string> filesDedup)
     {
         using var doc = JsonDocument.Parse(jsonLine);
         var root = doc.RootElement;
+
+        // Финальное событие агента
+        if (root.TryGetProperty("type", out var rootTypeEl) && rootTypeEl.GetString() == "result")
+        {
+            isDone = true;
+            return;
+        }
 
         if (!root.TryGetProperty("message", out var message)) return;
         if (!message.TryGetProperty("content", out var content)) return;

@@ -59,27 +59,149 @@ public class WorkflowController : ControllerBase
             var fileName = Path.GetFileNameWithoutExtension(jsonlFile); // agent-<uuid>
             var agentId = fileName.Length > 6 ? fileName[6..] : fileName; // убираем "agent-"
 
-            var firstLine = System.IO.File.ReadLines(jsonlFile).FirstOrDefault();
-            if (firstLine is null) continue;
+            var parsed = ParseAgentFile(jsonlFile);
+            if (parsed is null) continue;
 
-            string prompt;
-            try
-            {
-                prompt = ExtractPrompt(firstLine);
-            }
-            catch
-            {
-                continue; // пропускаем битые строки
-            }
-
-            agents.Add(new { id = agentId, prompt });
+            agents.Add(parsed);
         }
 
         return Ok(new { agents });
     }
 
-    // Извлекает текст из message.content (строка или [{type:"text", text:"..."}])
-    private static string ExtractPrompt(string jsonLine)
+    // Читает весь jsonl-файл агента и возвращает расширенный объект
+    private static object? ParseAgentFile(string filePath)
+    {
+        var fileName = Path.GetFileNameWithoutExtension(filePath);
+        var agentId = fileName.Length > 6 ? fileName[6..] : fileName;
+
+        string? prompt = null;
+        string? summary = null;
+        var toolCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var filesSet = new LinkedList<string>(); // сохраняем порядок появления
+        var filesDedup = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        bool isFirst = true;
+        foreach (var line in System.IO.File.ReadLines(filePath))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            if (isFirst)
+            {
+                isFirst = false;
+                try { prompt = ExtractText(line); }
+                catch { /* первая строка битая — пропускаем файл */ return null; }
+                continue;
+            }
+
+            try
+            {
+                ProcessLine(line, ref summary, toolCounts, filesSet, filesDedup);
+            }
+            catch
+            {
+                // Битые строки пропускаем, не роняем весь файл
+            }
+        }
+
+        if (prompt is null) return null;
+
+        // Строим инструменты: list отсортированный по count desc, null если пусто
+        object? tools = null;
+        if (toolCounts.Count > 0)
+        {
+            tools = toolCounts
+                .OrderByDescending(kv => kv.Value)
+                .Select(kv => new { name = kv.Key, count = kv.Value })
+                .ToArray();
+        }
+
+        // Файлы: максимум 10, null если пусто
+        object? files = null;
+        if (filesSet.Count > 0)
+        {
+            files = filesSet.Take(10).ToArray();
+        }
+
+        return new { id = agentId, prompt, summary, tools, files };
+    }
+
+    // Обрабатывает одну строку (не первую): обновляет summary, tools, files
+    private static void ProcessLine(
+        string jsonLine,
+        ref string? summary,
+        Dictionary<string, int> toolCounts,
+        LinkedList<string> filesSet,
+        HashSet<string> filesDedup)
+    {
+        using var doc = JsonDocument.Parse(jsonLine);
+        var root = doc.RootElement;
+
+        if (!root.TryGetProperty("message", out var message)) return;
+        if (!message.TryGetProperty("content", out var content)) return;
+
+        // role нужен для определения: assistant → summary-кандидат
+        var isAssistant = message.TryGetProperty("role", out var role) &&
+                          role.GetString() == "assistant";
+
+        if (content.ValueKind == JsonValueKind.String)
+        {
+            if (isAssistant)
+            {
+                var text = content.GetString();
+                if (!string.IsNullOrWhiteSpace(text))
+                    summary = Truncate(text.Trim(), 400);
+            }
+            return;
+        }
+
+        if (content.ValueKind != JsonValueKind.Array) return;
+
+        foreach (var block in content.EnumerateArray())
+        {
+            if (!block.TryGetProperty("type", out var typeEl)) continue;
+            var blockType = typeEl.GetString();
+
+            if (blockType == "text" && isAssistant)
+            {
+                if (block.TryGetProperty("text", out var textEl))
+                {
+                    var text = textEl.GetString();
+                    if (!string.IsNullOrWhiteSpace(text))
+                        summary = Truncate(text.Trim(), 400);
+                }
+            }
+            else if (blockType == "tool_use")
+            {
+                if (!block.TryGetProperty("name", out var nameEl)) continue;
+                var toolName = nameEl.GetString();
+                if (string.IsNullOrEmpty(toolName)) continue;
+
+                toolCounts[toolName] = toolCounts.GetValueOrDefault(toolName, 0) + 1;
+
+                // Извлекаем файлы из Read и Glob
+                if ((toolName == "Read" || toolName == "Glob") &&
+                    block.TryGetProperty("input", out var input))
+                {
+                    string? rawPath = null;
+
+                    if (toolName == "Read" && input.TryGetProperty("file_path", out var fp))
+                        rawPath = fp.GetString();
+                    else if (toolName == "Glob" && input.TryGetProperty("pattern", out var pt))
+                        rawPath = pt.GetString();
+
+                    if (!string.IsNullOrEmpty(rawPath))
+                    {
+                        var name = Path.GetFileName(rawPath);
+                        if (!string.IsNullOrEmpty(name) && filesDedup.Add(name))
+                            filesSet.AddLast(name);
+                    }
+                }
+            }
+        }
+    }
+
+    // Извлекает текст из первой строки (prompt)
+    private static string ExtractText(string jsonLine)
     {
         using var doc = JsonDocument.Parse(jsonLine);
         var root = doc.RootElement;
@@ -108,4 +230,7 @@ public class WorkflowController : ControllerBase
 
         return string.Empty;
     }
+
+    private static string Truncate(string s, int maxLen) =>
+        s.Length <= maxLen ? s : s[..maxLen];
 }

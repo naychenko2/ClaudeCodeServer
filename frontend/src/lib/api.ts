@@ -1,6 +1,14 @@
 import type { Project, Session, FileEntry, SyncMark } from '../types';
 import { request } from './offline';
 
+export interface WorkflowAgentInfo {
+  id: string;
+  prompt: string;
+  summary?: string;
+  tools?: { name: string; count: number }[];
+  files?: string[];
+}
+
 // Projects
 export const api = {
   auth: {
@@ -71,7 +79,7 @@ export const api = {
 
   workflow: {
     getAgents: (transcriptDir: string) =>
-      request<{ agents: { id: string; prompt: string }[] }>(
+      request<{ agents: WorkflowAgentInfo[] }>(
         `/workflow-agents?transcriptDir=${encodeURIComponent(transcriptDir)}`
       ),
   },

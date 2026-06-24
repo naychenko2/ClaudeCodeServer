@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo, createContext, useContext } from 
 import type { Project, Session, ChatItem, FileEntry } from '../types';
 import { useSession } from '../hooks/useSession';
 import { useOnline } from '../hooks/useOnline';
-import { api } from '../lib/api';
+import { api, type WorkflowAgentInfo } from '../lib/api';
 import { modelLabel } from '../lib/models';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
@@ -1294,8 +1294,9 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
 }) {
   const [expanded, setExpanded] = useState(false);
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
-  const [transcriptAgents, setTranscriptAgents] = useState<{ id: string; prompt: string }[] | null>(null);
+  const [transcriptAgents, setTranscriptAgents] = useState<WorkflowAgentInfo[] | null>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [expandedTranscriptAgents, setExpandedTranscriptAgents] = useState<Set<string>>(new Set());
 
   const isDone = workflow.result !== undefined;
   const meta = parseWorkflowMeta(workflow.input);
@@ -1314,6 +1315,12 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
       .catch(() => setTranscriptAgents([]))
       .finally(() => setTranscriptLoading(false));
   }, [expanded, isDone, transcriptAgents, workflow.result]);
+
+  const toggleTranscriptAgent = (id: string) => setExpandedTranscriptAgents(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const toggleAgent = (id: string) => setExpandedAgents(prev => {
     const next = new Set(prev);
@@ -1458,12 +1465,52 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
                 <div style={{ padding: '4px 0' }}>
                   {transcriptAgents.map((agent, idx) => {
                     const label = agent.prompt.split('\n')[0].slice(0, 100);
+                    const isOpen = expandedTranscriptAgents.has(agent.id);
+                    const hasDetails = !!(agent.summary || agent.tools?.length || agent.files?.length);
                     return (
-                      <div key={agent.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
-                        <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.4 }}>
-                          {label || `Агент ${idx + 1}`}
-                        </span>
+                      <div key={agent.id} style={{ borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
+                        <div
+                          onClick={hasDetails ? () => toggleTranscriptAgent(agent.id) : undefined}
+                          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', cursor: hasDetails ? 'pointer' : 'default', userSelect: 'none' as const }}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
+                          <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.4 }}>
+                            {label || `Агент ${idx + 1}`}
+                          </span>
+                          {hasDetails && (
+                            <span style={{ color: C.textMuted, fontSize: 10, flexShrink: 0, display: 'inline-block', transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>▾</span>
+                          )}
+                        </div>
+                        {isOpen && hasDetails && (
+                          <div style={{ margin: '0 14px 8px', background: C.bgInset, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, overflow: 'hidden' }}>
+                            {agent.summary && (
+                              <div style={{ padding: '8px 12px', fontFamily: FONT.sans, fontSize: 12, lineHeight: 1.5, color: C.textSecondary, borderBottom: (agent.tools?.length || agent.files?.length) ? `1px solid ${C.borderLight}` : undefined }}>
+                                {agent.summary}
+                              </div>
+                            )}
+                            {agent.tools && agent.tools.length > 0 && (
+                              <div style={{ padding: '6px 12px', display: 'flex', flexWrap: 'wrap' as const, gap: 4, borderBottom: agent.files?.length ? `1px solid ${C.borderLight}` : undefined }}>
+                                {agent.tools.map(t => (
+                                  <span key={t.name} style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '1px 6px', lineHeight: 1.6 }}>
+                                    {t.name}{t.count > 1 ? ` ×${t.count}` : ''}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {agent.files && agent.files.length > 0 && (
+                              <div style={{ padding: '5px 12px 7px', display: 'flex', flexDirection: 'column' as const, gap: 2 }}>
+                                {agent.files.slice(0, 3).map(f => (
+                                  <span key={f} style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, lineHeight: 1.5 }}>
+                                    {f.split(/[\\/]/).pop() ?? f}
+                                  </span>
+                                ))}
+                                {agent.files.length > 3 && (
+                                  <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>+{agent.files.length - 3} файлов</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}

@@ -1288,8 +1288,11 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
       {/* Список агентов */}
       {expanded && (
         <div style={{ borderTop: `1px solid ${C.border}` }}>
-          {agents.length === 0 && (
+          {agents.length === 0 && !isDone && (
             <div style={{ padding: '10px 14px', fontFamily: FONT.sans, fontSize: 12, color: C.textMuted }}>Запуск субагентов…</div>
+          )}
+          {agents.length === 0 && isDone && (
+            <div style={{ padding: '10px 14px', fontFamily: FONT.sans, fontSize: 12, color: C.textMuted }}>Детали недоступны</div>
           )}
           {agents.map((agent, idx) => {
             const tools = childrenByParentId.get(agent.id) ?? [];

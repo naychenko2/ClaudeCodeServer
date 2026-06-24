@@ -247,6 +247,12 @@ public class SessionManager
         return entry.WorkflowProgress.Values.ToList();
     }
 
+    public Session? GetSessionInfo(string sessionId)
+    {
+        _sessions.TryGetValue(sessionId, out var entry);
+        return entry?.Info;
+    }
+
     // --- Внутренняя логика ---
 
     private async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg)

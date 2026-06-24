@@ -1,3 +1,5 @@
+using ClaudeCodeServer.Models;
+using ClaudeCodeServer.Protocol;
 using ClaudeCodeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
@@ -19,7 +21,17 @@ public class SessionHub : Hub
     public async Task JoinSession(string sessionId)
     {
         await Groups.AddToGroupAsync(Context.ConnectionId, sessionId);
-        // Сразу отправляем кэшированные workflow_progress новому клиенту
+
+        // Новый клиент сразу получает текущий статус (чтобы не пропустить working при workflow)
+        var info = _sessions.GetSessionInfo(sessionId);
+        if (info is { Status: SessionStatus.Working or SessionStatus.Waiting or SessionStatus.Starting })
+        {
+            var statusMsg = new StatusChangedMessage(info.Status.ToString().ToLower(), info.LastMessage, info.MessageCount)
+                with { SessionId = sessionId };
+            await Clients.Caller.SendAsync("message", statusMsg);
+        }
+
+        // Кэшированные workflow_progress
         foreach (var msg in _sessions.GetWorkflowProgress(sessionId))
             await Clients.Caller.SendAsync("message", msg with { SessionId = sessionId });
     }

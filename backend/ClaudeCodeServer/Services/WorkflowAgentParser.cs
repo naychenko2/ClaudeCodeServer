@@ -17,23 +17,52 @@ public static class WorkflowAgentParser
     public static IReadOnlyList<WorkflowAgentDto> ParseDirectory(string wfPath)
     {
         if (!Directory.Exists(wfPath)) return [];
+        // journal.jsonl — источник истины: агент done если есть {"type":"result","agentId":"..."}
+        var doneAgents = ReadDoneAgentsFromJournal(wfPath);
         var agents = new List<WorkflowAgentDto>();
         foreach (var file in Directory.GetFiles(wfPath, "agent-*.jsonl").OrderBy(f => f))
         {
-            var parsed = ParseAgentFile(file);
+            var parsed = ParseAgentFile(file, doneAgents);
             if (parsed is not null) agents.Add(parsed);
         }
         return agents;
     }
 
-    public static WorkflowAgentDto? ParseAgentFile(string filePath)
+    // Читает journal.jsonl и возвращает множество agentId с типом "result"
+    private static HashSet<string> ReadDoneAgentsFromJournal(string wfPath)
+    {
+        var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var journalPath = Path.Combine(wfPath, "journal.jsonl");
+        if (!File.Exists(journalPath)) return done;
+        try
+        {
+            foreach (var line in File.ReadLines(journalPath))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("type", out var t) && t.GetString() == "result" &&
+                        root.TryGetProperty("agentId", out var aid))
+                        done.Add(aid.GetString() ?? "");
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return done;
+    }
+
+    public static WorkflowAgentDto? ParseAgentFile(string filePath, HashSet<string>? doneAgents = null)
     {
         var fileName = Path.GetFileNameWithoutExtension(filePath);
         var agentId = fileName.Length > 6 ? fileName[6..] : fileName;
 
         string? prompt = null;
         string? summary = null;
-        bool isDone = false;
+        // journal.jsonl — приоритетный источник истины о завершении
+        bool isDone = doneAgents?.Contains(agentId) ?? false;
         var toolCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var filesSet = new LinkedList<string>();
         var filesDedup = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

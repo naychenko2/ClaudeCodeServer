@@ -25,6 +25,7 @@ interface Props {
   onToggleDock?: () => void;
   isMobile?: boolean;
   onBack?: () => void;
+  onWorkflowRunning?: (active: boolean) => void;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -211,9 +212,10 @@ interface ChatHeaderBarProps {
   onToggleDock?: () => void;
   isMobile?: boolean;
   onBack?: () => void;
+  activeWorkflow?: { phasesDone: number; phasesTotal: number };
 }
 
-function ChatHeaderBar({ session, project, online, mode, onOpenSettings, onToggleDock, isMobile, onBack }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, mode, onOpenSettings, onToggleDock, isMobile, onBack, activeWorkflow }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -234,6 +236,21 @@ function ChatHeaderBar({ session, project, online, mode, onOpenSettings, onToggl
       {isMobile && onBack
         ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
         : titleBlock}
+      {activeWorkflow && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 5,
+          padding: '3px 8px',
+          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+          flexShrink: 0,
+        }}>
+          <div className="tool-spinner" style={{ width: 10, height: 10, flexShrink: 0 }} />
+          <span style={{ fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, whiteSpace: 'nowrap' }}>
+            {activeWorkflow.phasesTotal > 0
+              ? `${activeWorkflow.phasesDone}/${activeWorkflow.phasesTotal}`
+              : 'Workflow'}
+          </span>
+        </div>
+      )}
       {online && (
         <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -439,7 +456,7 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile, onBack }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile, onBack, onWorkflowRunning }: Props) {
   const { items, isWaiting, isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
   const online = useOnline();
   const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
@@ -547,6 +564,32 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Фаза режима «План» (для контекстного индикатора и подписи WaitingIndicator)
   const planPhase = derivePlanPhase(items, mode, isWaiting);
   const planningKind = planPhase === 'planning' ? 'planning' : planPhase === 'replanning' ? 'replanning' : undefined;
+
+  // Активный workflow — для индикатора в тулбаре и нотификации родителя
+  const activeWorkflowInfo = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind !== 'tool_use') continue;
+      const wf = it as ToolUseItem;
+      if (wf.name.toLowerCase() !== 'workflow' || wf.result !== undefined) continue;
+      const meta = parseWorkflowMeta(wf.input);
+      const phases = meta?.phases ?? [];
+      if (phases.length === 0) return { phasesDone: 0, phasesTotal: 0 };
+      const serverAgents = wf.workflowAgents;
+      const transcriptDone = serverAgents?.filter(a => a.isDone).length ?? 0;
+      const transcriptTotal = serverAgents?.length ?? 0;
+      const phasesDone = transcriptTotal > 0
+        ? Math.min(Math.floor((transcriptDone / transcriptTotal) * phases.length), phases.length - 1)
+        : 0;
+      return { phasesDone, phasesTotal: phases.length };
+    }
+    return null;
+  }, [items]);
+
+  const isWorkflowRunning = activeWorkflowInfo !== null;
+  useEffect(() => {
+    onWorkflowRunning?.(isWorkflowRunning);
+  }, [isWorkflowRunning, onWorkflowRunning]);
 
   // Единое условие показа WaitingIndicator — синхронизировано с флагом активности на карточке.
   // session.status покрывает случай когда isWaiting ещё не обновился (перезагрузка, переключение чата).
@@ -835,6 +878,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           mode={mode}
           onOpenSettings={() => setShowEdit(true)}
           onToggleDock={onToggleDock}
+          activeWorkflow={activeWorkflowInfo ?? undefined}
         />
 
         {/* Сообщения (нижний отступ = высота плавающего composer) */}
@@ -894,6 +938,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         onOpenSettings={() => setShowEdit(true)}
         isMobile={isMobile}
         onBack={onBack}
+        activeWorkflow={activeWorkflowInfo ?? undefined}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
@@ -1360,8 +1405,8 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
     !hasTranscriptDir ||
     // Все агенты от сервера завершены → считаем settled (без ожидания IsDone=true)
     (serverAgents !== undefined && serverAgents.length > 0 && serverAgents.every(a => a.isDone === true)) ||
-    // Фоллбэк для старых сессий (нет живого watcher'а)
-    (serverAgents === undefined && localAgents !== null)
+    // Фоллбэк для старых сессий (нет живого watcher'а) — только если ВСЕ агенты завершены
+    (serverAgents === undefined && localAgents !== null && localAgents.length > 0 && localAgents.every(a => a.isDone === true))
   );
 
   const meta = parseWorkflowMeta(workflow.input);
@@ -1433,12 +1478,34 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textPrimary, flexShrink: 0 }}>Workflow</span>
-            {!meta?.description && totalCount > 0 && (
+            {/* Дотики фаз — когда есть phases (независимо от description) */}
+            {phases.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+                {phases.map((_, idx) => {
+                  const done = idx < completedPhaseCount;
+                  const active = !isSettled && idx === completedPhaseCount;
+                  return (
+                    <div key={idx} style={{
+                      width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                      background: done || isSettled ? C.success : active ? C.accent : C.borderLight,
+                      transition: 'background 0.25s',
+                    }} />
+                  );
+                })}
+              </div>
+            )}
+            {phases.length > 0 && (
+              <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0, whiteSpace: 'nowrap' }}>
+                {completedPhaseCount}/{phases.length}
+              </span>
+            )}
+            {/* Когда фаз нет — счётчик агентов + бар */}
+            {phases.length === 0 && !meta?.description && totalCount > 0 && (
               <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
                 {doneCount}/{totalCount} агентов
               </span>
             )}
-            {!meta?.description && totalCount > 0 && (
+            {phases.length === 0 && !meta?.description && totalCount > 0 && (
               <div style={{ flex: 1, height: 3, background: C.borderLight, borderRadius: 2, overflow: 'hidden', minWidth: 40, maxWidth: 80 }}>
                 <div style={{ width: `${Math.round(progress * 100)}%`, height: '100%', background: isSettled ? C.success : C.accent, borderRadius: 2, transition: 'width 0.3s ease' }} />
               </div>

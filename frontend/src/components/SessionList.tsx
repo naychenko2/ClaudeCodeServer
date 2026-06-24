@@ -16,9 +16,10 @@ interface Props {
   onSelect: (session: Session, firstMessage?: string, autoSelect?: boolean) => void;
   onSessionUpdated?: (session: Session) => void;
   isMobile?: boolean;
+  workflowRunningFor?: string;
 }
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, isMobile = false }: Props) {
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, isMobile = false, workflowRunningFor }: Props) {
   const online = useOnline();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
@@ -200,6 +201,17 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                 </span>
                 {(s.status === 'starting' || s.status === 'working' || s.status === 'finished' || s.status === 'error') && (
                   <StatusBadge status={s.status} />
+                )}
+                {workflowRunningFor === s.id && (
+                  <div title="Выполняется Workflow" style={{
+                    display: 'flex', alignItems: 'center', gap: 3,
+                    padding: '1px 5px',
+                    background: '#F4ECE1', border: '1px solid #EAD3C5', borderRadius: 4,
+                    flexShrink: 0,
+                  }}>
+                    <div className="tool-spinner" style={{ width: 8, height: 8 }} />
+                    <span style={{ fontFamily: 'Hanken Grotesk, sans-serif', fontSize: 10, fontWeight: 600, color: '#D97757', lineHeight: 1 }}>WF</span>
+                  </div>
                 )}
               </div>
               {s.lastMessage && (

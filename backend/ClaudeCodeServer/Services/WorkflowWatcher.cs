@@ -30,8 +30,20 @@ public sealed class WorkflowWatcher : IDisposable
     public void Start()
     {
         if (!WorkflowAgentParser.IsPathAllowed(_wfPath)) return;
-        if (!Directory.Exists(_wfPath)) return;
 
+        // Таймаут ставим сразу — независимо от того, существует ли директория
+        _timeoutTimer = new Timer(_ => _ = ForceFinishAsync(), null, MaxDuration, Timeout.InfiniteTimeSpan);
+
+        if (Directory.Exists(_wfPath))
+            AttachFsWatcher();
+
+        // Первое чтение — через 500мс; если директория ещё не появилась — будем поллить
+        ScheduleDebounce(TimeSpan.FromMilliseconds(500));
+    }
+
+    private void AttachFsWatcher()
+    {
+        if (_fsWatcher != null || !Directory.Exists(_wfPath)) return;
         _fsWatcher = new FileSystemWatcher(_wfPath, "agent-*.jsonl")
         {
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
@@ -40,12 +52,6 @@ public sealed class WorkflowWatcher : IDisposable
         };
         _fsWatcher.Changed += OnFileChanged;
         _fsWatcher.Created += OnFileChanged;
-
-        // Принудительно завершить через MaxDuration
-        _timeoutTimer = new Timer(_ => _ = ForceFinishAsync(), null, MaxDuration, Timeout.InfiniteTimeSpan);
-
-        // Первое чтение — через 500мс (транскрипт может заполняться прямо сейчас)
-        ScheduleDebounce(TimeSpan.FromMilliseconds(500));
     }
 
     private void OnFileChanged(object _, FileSystemEventArgs e)
@@ -68,6 +74,16 @@ public sealed class WorkflowWatcher : IDisposable
         if (_disposed) return;
         try
         {
+            // Директория может появиться после Start() — подключаем FSWatcher как только она создана
+            AttachFsWatcher();
+
+            if (!Directory.Exists(_wfPath))
+            {
+                // Директория ещё не создана — поллим каждые 2с
+                ScheduleDebounce(TimeSpan.FromSeconds(2));
+                return;
+            }
+
             var agents = WorkflowAgentParser.ParseDirectory(_wfPath);
             var allDone = agents.Count > 0 && agents.All(a => a.IsDone);
             // Если все агенты завершились — достаточно 5с тишины; иначе ждём 30с

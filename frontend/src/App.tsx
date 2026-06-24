@@ -23,6 +23,11 @@ export default function App() {
     const username = localStorage.getItem('cc_username') || ''
     return { serverUrl: url, token, username }
   })
+  // Если токен восстановлен из localStorage — ждём ответа сервера перед показом контента,
+  // чтобы не было flash рабочего экрана с последующим переключением на пустой фон.
+  const [authChecking, setAuthChecking] = useState<boolean>(() => {
+    return !!(localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+  })
   // Открытый проект — восстанавливаем из localStorage, чтобы рефреш возвращал туда, где был.
   // Состояние внутри проекта (активный чат/файл/панели) восстанавливает сама WorkspacePage.
   const [project, setProject] = useState<Project | null>(() => {
@@ -44,8 +49,10 @@ export default function App() {
   // При наличии сохранённых credentials — немедленно зондируем сервер, чтобы _online
   // выставился правильно ещё до первого рендера страниц (navigator.onLine ≠ «сервер доступен»)
   useEffect(() => {
-    if (!auth) return
-    api.auth.me().catch(() => { /* результат отразится в _online */ })
+    if (!auth) { setAuthChecking(false); return }
+    api.auth.me()
+      .catch(() => { /* результат отразится в _online */ })
+      .finally(() => setAuthChecking(false))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth?.serverUrl])
 
@@ -141,6 +148,7 @@ export default function App() {
     setAuth(null)
   }
 
+  if (authChecking) return <div style={{ minHeight: '100vh', background: '#F4F0E8' }} />
   if (!auth) return <LoginPage onConnect={setAuth} />
   // onBack ведёт через историю — едино с кнопкой «назад» браузера
   if (project) return <WorkspacePage project={project} onBack={() => window.history.back()} />

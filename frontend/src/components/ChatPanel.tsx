@@ -566,6 +566,15 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const planPhase = derivePlanPhase(items, mode, isWaiting);
   const planningKind = planPhase === 'planning' ? 'planning' : planPhase === 'replanning' ? 'replanning' : undefined;
 
+  // Workflow background работает — WaitingIndicator показывается пока не придёт workflowDone=true
+  const hasActiveWorkflow = items.some(it =>
+    it.kind === 'tool_use' &&
+    (it as ToolUseItem).name === 'Workflow' &&
+    (it as ToolUseItem).workflowDone !== true &&
+    typeof (it as ToolUseItem).result === 'string' &&
+    ((it as ToolUseItem).result as string).includes('Transcript dir:')
+  );
+
   // Номера версий plan_review: счётчик с последнего user_message включительно (1, 2, …).
   // Также помечаем, был ли в текущем ходе отклонённый план — тогда показываем бейдж даже для v1.
   const planVersions = useMemo(() => {
@@ -799,7 +808,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
-            {(isWaiting || items.some(it => it.kind === 'tool_use' && it.result === undefined)) && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved) && (
+            {(isWaiting || hasActiveWorkflow || items.some(it => it.kind === 'tool_use' && it.result === undefined)) && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved) && (
               <WaitingIndicator planning={planningKind} />
             )}
             <div ref={bottomRef} />
@@ -1192,7 +1201,7 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
   return (
     <div>
       <div
-        style={{ padding: '9px 0', display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
+        style={{ padding: '4px 0', display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
         onClick={() => hasBody && setOpen(o => !o)}
       >
         {item.result === undefined && <ToolSpinner />}
@@ -1526,9 +1535,13 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
                           <circle cx="12" cy="8" r="4" /><path d="M6 20v-2a6 6 0 0 1 12 0v2" />
                         </svg>;
 
-                    // Заголовок строки: summary (первая строка) или первая строка prompt
+                    // Заголовок строки: первый md-заголовок из summary, иначе первая строка, иначе prompt
                     const summaryFirstLine = agent.summary
-                      ? agent.summary.replace(/^#+\s*/, '').replace(/\*\*/g, '').split('\n')[0].trim()
+                      ? (() => {
+                          const h = agent.summary!.match(/^#{1,6}\s+(.+)$/m);
+                          if (h) return h[1].replace(/\*\*/g, '').trim();
+                          return agent.summary!.replace(/^#+\s*/, '').replace(/\*\*/g, '').split('\n')[0].trim();
+                        })()
                       : '';
                     const promptFirstLine = agent.prompt.split('\n')[0].trim();
                     const rowLabel = (summaryFirstLine || promptFirstLine).slice(0, 90) || `Агент ${idx + 1}`;

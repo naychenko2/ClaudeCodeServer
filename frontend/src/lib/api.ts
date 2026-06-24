@@ -71,6 +71,25 @@ export const api = {
       }),
     delete: (projectId: string, path: string) =>
       request<void>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+    upload: async (projectId: string, file: File, targetPath = ''): Promise<void> => {
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(
+        `/api/projects/${projectId}/files/upload?path=${encodeURIComponent(targetPath)}`,
+        { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form },
+      );
+      if (res.status === 401) {
+        if (token && typeof window !== 'undefined') window.dispatchEvent(new Event('cc-unauthorized'));
+        throw new Error('Нет доступа');
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error ?? res.statusText);
+      }
+    },
   },
 
   workflow: {

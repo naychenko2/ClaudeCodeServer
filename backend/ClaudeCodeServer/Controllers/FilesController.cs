@@ -143,6 +143,32 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         catch (FileNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
+
+    [HttpPost("upload")]
+    [RequestSizeLimit(100 * 1024 * 1024)] // 100 МБ
+    public async Task<IActionResult> Upload(string projectId, [FromQuery] string path = "", IFormFile? file = null)
+    {
+        if (file == null || file.Length == 0)
+            return BadRequest(new { error = "Файл не выбран или пустой" });
+
+        try
+        {
+            var root = GetRoot(projectId);
+            // Path.GetFileName защищает от path-сегментов в имени файла (../evil)
+            var safeName = Path.GetFileName(file.FileName);
+            if (string.IsNullOrEmpty(safeName))
+                return BadRequest(new { error = "Некорректное имя файла" });
+
+            var relativePath = string.IsNullOrEmpty(path) ? safeName : $"{path}/{safeName}";
+
+            using var ms = new MemoryStream();
+            await file.CopyToAsync(ms);
+            files.WriteFileBytes(root, relativePath, ms.ToArray());
+            return Ok();
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
+    }
 }
 
 public record SaveContentRequest(string Content);

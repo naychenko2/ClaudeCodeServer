@@ -162,6 +162,13 @@ public class FileService
         File.WriteAllText(path, content);
     }
 
+    public void WriteFileBytes(string rootPath, string relativePath, byte[] content)
+    {
+        var path = SafeJoin(rootPath, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, content);
+    }
+
     public void CreateFile(string rootPath, string relativePath)
     {
         var path = SafeJoin(rootPath, relativePath);

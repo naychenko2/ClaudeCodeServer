@@ -117,6 +117,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const [showCreateFile, setShowCreateFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');
   const [createInDir, setCreateInDir] = useState(() => initial?.createInDir ?? '');
+  const [uploading, setUploading] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeNorm = normPath(activeFilePath);
 
@@ -251,6 +253,20 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     setNewFileName('');
     await invalidateDir(createInDir);
     if (createInDir) setExpanded(prev => new Set(prev).add(createInDir));
+  };
+
+  const handleUploadFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    const dir = isMobile ? mobileDir : createInDir;
+    setUploading(true);
+    try {
+      await Promise.all(Array.from(fileList).map(f => api.files.upload(project.id, f, dir)));
+      await invalidateDir(dir);
+      if (dir && !isMobile) setExpanded(prev => new Set(prev).add(dir));
+    } finally {
+      setUploading(false);
+      if (uploadInputRef.current) uploadInputRef.current.value = '';
+    }
   };
 
   const flatTree = useMemo((): TreeNode[] => {
@@ -422,16 +438,36 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         </div>
 
         {online && (
-          <div
-            onClick={() => {
-              // на мобиле создаём в текущей папке навигации
-              if (isMobile) setCreateInDir(mobileDir);
-              setShowCreateFile(true);
-            }}
-            style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 36, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
-            Новый файл
+          <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
+            <div
+              onClick={() => {
+                if (isMobile) setCreateInDir(mobileDir);
+                setShowCreateFile(true);
+              }}
+              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 36, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              Новый файл
+            </div>
+            <input
+              ref={uploadInputRef}
+              type="file"
+              multiple
+              style={{ display: 'none' }}
+              onChange={e => handleUploadFiles(e.target.files)}
+            />
+            <div
+              onClick={() => uploadInputRef.current?.click()}
+              title="Загрузить файлы"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, height: 36, paddingInline: 12, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: uploading ? C.textMuted : C.accent, fontSize: 12.5, fontWeight: 600, cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1, flexShrink: 0 }}
+            >
+              {uploading ? (
+                <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid #DACDB9', borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} />
+              ) : (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              )}
+              Загрузить
+            </div>
           </div>
         )}
       </div>

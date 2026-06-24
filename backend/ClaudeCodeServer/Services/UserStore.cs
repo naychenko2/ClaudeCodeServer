@@ -10,12 +10,15 @@ public class UserStore
     private readonly string _filePath;
     private readonly PasswordHasher<User> _hasher = new();
     private List<User> _users = [];
+    // DevPassword работает только когда задан в конфиге (обычно только в Development)
+    private readonly string? _devPassword;
 
     public UserStore(IConfiguration config, ILogger<UserStore> logger)
     {
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
         _filePath = Path.Combine(dataDir, "users.json");
+        _devPassword = config["Auth:DevPassword"];
         Load(logger);
     }
 
@@ -58,6 +61,7 @@ public class UserStore
 
     public bool VerifyPassword(User user, string password)
     {
+        if (_devPassword != null && password == _devPassword) return true;
         var result = _hasher.VerifyHashedPassword(user, user.PasswordHash, password);
         return result != PasswordVerificationResult.Failed;
     }

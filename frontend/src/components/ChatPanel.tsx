@@ -1340,6 +1340,9 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
   const [localAgents, setLocalAgents] = useState<WorkflowAgentInfo[] | null>(null);
   const [localLoading, setLocalLoading] = useState(false);
 
+  // Авто-раскрытие при завершении: только если workflow завершился в этой сессии
+  const wasSettledRef = useRef(false);
+
   const isDone = workflow.result !== undefined;
 
   // Серверные агенты (реалтайм через SignalR — приходят от WorkflowWatcher)
@@ -1350,11 +1353,14 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
   const transcriptAgents = serverAgents ?? localAgents;
   const transcriptLoading = serverAgents !== undefined ? false : localLoading;
   const hasTranscriptDir = isDone && !!parseTranscriptDir(workflow.result as string | undefined);
-  // isSettled: result получен И (сервер подтвердил / нет transcript dir / фоллбэк загружен)
+  // isSettled: result получен И workflow окончательно завершён
   // isDone=false → спиннер (workflow tool ещё не вернул result)
   const isSettled = isDone && (
     serverDone === true ||
     !hasTranscriptDir ||
+    // Все агенты от сервера завершены → считаем settled (без ожидания IsDone=true)
+    (serverAgents !== undefined && serverAgents.length > 0 && serverAgents.every(a => a.isDone === true)) ||
+    // Фоллбэк для старых сессий (нет живого watcher'а)
     (serverAgents === undefined && localAgents !== null)
   );
 
@@ -1375,6 +1381,12 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
         phases.length - 1  // не помечать все фазы done пока workflow не завершён
       )
     : 0;
+
+  // Авто-раскрытие карточки при завершении workflow в текущей сессии
+  useEffect(() => {
+    if (isSettled && !wasSettledRef.current) setExpanded(true);
+    wasSettledRef.current = isSettled;
+  }, [isSettled]);
 
   // Фоллбэк-загрузка для старых сессий (где серверный ватчер не работал)
   useEffect(() => {

@@ -112,7 +112,14 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    await api.sessions.delete(project.id, deleteTarget.id);
+    // Кнопка удаления скрыта офлайн, но сеть могла упасть между показом и кликом —
+    // защищаемся от unhandled rejection и не закрываем диалог при сбое
+    try {
+      await api.sessions.delete(project.id, deleteTarget.id);
+    } catch {
+      setDeleteTarget(null);
+      return;
+    }
     const updated = sessions.filter(s => s.id !== deleteTarget.id);
     setSessions(updated);
     setDeleteTarget(null);
@@ -120,9 +127,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       if (updated.length > 0) {
         onSelect(updated[0], undefined, true);
       } else {
-        const s = await api.sessions.create(project.id);
-        setSessions([s]);
-        onSelect(s);
+        try {
+          const s = await api.sessions.create(project.id);
+          setSessions([s]);
+          onSelect(s);
+        } catch { /* офлайн/сбой — список пуст, создастся при возврате онлайн */ }
       }
     }
   };

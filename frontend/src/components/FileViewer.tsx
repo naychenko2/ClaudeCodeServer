@@ -20,6 +20,7 @@ import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
 import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
 import type { Project } from '../types';
 import { api } from '../lib/api';
+import { OfflineError } from '../lib/offline';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
@@ -204,6 +205,8 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
   const [editContent, setEditContent] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [unsavedConfirm, setUnsavedConfirm] = useState(false);
+  // Ошибка мутации (сохранение/откат/удаление) офлайн или при сбое — inline-фидбек
+  const [actionError, setActionError] = useState<string | null>(null);
   const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
   const marks = useSyncMarks(project.id);
 
@@ -220,6 +223,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
     setLoadError(false);
     setFileContent(null);
     setImgDims(null);
+    setActionError(null);
     api.files.getContent(project.id, filePath).then(r => {
       setFileContent(r);
       setEditContent(r.content ?? '');
@@ -252,25 +256,47 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
     });
   };
 
-  const handleSave = async () => {
-    await api.files.saveContent(project.id, filePath, editContent);
-    setFileContent(prev => prev ? { ...prev, content: editContent } : prev);
-    setEditing(false);
-    const r = await api.files.getDiff(project.id, filePath);
-    setDiff(r.diff);
+  // Понятный текст для ошибки мутации
+  const mutationErrorText = (e: unknown, fallback: string) =>
+    e instanceof OfflineError ? 'Действие недоступно офлайн' : fallback;
+
+  const handleSave = async (): Promise<boolean> => {
+    try {
+      await api.files.saveContent(project.id, filePath, editContent);
+      setFileContent(prev => prev ? { ...prev, content: editContent } : prev);
+      setEditing(false);
+      setActionError(null);
+      const r = await api.files.getDiff(project.id, filePath);
+      setDiff(r.diff);
+      return true;
+    } catch (e) {
+      // Не выходим из режима редактирования — иначе потеряются несохранённые правки
+      setActionError(mutationErrorText(e, 'Не удалось сохранить файл'));
+      return false;
+    }
   };
 
   const handleDelete = async () => {
-    await api.files.delete(project.id, filePath);
-    onClose();
+    try {
+      await api.files.delete(project.id, filePath);
+      onClose();
+    } catch (e) {
+      setDeleteConfirm(false);
+      setActionError(mutationErrorText(e, 'Не удалось удалить файл'));
+    }
   };
 
   const handleRevert = async () => {
-    await api.files.revert(project.id, filePath);
-    const r = await api.files.getContent(project.id, filePath);
-    setFileContent(r);
-    setEditContent(r.content ?? '');
-    setDiff(null);
+    try {
+      await api.files.revert(project.id, filePath);
+      const r = await api.files.getContent(project.id, filePath);
+      setFileContent(r);
+      setEditContent(r.content ?? '');
+      setDiff(null);
+      setActionError(null);
+    } catch (e) {
+      setActionError(mutationErrorText(e, 'Не удалось откатить файл'));
+    }
   };
 
   const handleClose = () => {
@@ -288,8 +314,9 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
 
   const handleSaveAndClose = async () => {
     setUnsavedConfirm(false);
-    await handleSave();
-    onClose();
+    // Закрываем только при успешном сохранении — иначе правки потеряются (офлайн/сбой)
+    const ok = await handleSave();
+    if (ok) onClose();
   };
 
   const handleDownload = () => {
@@ -370,8 +397,13 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
           {!editing && fileContent?.isBinary && null}
           {editing && (
             <>
-              <button onClick={() => { setEditing(false); setEditContent(content); }} style={tbBtnGhost}>Отмена</button>
-              <button onClick={handleSave} style={tbBtnPrimary}>Сохранить</button>
+              <button onClick={() => { setEditing(false); setEditContent(content); setActionError(null); }} style={tbBtnGhost}>Отмена</button>
+              <button
+                onClick={handleSave}
+                disabled={!online}
+                title={!online ? 'Сохранение недоступно офлайн' : undefined}
+                style={{ ...tbBtnPrimary, ...(!online ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+              >Сохранить</button>
             </>
           )}
 
@@ -437,6 +469,23 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
           )}
         </div>
       </Toolbar>
+
+      {/* Баннер ошибки мутации (офлайн/сбой) */}
+      {actionError && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 16px', background: C.dangerBg,
+          borderBottom: `1px solid ${C.dangerBorder}`,
+          fontSize: 13, color: C.danger,
+        }}>
+          <span style={{ flexShrink: 0 }}>⚠</span>
+          <span style={{ flex: 1 }}>{actionError}</span>
+          <button
+            onClick={() => setActionError(null)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.danger, fontSize: 14, padding: 0, flexShrink: 0 }}
+          >✕</button>
+        </div>
+      )}
 
       {/* Содержимое */}
       <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'flex', flexDirection: 'column' }}>

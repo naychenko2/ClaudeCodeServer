@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
+import { OfflineError } from '../lib/offline';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
@@ -110,6 +111,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const [search, setSearch] = useState(() => initial?.search ?? '');
   const [searchResults, setSearchResults] = useState<FileEntry[] | null>(() => initial?.searchResults ?? null);
+  // Поиск идёт только по живому серверу (не кэшируется): офлайн/сбой → сообщение вместо краша
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const [showCreateFile, setShowCreateFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');
@@ -221,9 +224,16 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const handleSearch = async (q: string) => {
     setSearch(q);
-    if (!q.trim()) { setSearchResults(null); return; }
-    const results = await api.files.search(project.id, q);
-    setSearchResults(results);
+    if (!q.trim()) { setSearchResults(null); setSearchError(null); return; }
+    try {
+      const results = await api.files.search(project.id, q);
+      setSearchResults(results);
+      setSearchError(null);
+    } catch (e) {
+      // Поиск по живому серверу: офлайн/сбой не должен ронять промис в консоль
+      setSearchResults([]);
+      setSearchError(e instanceof OfflineError ? 'Поиск недоступен офлайн' : 'Не удалось выполнить поиск');
+    }
   };
 
   // Переключение синхронизации файла/папки. Маркеры (direct + inherited у вложенных)
@@ -468,8 +478,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           searchResults.length === 0 ? (
             <EmptyState
               icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>}
-              title="Ничего не найдено"
-              subtitle={`Нет файлов по запросу «${search}»`}
+              title={searchError ?? 'Ничего не найдено'}
+              subtitle={searchError ? 'Подключитесь к серверу, чтобы искать файлы' : `Нет файлов по запросу «${search}»`}
             />
           ) : (
             searchResults.map(entry => renderFileRow(entry, 0, true))

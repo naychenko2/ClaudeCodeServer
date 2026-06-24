@@ -1239,6 +1239,54 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
 
 type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
+function parseTranscriptDir(result: string | undefined): string | null {
+  if (!result) return null;
+  const m = result.match(/Transcript dir:\s*(.+)/);
+  return m ? m[1].trim() : null;
+}
+
+function parseWorkflowMeta(input: unknown): { description?: string; phases?: { title: string; detail?: string }[] } | null {
+  const inp = input as Record<string, unknown> | null;
+  const script = typeof inp?.script === 'string' ? inp.script : null;
+  if (!script) return null;
+
+  const metaStart = script.indexOf('export const meta');
+  if (metaStart === -1) return null;
+  const braceStart = script.indexOf('{', metaStart);
+  if (braceStart === -1) return null;
+
+  let depth = 0, metaEnd = -1;
+  for (let i = braceStart; i < script.length; i++) {
+    if (script[i] === '{') depth++;
+    else if (script[i] === '}') { depth--; if (depth === 0) { metaEnd = i; break; } }
+  }
+  if (metaEnd === -1) return null;
+  const metaStr = script.slice(braceStart, metaEnd + 1);
+
+  const descMatch = metaStr.match(/description:\s*['"`]([^'"`]+)['"`]/);
+  const description = descMatch?.[1];
+
+  const phases: { title: string; detail?: string }[] = [];
+  const phasesPos = metaStr.indexOf('phases:');
+  if (phasesPos !== -1) {
+    const bracketStart = metaStr.indexOf('[', phasesPos);
+    if (bracketStart !== -1) {
+      let bd = 0, bracketEnd = -1;
+      for (let i = bracketStart; i < metaStr.length; i++) {
+        if (metaStr[i] === '[') bd++;
+        else if (metaStr[i] === ']') { bd--; if (bd === 0) { bracketEnd = i; break; } }
+      }
+      if (bracketEnd !== -1) {
+        const phasesStr = metaStr.slice(bracketStart + 1, bracketEnd);
+        const phaseRe = /\{[^}]*title:\s*['"`]([^'"`]+)['"`](?:[^}]*detail:\s*['"`]([^'"`]+)['"`])?[^}]*\}/g;
+        let m;
+        while ((m = phaseRe.exec(phasesStr)) !== null) phases.push({ title: m[1], detail: m[2] });
+      }
+    }
+  }
+  return { description, phases: phases.length > 0 ? phases : undefined };
+}
+
 function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
   workflow: ToolUseItem;
   agents: ToolUseItem[];
@@ -1246,11 +1294,26 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
 }) {
   const [expanded, setExpanded] = useState(false);
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+  const [transcriptAgents, setTranscriptAgents] = useState<{ id: string; prompt: string }[] | null>(null);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
 
   const isDone = workflow.result !== undefined;
+  const meta = parseWorkflowMeta(workflow.input);
+  const phases = meta?.phases ?? [];
   const doneCount = agents.filter(a => a.result !== undefined).length;
   const totalCount = agents.length;
   const progress = totalCount > 0 ? doneCount / totalCount : isDone ? 1 : 0;
+
+  useEffect(() => {
+    if (!expanded || !isDone || transcriptAgents !== null) return;
+    const dir = parseTranscriptDir(workflow.result as string | undefined);
+    if (!dir) return;
+    setTranscriptLoading(true);
+    api.workflow.getAgents(dir)
+      .then(r => setTranscriptAgents(r.agents))
+      .catch(() => setTranscriptAgents([]))
+      .finally(() => setTranscriptLoading(false));
+  }, [expanded, isDone, transcriptAgents, workflow.result]);
 
   const toggleAgent = (id: string) => setExpandedAgents(prev => {
     const next = new Set(prev);
@@ -1258,9 +1321,9 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
     return next;
   });
 
-  const WorkflowIcon = () => isDone
-    ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-    : <div className="tool-spinner" />;
+  const DoneIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+  );
 
   return (
     <div style={{ border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden', background: C.bgPanel }}>
@@ -1269,79 +1332,151 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
         onClick={() => setExpanded(e => !e)}
         style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', cursor: 'pointer', userSelect: 'none' as const }}
       >
-        <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}><WorkflowIcon /></span>
-        <span style={{ fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, color: C.textPrimary, flexShrink: 0 }}>Workflow</span>
-        {totalCount > 0 && (
-          <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
-            {doneCount}/{totalCount} агентов
-          </span>
-        )}
-        {totalCount > 0 && (
-          <div style={{ flex: 1, height: 4, background: C.border, borderRadius: 2, overflow: 'hidden', minWidth: 40, maxWidth: 100 }}>
-            <div style={{ width: `${Math.round(progress * 100)}%`, height: '100%', background: isDone ? C.success : C.accent, borderRadius: 2, transition: 'width 0.3s ease' }} />
+        <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', marginTop: meta?.description ? -1 : 0 }}>
+          {isDone
+            ? <DoneIcon />
+            : <div className="tool-spinner" />}
+        </span>
+        {/* Название + описание: одна колонка, description под заголовком */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textPrimary, flexShrink: 0 }}>Workflow</span>
+            {!meta?.description && totalCount > 0 && (
+              <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
+                {doneCount}/{totalCount} агентов
+              </span>
+            )}
+            {!meta?.description && totalCount > 0 && (
+              <div style={{ flex: 1, height: 3, background: C.borderLight, borderRadius: 2, overflow: 'hidden', minWidth: 40, maxWidth: 80 }}>
+                <div style={{ width: `${Math.round(progress * 100)}%`, height: '100%', background: isDone ? C.success : C.accent, borderRadius: 2, transition: 'width 0.3s ease' }} />
+              </div>
+            )}
           </div>
-        )}
-        {totalCount === 0 && <span style={{ flex: 1 }} />}
+          {meta?.description && (
+            <div style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {meta.description}
+            </div>
+          )}
+        </div>
         <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{expanded ? '▴ скрыть' : '▾ детали'}</span>
       </div>
 
-      {/* Список агентов */}
+      {/* Тело */}
       {expanded && (
         <div style={{ borderTop: `1px solid ${C.border}` }}>
-          {agents.length === 0 && !isDone && (
-            <div style={{ padding: '10px 14px', fontFamily: FONT.sans, fontSize: 12, color: C.textMuted }}>Запуск субагентов…</div>
-          )}
-          {agents.length === 0 && isDone && (
-            <div style={{ padding: '10px 14px', fontFamily: FONT.sans, fontSize: 12, color: C.textMuted }}>Детали недоступны</div>
-          )}
-          {agents.map((agent, idx) => {
-            const tools = childrenByParentId.get(agent.id) ?? [];
-            const isAgentExpanded = expandedAgents.has(agent.id);
-            const inp = (agent.input ?? {}) as Record<string, unknown>;
-            const rawLabel =
-              (typeof inp.description === 'string' ? inp.description : null) ??
-              (typeof inp.label === 'string' ? inp.label : null) ??
-              (typeof inp.prompt === 'string' ? inp.prompt : null) ??
-              (typeof inp.task === 'string' ? inp.task : null) ?? '';
-            const label = rawLabel.split('\n')[0].slice(0, 100);
-            const agentDone = agent.result !== undefined;
-
-            return (
-              <div key={agent.id} style={{ borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
-                <div
-                  onClick={tools.length > 0 ? () => toggleAgent(agent.id) : undefined}
-                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', cursor: tools.length > 0 ? 'pointer' : 'default' }}
-                >
-                  <span style={{ flexShrink: 0, width: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    {agentDone
+          {/* Фазы из meta.phases */}
+          {phases.length > 0 && (
+            <div style={{ padding: '10px 14px 8px', display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {phases.map((phase, idx) => (
+                <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 0', borderBottom: idx < phases.length - 1 ? `1px solid ${C.borderLight}` : undefined }}>
+                  <span style={{ flexShrink: 0, width: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 2 }}>
+                    {isDone
                       ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-                      : <div className="tool-spinner" style={{ width: 11, height: 11 }} />
-                    }
+                      : <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.border }} />}
                   </span>
-                  <span style={{ flex: 1, fontFamily: FONT.sans, fontSize: 12.5, color: label ? C.textPrimary : C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {label || `Агент ${idx + 1}`}
-                  </span>
-                  {tools.length > 0 && (
-                    <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
-                      {tools.length} {toolWord(tools.length)}
-                    </span>
-                  )}
-                  {tools.length > 0 && (
-                    <span style={{ color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', transform: isAgentExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
-                  )}
-                </div>
-                {isAgentExpanded && tools.length > 0 && (
-                  <div style={{ paddingLeft: 22, paddingRight: 14, paddingBottom: 4, borderTop: `1px solid ${C.bgInset}` }}>
-                    {tools.map((tool, ti) => (
-                      <div key={tool.id} style={ti > 0 ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
-                        <ToolUseView item={tool} />
-                      </div>
-                    ))}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 500, color: C.textPrimary, lineHeight: 1.4 }}>{phase.title}</div>
+                    {phase.detail && (
+                      <div style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary, lineHeight: 1.4, marginTop: 1 }}>{phase.detail}</div>
+                    )}
                   </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Субагенты из потока (если есть) */}
+          {agents.length > 0 && (
+            <div style={{ borderTop: phases.length > 0 ? `1px solid ${C.border}` : undefined }}>
+              {agents.map((agent, idx) => {
+                const tools = childrenByParentId.get(agent.id) ?? [];
+                const isAgentExpanded = expandedAgents.has(agent.id);
+                const inp = (agent.input ?? {}) as Record<string, unknown>;
+                const rawLabel =
+                  (typeof inp.description === 'string' ? inp.description : null) ??
+                  (typeof inp.label === 'string' ? inp.label : null) ??
+                  (typeof inp.prompt === 'string' ? inp.prompt : null) ??
+                  (typeof inp.task === 'string' ? inp.task : null) ?? '';
+                const label = rawLabel.split('\n')[0].slice(0, 100);
+                const agentDone = agent.result !== undefined;
+                return (
+                  <div key={agent.id} style={{ borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
+                    <div
+                      onClick={tools.length > 0 ? () => toggleAgent(agent.id) : undefined}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', cursor: tools.length > 0 ? 'pointer' : 'default' }}
+                    >
+                      <span style={{ flexShrink: 0, width: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {agentDone
+                          ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                          : <div className="tool-spinner" style={{ width: 11, height: 11 }} />}
+                      </span>
+                      <span style={{ flex: 1, fontFamily: FONT.sans, fontSize: 12.5, color: label ? C.textPrimary : C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {label || `Агент ${idx + 1}`}
+                      </span>
+                      {tools.length > 0 && (
+                        <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{tools.length} {toolWord(tools.length)}</span>
+                      )}
+                      {tools.length > 0 && (
+                        <span style={{ color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', transform: isAgentExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
+                      )}
+                    </div>
+                    {isAgentExpanded && tools.length > 0 && (
+                      <div style={{ paddingLeft: 22, paddingRight: 14, paddingBottom: 4, borderTop: `1px solid ${C.bgInset}` }}>
+                        {tools.map((tool, ti) => (
+                          <div key={tool.id} style={ti > 0 ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
+                            <ToolUseView item={tool} />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {/* Агенты из transcript-файлов */}
+          {isDone && (transcriptLoading || (transcriptAgents && transcriptAgents.length > 0)) && (
+            <div style={{ borderTop: `1px solid ${C.border}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px 6px', background: C.bgInset, borderBottom: `1px solid ${C.borderLight}` }}>
+                <span style={{ fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase' as const, letterSpacing: '0.04em' }}>Агенты</span>
+                {!transcriptLoading && transcriptAgents && (
+                  <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, background: C.borderLight, borderRadius: R.sm, padding: '1px 5px', fontWeight: 600, lineHeight: 1.5 }}>
+                    {transcriptAgents.length}
+                  </span>
                 )}
               </div>
-            );
-          })}
+              {transcriptLoading && (
+                <div style={{ padding: '6px 0' }}>
+                  {[80, 65, 90].map((w, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', borderTop: i > 0 ? `1px solid ${C.bgInset}` : undefined }}>
+                      <div style={{ width: 13, height: 13, borderRadius: '50%', background: C.borderLight, flexShrink: 0 }} />
+                      <div style={{ height: 11, width: `${w}%`, maxWidth: 280, borderRadius: 4, background: C.borderLight }} />
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!transcriptLoading && transcriptAgents && transcriptAgents.length > 0 && (
+                <div style={{ padding: '4px 0' }}>
+                  {transcriptAgents.map((agent, idx) => {
+                    const label = agent.prompt.split('\n')[0].slice(0, 100);
+                    return (
+                      <div key={agent.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
+                        <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.4 }}>
+                          {label || `Агент ${idx + 1}`}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          {/* Ничего нет */}
+          {agents.length === 0 && phases.length === 0 && !transcriptLoading && !transcriptAgents?.length && (
+            <div style={{ padding: '10px 14px', fontFamily: FONT.sans, fontSize: 12, color: C.textMuted }}>
+              {isDone ? 'Детали недоступны' : 'Запуск субагентов…'}
+            </div>
+          )}
         </div>
       )}
     </div>

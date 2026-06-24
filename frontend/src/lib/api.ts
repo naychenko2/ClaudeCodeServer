@@ -69,6 +69,13 @@ export const api = {
       request<void>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
   },
 
+  workflow: {
+    getAgents: (transcriptDir: string) =>
+      request<{ agents: { id: string; prompt: string }[] }>(
+        `/workflow-agents?transcriptDir=${encodeURIComponent(transcriptDir)}`
+      ),
+  },
+
   sync: {
     list: (projectId: string) => request<SyncMark[]>(`/projects/${projectId}/sync`),
     add: (projectId: string, path: string, isDirectory: boolean) =>

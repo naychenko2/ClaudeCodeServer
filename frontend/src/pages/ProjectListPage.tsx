@@ -81,8 +81,12 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    await api.projects.delete(deleteTarget.id);
-    setProjects(prev => prev.filter(p => p.id !== deleteTarget.id));
+    // Кнопка удаления скрыта офлайн, но сеть могла упасть между показом и кликом —
+    // защищаемся от unhandled rejection
+    try {
+      await api.projects.delete(deleteTarget.id);
+      setProjects(prev => prev.filter(p => p.id !== deleteTarget.id));
+    } catch { /* офлайн/сбой — проект остаётся, повторим онлайн */ }
     setDeleteTarget(null);
   };
 

@@ -251,24 +251,6 @@ function ChatHeaderBar({ session, project, online, mode, onOpenSettings, onToggl
   );
 }
 
-// Заглушка вместо Composer в офлайн-режиме
-function OfflineComposerStub() {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-      padding: '14px', borderRadius: 14, background: C.bgPanel,
-      border: '1px solid #E0D8CC', color: C.textMuted, fontSize: 13, fontWeight: 600,
-    }}>
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M1 1l22 22" />
-        <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55M5 12.55a10.94 10.94 0 0 1 5.17-2.39M10.71 5.05A16 16 0 0 1 22.58 9M1.42 9a15.91 15.91 0 0 1 4.7-2.88M8.53 16.11a6 6 0 0 1 6.95 0" />
-        <line x1="12" y1="20" x2="12.01" y2="20" />
-      </svg>
-      Отправка недоступна офлайн
-    </div>
-  );
-}
-
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
 const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
 
@@ -827,18 +809,17 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         {/* Composer — плавающий над доком, контент виден под ним */}
         <div ref={composerWrapRef} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '0 16px 12px', pointerEvents: 'none' }}>
           <div style={{ width: '100%', pointerEvents: 'auto', borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
-            {online ? (
-              <Composer
-                onSend={handleSend}
-                onStop={interrupt}
-                onAttach={() => setShowAttachPicker(true)}
-                isGenerating={isWaiting}
-                mode={mode}
-                onModeChange={setMode}
-                attachments={attachedFiles}
-                onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
-              />
-            ) : <OfflineComposerStub />}
+            <Composer
+              offline={!online}
+              onSend={handleSend}
+              onStop={interrupt}
+              onAttach={() => setShowAttachPicker(true)}
+              isGenerating={isWaiting}
+              mode={mode}
+              onModeChange={setMode}
+              attachments={attachedFiles}
+              onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
+            />
           </div>
         </div>
 
@@ -961,19 +942,18 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         pointerEvents: 'none',
       }}>
         <div style={{ maxWidth: 760, margin: '0 auto', pointerEvents: 'auto', borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
-          {online ? (
-            <Composer
-              onSend={handleSend}
-              onStop={interrupt}
-              onAttach={() => setShowAttachPicker(true)}
-              isGenerating={isWaiting}
-              mode={mode}
-              onModeChange={setMode}
-              attachments={attachedFiles}
-              onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
-              isMobile={isMobile}
-            />
-          ) : <OfflineComposerStub />}
+          <Composer
+            offline={!online}
+            onSend={handleSend}
+            onStop={interrupt}
+            onAttach={() => setShowAttachPicker(true)}
+            isGenerating={isWaiting}
+            mode={mode}
+            onModeChange={setMode}
+            attachments={attachedFiles}
+            onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
+            isMobile={isMobile}
+          />
         </div>
       </div>
 

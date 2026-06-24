@@ -23,9 +23,49 @@ export function subscribeOnline(fn: () => void): () => void {
 }
 
 function setOnline(value: boolean) {
-  if (_online === value) return;
+  if (_online === value) {
+    return;
+  }
   _online = value;
+  // Пока офлайн — активно зондируем сервер: иначе при «мигнувшей» сети
+  // (упал один запрос, но событие window 'online' не пришло) UI застрянет в офлайне
+  if (value) stopConnectivityProbe(); else startConnectivityProbe();
   _listeners.forEach(fn => fn());
+}
+
+// --- Probe восстановления связи ---
+// Если _online опустился в false из-за единичного сбоя fetch, а ОС-событие 'online'
+// не приходит (сеть на уровне ОС не пропадала) и фоновых GET нет — без зонда UI
+// остался бы офлайн навсегда. Зонд бьёт по API раз в N секунд, пока не получит ответ.
+let _probeTimer: ReturnType<typeof setInterval> | null = null;
+const PROBE_INTERVAL_MS = 4_000;
+
+function startConnectivityProbe() {
+  if (_probeTimer !== null || typeof window === 'undefined') return;
+  _probeTimer = setInterval(async () => {
+    try {
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_api_key') || sessionStorage.getItem('cc_api_key'))
+        : null;
+      // HEAD к API: важен сам факт ответа (сеть жива), тело не нужно. Не идёт через
+      // request(), чтобы не триггерить IDB-fallback/логаут. SW не кэширует /api.
+      const res = await fetch(BASE + '/projects', {
+        method: 'HEAD',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      // Любой HTTP-ответ (включая 401) означает, что сеть восстановлена
+      if (res) setOnline(true);
+    } catch {
+      /* всё ещё нет сети — ждём следующего тика */
+    }
+  }, PROBE_INTERVAL_MS);
+}
+
+function stopConnectivityProbe() {
+  if (_probeTimer !== null) {
+    clearInterval(_probeTimer);
+    _probeTimer = null;
+  }
 }
 
 // Вызываются из signalr.ts по событиям соединения
@@ -130,4 +170,8 @@ export function initConnectivity() {
   window.addEventListener('offline', () => setOnline(false));
   // 'online' — оптимистично считаем себя онлайн; ближайший fetch/SignalR подтвердит или откатит
   window.addEventListener('online', () => setOnline(true));
+
+  // Стартанули в офлайне (navigator.onLine=false): setOnline не вызывался,
+  // поэтому зонд не активен — запускаем его вручную, чтобы поймать восстановление
+  if (!_online) startConnectivityProbe();
 }

@@ -24,6 +24,10 @@ public class FileService
         return full;
     }
 
+    // Публичная обёртка SafeJoin для использования вне сборки (WebDav и др.)
+    public static string SafeJoinPublic(string root, string relativePath) =>
+        SafeJoin(root, relativePath);
+
     public IEnumerable<FileEntry> List(string rootPath, string relativePath = "")
     {
         var dir = SafeJoin(rootPath, relativePath);

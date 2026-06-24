@@ -107,6 +107,11 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
+// WebDAV — собственный Basic Auth внутри хендлера, вне JWT pipeline
+var webDavMethods = new[] { "OPTIONS", "PROPFIND", "PROPPATCH", "GET", "HEAD", "PUT", "DELETE", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK" };
+app.MapMethods("/webdav/{projectId}", webDavMethods, ClaudeCodeServer.WebDav.WebDavHandler.HandleAsync);
+app.MapMethods("/webdav/{projectId}/{**path}", webDavMethods, ClaudeCodeServer.WebDav.WebDavHandler.HandleAsync);
+
 // Раздача фронтенда: wwwroot/ рядом с exe (prod) или ../../frontend/dist (dev)
 var wwwrootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");
 var devDistPath = Path.GetFullPath(Path.Combine(

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import type { Project } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
@@ -46,8 +46,17 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
   const [error, setError] = useState('');
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'offline' | 'error'>('loading');
   const [retryKey, setRetryKey] = useState(0);
+  const [copiedWebDav, setCopiedWebDav] = useState(false);
 
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';
+
+  const handleCopyWebDav = useCallback((projectId: string) => {
+    const url = `${window.location.origin}/webdav/${projectId}/`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedWebDav(true);
+      setTimeout(() => setCopiedWebDav(false), 1500);
+    });
+  }, []);
 
   useEffect(() => {
     setLoadState('loading');
@@ -334,6 +343,28 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
           <TextField value={editName} onChange={setEditName} placeholder="Название" />
           <TextField value={editPath} onChange={setEditPath} placeholder="Путь к папке" mono />
           <ProjectSyncToggle projectId={editTarget.id} online={online} />
+          {/* WebDAV */}
+          <div style={{ marginTop: 4, padding: '12px 14px', background: '#F4F0E8', border: `1px solid ${C.border}`, borderRadius: R.xl }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, letterSpacing: '0.06em', marginBottom: 8 }}>WEBDAV</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '7px 10px' }}>
+              <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {`${window.location.origin}/webdav/${editTarget.id}/`}
+              </span>
+              <button
+                onClick={() => handleCopyWebDav(editTarget.id)}
+                title="Скопировать URL"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: copiedWebDav ? '#3F7A4F' : C.textMuted, flexShrink: 0 }}
+              >
+                {copiedWebDav
+                  ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                }
+              </button>
+            </div>
+            <div style={{ marginTop: 7, fontSize: 11.5, color: C.textMuted, lineHeight: 1.5 }}>
+              Монтируется в ОС через любой WebDAV-клиент. Войти как <span style={{ fontFamily: FONT.mono }}>username:password</span>.
+            </div>
+          </div>
         </Modal>
       )}
 

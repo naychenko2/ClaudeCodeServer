@@ -19,6 +19,9 @@ public class SessionHub : Hub
     public async Task JoinSession(string sessionId)
     {
         await Groups.AddToGroupAsync(Context.ConnectionId, sessionId);
+        // Сразу отправляем кэшированные workflow_progress новому клиенту
+        foreach (var msg in _sessions.GetWorkflowProgress(sessionId))
+            await Clients.Caller.SendAsync("message", msg with { SessionId = sessionId });
     }
 
     public async Task LeaveSession(string sessionId)

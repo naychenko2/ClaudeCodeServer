@@ -13,6 +13,8 @@ public class SessionManager
         public required Session Info;
         public ClaudeSession? Process;
         public TurnAccumulator? Accumulator;
+        // Кэш последних workflow_progress для replay при подключении нового клиента
+        public Dictionary<string, WorkflowProgressMessage> WorkflowProgress = new();
     }
 
     private readonly ConcurrentDictionary<string, SessionEntry> _sessions = new();
@@ -239,6 +241,12 @@ public class SessionManager
         return [];
     }
 
+    public IReadOnlyList<WorkflowProgressMessage> GetWorkflowProgress(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return [];
+        return entry.WorkflowProgress.Values.ToList();
+    }
+
     // --- Внутренняя логика ---
 
     private async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg)
@@ -262,6 +270,13 @@ public class SessionManager
                 case ToolResultMessage m:
                     acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);
                     await acc.SaveSnapshotAsync(_history); // промежуточное сохранение после каждого tool call
+                    break;
+                case WorkflowProgressMessage m:
+                    if (entry is not null)
+                    {
+                        if (m.IsDone) entry.WorkflowProgress.Remove(m.ToolUseId);
+                        else entry.WorkflowProgress[m.ToolUseId] = m;
+                    }
                     break;
                 case FileChangedMessage m:  acc.OnFileChanged(m.Path, m.Added, m.Removed); break;
                 case AskQuestionMessage m:

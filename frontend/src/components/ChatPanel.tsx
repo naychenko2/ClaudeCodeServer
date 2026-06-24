@@ -548,10 +548,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const planPhase = derivePlanPhase(items, mode, isWaiting);
   const planningKind = planPhase === 'planning' ? 'planning' : planPhase === 'replanning' ? 'replanning' : undefined;
 
-  // Индикатор работы: показываем пока после последнего user_message нет result/error
-  const lastUserMsgIdx = items.reduce((acc, it, i) => it.kind === 'user_message' ? i : acc, -1);
-  const turnSettled = lastUserMsgIdx < 0 ||
-    items.slice(lastUserMsgIdx + 1).some(it => it.kind === 'result' || it.kind === 'error' || it.kind === 'session_ended');
+  // Единое условие показа WaitingIndicator — синхронизировано с флагом активности на карточке.
+  // session.status покрывает случай когда isWaiting ещё не обновился (перезагрузка, переключение чата).
+  const showWaiting =
+    (isWaiting || session.status === 'working' || session.status === 'starting'
+      || items.some(it => it.kind === 'tool_use' && it.result === undefined))
+    && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved);
 
   // Номера версий plan_review: счётчик с последнего user_message включительно (1, 2, …).
   // Также помечаем, был ли в текущем ходе отклонённый план — тогда показываем бейдж даже для v1.
@@ -658,6 +660,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       for (const child of (childrenByParentId.get(it.id) ?? [])) {
         if (!suppressedByWorkflow.has(child.id)) suppressedByAgentParent.add(child.id);
       }
+    }
+    // DEBUG: временный лог для диагностики группировки агентов
+    if (items.some(it => it.kind === 'tool_use' && (it as ToolUseItem).name.toLowerCase() !== 'workflow')) {
+      console.log('[agent-group DEBUG] items:', items.filter(it => it.kind === 'tool_use').map(it => ({ id: (it as ToolUseItem).id, name: (it as ToolUseItem).name, parentToolUseId: (it as ToolUseItem).parentToolUseId })));
+      console.log('[agent-group DEBUG] childrenByParentId entries:', [...childrenByParentId.entries()].map(([k, v]) => `${k} → [${v.map(x => x.id).join(',')}]`));
+      console.log('[agent-group DEBUG] suppressedByAgentParent:', [...suppressedByAgentParent]);
     }
     // Дочерние вызовы субагента (не-Workflow, не inline) — рисуем единой линией-коннектором слева
     const isSubTool = (it: ChatItem) => it.kind === 'tool_use' && !!it.parentToolUseId && !suppressedByWorkflow.has(it.id) && !suppressedByAgentParent.has(it.id);
@@ -833,7 +841,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
-            {online && !turnSettled && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved) && (
+            {online && showWaiting && (
               <WaitingIndicator planning={planningKind} />
             )}
             <div ref={bottomRef} />
@@ -944,7 +952,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
         <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
 
-        {(isWaiting || items.some(it => it.kind === 'tool_use' && it.result === undefined)) && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved) && (
+        {online && showWaiting && (
           <WaitingIndicator planning={planningKind} />
         )}
         <div ref={bottomRef} />
@@ -1361,8 +1369,11 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
   const transcriptTotal = transcriptAgents?.length ?? 0;
   const completedPhaseCount = isSettled
     ? phases.length
-    : transcriptTotal > 0
-    ? Math.floor((transcriptDone / transcriptTotal) * phases.length)
+    : transcriptTotal > 0 && phases.length > 0
+    ? Math.min(
+        Math.floor((transcriptDone / transcriptTotal) * phases.length),
+        phases.length - 1  // не помечать все фазы done пока workflow не завершён
+      )
     : 0;
 
   // Фоллбэк-загрузка для старых сессий (где серверный ватчер не работал)

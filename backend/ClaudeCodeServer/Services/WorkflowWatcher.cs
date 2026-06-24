@@ -69,9 +69,14 @@ public sealed class WorkflowWatcher : IDisposable
         try
         {
             var agents = WorkflowAgentParser.ParseDirectory(_wfPath);
-            var stable = agents.Count > 0 && (DateTime.UtcNow - _lastChange) >= StableDelay;
+            var allDone = agents.Count > 0 && agents.All(a => a.IsDone);
+            // Если все агенты завершились — достаточно 5с тишины; иначе ждём 30с
+            var effectiveStableDelay = allDone ? TimeSpan.FromSeconds(5) : StableDelay;
+            var stable = agents.Count > 0 && (DateTime.UtcNow - _lastChange) >= effectiveStableDelay;
             await _onMessage(new WorkflowProgressMessage(_toolUseId, agents, stable));
-            if (stable) Dispose();
+            if (stable) { Dispose(); return; }
+            // Планируем следующую проверку, чтобы не зависнуть если файлы больше не меняются
+            ScheduleDebounce(effectiveStableDelay);
         }
         catch { /* не роняем */ }
     }

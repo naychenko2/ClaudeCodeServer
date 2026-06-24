@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Фон приложения -->
+  <rect width="512" height="512" fill="#F4F0E8"/>
+  <!-- Речевой пузырь -->
+  <rect x="32" y="40" width="448" height="356" rx="64" ry="64" fill="#D97757"/>
+  <!-- Хвостик пузыря снизу-слева -->
+  <path d="M80 396 L44 472 L168 396 Z" fill="#D97757"/>
+  <!-- Звёздочка белая -->
+  <g stroke="#F4F0E8" stroke-width="44" stroke-linecap="round" fill="none">
+    <line x1="256" y1="140" x2="256" y2="372"/>
+    <line x1="140" y1="256" x2="372" y2="256"/>
+    <line x1="167" y1="167" x2="345" y2="345"/>
+    <line x1="345" y1="167" x2="167" y2="345"/>
+  </g>
+</svg>

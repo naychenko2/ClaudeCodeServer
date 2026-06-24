@@ -75,7 +75,7 @@ public static class WorkflowAgentParser
         using var doc = JsonDocument.Parse(jsonLine);
         var root = doc.RootElement;
 
-        // Финальное событие агента
+        // Старый формат: явное событие result
         if (root.TryGetProperty("type", out var rootTypeEl) && rootTypeEl.GetString() == "result")
         {
             isDone = true;
@@ -83,6 +83,14 @@ public static class WorkflowAgentParser
         }
 
         if (!root.TryGetProperty("message", out var message)) return;
+
+        // Новый формат (agent-*.jsonl): assistant с stop_reason == "end_turn"
+        if (message.TryGetProperty("stop_reason", out var stopReasonEl) &&
+            stopReasonEl.GetString() == "end_turn")
+        {
+            isDone = true;
+        }
+
         if (!message.TryGetProperty("content", out var content)) return;
 
         var isAssistant = message.TryGetProperty("role", out var role) && role.GetString() == "assistant";

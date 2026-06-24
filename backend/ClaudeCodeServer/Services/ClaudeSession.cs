@@ -234,6 +234,11 @@ public class ClaudeSession : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(Info.Model))
             args.AddRange(["--model", Info.Model]);
 
+        // claude.exe пишет/читает UTF-8. Без явной кодировки .NET берёт системную
+        // OEM code page (напр. CP866 на русской Windows) → кракозябры в ответах.
+        // Задаём UTF-8 без BOM (BOM сломал бы первое сообщение в stdin).
+        var utf8NoBom = new System.Text.UTF8Encoding(false);
+
         var process = new Process
         {
             StartInfo = new ProcessStartInfo
@@ -245,6 +250,9 @@ public class ClaudeSession : IAsyncDisposable
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                StandardOutputEncoding = utf8NoBom,
+                StandardErrorEncoding = utf8NoBom,
+                StandardInputEncoding = utf8NoBom,
                 CreateNoWindow = true
             }
         };

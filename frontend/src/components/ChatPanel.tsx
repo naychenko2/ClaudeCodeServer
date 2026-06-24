@@ -1324,6 +1324,15 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
   const totalCount = agents.length;
   const progress = totalCount > 0 ? doneCount / totalCount : isSettled ? 1 : 0;
 
+  // Прогресс по фазам: сколько фаз завершено (оцениваем по transcript агентам)
+  const transcriptDone = transcriptAgents?.filter(a => a.summary !== undefined).length ?? 0;
+  const transcriptTotal = transcriptAgents?.length ?? 0;
+  const completedPhaseCount = isSettled
+    ? phases.length
+    : transcriptTotal > 0
+    ? Math.floor((transcriptDone / transcriptTotal) * phases.length)
+    : 0;
+
   // Фоллбэк-загрузка для старых сессий (где серверный ватчер не работал)
   useEffect(() => {
     if (serverAgents !== undefined) return; // сервер уже обрабатывает
@@ -1395,11 +1404,16 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
           {/* Фазы из meta.phases */}
           {phases.length > 0 && (
             <div style={{ padding: '10px 14px 8px', display: 'flex', flexDirection: 'column', gap: 1 }}>
-              {phases.map((phase, idx) => (
+              {phases.map((phase, idx) => {
+                const phaseDone = idx < completedPhaseCount;
+                const phaseActive = !isSettled && idx === completedPhaseCount;
+                return (
                 <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 0', borderBottom: idx < phases.length - 1 ? `1px solid ${C.borderLight}` : undefined }}>
                   <span style={{ flexShrink: 0, width: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 2 }}>
-                    {isSettled
+                    {phaseDone
                       ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                      : phaseActive
+                      ? <div className="tool-spinner" style={{ width: 10, height: 10 }} />
                       : <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.border }} />}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -1409,7 +1423,8 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
                     )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
           {/* Субагенты из потока (если есть) */}
@@ -1461,8 +1476,8 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
               })}
             </div>
           )}
-          {/* Агенты из transcript-файлов */}
-          {isDone && (transcriptLoading || (transcriptAgents && transcriptAgents.length > 0)) && (
+          {/* Агенты из transcript-файлов (показываем как только приходят через SignalR, не ждём isDone) */}
+          {(transcriptLoading || (transcriptAgents && transcriptAgents.length > 0)) && (
             <div style={{ borderTop: `1px solid ${C.border}` }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px 6px', background: C.bgInset, borderBottom: `1px solid ${C.borderLight}` }}>
                 <span style={{ fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase' as const, letterSpacing: '0.04em' }}>Агенты</span>
@@ -1524,10 +1539,10 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
                           onClick={hasDetails ? () => toggleTranscriptAgent(agent.id) : undefined}
                           style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', cursor: hasDetails ? 'pointer' : 'default', userSelect: 'none' as const }}
                         >
-                          {/* Галочка завершения */}
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
+                          {/* Галочка если есть summary (агент завершён), иначе спиннер */}
+                          {agent.summary !== undefined
+                            ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
+                            : <div className="tool-spinner" style={{ width: 11, height: 11, flexShrink: 0 }} />}
                           {/* Иконка типа агента */}
                           {agentIconSvg}
                           {/* Основной текст строки — summary или prompt */}

@@ -2181,50 +2181,56 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
         );
       }
 
-      // Есть текст (стриминг или завершён) — collapsible карточка
+      // Есть текст (стриминг или завершён) — компактная collapsible строка
       return (
-        <div style={{
-          background: '#EFEAE0', border: '1px solid #E4DDCE',
-          borderRadius: 12, overflow: 'hidden',
-        }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+          {/* Триггер-строка — одна строчка, без фона/рамки */}
           <div
             style={{
-              display: 'flex', alignItems: 'center', gap: 9,
-              padding: '10px 12px', cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              cursor: 'pointer', userSelect: 'none',
+              padding: '2px 0',
+              width: 'fit-content',
             }}
             onClick={() => onToggleThinking(index)}
           >
-            <span style={{ color: C.textMuted, display: 'flex', alignItems: 'center' }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+            <span style={{ color: C.textMuted, display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 3a6 6 0 0 0-4 10.5V17h8v-3.5A6 6 0 0 0 12 3z" />
                 <path d="M9 20h6M10 22h4" />
               </svg>
             </span>
-            <span style={{ fontSize: 12.5, fontStyle: 'italic', color: C.textSecondary, flex: 1 }}>
+            <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>
               Размышление
             </span>
-            {/* Пульсирующая точка пока ещё идёт стриминг */}
             {streaming && (
               <span style={{
-                width: 6, height: 6, borderRadius: '50%', background: C.textMuted,
+                width: 5, height: 5, borderRadius: '50%', background: C.textMuted,
                 animation: 'thinkingDot 1.2s ease-in-out infinite', flexShrink: 0,
               }} />
             )}
-            <span title="приблизительно, по объёму текста" style={{ fontSize: 10.5, color: C.textMuted, fontFamily: FONT.mono }}>
-              ~{Math.max(1, Math.round(item.text.length / 4))} ток.
-            </span>
+            {!streaming && (
+              <span title="приблизительно, по объёму текста" style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, opacity: 0.7 }}>
+                ~{Math.max(1, Math.round(item.text.length / 4))} ток.
+              </span>
+            )}
             <span style={{
-              color: C.textMuted, fontSize: 12,
+              color: C.textMuted, fontSize: 10, opacity: 0.7,
               transform: item.expanded ? 'rotate(180deg)' : 'rotate(0deg)',
               transition: 'transform 0.2s',
               display: 'inline-block',
             }}>▾</span>
           </div>
+          {/* Раскрытое содержимое — левая полоска как у цитаты */}
           {item.expanded && (
             <div style={{
-              padding: '0 12px 11px',
-              fontSize: 12, fontStyle: 'italic', lineHeight: 1.6, color: '#8A8072',
+              marginTop: 4,
+              paddingLeft: 10,
+              borderLeft: `2px solid ${C.borderLight}`,
+              fontSize: 11.5, fontStyle: 'italic', lineHeight: 1.65,
+              color: C.textMuted,
               whiteSpace: 'pre-wrap',
+              fontFamily: FONT.sans,
             }}>
               {item.text}
             </div>

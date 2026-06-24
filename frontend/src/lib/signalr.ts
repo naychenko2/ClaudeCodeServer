@@ -13,7 +13,7 @@ export function getConnection(): signalR.HubConnection {
     connection = new signalR.HubConnectionBuilder()
       .withUrl('/hubs/session', {
         // API-ключ для WebSocket уходит как ?access_token= (заголовок задать нельзя)
-        accessTokenFactory: () => localStorage.getItem('cc_api_key') ?? '',
+        accessTokenFactory: () => localStorage.getItem('cc_api_key') || sessionStorage.getItem('cc_api_key') || '',
       })
       .withAutomaticReconnect({
         // Переподключаемся бесконечно с экспоненциальным откатом, макс 30 сек

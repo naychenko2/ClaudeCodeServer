@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { AuthState } from '../types';
 import { api } from '../lib/api';
+import { OfflineError } from '../lib/offline';
 import { C, R, FONT } from '../lib/design';
 import { IconField, Toggle, Button } from '../components/ui';
 
@@ -23,6 +24,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
     if (savedKey) {
       setApiKey(savedKey);
       setSaveKey(true);
+    } else {
+      const sessionKey = sessionStorage.getItem('cc_api_key');
+      if (sessionKey) setApiKey(sessionKey);
     }
   }, []);
 
@@ -34,10 +38,17 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
       if (saveKey) {
         localStorage.setItem('cc_server_url', serverUrl);
         localStorage.setItem('cc_api_key', apiKey);
+        sessionStorage.removeItem('cc_api_key');
+      } else {
+        sessionStorage.setItem('cc_api_key', apiKey);
+        localStorage.removeItem('cc_api_key');
+        localStorage.removeItem('cc_server_url');
       }
       onConnect({ serverUrl, apiKey });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Не удалось подключиться к серверу';
+      const message = err instanceof OfflineError
+        ? 'Нет соединения с сервером. Проверьте подключение к интернету.'
+        : err instanceof Error ? err.message : 'Не удалось подключиться к серверу';
       setErrorMessage(message);
       setPageState('error');
     }

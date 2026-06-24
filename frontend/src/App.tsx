@@ -15,11 +15,12 @@ import { idbClear } from './lib/idb'
 const OPEN_PROJECT_KEY = 'cc_open_project'
 
 export default function App() {
-  // Авторизация — сразу из localStorage (без вспышки логина при рефреше)
+  // Авторизация — из localStorage (постоянно) или sessionStorage (saveKey=false)
   const [auth, setAuth] = useState<AuthState | null>(() => {
-    const url = localStorage.getItem('cc_server_url')
-    const key = localStorage.getItem('cc_api_key')
-    return url && key ? { serverUrl: url, apiKey: key } : null
+    const key = localStorage.getItem('cc_api_key') || sessionStorage.getItem('cc_api_key')
+    if (!key) return null
+    const url = localStorage.getItem('cc_server_url') || window.location.origin
+    return { serverUrl: url, apiKey: key }
   })
   // Открытый проект — восстанавливаем из localStorage, чтобы рефреш возвращал туда, где был.
   // Состояние внутри проекта (активный чат/файл/панели) восстанавливает сама WorkspacePage.
@@ -53,6 +54,7 @@ export default function App() {
       localStorage.removeItem('cc_api_key')
       localStorage.removeItem('cc_server_url')
       localStorage.removeItem(OPEN_PROJECT_KEY)
+      sessionStorage.removeItem('cc_api_key')
       idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
       navReplace({ screen: 'projects' })
       setProject(null)
@@ -129,6 +131,7 @@ export default function App() {
     localStorage.removeItem('cc_api_key')
     localStorage.removeItem('cc_server_url')
     localStorage.removeItem(OPEN_PROJECT_KEY)
+    sessionStorage.removeItem('cc_api_key')
     idbClear() // чистим кэш при смене аккаунта/сервера
     navReplace({ screen: 'projects' })
     setProject(null)

@@ -59,7 +59,9 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
     throw new OfflineError();
   }
 
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('cc_api_key') : null;
+  const token = typeof localStorage !== 'undefined'
+    ? (localStorage.getItem('cc_api_key') || sessionStorage.getItem('cc_api_key'))
+    : null;
 
   // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),
   // мы не ждём браузерного TCP-таймаута (может быть минуты)

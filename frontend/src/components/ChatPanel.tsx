@@ -1299,14 +1299,16 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
   const [expandedTranscriptAgents, setExpandedTranscriptAgents] = useState<Set<string>>(new Set());
 
   const isDone = workflow.result !== undefined;
+  // isSettled — workflow действительно завершён: transcript загружен (или попытка не удалась)
+  const isSettled = isDone && !transcriptLoading && transcriptAgents !== null;
   const meta = parseWorkflowMeta(workflow.input);
   const phases = meta?.phases ?? [];
   const doneCount = agents.filter(a => a.result !== undefined).length;
   const totalCount = agents.length;
-  const progress = totalCount > 0 ? doneCount / totalCount : isDone ? 1 : 0;
+  const progress = totalCount > 0 ? doneCount / totalCount : isSettled ? 1 : 0;
 
   useEffect(() => {
-    if (!expanded || !isDone || transcriptAgents !== null) return;
+    if (!isDone || transcriptAgents !== null) return;
     const dir = parseTranscriptDir(workflow.result as string | undefined);
     if (!dir) return;
     setTranscriptLoading(true);
@@ -1314,7 +1316,7 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
       .then(r => setTranscriptAgents(r.agents))
       .catch(() => setTranscriptAgents([]))
       .finally(() => setTranscriptLoading(false));
-  }, [expanded, isDone, transcriptAgents, workflow.result]);
+  }, [isDone, transcriptAgents, workflow.result]);
 
   const toggleTranscriptAgent = (id: string) => setExpandedTranscriptAgents(prev => {
     const next = new Set(prev);
@@ -1340,7 +1342,7 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
         style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', cursor: 'pointer', userSelect: 'none' as const }}
       >
         <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', marginTop: meta?.description ? -1 : 0 }}>
-          {isDone
+          {isSettled
             ? <DoneIcon />
             : <div className="tool-spinner" />}
         </span>
@@ -1355,7 +1357,7 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
             )}
             {!meta?.description && totalCount > 0 && (
               <div style={{ flex: 1, height: 3, background: C.borderLight, borderRadius: 2, overflow: 'hidden', minWidth: 40, maxWidth: 80 }}>
-                <div style={{ width: `${Math.round(progress * 100)}%`, height: '100%', background: isDone ? C.success : C.accent, borderRadius: 2, transition: 'width 0.3s ease' }} />
+                <div style={{ width: `${Math.round(progress * 100)}%`, height: '100%', background: isSettled ? C.success : C.accent, borderRadius: 2, transition: 'width 0.3s ease' }} />
               </div>
             )}
           </div>
@@ -1377,7 +1379,7 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
               {phases.map((phase, idx) => (
                 <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 0', borderBottom: idx < phases.length - 1 ? `1px solid ${C.borderLight}` : undefined }}>
                   <span style={{ flexShrink: 0, width: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 2 }}>
-                    {isDone
+                    {isSettled
                       ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                       : <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.border }} />}
                   </span>
@@ -1464,48 +1466,98 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
               {!transcriptLoading && transcriptAgents && transcriptAgents.length > 0 && (
                 <div style={{ padding: '4px 0' }}>
                   {transcriptAgents.map((agent, idx) => {
-                    const label = agent.prompt.split('\n')[0].slice(0, 100);
                     const isOpen = expandedTranscriptAgents.has(agent.id);
                     const hasDetails = !!(agent.summary || agent.tools?.length || agent.files?.length);
+
+                    // Определяем тип агента по инструментам
+                    const toolNames = agent.tools?.map(t => t.name.toLowerCase()) ?? [];
+                    const hasBash = toolNames.some(n => n.includes('bash') || n.includes('execute') || n.includes('run'));
+                    const hasRead = toolNames.some(n => n.includes('read') || n.includes('grep') || n.includes('glob') || n.includes('search'));
+                    const hasWrite = toolNames.some(n => n.includes('write') || n.includes('edit') || n.includes('create'));
+
+                    // Иконка типа агента (SVG inline)
+                    const agentIconSvg = hasBash
+                      ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                          <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
+                        </svg>
+                      : hasWrite
+                      ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                        </svg>
+                      : hasRead
+                      ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                          <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                        </svg>
+                      : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                          <circle cx="12" cy="8" r="4" /><path d="M6 20v-2a6 6 0 0 1 12 0v2" />
+                        </svg>;
+
+                    // Заголовок строки: summary (первая строка) или первая строка prompt
+                    const summaryFirstLine = agent.summary
+                      ? agent.summary.replace(/^#+\s*/, '').replace(/\*\*/g, '').split('\n')[0].trim()
+                      : '';
+                    const promptFirstLine = agent.prompt.split('\n')[0].trim();
+                    const rowLabel = (summaryFirstLine || promptFirstLine).slice(0, 90) || `Агент ${idx + 1}`;
+
                     return (
                       <div key={agent.id} style={{ borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
                         <div
                           onClick={hasDetails ? () => toggleTranscriptAgent(agent.id) : undefined}
                           style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', cursor: hasDetails ? 'pointer' : 'default', userSelect: 'none' as const }}
                         >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
-                          <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.4 }}>
-                            {label || `Агент ${idx + 1}`}
+                          {/* Галочка завершения */}
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                          {/* Иконка типа агента */}
+                          {agentIconSvg}
+                          {/* Основной текст строки — summary или prompt */}
+                          <span style={{ flex: 1, fontFamily: FONT.sans, fontSize: 12, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.4 }}>
+                            {rowLabel}
                           </span>
+                          {/* Счётчик инструментов */}
+                          {agent.tools && agent.tools.length > 0 && (
+                            <span style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0 }}>
+                              {agent.tools.reduce((s, t) => s + t.count, 0)}
+                            </span>
+                          )}
                           {hasDetails && (
                             <span style={{ color: C.textMuted, fontSize: 10, flexShrink: 0, display: 'inline-block', transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>▾</span>
                           )}
                         </div>
                         {isOpen && hasDetails && (
                           <div style={{ margin: '0 14px 8px', background: C.bgInset, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, overflow: 'hidden' }}>
+                            {/* Summary — основной результат */}
                             {agent.summary && (
-                              <div style={{ padding: '8px 12px', fontFamily: FONT.sans, fontSize: 12, lineHeight: 1.5, color: C.textSecondary, borderBottom: (agent.tools?.length || agent.files?.length) ? `1px solid ${C.borderLight}` : undefined }}>
-                                {agent.summary}
+                              <div style={{ padding: '8px 12px', fontFamily: FONT.sans, fontSize: 12, lineHeight: 1.5, color: C.textSecondary, borderBottom: `1px solid ${C.borderLight}` }}>
+                                <MarkdownContent text={agent.summary} />
                               </div>
                             )}
+                            {/* Задача (prompt) — второстепенный контекст */}
+                            <div style={{ padding: '5px 12px 6px', fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, lineHeight: 1.4, borderBottom: (agent.tools?.length || agent.files?.length) ? `1px solid ${C.borderLight}` : undefined }}>
+                              <span style={{ fontWeight: 600, marginRight: 4 }}>Задача:</span>
+                              <span style={{ fontStyle: 'italic' }}>{agent.prompt.split('\n')[0].slice(0, 120)}{agent.prompt.length > 120 ? '…' : ''}</span>
+                            </div>
+                            {/* Инструменты */}
                             {agent.tools && agent.tools.length > 0 && (
                               <div style={{ padding: '6px 12px', display: 'flex', flexWrap: 'wrap' as const, gap: 4, borderBottom: agent.files?.length ? `1px solid ${C.borderLight}` : undefined }}>
                                 {agent.tools.map(t => (
-                                  <span key={t.name} style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '1px 6px', lineHeight: 1.6 }}>
+                                  <span key={t.name} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '1px 5px', lineHeight: 1.6 }}>
                                     {t.name}{t.count > 1 ? ` ×${t.count}` : ''}
                                   </span>
                                 ))}
                               </div>
                             )}
+                            {/* Файлы */}
                             {agent.files && agent.files.length > 0 && (
-                              <div style={{ padding: '5px 12px 7px', display: 'flex', flexDirection: 'column' as const, gap: 2 }}>
-                                {agent.files.slice(0, 3).map(f => (
-                                  <span key={f} style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, lineHeight: 1.5 }}>
+                              <div style={{ padding: '5px 12px 7px', display: 'flex', flexWrap: 'wrap' as const, gap: '2px 10px' }}>
+                                {agent.files.slice(0, 5).map(f => (
+                                  <span key={f} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, lineHeight: 1.6 }}>
                                     {f.split(/[\\/]/).pop() ?? f}
                                   </span>
                                 ))}
-                                {agent.files.length > 3 && (
-                                  <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>+{agent.files.length - 3} файлов</span>
+                                {agent.files.length > 5 && (
+                                  <span style={{ fontFamily: FONT.sans, fontSize: 10, color: C.textMuted }}>+{agent.files.length - 5}</span>
                                 )}
                               </div>
                             )}

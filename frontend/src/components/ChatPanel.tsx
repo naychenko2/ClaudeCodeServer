@@ -1294,29 +1294,44 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
 }) {
   const [expanded, setExpanded] = useState(false);
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
-  const [transcriptAgents, setTranscriptAgents] = useState<WorkflowAgentInfo[] | null>(null);
-  const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [expandedTranscriptAgents, setExpandedTranscriptAgents] = useState<Set<string>>(new Set());
 
+  // Локальный фоллбэк — используется только для старых сессий без серверного ватчера
+  const [localAgents, setLocalAgents] = useState<WorkflowAgentInfo[] | null>(null);
+  const [localLoading, setLocalLoading] = useState(false);
+
   const isDone = workflow.result !== undefined;
-  // isSettled — workflow действительно завершён: transcript загружен (или попытка не удалась)
-  const isSettled = isDone && !transcriptLoading && transcriptAgents !== null;
+
+  // Серверные агенты (реалтайм через SignalR — приходят от WorkflowWatcher)
+  const serverAgents = workflow.workflowAgents;
+  const serverDone = workflow.workflowDone;
+
+  // Итоговые значения: сервер приоритетнее фоллбэка
+  const transcriptAgents = serverAgents ?? localAgents;
+  const transcriptLoading = serverAgents !== undefined ? false : localLoading;
+  const hasTranscriptDir = isDone && !!parseTranscriptDir(workflow.result as string | undefined);
+  // isSettled: сервер подтвердил завершение ИЛИ фоллбэк загружен ИЛИ нет transcript dir
+  const isSettled = serverDone === true ||
+    (serverAgents === undefined && (localAgents !== null || !hasTranscriptDir || !isDone));
+
   const meta = parseWorkflowMeta(workflow.input);
   const phases = meta?.phases ?? [];
   const doneCount = agents.filter(a => a.result !== undefined).length;
   const totalCount = agents.length;
   const progress = totalCount > 0 ? doneCount / totalCount : isSettled ? 1 : 0;
 
+  // Фоллбэк-загрузка для старых сессий (где серверный ватчер не работал)
   useEffect(() => {
-    if (!isDone || transcriptAgents !== null) return;
+    if (serverAgents !== undefined) return; // сервер уже обрабатывает
+    if (!isDone || localAgents !== null) return;
     const dir = parseTranscriptDir(workflow.result as string | undefined);
     if (!dir) return;
-    setTranscriptLoading(true);
+    setLocalLoading(true);
     api.workflow.getAgents(dir)
-      .then(r => setTranscriptAgents(r.agents))
-      .catch(() => setTranscriptAgents([]))
-      .finally(() => setTranscriptLoading(false));
-  }, [isDone, transcriptAgents, workflow.result]);
+      .then(r => setLocalAgents(r.agents))
+      .catch(() => setLocalAgents([]))
+      .finally(() => setLocalLoading(false));
+  }, [isDone, localAgents, workflow.result, serverAgents]);
 
   const toggleTranscriptAgent = (id: string) => setExpandedTranscriptAgents(prev => {
     const next = new Set(prev);

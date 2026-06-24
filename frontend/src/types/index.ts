@@ -37,6 +37,14 @@ export interface SyncMark {
   isDirectory: boolean;
 }
 
+export interface WorkflowAgentInfo {
+  id: string;
+  prompt: string;
+  summary?: string;
+  tools?: { name: string; count: number }[];
+  files?: string[];
+}
+
 // WebSocket сообщения от сервера — sessionId присутствует во всех типах
 export type ServerMessage = { sessionId: string } & (
   | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
@@ -57,6 +65,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'redacted_thinking' }
   | { type: 'exited' }
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
+  | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
 );
 
 export interface UsageInfo {
@@ -72,7 +81,7 @@ export type ChatItem =
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string; expanded: boolean }
-  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string }
+  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean }
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean; answers?: Record<string, string | string[]> }
   | { kind: 'plan_review'; requestId: string; plan: string; resolved: boolean; approved?: boolean; feedback?: string }

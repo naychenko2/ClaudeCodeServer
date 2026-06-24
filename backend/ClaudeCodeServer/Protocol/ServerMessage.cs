@@ -75,6 +75,15 @@ public record StatusChangedMessage(string Status, string? LastMessage = null, in
 
 public record UsageInfo(int InputTokens, int OutputTokens, int CacheReadTokens, int CacheCreationTokens);
 
+// Прогресс фоновых агентов Workflow (шлётся через SignalR по мере завершения)
+public record WorkflowToolDto(string Name, int Count);
+
+public record WorkflowAgentDto(string Id, string Prompt, string? Summary,
+    IReadOnlyList<WorkflowToolDto>? Tools, IReadOnlyList<string>? Files);
+
+public record WorkflowProgressMessage(string ToolUseId, IReadOnlyList<WorkflowAgentDto> Agents, bool IsDone)
+    : ServerMessage("workflow_progress");
+
 // Сообщения от клиента к серверу
 public record ClientMessage([property: JsonPropertyName("type")] string Type);
 

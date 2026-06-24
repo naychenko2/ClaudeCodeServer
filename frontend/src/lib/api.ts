@@ -1,13 +1,7 @@
-import type { Project, Session, FileEntry, SyncMark } from '../types';
+import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo } from '../types';
 import { request } from './offline';
 
-export interface WorkflowAgentInfo {
-  id: string;
-  prompt: string;
-  summary?: string;
-  tools?: { name: string; count: number }[];
-  files?: string[];
-}
+export type { WorkflowAgentInfo };
 
 // Projects
 export const api = {

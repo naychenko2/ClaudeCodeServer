@@ -31,6 +31,9 @@ public class ClaudeSession : IAsyncDisposable
     private readonly SemaphoreSlim _turnLock = new(1, 1);
     private Process? _currentProcess;
 
+    // Ватчеры фоновых Workflow (по одному на каждый запущенный workflow в сессии)
+    private readonly List<WorkflowWatcher> _workflowWatchers = [];
+
     // Если claude не выдаёт ни одной строки дольше этого — считаем зависшим
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(60);
 
@@ -514,6 +517,19 @@ public class ClaudeSession : IAsyncDisposable
             }
 
             await _onMessage(new ToolResultMessage(toolUseId, resultContent, isError));
+
+            // Если это результат Workflow с транскриптом — запускаем watcher
+            if (!isError && resultContent.Contains("Transcript dir:"))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(resultContent, @"Transcript dir:\s*(.+)");
+                if (m.Success)
+                {
+                    var transcriptDir = m.Groups[1].Value.Trim();
+                    var watcher = new WorkflowWatcher(transcriptDir, toolUseId, _onMessage);
+                    _workflowWatchers.Add(watcher);
+                    watcher.Start();
+                }
+            }
         }
     }
 
@@ -752,6 +768,8 @@ public class ClaudeSession : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         StopFileWatcher();
+        foreach (var w in _workflowWatchers) w.Dispose();
+        _workflowWatchers.Clear();
         _cts.Cancel();
         if (_currentProcess != null && !_currentProcess.HasExited)
         {

@@ -213,6 +213,13 @@ function ensureHandler() {
           return { ...prev, isWaiting: false, items: abnormal ? [...prev.items, { kind: 'session_ended' }] : prev.items };
         });
         break;
+      case 'workflow_progress':
+        updateItems(sid, items => items.map(item =>
+          item.kind === 'tool_use' && item.id === msg.toolUseId
+            ? { ...item, workflowAgents: msg.agents, workflowDone: msg.isDone }
+            : item
+        ));
+        break;
       case 'status_changed': {
         // Синхронизируем isWaiting по статусу — работает для всех открытых вкладок/браузеров
         if (msg.status === 'working' || msg.status === 'waiting') {

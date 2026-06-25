@@ -1603,7 +1603,7 @@ function MediaBlock({
             }}>{filename}</span>
           </div>
           {/* Нативный плеер */}
-          <audio controls style={{ width: '100%', height: 36, outline: 'none' }}>
+          <audio controls style={{ width: '100%', height: 36, outline: 'none', borderRadius: 6, display: 'block' }}>
             <source src={proxyUrl(m.url)} />
           </audio>
           {/* Метаданные + кнопки */}

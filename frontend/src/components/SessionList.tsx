@@ -6,8 +6,7 @@ import { useOnline } from '../hooks/useOnline';
 import { isOnline } from '../lib/offline';
 import { StatusBadge } from './StatusBadge';
 import { EditSessionDialog } from './EditSessionDialog';
-import { modelLabel } from '../lib/models';
-import { C, R, FONT, SHADOW, MODAL_W } from '../lib/design';
+import { C, R, SHADOW, MODAL_W } from '../lib/design';
 import { Modal, ModalActions } from './ui';
 
 interface Props {
@@ -219,27 +218,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                   {s.lastMessage}
                 </div>
               )}
-              {/* Бейдж используемой модели — тех-инфо моноширинным шрифтом */}
-              <div style={{ marginTop: 5, display: 'flex' }}>
-                <span style={{
-                  fontFamily: FONT.mono,
-                  fontSize: 10.5,
-                  fontWeight: 500,
-                  letterSpacing: '-0.01em',
-                  color: isActive ? C.accent : C.textMuted,
-                  // в активной карточке фон accentLight совпал бы с фоном чипа — даём белый для контраста
-                  background: isActive ? C.bgWhite : C.bgPanel,
-                  border: isActive ? `1px solid ${C.accentMuted}` : '1px solid transparent',
-                  padding: '1px 6px',
-                  borderRadius: R.sm,
-                  maxWidth: '100%',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}>
-                  {modelLabel(s.model)}
-                </span>
-              </div>
             </div>
             <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 6 }}>
               {online && (<>

@@ -44,30 +44,6 @@ function PlanIcon({ size = 13, color = 'currentColor', strokeWidth = 2 }: { size
   );
 }
 
-// Русские названия режимов для подзаголовка шапки чата
-const MODE_LABELS: Record<'auto' | 'plan' | 'ask', string> = {
-  auto: 'Авто',
-  plan: 'План',
-  ask: 'Спросить',
-};
-
-// Инлайн-чип режима в подзаголовке шапки чата
-function ModeChip({ mode }: { mode: 'auto' | 'plan' | 'ask' }) {
-  const isPlan = mode === 'plan';
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      background: isPlan ? C.planLight : C.accentLight,
-      color: isPlan ? C.planText : C.textMuted,
-      borderRadius: R.sm,
-      padding: '1px 6px', fontFamily: FONT.sans, fontWeight: 600, fontSize: 11,
-      verticalAlign: 'baseline',
-    }}>
-      {isPlan && <PlanIcon size={11} color={C.planText} />}
-      {MODE_LABELS[mode]}
-    </span>
-  );
-}
 
 // Фаза работы режима «План» — выводится из ленты, mode и isWaiting (сервер фазу не присылает)
 type PlanPhase = 'review' | 'executing' | 'done' | 'replanning' | 'planning' | 'idle' | null;
@@ -206,8 +182,6 @@ interface ChatHeaderBarProps {
   session: Session;
   project: Project;
   online: boolean;
-  // Текущий режим из Composer — может отличаться от session.mode до отправки следующего сообщения
-  mode: 'auto' | 'plan' | 'ask';
   onOpenSettings: () => void;
   onToggleDock?: () => void;
   isMobile?: boolean;
@@ -215,18 +189,16 @@ interface ChatHeaderBarProps {
   activeWorkflow?: { phasesDone: number; phasesTotal: number };
 }
 
-function ChatHeaderBar({ session, project, online, mode, onOpenSettings, onToggleDock, isMobile, onBack, activeWorkflow }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, onOpenSettings, onToggleDock, isMobile, onBack, activeWorkflow }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
       <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {session.name ?? 'Новый чат'}
       </div>
-      <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 0 }}>
+      <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
-        {!isMobile && <span>{project.name} · </span>}
-        <ModeChip mode={mode} />
-        <span style={{ marginLeft: 4 }}>· {modelLabel(session.model)}</span>
+        {!isMobile && <span>{project.name} · </span>}{modelLabel(session.model)}
       </div>
     </div>
   );
@@ -593,8 +565,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
   // Единое условие показа WaitingIndicator — синхронизировано с флагом активности на карточке.
   // session.status покрывает случай когда isWaiting ещё не обновился (перезагрузка, переключение чата).
+  // items.length > 0: не показывать спиннер на пустом чате до первого сообщения.
   const showWaiting =
-    (isWaiting || session.status === 'working' || session.status === 'starting'
+    items.length > 0
+    && (isWaiting || session.status === 'working' || session.status === 'starting'
       || items.some(it => it.kind === 'tool_use' && it.result === undefined))
     && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved);
 
@@ -873,7 +847,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           session={session}
           project={project}
           online={online}
-          mode={mode}
           onOpenSettings={() => setShowEdit(true)}
           onToggleDock={onToggleDock}
           activeWorkflow={activeWorkflowInfo ?? undefined}
@@ -932,7 +905,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         session={session}
         project={project}
         online={online}
-        mode={mode}
         onOpenSettings={() => setShowEdit(true)}
         isMobile={isMobile}
         onBack={onBack}
@@ -1284,7 +1256,7 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
           <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>{displayName}</span>
         </span>
         {toolArg
-          ? <span className={argIsPath ? 'cc-trunc-left' : undefined} style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolArg}</span>
+          ? <span className={argIsPath ? 'cc-trunc-left' : undefined} style={{ fontFamily: FONT.mono, fontSize: 11, flex: 1, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolArg}</span>
           : <span style={{ flex: 1 }} />}
         {item.result !== undefined && (
           <span style={{ fontSize: 11, color: item.isError ? '#C0392B' : C.textMuted, flexShrink: 0 }}>

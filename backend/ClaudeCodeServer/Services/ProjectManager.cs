@@ -24,6 +24,9 @@ public class ProjectManager
 
     public Project? GetById(string id) => _projects.GetValueOrDefault(id);
 
+    public Project? GetByName(string name) =>
+        _projects.Values.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+
     public Project Create(string name, string rootPath, string userId)
     {
         if (!Directory.Exists(rootPath))

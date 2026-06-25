@@ -50,8 +50,8 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
 
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';
 
-  const handleCopyWebDav = useCallback((projectId: string) => {
-    const url = `${window.location.origin}/webdav/${projectId}/`;
+  const handleCopyWebDav = useCallback((projectName: string) => {
+    const url = `${window.location.origin}/webdav/${encodeURIComponent(projectName)}/`;
     navigator.clipboard.writeText(url).then(() => {
       setCopiedWebDav(true);
       setTimeout(() => setCopiedWebDav(false), 1500);
@@ -348,10 +348,10 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
             <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, letterSpacing: '0.06em', marginBottom: 8 }}>WEBDAV</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '7px 10px' }}>
               <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {`${window.location.origin}/webdav/${editTarget.id}/`}
+                {`${window.location.origin}/webdav/${encodeURIComponent(editTarget.name)}/`}
               </span>
               <button
-                onClick={() => handleCopyWebDav(editTarget.id)}
+                onClick={() => handleCopyWebDav(editTarget.name)}
                 title="Скопировать URL"
                 style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: copiedWebDav ? '#3F7A4F' : C.textMuted, flexShrink: 0 }}
               >

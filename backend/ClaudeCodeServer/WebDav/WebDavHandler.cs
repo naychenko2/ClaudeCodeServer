@@ -18,7 +18,7 @@ public record DavLock(string Token, string Owner, DateTime Expires);
 /// </summary>
 public static class WebDavHandler
 {
-    // in-memory хранилище блокировок: ключ = "projectId/relPath"
+    // in-memory хранилище блокировок: ключ = "projectName/relPath"
     private static readonly ConcurrentDictionary<string, DavLock> _locks = new(StringComparer.OrdinalIgnoreCase);
 
     public static async Task HandleAsync(HttpContext ctx)
@@ -33,11 +33,11 @@ public static class WebDavHandler
         }
 
         // ── Разбор маршрута ─────────────────────────────────────────────────
-        var projectId = ctx.GetRouteValue("projectId") as string ?? "";
-        var rawPath   = ctx.GetRouteValue("path") as string ?? "";
+        var projectName = ctx.GetRouteValue("projectName") as string ?? "";
+        var rawPath     = ctx.GetRouteValue("path") as string ?? "";
 
         var projects = ctx.RequestServices.GetRequiredService<ProjectManager>();
-        var project  = projects.GetById(projectId);
+        var project  = projects.GetByName(projectName);
         if (project is null)
         {
             ctx.Response.StatusCode = 404;
@@ -57,17 +57,17 @@ public static class WebDavHandler
             switch (method)
             {
                 case "OPTIONS":     HandleOptions(ctx); break;
-                case "PROPFIND":    await HandlePropfindAsync(ctx, files, root, relPath, projectId); break;
-                case "PROPPATCH":   await HandleProppatchAsync(ctx, relPath, projectId); break;
+                case "PROPFIND":    await HandlePropfindAsync(ctx, files, root, relPath, projectName); break;
+                case "PROPPATCH":   await HandleProppatchAsync(ctx, relPath, projectName); break;
                 case "GET":
                 case "HEAD":        await HandleGetAsync(ctx, files, root, relPath, method == "HEAD"); break;
                 case "PUT":         await HandlePutAsync(ctx, files, root, relPath); break;
                 case "DELETE":      HandleDelete(ctx, files, root, relPath); break;
                 case "MKCOL":       HandleMkcol(ctx, files, root, relPath); break;
-                case "COPY":        await HandleCopyAsync(ctx, files, root, relPath, projectId); break;
-                case "MOVE":        HandleMove(ctx, files, root, relPath, projectId); break;
-                case "LOCK":        await HandleLockAsync(ctx, files, root, relPath, projectId); break;
-                case "UNLOCK":      HandleUnlock(ctx, relPath, projectId); break;
+                case "COPY":        await HandleCopyAsync(ctx, files, root, relPath, projectName); break;
+                case "MOVE":        HandleMove(ctx, files, root, relPath, projectName); break;
+                case "LOCK":        await HandleLockAsync(ctx, files, root, relPath, projectName); break;
+                case "UNLOCK":      HandleUnlock(ctx, relPath, projectName); break;
                 default:
                     ctx.Response.StatusCode = 405;
                     break;
@@ -133,7 +133,7 @@ public static class WebDavHandler
     // PROPFIND
     // ────────────────────────────────────────────────────────────────────────
 
-    private static async Task HandlePropfindAsync(HttpContext ctx, FileService files, string root, string relPath, string projectId)
+    private static async Task HandlePropfindAsync(HttpContext ctx, FileService files, string root, string relPath, string projectName)
     {
         var depth = ctx.Request.Headers["Depth"].ToString();
         if (depth == "infinity") depth = "1"; // ограничиваем глубину
@@ -156,7 +156,7 @@ public static class WebDavHandler
         sb.AppendLine("<D:multistatus xmlns:D=\"DAV:\">");
 
         // сам ресурс
-        AppendResponse(sb, ctx, projectId, relPath, absPath, isDir);
+        AppendResponse(sb, ctx, projectName, relPath, absPath, isDir);
 
         // дочерние элементы (depth=1, только для папок)
         if (isDir && depth == "1")
@@ -164,7 +164,7 @@ public static class WebDavHandler
             foreach (var entry in files.List(root, relPath))
             {
                 var childAbs = FileService.SafeJoinPublic(root, entry.Path);
-                AppendResponse(sb, ctx, projectId, entry.Path, childAbs, entry.IsDirectory);
+                AppendResponse(sb, ctx, projectName, entry.Path, childAbs, entry.IsDirectory);
             }
         }
 
@@ -175,16 +175,16 @@ public static class WebDavHandler
         await ctx.Response.WriteAsync(sb.ToString(), Encoding.UTF8);
     }
 
-    private static void AppendResponse(StringBuilder sb, HttpContext ctx, string projectId, string relPath, string absPath, bool isDir)
+    private static void AppendResponse(StringBuilder sb, HttpContext ctx, string projectName, string relPath, string absPath, bool isDir)
     {
-        var href = BuildHref(ctx, projectId, relPath, isDir);
+        var href = BuildHref(ctx, projectName, relPath, isDir);
 
         string displayName, lastModified, createdDate, etag = "", contentLength = "", contentType = "";
 
         if (isDir)
         {
             var info = new DirectoryInfo(absPath);
-            displayName  = string.IsNullOrEmpty(relPath) ? projectId : XmlEscape(info.Name);
+            displayName  = string.IsNullOrEmpty(relPath) ? projectName : XmlEscape(info.Name);
             lastModified = info.LastWriteTimeUtc.ToString("R");
             createdDate  = info.CreationTimeUtc.ToString("O");
         }
@@ -227,9 +227,9 @@ public static class WebDavHandler
     // PROPPATCH  — файловая система read-only со стороны DAV-свойств
     // ────────────────────────────────────────────────────────────────────────
 
-    private static async Task HandleProppatchAsync(HttpContext ctx, string relPath, string projectId)
+    private static async Task HandleProppatchAsync(HttpContext ctx, string relPath, string projectName)
     {
-        var href = BuildHref(ctx, projectId, relPath, false);
+        var href = BuildHref(ctx, projectName, relPath, false);
         var xml = $"""
             <?xml version="1.0" encoding="utf-8"?>
             <D:multistatus xmlns:D="DAV:">
@@ -372,9 +372,9 @@ public static class WebDavHandler
     // COPY
     // ────────────────────────────────────────────────────────────────────────
 
-    private static async Task HandleCopyAsync(HttpContext ctx, FileService files, string root, string relPath, string projectId)
+    private static async Task HandleCopyAsync(HttpContext ctx, FileService files, string root, string relPath, string projectName)
     {
-        var destRel = ParseDestination(ctx, projectId);
+        var destRel = ParseDestination(ctx, projectName);
         if (destRel is null)
         {
             ctx.Response.StatusCode = 400;
@@ -423,9 +423,9 @@ public static class WebDavHandler
     // MOVE
     // ────────────────────────────────────────────────────────────────────────
 
-    private static void HandleMove(HttpContext ctx, FileService files, string root, string relPath, string projectId)
+    private static void HandleMove(HttpContext ctx, FileService files, string root, string relPath, string projectName)
     {
-        var destRel = ParseDestination(ctx, projectId);
+        var destRel = ParseDestination(ctx, projectName);
         if (destRel is null)
         {
             ctx.Response.StatusCode = 400;
@@ -456,7 +456,7 @@ public static class WebDavHandler
     // LOCK
     // ────────────────────────────────────────────────────────────────────────
 
-    private static async Task HandleLockAsync(HttpContext ctx, FileService files, string root, string relPath, string projectId)
+    private static async Task HandleLockAsync(HttpContext ctx, FileService files, string root, string relPath, string projectName)
     {
         if (string.IsNullOrEmpty(relPath))
         {
@@ -490,10 +490,10 @@ public static class WebDavHandler
         catch { /* тело может быть пустым */ }
 
         var token = "urn:uuid:" + Guid.NewGuid();
-        var lockKey = $"{projectId}/{relPath}";
+        var lockKey = $"{projectName}/{relPath}";
         _locks[lockKey] = new DavLock(token, owner, DateTime.UtcNow.AddHours(1));
 
-        var href = BuildHref(ctx, projectId, relPath, false);
+        var href = BuildHref(ctx, projectName, relPath, false);
         var xml = $"""
             <?xml version="1.0" encoding="utf-8"?>
             <D:prop xmlns:D="DAV:">
@@ -521,10 +521,10 @@ public static class WebDavHandler
     // UNLOCK
     // ────────────────────────────────────────────────────────────────────────
 
-    private static void HandleUnlock(HttpContext ctx, string relPath, string projectId)
+    private static void HandleUnlock(HttpContext ctx, string relPath, string projectName)
     {
         var tokenHeader = ctx.Request.Headers["Lock-Token"].ToString().Trim('<', '>');
-        var lockKey = $"{projectId}/{relPath}";
+        var lockKey = $"{projectName}/{relPath}";
 
         if (_locks.TryGetValue(lockKey, out var lck) && lck.Token == tokenHeader)
             _locks.TryRemove(lockKey, out _);
@@ -537,10 +537,10 @@ public static class WebDavHandler
     // ────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Строит href для PROPFIND-ответа из текущего Request.PathBase + /webdav/{projectId}/{relPath}.
+    /// Строит href для PROPFIND-ответа из текущего Request.PathBase + /webdav/{projectName}/{relPath}.
     /// Сегменты пути URL-кодируются. Не хардкодим схему/хост — берём из контекста.
     /// </summary>
-    private static string BuildHref(HttpContext ctx, string projectId, string relPath, bool isDir)
+    private static string BuildHref(HttpContext ctx, string projectName, string relPath, bool isDir)
     {
         var pb = ctx.Request.PathBase.ToString().TrimEnd('/');
         var segments = string.IsNullOrEmpty(relPath)
@@ -548,7 +548,7 @@ public static class WebDavHandler
             : relPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
         var encoded = string.Join("/", segments.Select(Uri.EscapeDataString));
-        var path = $"{pb}/webdav/{Uri.EscapeDataString(projectId)}" +
+        var path = $"{pb}/webdav/{Uri.EscapeDataString(projectName)}" +
                    (encoded.Length > 0 ? $"/{encoded}" : "") +
                    (isDir ? "/" : "");
         return path;
@@ -556,9 +556,9 @@ public static class WebDavHandler
 
     /// <summary>
     /// Извлекает относительный путь назначения из заголовка Destination.
-    /// Заголовок содержит полный URL: http://host/webdav/{projectId}/{path}
+    /// Заголовок содержит полный URL: http://host/webdav/{projectName}/{path}
     /// </summary>
-    private static string? ParseDestination(HttpContext ctx, string projectId)
+    private static string? ParseDestination(HttpContext ctx, string projectName)
     {
         var dest = ctx.Request.Headers["Destination"].ToString();
         if (string.IsNullOrEmpty(dest)) return null;
@@ -568,8 +568,8 @@ public static class WebDavHandler
             var uri = new Uri(dest);
             // декодируем полный путь URI
             var uriPath = Uri.UnescapeDataString(uri.AbsolutePath);
-            // ищем /webdav/{projectId}/ в пути
-            var prefix = $"/webdav/{projectId}/";
+            // ищем /webdav/{projectName}/ в пути
+            var prefix = $"/webdav/{projectName}/";
             var idx = uriPath.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
             if (idx < 0) return null;
             return uriPath[(idx + prefix.Length)..].Trim('/');

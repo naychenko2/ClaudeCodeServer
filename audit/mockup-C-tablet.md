@@ -1,6 +1,6 @@
-# Mockup C — Tablet (планшетная раскладка)
+﻿# Mockup C — Tablet (планшетная раскладка)
 
-Сверка: задумка макета `Claude Code Tablet.dc.html` (DesignSync, получен полностью, не truncated) vs реализация ClaudeCodeServer (адаптивный код, breakpoint `isTablet` 768–1100px в `WorkspacePage.tsx`).
+Сверка: задумка макета `Claude Code Tablet.dc.html` (DesignSync, получен полностью, не truncated) vs реализация ClaudeHomeServer (адаптивный код, breakpoint `isTablet` 768–1100px в `WorkspacePage.tsx`).
 
 Контекст: реализация — единый адаптивный код под все ширины, не отдельное планшетное приложение; данные демо. Скриншот `da-ws-file-tablet.png` отрендерился как крошечное искажённое превью (открыт `history.json` в мелком масштабе) и нечитаем — выводы по просмотру файла на планшете опираются на код `WorkspacePage.tsx` (строки 369–399) и `FileViewer.tsx`.
 

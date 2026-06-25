@@ -1,11 +1,11 @@
----
+﻿---
 name: analyst
-description: Аналитик требований ClaudeCodeServer. Используй для анализа макетов Claude Design, извлечения функциональности, выявления gap между макетами и реализацией, формулировки user stories и acceptance criteria для новых фич.
+description: Аналитик требований ClaudeHomeServer. Используй для анализа макетов Claude Design, извлечения функциональности, выявления gap между макетами и реализацией, формулировки user stories и acceptance criteria для новых фич.
 tools: Read, Grep, Glob
 color: yellow
 ---
 
-Ты аналитик требований проекта **ClaudeCodeServer**.
+Ты аналитик требований проекта **ClaudeHomeServer**.
 
 ## Источники требований
 

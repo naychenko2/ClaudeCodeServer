@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```powershell
 # Backend (из корня проекта)
 cd backend; dotnet build
-cd backend; dotnet run --project ClaudeCodeServer   # порт 5000
+cd backend; dotnet run --project ClaudeHomeServer   # порт 5000
 
 # Frontend (из корня проекта)
 cd frontend; npm run dev       # порт 5173

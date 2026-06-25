@@ -1,7 +1,7 @@
-# Дизайн-ревью B — десктопная раскладка
+﻿# Дизайн-ревью B — десктопная раскладка
 
 Сверка задумки дизайнера (`Claude Code Desktop.dc.html`, окно 1440×884) с реализацией
-десктопной раскладки ClaudeCodeServer (`frontend/src/`). Фокус — **задумка**, а не токены.
+десктопной раскладки ClaudeHomeServer (`frontend/src/`). Фокус — **задумка**, а не токены.
 
 DesignSync: **OK** (`get_file`, `truncated:false`, полный HTML + DCLogic-скрипт получены).
 

@@ -11,8 +11,8 @@ export default defineConfig({
       // .mjs включён в precache — иначе pdf.worker.min.mjs выпадает и PDF не работает офлайн
       workbox: { globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,webmanifest}'] },
       manifest: {
-        name: 'Claude Code Server',
-        short_name: 'ClaudeCode',
+        name: 'Claude Home Server',
+        short_name: 'ClaudeHome',
         description: 'Веб-интерфейс для Claude Code CLI',
         theme_color: '#D97757',
         background_color: '#F4F0E8',

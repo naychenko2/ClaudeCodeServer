@@ -1,13 +1,13 @@
-# Ревью D — Состояния ленты чата: задумка vs реализация
+﻿# Ревью D — Состояния ленты чата: задумка vs реализация
 
 Сверка каталога состояний чата из Claude Design (файлы `Chat States Gallery.dc.html`, `App States Exploration.dc.html`, `uploads/claude-code-message-states.md`) с реализацией ленты в `ChatPanel.tsx` / `useSession.ts` / `types/index.ts` и протоколом `ServerMessage.cs` / `ClaudeSession.cs`.
 
 Источники реализации:
-- `c:\Sources\ClaudeCodeServer\frontend\src\components\ChatPanel.tsx`
-- `c:\Sources\ClaudeCodeServer\frontend\src\hooks\useSession.ts`
-- `c:\Sources\ClaudeCodeServer\frontend\src\types\index.ts`
-- `c:\Sources\ClaudeCodeServer\backend\ClaudeCodeServer\Protocol\ServerMessage.cs`
-- `c:\Sources\ClaudeCodeServer\backend\ClaudeCodeServer\Services\ClaudeSession.cs`
+- `c:\Sources\ClaudeHomeServer\frontend\src\components\ChatPanel.tsx`
+- `c:\Sources\ClaudeHomeServer\frontend\src\hooks\useSession.ts`
+- `c:\Sources\ClaudeHomeServer\frontend\src\types\index.ts`
+- `c:\Sources\ClaudeHomeServer\backend\ClaudeHomeServer\Protocol\ServerMessage.cs`
+- `c:\Sources\ClaudeHomeServer\backend\ClaudeHomeServer\Services\ClaudeSession.cs`
 
 ---
 

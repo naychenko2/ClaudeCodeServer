@@ -1,0 +1,140 @@
+﻿using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text.RegularExpressions;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace ClaudeHomeServer.Controllers;
+
+[ApiController]
+[Route("api/users")]
+[Authorize(Roles = "admin")]
+public class UsersController(UserStore users) : ControllerBase
+{
+    private static readonly Regex UsernameRegex = new(@"^[a-zA-Z0-9_-]+$", RegexOptions.Compiled);
+
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        var dtos = users.GetAll().Select(ToDto);
+        return Ok(dtos);
+    }
+
+    [HttpPost]
+    public IActionResult Create([FromBody] CreateUserRequest req)
+    {
+        var validationError = ValidateUsername(req.Username)
+                           ?? ValidatePassword(req.Password)
+                           ?? ValidateRole(req.Role);
+        if (validationError is not null) return BadRequest(new { error = validationError });
+
+        try
+        {
+            var user = users.Add(req.Username, req.Password, req.Role);
+            return CreatedAtAction(nameof(GetAll), ToDto(user));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+    }
+
+    [HttpPut("{id}")]
+    public IActionResult Update(string id, [FromBody] UpdateUserRequest req)
+    {
+        if (req.Username is not null)
+        {
+            var err = ValidateUsername(req.Username);
+            if (err is not null) return BadRequest(new { error = err });
+        }
+
+        if (req.Role is not null)
+        {
+            var err = ValidateRole(req.Role);
+            if (err is not null) return BadRequest(new { error = err });
+        }
+
+        try
+        {
+            if (!users.Update(id, req.Username, req.Role))
+                return NotFound();
+
+            var user = users.GetById(id)!;
+            return Ok(ToDto(user));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpDelete("{id}")]
+    public IActionResult Delete(string id)
+    {
+        // Нельзя удалить самого себя
+        var currentUserId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (id == currentUserId)
+            return BadRequest(new { error = "Нельзя удалить собственную учётную запись" });
+
+        try
+        {
+            if (!users.Delete(id))
+                return NotFound();
+
+            return NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPut("{id}/password")]
+    public IActionResult ResetPassword(string id, [FromBody] ResetPasswordRequest req)
+    {
+        var err = ValidatePassword(req.NewPassword);
+        if (err is not null) return BadRequest(new { error = err });
+
+        if (!users.ResetPassword(id, req.NewPassword))
+            return NotFound();
+
+        return NoContent();
+    }
+
+    // --- вспомогательные методы ---
+
+    private static UserDto ToDto(User u) =>
+        new(u.Id, u.Username, u.Role, u.CreatedAt);
+
+    private static string? ValidateUsername(string? username)
+    {
+        if (string.IsNullOrWhiteSpace(username))
+            return "Имя пользователя не может быть пустым";
+        if (username.Length < 3 || username.Length > 32)
+            return "Имя пользователя должно содержать от 3 до 32 символов";
+        if (!UsernameRegex.IsMatch(username))
+            return "Имя пользователя может содержать только буквы, цифры, _ и -";
+        return null;
+    }
+
+    private static string? ValidatePassword(string? password)
+    {
+        if (string.IsNullOrEmpty(password) || password.Length < 8)
+            return "Пароль должен содержать не менее 8 символов";
+        return null;
+    }
+
+    private static string? ValidateRole(string? role)
+    {
+        if (role is not "admin" and not "user")
+            return "Роль должна быть 'admin' или 'user'";
+        return null;
+    }
+}
+
+public record UserDto(string Id, string Username, string Role, DateTime CreatedAt);
+public record CreateUserRequest(string Username, string Password, string Role);
+public record UpdateUserRequest(string? Username, string? Role);
+public record ResetPasswordRequest(string NewPassword);

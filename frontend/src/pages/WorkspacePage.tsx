@@ -304,7 +304,7 @@ export function WorkspacePage({ project, onBack }: Props) {
                 </g>
               </svg>
             </div>
-            <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading }}>Claude Code Server</span>
+            <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading }}>Claude Home Server</span>
           </div>
           {TabSwitcher}
         </div>

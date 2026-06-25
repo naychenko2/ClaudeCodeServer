@@ -1,13 +1,12 @@
 import { useEffect, useState, useCallback } from 'react';
-import type { Project } from '../types';
+import type { Project, AppSettings } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
 import { ProjectSyncToggle } from '../components/ProjectSyncToggle';
 import { ConnectionStatus } from '../components/ConnectionStatus';
-import { toggleSyncMark } from '../lib/sync';
 import { C, R, FONT, SHADOW, MODAL_W } from '../lib/design';
-import { Modal, ModalActions, TextField, Toggle } from '../components/ui';
+import { Modal, ModalActions, TextField, Field } from '../components/ui';
 
 interface Props {
   onOpen: (project: Project) => void;
@@ -35,10 +34,10 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
   const online = useOnline();
   const [projects, setProjects] = useState<Project[]>([]);
   const [search, setSearch] = useState('');
-  const [showCreate, setShowCreate] = useState(false);
+  const [showCreateNew, setShowCreateNew] = useState(false);
+  const [showAddExisting, setShowAddExisting] = useState(false);
   const [newName, setNewName] = useState('');
   const [newPath, setNewPath] = useState('');
-  const [newSync, setNewSync] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
   const [editTarget, setEditTarget] = useState<Project | null>(null);
   const [editName, setEditName] = useState('');
@@ -47,8 +46,12 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'offline' | 'error'>('loading');
   const [retryKey, setRetryKey] = useState(0);
   const [copiedWebDav, setCopiedWebDav] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>({ defaultProjectsPath: '' });
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsPath, setSettingsPath] = useState('');
 
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';
+  const currentUsername = localStorage.getItem('cc_username') ?? '';
 
   const handleCopyWebDav = useCallback((projectName: string) => {
     const url = `${window.location.origin}/webdav/${encodeURIComponent(projectName)}/`;
@@ -67,22 +70,37 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [online, retryKey]);
 
+  useEffect(() => {
+    api.settings.get().then(setSettings).catch(() => {});
+  }, []);
+
   const filtered = projects.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
     p.rootPath.toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleCreate = async () => {
+  const resetNewForm = () => { setNewName(''); setNewPath(''); setError(''); };
+
+  const handleCreateNew = async () => {
     setError('');
     try {
-      const p = await api.projects.create(newName.trim(), newPath.trim());
+      // rootPath = null → бэкенд строит путь из настроек и создаёт папку
+      const p = await api.projects.create(newName.trim(), null);
       setProjects(prev => [...prev, p]);
-      // Включаем синхронизацию всего проекта сразу при создании, если выбрано
-      if (newSync) toggleSyncMark(p.id, { name: '', path: '', isDirectory: true, modified: '', isModified: false });
-      setShowCreate(false);
-      setNewName('');
-      setNewPath('');
-      setNewSync(false);
+      setShowCreateNew(false);
+      resetNewForm();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const handleAddExisting = async () => {
+    setError('');
+    try {
+      const p = await api.projects.create(newName.trim(), newPath.trim() || null);
+      setProjects(prev => [...prev, p]);
+      setShowAddExisting(false);
+      resetNewForm();
     } catch (e: any) {
       setError(e.message);
     }
@@ -134,23 +152,42 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
             Проекты
           </h1>
 
-          {/* Badge с аватаром — сжимается, текст внутри обрезается многоточием */}
-          <div
-            onClick={onLogout}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 7, background: C.bgPanel,
-              borderRadius: 20, padding: '6px 12px 6px 8px', cursor: 'pointer',
-              minWidth: 0, flexShrink: 1, maxWidth: 260, overflow: 'hidden',
-            }}
-          >
-            <div style={{
-              width: 22, height: 22, borderRadius: '50%', background: C.accent,
-              color: C.onAccent, fontSize: 11, fontWeight: 700,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-            }}>
-              AD
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1 }}>
+            {/* Кнопка настроек */}
+            <button
+              onClick={() => { setSettingsPath(settings.defaultProjectsPath); setShowSettings(true); }}
+              title="Настройки"
+              style={{
+                width: 32, height: 32, borderRadius: R.md,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: C.textMuted, flexShrink: 0,
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06-.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+            </button>
+
+            {/* Badge с аватаром — сжимается, текст внутри обрезается многоточием */}
+            <div
+              onClick={onLogout}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 7, background: C.bgPanel,
+                borderRadius: 20, padding: '6px 12px 6px 8px', cursor: 'pointer',
+                minWidth: 0, flexShrink: 1, maxWidth: 260, overflow: 'hidden',
+              }}
+            >
+              <div style={{
+                width: 22, height: 22, borderRadius: '50%', background: C.accent,
+                color: C.onAccent, fontSize: 11, fontWeight: 700,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}>
+                AD
+              </div>
+              <ConnectionStatus variant="badge" label={serverUrl || 'localhost'} />
             </div>
-            <ConnectionStatus variant="badge" label={serverUrl || 'localhost'} />
           </div>
         </div>
 
@@ -239,21 +276,36 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
             );
           })}
 
-          {/* Кнопка добавления — всегда в конце списка, только онлайн */}
+          {/* Кнопки создания — только онлайн */}
           {online && (
-          <div
-            onClick={() => setShowCreate(true)}
-            style={{
-              border: `1.5px dashed ${C.dashed}`, borderRadius: 16, padding: 15,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-              color: C.accent, fontSize: 14.5, fontWeight: 600, cursor: 'pointer',
-            }}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <line x1="12" y1="5" x2="12" y2="19"/>
-              <line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-            Добавить проект
+          <div style={{ display: 'flex', gap: 10 }}>
+            <div
+              onClick={() => { resetNewForm(); setShowCreateNew(true); }}
+              style={{
+                flex: 1, border: `1.5px dashed ${C.dashed}`, borderRadius: 16, padding: 15,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                color: C.accent, fontSize: 14, fontWeight: 600, cursor: 'pointer',
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              Создать проект
+            </div>
+            <div
+              onClick={() => { resetNewForm(); setShowAddExisting(true); }}
+              style={{
+                flex: 1, border: `1.5px dashed ${C.dashed}`, borderRadius: 16, padding: 15,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                color: C.textMuted, fontSize: 14, fontWeight: 500, cursor: 'pointer',
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              Добавить папку
+            </div>
           </div>
           )}
         </div>
@@ -297,31 +349,98 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
         )}
       </div>
 
-      {/* Диалог создания */}
-      {showCreate && (
+      {/* Диалог «Создать новый проект» — путь генерируется автоматически */}
+      {showCreateNew && (
         <Modal
-          title="Новый проект"
+          title="Создать проект"
           width={MODAL_W.form}
-          onClose={() => { setShowCreate(false); setError(''); setNewSync(false); }}
+          onClose={() => { setShowCreateNew(false); resetNewForm(); }}
           footer={
             <ModalActions
-              confirmLabel="Добавить"
-              onConfirm={handleCreate}
-              onCancel={() => { setShowCreate(false); setError(''); setNewSync(false); }}
+              confirmLabel="Создать"
+              onConfirm={handleCreateNew}
+              onCancel={() => { setShowCreateNew(false); resetNewForm(); }}
             />
           }
         >
           {errorLine}
-          <TextField value={newName} onChange={setNewName} placeholder="Название" />
-          <TextField value={newPath} onChange={setNewPath} placeholder="Путь к папке" mono />
-          {/* Включить синхронизацию всего проекта сразу при создании */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 12px', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: C.textHeading }}>Синхронизировать для офлайна</div>
-              <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>Скачать все файлы проекта сразу после создания</div>
+          <TextField value={newName} onChange={setNewName} placeholder="Название" autoFocus />
+          {settings.defaultProjectsPath ? (
+            <div style={{
+              background: C.bgMain, border: `1px solid ${C.border}`, borderRadius: R.xl,
+              padding: '10px 13px', fontFamily: FONT.mono, fontSize: 12.5,
+              color: C.textSecondary, lineHeight: 1.4, wordBreak: 'break-all',
+            }}>
+              {`${settings.defaultProjectsPath}/${currentUsername || 'user'}/${newName.trim() || 'название'}`}
             </div>
-            <Toggle checked={newSync} onChange={setNewSync} width={44} height={26} />
-          </div>
+          ) : (
+            <div style={{ fontSize: 13, color: C.textMuted, padding: '8px 2px' }}>
+              Укажите папку по умолчанию в{' '}
+              <button
+                onClick={() => { setShowCreateNew(false); setSettingsPath(settings.defaultProjectsPath); setShowSettings(true); }}
+                style={{ background: 'none', border: 'none', padding: 0, fontSize: 13, color: C.accent, cursor: 'pointer', fontFamily: 'inherit', textDecoration: 'underline' }}
+              >
+                настройках
+              </button>
+              , чтобы папка создавалась автоматически.
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {/* Диалог «Добавить папку» — пользователь указывает путь */}
+      {showAddExisting && (
+        <Modal
+          title="Добавить папку"
+          width={MODAL_W.form}
+          onClose={() => { setShowAddExisting(false); resetNewForm(); }}
+          footer={
+            <ModalActions
+              confirmLabel="Добавить"
+              onConfirm={handleAddExisting}
+              onCancel={() => { setShowAddExisting(false); resetNewForm(); }}
+            />
+          }
+        >
+          {errorLine}
+          <TextField value={newName} onChange={setNewName} placeholder="Название" autoFocus />
+          <TextField value={newPath} onChange={setNewPath} placeholder="Путь к папке" mono />
+        </Modal>
+      )}
+
+      {/* Диалог настроек */}
+      {showSettings && (
+        <Modal
+          title="Настройки"
+          width={MODAL_W.form}
+          onClose={() => setShowSettings(false)}
+          footer={
+            <ModalActions
+              confirmLabel="Сохранить"
+              onConfirm={async () => {
+                const s = { defaultProjectsPath: settingsPath.trim() };
+                await api.settings.save(s);
+                setSettings(s);
+                setShowSettings(false);
+              }}
+              onCancel={() => setShowSettings(false)}
+            />
+          }
+        >
+          <Field
+            label="Папка проектов по умолчанию"
+            hint={settingsPath.trim()
+              ? `Новые проекты: ${settingsPath.trim()}/<пользователь>/<название>`
+              : 'Если не задано — путь вводится вручную при создании проекта'}
+          >
+            <TextField
+              value={settingsPath}
+              onChange={setSettingsPath}
+              placeholder="/home/user/projects"
+              mono
+              autoFocus
+            />
+          </Field>
         </Modal>
       )}
 

@@ -776,13 +776,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
                       : renderItem(it, idx)}
                   </div>
                   {inlineChildren.length > 0 && (
-                    <div style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `2px solid ${C.border}` }}>
-                      {inlineChildren.map((child, ci) => (
-                        <div key={child.id} style={ci === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
-                          {renderItem(child, idxMap.get(child.id) ?? 0)}
-                        </div>
-                      ))}
-                    </div>
+                    <AgentActionsBlock
+                      items={inlineChildren}
+                      renderChild={renderItem}
+                      idxMap={idxMap}
+                    />
                   )}
                 </Fragment>
               );
@@ -1323,6 +1321,44 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
 }
 
 type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
+
+function AgentActionsBlock({ items, renderChild, idxMap }: {
+  items: ToolUseItem[];
+  renderChild: (item: ChatItem, idx: number) => React.ReactNode;
+  idxMap: Map<string, number>;
+}) {
+  const [open, setOpen] = useState(false);
+  const label = items.length === 1 ? '1 действие' : `${items.length} действий`;
+  return (
+    <div style={{ marginLeft: 8 }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer',
+          padding: '2px 6px', borderRadius: 4,
+          color: C.textMuted, fontSize: 11, userSelect: 'none',
+        }}
+      >
+        <span style={{
+          display: 'inline-block',
+          transform: open ? 'rotate(0deg)' : 'rotate(-90deg)',
+          transition: 'transform 0.15s',
+          fontSize: 10,
+        }}>▾</span>
+        {label}
+      </div>
+      {open && (
+        <div style={{ paddingLeft: 14, borderLeft: `2px solid ${C.border}` }}>
+          {items.map((child, ci) => (
+            <div key={child.id} style={ci === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
+              {renderChild(child, idxMap.get(child.id) ?? 0)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function parseTranscriptDir(result: string | undefined): string | null {
   if (!result) return null;

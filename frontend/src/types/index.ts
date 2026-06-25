@@ -7,6 +7,10 @@ export interface Project {
   sessionCount?: number;
 }
 
+export interface AppSettings {
+  defaultProjectsPath: string;
+}
+
 export interface Session {
   id: string;
   projectId: string;

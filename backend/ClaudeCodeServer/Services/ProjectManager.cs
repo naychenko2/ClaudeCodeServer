@@ -9,10 +9,12 @@ public class ProjectManager
     private readonly ConcurrentDictionary<string, Project> _projects = new();
     private readonly string _storePath;
     private readonly UserStore _users;
+    private readonly AppSettingsService _appSettings;
 
-    public ProjectManager(IConfiguration config, UserStore users)
+    public ProjectManager(IConfiguration config, UserStore users, AppSettingsService appSettings)
     {
         _users = users;
+        _appSettings = appSettings;
         _storePath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         Load();
     }
@@ -27,9 +29,20 @@ public class ProjectManager
     public Project? GetByName(string name) =>
         _projects.Values.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
 
-    public Project Create(string name, string rootPath, string userId)
+    public Project Create(string name, string? rootPath, string userId, string username, bool createDirectory = false)
     {
-        if (!Directory.Exists(rootPath))
+        if (string.IsNullOrWhiteSpace(rootPath))
+        {
+            var s = _appSettings.Get();
+            if (string.IsNullOrWhiteSpace(s.DefaultProjectsPath))
+                throw new ArgumentException("Укажите путь к папке или задайте папку по умолчанию в настройках");
+            rootPath = Path.Combine(s.DefaultProjectsPath, username, name);
+            createDirectory = true;
+        }
+
+        if (createDirectory)
+            Directory.CreateDirectory(rootPath);
+        else if (!Directory.Exists(rootPath))
             throw new DirectoryNotFoundException($"Папка не найдена: {rootPath}");
 
         var project = new Project { Name = name, RootPath = rootPath, OwnerId = userId };

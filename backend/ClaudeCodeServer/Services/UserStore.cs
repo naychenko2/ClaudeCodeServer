@@ -37,7 +37,7 @@ public class UserStore
         }
 
         var admin = new User { Username = "admin", Role = "admin" };
-        admin.PasswordHash = _hasher.HashPassword(admin, "admin");
+        SetPasswordInternal(admin, "admin");
         _users = [admin];
         Save();
 
@@ -64,6 +64,32 @@ public class UserStore
         if (_devPassword != null && password == _devPassword) return true;
         var result = _hasher.VerifyHashedPassword(user, user.PasswordHash, password);
         return result != PasswordVerificationResult.Failed;
+    }
+
+    /// <summary>
+    /// Устанавливает пароль: bcrypt-хэш + NT-хэш для NTLM WebDAV.
+    /// </summary>
+    public void SetPassword(User user, string password)
+    {
+        SetPasswordInternal(user, password);
+        Save();
+    }
+
+    /// <summary>
+    /// Лениво вычисляет и сохраняет NT-хэш если его ещё нет.
+    /// Вызывается при успешном логине, чтобы активировать NTLM WebDAV.
+    /// </summary>
+    public void EnsureNtHash(User user, string plainPassword)
+    {
+        if (user.NtHash is { Length: 16 }) return;
+        user.NtHash = WebDav.NtlmHelper.ComputeNtHash(plainPassword);
+        Save();
+    }
+
+    private void SetPasswordInternal(User user, string password)
+    {
+        user.PasswordHash = _hasher.HashPassword(user, password);
+        user.NtHash       = WebDav.NtlmHelper.ComputeNtHash(password);
     }
 
     public User? GetById(string id) =>

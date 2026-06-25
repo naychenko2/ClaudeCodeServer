@@ -1,4 +1,4 @@
-import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo } from '../types';
+import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -15,10 +15,15 @@ export const api = {
       request<{ userId: string; username: string; role: string }>('/auth/me'),
   },
 
+  settings: {
+    get: () => request<AppSettings>('/settings'),
+    save: (s: AppSettings) => request<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(s) }),
+  },
+
   projects: {
     list: () => request<Project[]>('/projects'),
-    create: (name: string, rootPath: string) =>
-      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath }) }),
+    create: (name: string, rootPath: string | null, createDirectory = false) =>
+      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory }) }),
     update: (id: string, data: { name?: string; rootPath?: string }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),

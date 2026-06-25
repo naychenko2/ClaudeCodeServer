@@ -37,10 +37,12 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         try
         {
-            var p = projects.Create(req.Name, req.RootPath, UserId);
+            var username = User.FindFirstValue(ClaimTypes.Name) ?? UserId;
+            var p = projects.Create(req.Name, req.RootPath, UserId, username, req.CreateDirectory);
             return CreatedAtAction(nameof(GetById), new { id = p.Id }, WithCount(p));
         }
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     [HttpPut("{id}")]
@@ -66,5 +68,5 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 }
 
-public record CreateProjectRequest(string Name, string RootPath);
+public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false);
 public record UpdateProjectRequest(string? Name, string? RootPath);

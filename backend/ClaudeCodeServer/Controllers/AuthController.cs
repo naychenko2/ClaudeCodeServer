@@ -23,6 +23,9 @@ public class AuthController(UserStore users, JwtService jwt) : ControllerBase
         if (user is null || !users.VerifyPassword(user, req.Password))
             return Unauthorized(new { error = "Неверное имя пользователя или пароль" });
 
+        // Лениво вычисляем NT-хэш, если его ещё нет — нужен для NTLM WebDAV (Microsoft Office)
+        if (req.Password is not null) users.EnsureNtHash(user, req.Password);
+
         var (token, expiresAt) = jwt.Issue(user);
         return Ok(new { token, expiresAt, username = user.Username });
     }

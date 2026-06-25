@@ -1352,6 +1352,91 @@ function extractMediaFromResult(result: string): MediaItem[] {
   }
 }
 
+// Один медиа-блок (изображение или видео) с кнопкой скачивания.
+// Десктоп: кнопка появляется при hover поверх медиа (правый верхний угол).
+// Мобайл (≤640px): постоянная строка с кнопкой под медиа.
+function MediaBlock({ m, proxyUrl, filename }: { m: MediaItem; proxyUrl: (u: string) => string; filename: string }) {
+  const [hovered, setHovered] = useState(false);
+  const [btnHovered, setBtnHovered] = useState(false);
+  // Кнопка скачивания — общий вид
+  const dlBtn = (
+    <a
+      href={proxyUrl(m.url)}
+      download={filename}
+      onMouseEnter={() => setBtnHovered(true)}
+      onMouseLeave={() => setBtnHovered(false)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '4px 9px', borderRadius: 6,
+        background: btnHovered ? C.accent : 'rgba(237,231,218,0.92)',
+        color: btnHovered ? '#fff' : C.textPrimary,
+        fontSize: 11, fontFamily: FONT.sans, fontWeight: 500,
+        textDecoration: 'none', lineHeight: 1,
+        border: `1px solid ${btnHovered ? C.accent : C.border}`,
+        boxShadow: SHADOW.card,
+        transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+        cursor: 'pointer',
+        // останавливаем всплытие, чтобы не открывать изображение по клику в родителе
+      }}
+      onClick={e => e.stopPropagation()}
+    >
+      ↓
+    </a>
+  );
+  return (
+    <div>
+      {/* Обёртка медиа с hover-оверлеем (скрыт на мобайле через inline CSS-переменную) */}
+      <div
+        style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => { setHovered(false); setBtnHovered(false); }}
+      >
+        {m.kind === 'image' ? (
+          <a href={proxyUrl(m.url)} target="_blank" rel="noopener noreferrer" style={{ display: 'block' }}>
+            <img
+              src={proxyUrl(m.url)}
+              alt=""
+              loading="lazy"
+              style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'pointer' }}
+            />
+          </a>
+        ) : (
+          <video
+            controls
+            style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 8, border: `1px solid ${C.border}` }}
+          >
+            <source src={proxyUrl(m.url)} />
+          </video>
+        )}
+        {/* Hover-кнопка — только десктоп (на мобайле display:none через медиа-класс) */}
+        <span
+          className="cc-media-dl-hover"
+          style={{
+            position: 'absolute', top: 8, right: 8,
+            opacity: hovered ? 1 : 0,
+            pointerEvents: hovered ? 'auto' : 'none',
+            transition: 'opacity 0.15s',
+          }}
+        >
+          {dlBtn}
+        </span>
+      </div>
+      {/* Мета-строка: размер + кнопка скачивания на мобайле */}
+      <div
+        style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3 }}
+      >
+        {(m.width && m.height) ? (
+          <span style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono }}>
+            {m.width}×{m.height}{m.kind === 'video' && m.duration ? ` · ${m.duration.toFixed(1)}с` : ''}
+          </span>
+        ) : null}
+        {/* Постоянная кнопка — только мобайл */}
+        <span className="cc-media-dl-mobile">{dlBtn}</span>
+      </div>
+    </div>
+  );
+}
+
 // Строка инструмента с раскрываемым телом результата (вывод Bash/Read и т.п.)
 function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }) {
   const meta = toolMeta(item.name);
@@ -1418,32 +1503,12 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
       {/* Медиа (изображения + видео) — сразу под шапкой, без клика */}
       {hasMedia && (
         <div style={{ paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {media.map((m, i) => (
-            <div key={i}>
-              {m.kind === 'image' ? (
-                <a href={proxyUrl(m.url)} target="_blank" rel="noopener noreferrer" style={{ display: 'block' }}>
-                  <img
-                    src={proxyUrl(m.url)}
-                    alt=""
-                    loading="lazy"
-                    style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'pointer' }}
-                  />
-                </a>
-              ) : (
-                <video
-                  controls
-                  style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 8, border: `1px solid ${C.border}` }}
-                >
-                  <source src={proxyUrl(m.url)} />
-                </video>
-              )}
-              {(m.width && m.height) ? (
-                <div style={{ fontSize: 10, color: C.textMuted, marginTop: 3, fontFamily: FONT.mono }}>
-                  {m.width}×{m.height}{m.kind === 'video' && m.duration ? ` · ${m.duration.toFixed(1)}с` : ''}
-                </div>
-              ) : null}
-            </div>
-          ))}
+          {media.map((m, i) => {
+            const filename = m.url.split('/').pop()?.split('?')[0] || (m.kind === 'image' ? 'image' : 'video');
+            return (
+              <MediaBlock key={i} m={m} proxyUrl={proxyUrl} filename={filename} />
+            );
+          })}
         </div>
       )}
       {open && hasDiff && <DiffBody hunks={editHunks} />}

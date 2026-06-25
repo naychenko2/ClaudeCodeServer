@@ -149,6 +149,16 @@ body {
   .cc-trunc-left { direction: rtl; text-align: left; unicode-bidi: plaintext; }
 }
 
+/* === Кнопка скачивания медиа === */
+/* Десктоп: hover-оверлей виден, постоянная мобильная кнопка — скрыта */
+@media (hover: hover) and (pointer: fine) {
+  .cc-media-dl-mobile { display: none !important; }
+}
+/* Тач (мобайл): оверлей скрыт (hover не работает), постоянная кнопка — видна */
+@media (hover: none), (pointer: coarse) {
+  .cc-media-dl-hover { display: none !important; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cc-pulse-ring { animation: none; }
   .cc-shimmer-text { animation: none; -webkit-text-fill-color: #9A8F7E; color: #9A8F7E; }

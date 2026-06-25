@@ -9,7 +9,11 @@ export default defineConfig({
       registerType: 'autoUpdate',
       devOptions: { enabled: true },
       // .mjs включён в precache — иначе pdf.worker.min.mjs выпадает и PDF не работает офлайн
-      workbox: { globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,webmanifest}'] },
+      workbox: {
+        globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,webmanifest}'],
+        // /api/* не должен перехватываться SW — иначе /api/proxy открывается как SPA
+        navigateFallbackDenylist: [/^\/api\//],
+      },
       manifest: {
         name: 'Claude Home Server',
         short_name: 'ClaudeHome',

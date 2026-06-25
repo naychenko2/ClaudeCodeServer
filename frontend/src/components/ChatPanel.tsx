@@ -27,6 +27,7 @@ interface Props {
   onBack?: () => void;
   onWorkflowRunning?: (active: boolean, sessionId: string) => void;
   isFirstSession?: boolean;
+  onOpenSidebar?: () => void;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -188,9 +189,10 @@ interface ChatHeaderBarProps {
   isMobile?: boolean;
   onBack?: () => void;
   activeWorkflow?: { phasesDone: number; phasesTotal: number };
+  onOpenSidebar?: () => void;
 }
 
-function ChatHeaderBar({ session, project, online, onOpenSettings, onToggleDock, isMobile, onBack, activeWorkflow }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, onOpenSettings, onToggleDock, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -205,6 +207,14 @@ function ChatHeaderBar({ session, project, online, onOpenSettings, onToggleDock,
   );
   return (
     <Toolbar isMobile={isMobile}>
+      {/* Кнопка открытия сайдбара — только когда он свёрнут (не на мобиле) */}
+      {onOpenSidebar && !isMobile && (
+        <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+          </svg>
+        </ToolbarIconButton>
+      )}
       {/* На мобиле стрелка + название кликабельны как «назад» в сайдбар; на десктопе — просто заголовок */}
       {isMobile && onBack
         ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
@@ -429,7 +439,7 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile, onBack, onWorkflowRunning, isFirstSession }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile, onBack, onWorkflowRunning, isFirstSession, onOpenSidebar }: Props) {
   const { items, isWaiting, isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
   const online = useOnline();
   const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
@@ -873,6 +883,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           onOpenSettings={() => setShowEdit(true)}
           onToggleDock={onToggleDock}
           activeWorkflow={activeWorkflowInfo ?? undefined}
+          onOpenSidebar={onOpenSidebar}
         />
 
         {/* Сообщения (нижний отступ = высота плавающего composer) */}
@@ -932,6 +943,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         isMobile={isMobile}
         onBack={onBack}
         activeWorkflow={activeWorkflowInfo ?? undefined}
+        onOpenSidebar={onOpenSidebar}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}

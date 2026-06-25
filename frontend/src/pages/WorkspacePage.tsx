@@ -459,74 +459,81 @@ export function WorkspacePage({ project, onBack }: Props) {
         />
       )}
 
-      {/* Гамбургер — только когда свёрнут */}
-      {sidebarMode === 'collapsed' && (
-        <button
-          onClick={() => setSidebarMode('open')}
-          title="Открыть панель"
-          style={{
-            position: 'absolute', top: 12, left: 12, zIndex: 11,
-            width: 32, height: 32, borderRadius: 9,
-            background: C.bgPanel, border: `1px solid ${C.border}`,
-            cursor: 'pointer', padding: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 2px 8px rgba(20,16,10,0.12)',
-          }}
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-            <path d="M2 4h12M2 8h12M2 12h12" stroke={C.textMuted} strokeWidth="1.8" strokeLinecap="round"/>
-          </svg>
-        </button>
-      )}
+      {/* Проп для ChatPanel — открывает drawer когда sidebar не pinned */}
+      {(() => {
+        const openSidebar = sidebarMode !== 'pinned' ? () => setSidebarMode('open') : undefined;
 
-      {/* Нет открытого файла — только чат */}
-      {!openFile && (
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          {activeSession
-            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} isFirstSession={sessionCount <= 1} />
-            : NoSession}
-        </div>
-      )}
+        // NoSession с топбаром для ☰ (когда нет активного чата)
+        const NoSessionWithBar = (
+          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            {sidebarMode === 'collapsed' && (
+              <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
+                <button
+                  onClick={() => setSidebarMode('open')}
+                  title="Открыть панель"
+                  style={{ width: 34, height: 34, border: 'none', borderRadius: 9, background: C.bgPanel, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path d="M2 4h12M2 8h12M2 12h12" stroke={C.textMuted} strokeWidth="1.8" strokeLinecap="round"/>
+                  </svg>
+                </button>
+              </div>
+            )}
+            {NoSession}
+          </div>
+        );
 
-      {/* Файл открыт, split только на десктопе: [Chat] | [splitter] | [FileViewer] */}
-      {openFile && !fileFullscreen && !isTablet && (
-        <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
-          <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
-            {activeSession
-              ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} isFirstSession={sessionCount <= 1} />
-              : NoSession}
-          </div>
-          {/* Сплиттер */}
-          <Splitter orientation="v" active={draggingSplitter === 'split'}
-            onMouseDown={e => { setDraggingSplitter('split'); handleSplitterMouseDown(e); }} />
-          <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
-            <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} onToggleFullscreen={handleEnterFullscreen} />
-          </div>
-        </div>
-      )}
+        return (
+          <>
+            {/* Нет открытого файла — только чат */}
+            {!openFile && (
+              <div style={{ flex: 1, overflow: 'hidden' }}>
+                {activeSession
+                  ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} isFirstSession={sessionCount <= 1} onOpenSidebar={openSidebar} />
+                  : NoSessionWithBar}
+              </div>
+            )}
 
-      {/* Fullscreen: на десктопе — по флагу, на планшете — всегда */}
-      {openFile && (fileFullscreen || isTablet) && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div style={{ flex: 1, overflow: 'hidden', minHeight: 100 }}>
-            <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} isFullscreen onToggleFullscreen={isTablet ? undefined : () => setFileFullscreen(false)} />
-          </div>
-          {/* Горизонтальный сплиттер — только когда чат развёрнут */}
-          {chatDockExpanded && (
-            <Splitter orientation="h" active={draggingSplitter === 'vertical'}
-              onMouseDown={e => { setDraggingSplitter('vertical'); handleVerticalSplitterMouseDown(e); }} />
-          )}
-          {activeSession ? (
-            <div style={{ flexShrink: 0, height: chatDockExpanded ? chatHeight : 56, overflow: 'hidden', transition: chatDockExpanded ? 'none' : 'height 0.2s ease' }}>
-              <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} dockMode={chatDockExpanded ? 'expanded' : 'collapsed'} onToggleDock={() => setChatDockExpanded(p => !p)} onWorkflowRunning={handleWorkflowRunning} isFirstSession={sessionCount <= 1} />
-            </div>
-          ) : (
-            <div style={{ flexShrink: 0, height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8A8070', fontSize: 13, background: C.bgPanel }}>
-              Выберите или создайте чат
-            </div>
-          )}
-        </div>
-      )}
+            {/* Файл открыт, split только на десктопе: [Chat] | [splitter] | [FileViewer] */}
+            {openFile && !fileFullscreen && !isTablet && (
+              <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
+                <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
+                  {activeSession
+                    ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} isFirstSession={sessionCount <= 1} onOpenSidebar={openSidebar} />
+                    : NoSessionWithBar}
+                </div>
+                <Splitter orientation="v" active={draggingSplitter === 'split'}
+                  onMouseDown={e => { setDraggingSplitter('split'); handleSplitterMouseDown(e); }} />
+                <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
+                  <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} onToggleFullscreen={handleEnterFullscreen} />
+                </div>
+              </div>
+            )}
+
+            {/* Fullscreen: на десктопе — по флагу, на планшете — всегда */}
+            {openFile && (fileFullscreen || isTablet) && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <div style={{ flex: 1, overflow: 'hidden', minHeight: 100 }}>
+                  <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} isFullscreen onToggleFullscreen={isTablet ? undefined : () => setFileFullscreen(false)} />
+                </div>
+                {chatDockExpanded && (
+                  <Splitter orientation="h" active={draggingSplitter === 'vertical'}
+                    onMouseDown={e => { setDraggingSplitter('vertical'); handleVerticalSplitterMouseDown(e); }} />
+                )}
+                {activeSession ? (
+                  <div style={{ flexShrink: 0, height: chatDockExpanded ? chatHeight : 56, overflow: 'hidden', transition: chatDockExpanded ? 'none' : 'height 0.2s ease' }}>
+                    <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} dockMode={chatDockExpanded ? 'expanded' : 'collapsed'} onToggleDock={() => setChatDockExpanded(p => !p)} onWorkflowRunning={handleWorkflowRunning} isFirstSession={sessionCount <= 1} onOpenSidebar={openSidebar} />
+                  </div>
+                ) : (
+                  <div style={{ flexShrink: 0, height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8A8070', fontSize: 13, background: C.bgPanel }}>
+                    Выберите или создайте чат
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        );
+      })()}
     </div>
   );
 }

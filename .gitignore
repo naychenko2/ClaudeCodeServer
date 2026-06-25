@@ -10,6 +10,10 @@ publish/
 certs/
 domain/
 
+# Собранный фронтенд внутри backend (копируется при публикации)
+backend/ClaudeCodeServer/wwwroot/assets/
+backend/wwwroot/
+
 # Node / Frontend
 frontend/node_modules/
 frontend/dist/

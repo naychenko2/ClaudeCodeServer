@@ -4,6 +4,7 @@ using System.Threading.RateLimiting;
 using ClaudeCodeServer.Hubs;
 using ClaudeCodeServer.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication.Negotiate;
 using Microsoft.AspNetCore.HttpOverrides;
 
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
@@ -22,6 +23,7 @@ builder.Services.AddSignalR()
 
 builder.Services.AddSingleton<UserStore>();
 builder.Services.AddSingleton<JwtService>();
+builder.Services.AddSingleton<AppSettingsService>();
 builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<FileService>();
 builder.Services.AddSingleton<SyncService>();
@@ -29,9 +31,10 @@ builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddSingleton<ChatHistoryService>();
 builder.Services.AddSingleton<SessionManager>();
 
-// JWT-аутентификация; токен для SignalR берём из ?access_token=
+// JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office)
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer();
+    .AddJwtBearer()
+    .AddNegotiate();
 builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
     .Configure<JwtService>((opts, jwt) =>
     {
@@ -85,6 +88,8 @@ app.Services.GetRequiredService<UserStore>();
 app.Services.GetRequiredService<JwtService>();
 
 app.UseForwardedHeaders();
+
+
 // Принудительный HTTPS только для публичного домена naychenko.me;
 // доступ из локальной сети по IP остаётся по HTTP (сертификат на IP не выдан)
 if (!app.Environment.IsDevelopment())
@@ -107,10 +112,28 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
-// WebDAV — собственный Basic Auth внутри хендлера, вне JWT pipeline
-var webDavMethods = new[] { "OPTIONS", "PROPFIND", "PROPPATCH", "GET", "HEAD", "PUT", "DELETE", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK" };
-app.MapMethods("/webdav/{projectName}", webDavMethods, ClaudeCodeServer.WebDav.WebDavHandler.HandleAsync);
-app.MapMethods("/webdav/{projectName}/{**path}", webDavMethods, ClaudeCodeServer.WebDav.WebDavHandler.HandleAsync);
+// WebDAV — middleware перехватывает /webdav/* до роутинга.
+// Собственный Basic Auth внутри хендлера, вне JWT pipeline.
+// Также отвечает на OPTIONS / (Windows WebClient зондирует корень перед монтированием).
+app.Use(async (ctx, next) =>
+{
+    var path = ctx.Request.Path.Value ?? "";
+    if (ctx.Request.Method.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase) && path == "/")
+    {
+        ctx.Response.StatusCode    = 200;
+        ctx.Response.ContentLength = 0;
+        ctx.Response.Headers["DAV"]           = "1, 2";
+        ctx.Response.Headers["MS-Author-Via"] = "DAV";
+        ctx.Response.Headers["Allow"]         = "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK";
+        return;
+    }
+    if (path == "/webdav" || path.StartsWith("/webdav/", StringComparison.OrdinalIgnoreCase))
+    {
+        await ClaudeCodeServer.WebDav.WebDavHandler.HandleAsync(ctx);
+        return;
+    }
+    await next(ctx);
+});
 
 // Раздача фронтенда: wwwroot/ рядом с exe (prod) или ../../frontend/dist (dev)
 var wwwrootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");
@@ -122,6 +145,8 @@ if (Directory.Exists(distPath))
     var fp = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(distPath);
     app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fp });
     app.UseStaticFiles(new StaticFileOptions { FileProvider = fp });
+    // /_api/* — Office/SharePoint-запросы; возвращаем 404 вместо SPA, иначе Word показывает «Нет доступа»
+    app.Map("/_api", api => api.Run(ctx => { ctx.Response.StatusCode = 404; return Task.CompletedTask; }));
     app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp });
 }
 

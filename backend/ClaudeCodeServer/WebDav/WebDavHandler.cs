@@ -3,6 +3,7 @@ using System.Net;
 using System.Security;
 using System.Text;
 using ClaudeCodeServer.Services;
+using Microsoft.AspNetCore.Authentication;
 
 namespace ClaudeCodeServer.WebDav;
 
@@ -23,25 +24,80 @@ public static class WebDavHandler
 
     public static async Task HandleAsync(HttpContext ctx)
     {
-        // ── Basic Auth ──────────────────────────────────────────────────────
-        var users = ctx.RequestServices.GetRequiredService<UserStore>();
-        if (!TryAuthenticateBasic(ctx, users))
+        var authHdr = ctx.Request.Headers.Authorization.ToString();
+
+        // OPTIONS:
+        // • Анонимный (без Auth) — Windows WebClient зондирует анонимно, пускаем без аутентификации.
+        // • С Auth-заголовком — пускаем через TryAuthenticateAsync:
+        //   - Bearer невалидный → 401 + Negotiate, Word переключает соединение на NTLM до LOCK.
+        //   - NTLM T1 → 401 + T2 (нужно для завершения рукопожатия на соединении).
+        //   - NTLM T3 / Basic / Bearer валидный → 200.
+        if (ctx.Request.Method.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase))
         {
-            ctx.Response.StatusCode = 401;
-            ctx.Response.Headers["WWW-Authenticate"] = "Basic realm=\"ClaudeCodeServer\", charset=\"UTF-8\"";
+            if (string.IsNullOrEmpty(authHdr))
+            {
+                HandleOptions(ctx);
+                return;
+            }
+            var users2 = ctx.RequestServices.GetRequiredService<UserStore>();
+            if (!await TryAuthenticateAsync(ctx, users2))
+            {
+                ctx.Response.StatusCode    = 401;
+                ctx.Response.ContentLength = 0;
+                if (!ctx.Response.Headers.ContainsKey("WWW-Authenticate"))
+                    ctx.Response.Headers["WWW-Authenticate"] = "Negotiate, Basic realm=\"ClaudeCodeServer\"";
+                return;
+            }
+            HandleOptions(ctx);
             return;
         }
 
-        // ── Разбор маршрута ─────────────────────────────────────────────────
-        var projectName = ctx.GetRouteValue("projectName") as string ?? "";
-        var rawPath     = ctx.GetRouteValue("path") as string ?? "";
+        // ── Аутентификация: NTLM (для Office) или Basic ────────────────────
+        var users = ctx.RequestServices.GetRequiredService<UserStore>();
+        if (!await TryAuthenticateAsync(ctx, users))
+        {
+            ctx.Response.StatusCode    = 401;
+            ctx.Response.ContentLength = 0;
+            if (!ctx.Response.Headers.ContainsKey("WWW-Authenticate"))
+                ctx.Response.Headers["WWW-Authenticate"] = "Negotiate, Basic realm=\"ClaudeCodeServer\"";
+            return;
+        }
+
+        // ── Разбор маршрута из пути запроса ────────────────────────────────
+        // Путь: /webdav/{projectName}/{**relPath}
+        var segments = (ctx.Request.Path.Value ?? "")
+            .Split('/', StringSplitOptions.RemoveEmptyEntries);
+        // segments[0] = "webdav", [1] = projectName, [2..] = relPath
+        var projectName = segments.Length >= 2
+            ? Uri.UnescapeDataString(segments[1])
+            : "";
+        var rawPath = segments.Length >= 3
+            ? string.Join("/", segments.Skip(2).Select(Uri.UnescapeDataString))
+            : "";
 
         var projects = ctx.RequestServices.GetRequiredService<ProjectManager>();
+
+        // PROPFIND на корне /webdav/ — виртуальная коллекция со списком проектов
+        // Windows WebClient зондирует этот путь перед монтированием подпапки
+        if (string.IsNullOrEmpty(projectName))
+        {
+            if (ctx.Request.Method.Equals("PROPFIND", StringComparison.OrdinalIgnoreCase))
+            {
+                await HandlePropfindRootAsync(ctx, projects);
+            }
+            else
+            {
+                ctx.Response.StatusCode = 405;
+                ctx.Response.ContentLength = 0;
+            }
+            return;
+        }
+
         var project  = projects.GetByName(projectName);
         if (project is null)
         {
             ctx.Response.StatusCode = 404;
-            await ctx.Response.WriteAsync("Project not found");
+            ctx.Response.ContentLength = 0;
             return;
         }
 
@@ -56,7 +112,6 @@ public static class WebDavHandler
         {
             switch (method)
             {
-                case "OPTIONS":     HandleOptions(ctx); break;
                 case "PROPFIND":    await HandlePropfindAsync(ctx, files, root, relPath, projectName); break;
                 case "PROPPATCH":   await HandleProppatchAsync(ctx, relPath, projectName); break;
                 case "GET":
@@ -88,8 +143,47 @@ public static class WebDavHandler
     }
 
     // ────────────────────────────────────────────────────────────────────────
-    // Basic Auth
+    // Аутентификация: NTLM (Windows Negotiate) + Basic
     // ────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Проверяет аутентификацию запроса.
+    /// Приоритет: Basic (Mini-Redirector) > JWT Bearer (Office на повторных соединениях) > NTLM Negotiate.
+    /// При NTLM Type 1/3 делегирует ASP.NET Core Negotiate-хендлеру (SSPI).
+    /// </summary>
+    private static async Task<bool> TryAuthenticateAsync(HttpContext ctx, UserStore users)
+    {
+        // Basic — проверяем первым, Mini-Redirector всегда шлёт Basic напрямую
+        if (TryAuthenticateBasic(ctx, users)) return true;
+
+        var authHeader = ctx.Request.Headers.Authorization.ToString();
+
+        // JWT Bearer — Microsoft Office иногда повторно использует соединение из REST API
+        // и шлёт Bearer вместо NTLM. UseAuthentication() уже проверил токен и выставил ctx.User.
+        if (authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (ctx.User.Identity?.IsAuthenticated == true) return true;
+            // Токен недействителен — выдаём Negotiate-вызов, чтобы Word переключился на NTLM/Basic
+            await ctx.ChallengeAsync("Negotiate");
+            ctx.Response.Headers.Append("WWW-Authenticate", "Basic realm=\"ClaudeCodeServer\"");
+            return false;
+        }
+
+        if (!authHeader.StartsWith("Negotiate ", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // Negotiate (NTLM) — ASP.NET Core Negotiate handler обрабатывает Type1/Type3 через SSPI
+        // и сохраняет состояние в IConnectionItems между запросами одного соединения.
+        var result = await ctx.AuthenticateAsync("Negotiate");
+        if (result.Succeeded) return true;
+
+        // Type 1: хендлер записал Type2 в connection items → ChallengeAsync добавит его в ответ.
+        // Type 3 failure: хендлер вернул Fail.
+        await ctx.ChallengeAsync("Negotiate");
+        // Добавляем Basic как запасной вариант (Office может попробовать Basic если NTLM не удался)
+        ctx.Response.Headers.Append("WWW-Authenticate", "Basic realm=\"ClaudeCodeServer\"");
+        return false;
+    }
 
     private static bool TryAuthenticateBasic(HttpContext ctx, UserStore users)
     {
@@ -123,10 +217,81 @@ public static class WebDavHandler
 
     private static void HandleOptions(HttpContext ctx)
     {
-        ctx.Response.StatusCode = 200;
+        ctx.Response.StatusCode    = 200;
+        ctx.Response.ContentLength = 0;
         ctx.Response.Headers["Allow"]         = "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK";
         ctx.Response.Headers["DAV"]           = "1, 2";
         ctx.Response.Headers["MS-Author-Via"] = "DAV";
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // PROPFIND /webdav/ — корневая коллекция
+    // ────────────────────────────────────────────────────────────────────────
+
+    private static async Task HandlePropfindRootAsync(HttpContext ctx, ProjectManager projects)
+    {
+        var pb   = ctx.Request.PathBase.ToString().TrimEnd('/');
+        // href — абсолютный URI с trailing slash для коллекции (IIS-поведение)
+        var href = $"{ctx.Request.Scheme}://{ctx.Request.Host}{ctx.Request.Path.Value?.TrimEnd('/')}/";
+
+        var now = DateTime.UtcNow;
+        var sb = new StringBuilder();
+        sb.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+        // xmlns:Z обязателен — Windows WebDAV Mini-Redirector требует этот namespace для Win32-свойств
+        sb.AppendLine("<D:multistatus xmlns:D=\"DAV:\" xmlns:Z=\"urn:schemas-microsoft-com:\">");
+        sb.AppendLine("  <D:response>");
+        sb.AppendLine($"    <D:href>{href}</D:href>");
+        sb.AppendLine("    <D:propstat>");
+        sb.AppendLine("      <D:prop>");
+        sb.AppendLine("        <D:displayname>webdav</D:displayname>");
+        sb.AppendLine("        <D:resourcetype><D:collection/></D:resourcetype>");
+        sb.AppendLine($"        <D:getlastmodified>{now:R}</D:getlastmodified>");
+        sb.AppendLine($"        <D:creationdate>{now:yyyy-MM-ddTHH:mm:ssZ}</D:creationdate>");
+        sb.AppendLine("        <Z:Win32FileAttributes>00000010</Z:Win32FileAttributes>");
+        sb.AppendLine($"        <Z:Win32CreationTime>{now:R}</Z:Win32CreationTime>");
+        sb.AppendLine($"        <Z:Win32LastAccessTime>{now:R}</Z:Win32LastAccessTime>");
+        sb.AppendLine($"        <Z:Win32LastModifiedTime>{now:R}</Z:Win32LastModifiedTime>");
+        sb.AppendLine("      </D:prop>");
+        sb.AppendLine("      <D:status>HTTP/1.1 200 OK</D:status>");
+        sb.AppendLine("    </D:propstat>");
+        sb.AppendLine("  </D:response>");
+
+        var depth = ctx.Request.Headers["Depth"].ToString();
+        if (depth == "1")
+        {
+            foreach (var p in projects.GetAll())
+            {
+                var pHref = $"{ctx.Request.Scheme}://{ctx.Request.Host}{pb}/webdav/{Uri.EscapeDataString(p.Name)}/";
+                DateTime pModified = now, pCreated = now;
+                if (Directory.Exists(p.RootPath))
+                {
+                    var di = new DirectoryInfo(p.RootPath);
+                    pModified = di.LastWriteTimeUtc;
+                    pCreated  = di.CreationTimeUtc;
+                }
+                sb.AppendLine("  <D:response>");
+                sb.AppendLine($"    <D:href>{pHref}</D:href>");
+                sb.AppendLine("    <D:propstat>");
+                sb.AppendLine("      <D:prop>");
+                sb.AppendLine($"        <D:displayname>{XmlEscape(p.Name)}</D:displayname>");
+                sb.AppendLine("        <D:resourcetype><D:collection/></D:resourcetype>");
+                sb.AppendLine($"        <D:getlastmodified>{pModified:R}</D:getlastmodified>");
+                sb.AppendLine($"        <D:creationdate>{pCreated:yyyy-MM-ddTHH:mm:ssZ}</D:creationdate>");
+                sb.AppendLine("        <Z:Win32FileAttributes>00000010</Z:Win32FileAttributes>");
+                sb.AppendLine($"        <Z:Win32CreationTime>{pCreated:R}</Z:Win32CreationTime>");
+                sb.AppendLine($"        <Z:Win32LastAccessTime>{pModified:R}</Z:Win32LastAccessTime>");
+                sb.AppendLine($"        <Z:Win32LastModifiedTime>{pModified:R}</Z:Win32LastModifiedTime>");
+                sb.AppendLine("      </D:prop>");
+                sb.AppendLine("      <D:status>HTTP/1.1 200 OK</D:status>");
+                sb.AppendLine("    </D:propstat>");
+                sb.AppendLine("  </D:response>");
+            }
+        }
+
+        sb.AppendLine("</D:multistatus>");
+
+        ctx.Response.StatusCode = 207;
+        await WriteXmlAsync(ctx, sb.ToString());
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -153,10 +318,21 @@ public static class WebDavHandler
 
         var sb = new StringBuilder();
         sb.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
-        sb.AppendLine("<D:multistatus xmlns:D=\"DAV:\">");
+        // xmlns:Z обязателен — Windows WebDAV Mini-Redirector требует этот namespace для Win32-свойств
+        sb.AppendLine("<D:multistatus xmlns:D=\"DAV:\" xmlns:Z=\"urn:schemas-microsoft-com:\">");
 
-        // сам ресурс
-        AppendResponse(sb, ctx, projectName, relPath, absPath, isDir);
+        // для коллекций href всегда с trailing slash (IIS-поведение; Windows WebDAV ожидает именно это)
+        var reqPath = ctx.Request.Path.Value ?? "";
+        var requestHref = isDir
+            ? $"{ctx.Request.Scheme}://{ctx.Request.Host}{reqPath.TrimEnd('/')}/"
+            : $"{ctx.Request.Scheme}://{ctx.Request.Host}{reqPath}";
+
+        // Передаём активную блокировку в PROPFIND-ответ (lockdiscovery)
+        static DavLock? GetActiveLock(string key) =>
+            _locks.TryGetValue(key, out var lck) && lck.Expires > DateTime.UtcNow ? lck : null;
+
+        var rootLockKey = string.IsNullOrEmpty(relPath) ? projectName : $"{projectName}/{relPath}";
+        AppendResponse(sb, requestHref, absPath, isDir, GetActiveLock(rootLockKey));
 
         // дочерние элементы (depth=1, только для папок)
         if (isDir && depth == "1")
@@ -164,39 +340,42 @@ public static class WebDavHandler
             foreach (var entry in files.List(root, relPath))
             {
                 var childAbs = FileService.SafeJoinPublic(root, entry.Path);
-                AppendResponse(sb, ctx, projectName, entry.Path, childAbs, entry.IsDirectory);
+                var childHref = BuildHref(ctx, projectName, entry.Path, entry.IsDirectory);
+                AppendResponse(sb, childHref, childAbs, entry.IsDirectory, GetActiveLock($"{projectName}/{entry.Path}"));
             }
         }
 
         sb.AppendLine("</D:multistatus>");
 
-        ctx.Response.StatusCode  = 207;
-        ctx.Response.ContentType = "application/xml; charset=utf-8";
-        await ctx.Response.WriteAsync(sb.ToString(), Encoding.UTF8);
+        ctx.Response.StatusCode = 207;
+        await WriteXmlAsync(ctx, sb.ToString());
     }
 
-    private static void AppendResponse(StringBuilder sb, HttpContext ctx, string projectName, string relPath, string absPath, bool isDir)
+    private static void AppendResponse(StringBuilder sb, string href, string absPath, bool isDir, DavLock? activeLock = null)
     {
-        var href = BuildHref(ctx, projectName, relPath, isDir);
+        // displayName берём из последнего сегмента href (декодированного)
+        var displayName = XmlEscape(Uri.UnescapeDataString(href.TrimEnd('/').Split('/').Last()));
 
-        string displayName, lastModified, createdDate, etag = "", contentLength = "", contentType = "";
+        string lastModified, createdDate, createdDateRfc, win32Attrs, etag = "", contentLength = "", contentType = "";
 
         if (isDir)
         {
             var info = new DirectoryInfo(absPath);
-            displayName  = string.IsNullOrEmpty(relPath) ? projectName : XmlEscape(info.Name);
-            lastModified = info.LastWriteTimeUtc.ToString("R");
-            createdDate  = info.CreationTimeUtc.ToString("O");
+            lastModified   = info.LastWriteTimeUtc.ToString("R");
+            createdDate    = info.CreationTimeUtc.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            createdDateRfc = info.CreationTimeUtc.ToString("R");
+            win32Attrs     = "00000010"; // FILE_ATTRIBUTE_DIRECTORY — фиксированное значение для коллекций
         }
         else
         {
             var info = new FileInfo(absPath);
-            displayName   = XmlEscape(info.Name);
-            lastModified  = info.LastWriteTimeUtc.ToString("R");
-            createdDate   = info.CreationTimeUtc.ToString("O");
-            contentLength = info.Length.ToString();
-            contentType   = XmlEscape(GetMimeType(info.Name));
-            etag          = $"\"{info.LastWriteTimeUtc.Ticks:x}-{info.Length:x}\"";
+            lastModified   = info.LastWriteTimeUtc.ToString("R");
+            createdDate    = info.CreationTimeUtc.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            createdDateRfc = info.CreationTimeUtc.ToString("R");
+            win32Attrs     = ((uint)info.Attributes).ToString("X8");
+            contentLength  = info.Length.ToString();
+            contentType    = XmlEscape(GetMimeType(info.Name));
+            etag           = $"\"{info.LastWriteTimeUtc.Ticks:x}-{info.Length:x}\"";
         }
 
         sb.AppendLine("  <D:response>");
@@ -205,18 +384,52 @@ public static class WebDavHandler
         sb.AppendLine("      <D:prop>");
         sb.AppendLine($"        <D:displayname>{displayName}</D:displayname>");
 
+        // supportedlock и lockdiscovery для файлов и папок
+        var lockBlock = new System.Text.StringBuilder();
+        lockBlock.AppendLine("        <D:supportedlock>");
+        lockBlock.AppendLine("          <D:lockentry><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockentry>");
+        lockBlock.AppendLine("          <D:lockentry><D:lockscope><D:shared/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockentry>");
+        lockBlock.AppendLine("        </D:supportedlock>");
+        if (activeLock != null && activeLock.Expires > DateTime.UtcNow)
+        {
+            lockBlock.AppendLine("        <D:lockdiscovery>");
+            lockBlock.AppendLine("          <D:activelock>");
+            lockBlock.AppendLine("            <D:locktype><D:write/></D:locktype>");
+            lockBlock.AppendLine("            <D:lockscope><D:exclusive/></D:lockscope>");
+            lockBlock.AppendLine("            <D:depth>0</D:depth>");
+            lockBlock.AppendLine($"            <D:owner><D:href>{activeLock.Owner}</D:href></D:owner>");
+            lockBlock.AppendLine("            <D:timeout>Second-3600</D:timeout>");
+            lockBlock.AppendLine($"            <D:locktoken><D:href>{activeLock.Token}</D:href></D:locktoken>");
+            lockBlock.AppendLine($"            <D:lockroot><D:href>{href}</D:href></D:lockroot>");
+            lockBlock.AppendLine("          </D:activelock>");
+            lockBlock.AppendLine("        </D:lockdiscovery>");
+        }
+        else
+        {
+            lockBlock.AppendLine("        <D:lockdiscovery/>");
+        }
+
         if (isDir)
+        {
             sb.AppendLine("        <D:resourcetype><D:collection/></D:resourcetype>");
+            sb.Append(lockBlock);
+        }
         else
         {
             sb.AppendLine("        <D:resourcetype/>");
             sb.AppendLine($"        <D:getcontentlength>{contentLength}</D:getcontentlength>");
             sb.AppendLine($"        <D:getcontenttype>{contentType}</D:getcontenttype>");
             sb.AppendLine($"        <D:getetag>{etag}</D:getetag>");
+            sb.Append(lockBlock);
         }
 
         sb.AppendLine($"        <D:getlastmodified>{lastModified}</D:getlastmodified>");
         sb.AppendLine($"        <D:creationdate>{createdDate}</D:creationdate>");
+        // Win32-свойства — Windows WebDAV Mini-Redirector требует их в namespace Z для корректного монтирования
+        sb.AppendLine($"        <Z:Win32FileAttributes>{win32Attrs}</Z:Win32FileAttributes>");
+        sb.AppendLine($"        <Z:Win32CreationTime>{createdDateRfc}</Z:Win32CreationTime>");
+        sb.AppendLine($"        <Z:Win32LastAccessTime>{lastModified}</Z:Win32LastAccessTime>");
+        sb.AppendLine($"        <Z:Win32LastModifiedTime>{lastModified}</Z:Win32LastModifiedTime>");
         sb.AppendLine("      </D:prop>");
         sb.AppendLine("      <D:status>HTTP/1.1 200 OK</D:status>");
         sb.AppendLine("    </D:propstat>");
@@ -243,9 +456,8 @@ public static class WebDavHandler
             </D:multistatus>
             """;
 
-        ctx.Response.StatusCode  = 207;
-        ctx.Response.ContentType = "application/xml; charset=utf-8";
-        await ctx.Response.WriteAsync(xml, Encoding.UTF8);
+        ctx.Response.StatusCode = 207;
+        await WriteXmlAsync(ctx, xml);
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -467,18 +679,16 @@ public static class WebDavHandler
         var absPath = FileService.SafeJoinPublic(root, relPath);
         var existed = File.Exists(absPath);
 
-        // Клиент сначала блокирует несуществующий файл, потом пишет содержимое через PUT
-        if (!existed && !Directory.Exists(absPath))
-            files.CreateFile(root, relPath);
-
-        // Читаем owner из тела запроса (может быть пустым)
+        // Читаем owner из тела запроса (пустое тело = refresh существующей блокировки)
         var owner = "";
+        var hasBody = false;
         try
         {
             using var sr = new StreamReader(ctx.Request.Body, Encoding.UTF8, leaveOpen: true);
             var body = await sr.ReadToEndAsync();
             if (!string.IsNullOrWhiteSpace(body))
             {
+                hasBody = true;
                 // ищем <D:href>...</D:href> или <href>...</href> внутри owner
                 var ownerMatch = System.Text.RegularExpressions.Regex.Match(
                     body, @"<[^>]*:?href[^>]*>(.*?)</[^>]*:?href[^>]*>",
@@ -489,8 +699,53 @@ public static class WebDavHandler
         }
         catch { /* тело может быть пустым */ }
 
-        var token = "urn:uuid:" + Guid.NewGuid();
         var lockKey = $"{projectName}/{relPath}";
+
+        // Проверяем существующую блокировку
+        if (_locks.TryGetValue(lockKey, out var existing) && existing.Expires > DateTime.UtcNow)
+        {
+            // Refresh: пустое тело + If-заголовок с нашим токеном
+            var ifHeader = ctx.Request.Headers["If"].ToString();
+            var ifToken = System.Text.RegularExpressions.Regex.Match(ifHeader, @"<(urn:[^>]+)>").Groups[1].Value;
+            if (!hasBody && ifToken == existing.Token)
+            {
+                // Продлеваем блокировку, возвращаем тот же токен
+                _locks[lockKey] = existing with { Expires = DateTime.UtcNow.AddHours(1) };
+                var refreshHref = BuildHref(ctx, projectName, relPath, false);
+                var refreshXml = $"""
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <D:prop xmlns:D="DAV:">
+                      <D:lockdiscovery>
+                        <D:activelock>
+                          <D:locktype><D:write/></D:locktype>
+                          <D:lockscope><D:exclusive/></D:lockscope>
+                          <D:depth>0</D:depth>
+                          <D:owner><D:href>{existing.Owner}</D:href></D:owner>
+                          <D:timeout>Second-3600</D:timeout>
+                          <D:locktoken><D:href>{existing.Token}</D:href></D:locktoken>
+                          <D:lockroot><D:href>{refreshHref}</D:href></D:lockroot>
+                        </D:activelock>
+                      </D:lockdiscovery>
+                    </D:prop>
+                    """;
+                ctx.Response.StatusCode = 200;
+                ctx.Response.Headers["Lock-Token"] = $"<{existing.Token}>";
+                await WriteXmlAsync(ctx, refreshXml);
+                return;
+            }
+
+            // Файл занят другим клиентом — 423 Locked
+            ctx.Response.StatusCode = 423;
+            ctx.Response.ContentLength = 0;
+            return;
+        }
+
+        // Новая блокировка
+        // Клиент сначала блокирует несуществующий файл, потом пишет содержимое через PUT
+        if (!existed && !Directory.Exists(absPath))
+            files.CreateFile(root, relPath);
+
+        var token = "urn:uuid:" + Guid.NewGuid();
         _locks[lockKey] = new DavLock(token, owner, DateTime.UtcNow.AddHours(1));
 
         var href = BuildHref(ctx, projectName, relPath, false);
@@ -513,8 +768,7 @@ public static class WebDavHandler
 
         ctx.Response.StatusCode = existed ? 200 : 201;
         ctx.Response.Headers["Lock-Token"] = $"<{token}>";
-        ctx.Response.ContentType = "application/xml; charset=utf-8";
-        await ctx.Response.WriteAsync(xml, Encoding.UTF8);
+        await WriteXmlAsync(ctx, xml);
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -537,21 +791,21 @@ public static class WebDavHandler
     // ────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Строит href для PROPFIND-ответа из текущего Request.PathBase + /webdav/{projectName}/{relPath}.
-    /// Сегменты пути URL-кодируются. Не хардкодим схему/хост — берём из контекста.
+    /// Строит абсолютный URI для href в PROPFIND-ответе.
+    /// Windows WebDAV Mini-Redirector требует абсолютные URI — относительные пути не принимает.
     /// </summary>
     private static string BuildHref(HttpContext ctx, string projectName, string relPath, bool isDir)
     {
-        var pb = ctx.Request.PathBase.ToString().TrimEnd('/');
+        var origin = $"{ctx.Request.Scheme}://{ctx.Request.Host}{ctx.Request.PathBase.ToString().TrimEnd('/')}";
         var segments = string.IsNullOrEmpty(relPath)
             ? Array.Empty<string>()
             : relPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
 
         var encoded = string.Join("/", segments.Select(Uri.EscapeDataString));
-        var path = $"{pb}/webdav/{Uri.EscapeDataString(projectName)}" +
+        var path = $"/webdav/{Uri.EscapeDataString(projectName)}" +
                    (encoded.Length > 0 ? $"/{encoded}" : "") +
                    (isDir ? "/" : "");
-        return path;
+        return origin + path;
     }
 
     /// <summary>
@@ -578,6 +832,20 @@ public static class WebDavHandler
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Записывает XML-ответ с явным Content-Length, чтобы Windows WebClient
+    /// не получал chunked transfer encoding (вызывает ошибку 59).
+    /// </summary>
+    private static async Task WriteXmlAsync(HttpContext ctx, string xml)
+    {
+        var bytes = Encoding.UTF8.GetBytes(xml);
+        ctx.Response.ContentType   = "text/xml; charset=\"utf-8\"";
+        ctx.Response.ContentLength = bytes.Length;
+        ctx.Response.Headers["DAV"]           = "1, 2";
+        ctx.Response.Headers["MS-Author-Via"] = "DAV";
+        await ctx.Response.Body.WriteAsync(bytes);
     }
 
     private static string XmlEscape(string s) =>

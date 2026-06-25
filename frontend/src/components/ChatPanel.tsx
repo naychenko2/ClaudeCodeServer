@@ -846,9 +846,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const node = renderItem(items[i], i);
         const needsTopSpacing = kind === 'text' || kind === 'user_message' || kind === 'result' || kind === 'error';
         pushNode(
-          needsTopSpacing
-            ? <div key={`sp-${i}`} style={{ marginTop: 12 }}>{node}</div>
-            : node,
+          kind === 'user_message'
+            ? <div key={`sp-${i}`} style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>{node}</div>
+            : needsTopSpacing
+              ? <div key={`sp-${i}`} style={{ marginTop: 12 }}>{node}</div>
+              : node,
           i
         );
         i++;

@@ -1381,8 +1381,8 @@ function isProxiable(url: string): boolean {
 
 
 type MediaItem =
-  | { kind: 'image'; url: string; width?: number; height?: number }
-  | { kind: 'video'; url: string; width?: number; height?: number; duration?: number }
+  | { kind: 'image'; url: string; width?: number; height?: number; fileName?: string }
+  | { kind: 'video'; url: string; width?: number; height?: number; duration?: number; fileName?: string }
   | { kind: 'audio'; url: string; duration?: number; fileName?: string };
 
 function classifyUrl(item: any): 'image' | 'video' | 'audio' | null {
@@ -1409,15 +1409,15 @@ function extractMediaFromResult(result: string): MediaItem[] {
         if (Array.isArray(arr)) {
           for (const item of arr) {
             const kind = classifyUrl(item);
-            if (kind === 'audio') items.push({ kind: 'audio', url: item.url, duration: item.duration });
-            else if (kind) items.push({ kind, url: item.url, width: item.width, height: item.height, ...(kind === 'video' ? { duration: item.duration } : {}) } as MediaItem);
+            if (kind === 'audio') items.push({ kind: 'audio', url: item.url, duration: item.duration, fileName: item.file_name });
+            else if (kind) items.push({ kind, url: item.url, width: item.width, height: item.height, fileName: item.file_name, ...(kind === 'video' ? { duration: item.duration } : {}) } as MediaItem);
           }
         }
       }
       // Одиночный объект video
       if (root.video && typeof root.video?.url === 'string') {
         const v = root.video;
-        items.push({ kind: 'video', url: v.url, width: v.width, height: v.height, duration: v.duration });
+        items.push({ kind: 'video', url: v.url, width: v.width, height: v.height, duration: v.duration, fileName: v.file_name });
       }
       // Одиночный объект audio / audio_file
       for (const key of ['audio', 'audio_file']) {
@@ -1836,7 +1836,7 @@ function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 
       {hasMedia && (
         <div style={{ paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {media.map((m, i) => {
-            const filename = (m.kind === 'audio' && m.fileName) ? m.fileName : (m.url.split('/').pop()?.split('?')[0] || (m.kind === 'image' ? 'image' : m.kind === 'audio' ? 'audio' : 'video'));
+            const filename = m.fileName ?? m.url.split('/').pop()?.split('?')[0] ?? m.kind;
             return (
               <MediaBlock key={i} m={m} filename={filename} model={mediaMeta.model} inferenceTime={mediaMeta.inferenceTime} costUsd={estimatedCostUsd} online={online} />
             );

@@ -268,6 +268,19 @@ public class ClaudeSession : IAsyncDisposable
         // Читаем stderr асинхронно, иначе при переполнении буфера процесс зависнет
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
 
+        // Для новой сессии (не resume) — системная инструкция по тарификации fal-ai.
+        // Claude Code CLI stream-json принимает {"type":"system",...} до первого user-сообщения.
+        if (Info.ClaudeSessionId is null)
+        {
+            var sysMsg = JsonSerializer.Serialize(new
+            {
+                type = "system",
+                content = "When you use fal-ai MCP tools to generate images or videos, always call get_pricing(endpoint_id) right after receiving the job result. This lets the interface display the estimated generation cost."
+            });
+            await process.StandardInput.WriteLineAsync(sysMsg);
+            await process.StandardInput.FlushAsync();
+        }
+
         // stdin оставляем открытым — claude пишет control_response в него при permission-запросах
         var msg = JsonSerializer.Serialize(new
         {

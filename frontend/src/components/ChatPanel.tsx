@@ -255,6 +255,11 @@ function ChatHeaderBar({ session, project, online, onOpenSettings, onToggleDock,
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
 const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
 
+// Тариф fal-ai: за запрос или за секунду
+type FalPricingEntry = { type: 'per_request' | 'per_second'; price: number };
+// Контекст тарифов — строится из get_pricing результатов в ленте
+const FalPricingContext = createContext<Map<string, FalPricingEntry>>(new Map());
+
 // Картинка из markdown: внешние URL (http/https/data) — напрямую; локальный путь файла
 // проекта (например, картинка, скачанная Claude) — грузим через API и показываем как data-URL.
 function ChatImage({ src, alt }: { src?: string; alt?: string }) {
@@ -301,8 +306,8 @@ function MarkdownContent({ text }: { text: string }) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       urlTransform={(url, key) => {
-        // fal.media src — не проксируем: картинки уже показаны в MediaBlock из tool_result
-        if (key === 'src' && matchesHosts(url, FAL_HOSTS)) return url;
+        // fal.media src — блокируем: картинки уже показаны в MediaBlock из tool_result
+        if (key === 'src' && matchesHosts(url, FAL_HOSTS)) return null;
         // остальные внешние URL (src и href) — через прокси если домен разрешён
         return isProxiable(url) ? proxyUrl(url) : defaultUrlTransform(url);
       }}
@@ -362,7 +367,10 @@ function MarkdownContent({ text }: { text: string }) {
           </a>
         ),
         // Картинки из markdown: внешние URL — напрямую, локальные пути файлов проекта — через API
-        img: ({ src, alt }) => <ChatImage src={typeof src === 'string' ? src : undefined} alt={alt ?? ''} />,
+        img: ({ src, alt }) => {
+          if (!src) return null;
+          return <ChatImage src={src} alt={alt ?? ''} />;
+        },
         strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
         hr: () => <hr style={{ border: 'none', borderTop: `1px solid ${C.border}`, margin: '10px 0' }} />,
         table: ({ children }) => (
@@ -449,6 +457,36 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile, onBack, onWorkflowRunning, isFirstSession, onOpenSidebar }: Props) {
   const { items, isWaiting, isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
   const online = useOnline();
+
+  // Строим кэш тарифов fal-ai из результатов get_pricing в ленте
+  const falPricing = useMemo(() => {
+    const map = new Map<string, FalPricingEntry>();
+    for (const item of items) {
+      if (item.kind !== 'tool_use' || !item.result || item.isError) continue;
+      if (!item.name.toLowerCase().includes('get_pricing')) continue;
+      try {
+        const r = JSON.parse(item.result);
+        const endpointId: string | undefined =
+          r.endpoint_id ?? r.endpointId ?? (item.input as Record<string, unknown>)?.endpoint_id as string;
+        if (!endpointId) continue;
+        // Разные форматы ответа fal-ai
+        const perSecond = r.price_per_second ?? r.cost_per_second ?? r.per_second_price;
+        const perRequest = r.price_per_request ?? r.cost_per_request ?? r.price_usd ?? r.cost_usd;
+        const billingType: string | undefined = r.billing_type ?? r.billing_strategy ?? r.cost_type;
+        if (perSecond != null) {
+          map.set(endpointId, { type: 'per_second', price: Number(perSecond) });
+        } else if (perRequest != null) {
+          map.set(endpointId, { type: 'per_request', price: Number(perRequest) });
+        } else if (billingType?.includes('second') && r.price != null) {
+          map.set(endpointId, { type: 'per_second', price: Number(r.price) });
+        } else if (r.price != null) {
+          map.set(endpointId, { type: 'per_request', price: Number(r.price) });
+        }
+      } catch { /* некорректный JSON — пропускаем */ }
+    }
+    return map;
+  }, [items]);
+
   const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [showAttachPicker, setShowAttachPicker] = useState(false);
@@ -905,7 +943,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         {/* Сообщения (нижний отступ = высота плавающего composer) */}
         <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
+            <FalPricingContext.Provider value={falPricing}><ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider></FalPricingContext.Provider>
             {online && showWaiting && (
               <WaitingIndicator planning={planningKind} />
             )}
@@ -1484,7 +1522,7 @@ function MediaBlock({
   if (m.kind === 'video' && m.duration) metaParts.push(`${m.duration.toFixed(1)}с`);
   if (inferenceTime) metaParts.push(`${inferenceTime.toFixed(1)}с`);
   if (model) metaParts.push(model);
-  if (costUsd) metaParts.push(costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`);
+  if (costUsd) metaParts.push(costUsd < 0.01 ? `~$${costUsd.toFixed(4)}` : `~$${costUsd.toFixed(2)}`);
 
   const btnBase: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -1705,6 +1743,23 @@ function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 
   const media = hasResult && !item.isError ? extractMediaFromResult(item.result!) : [];
   const mediaMeta = hasResult && !item.isError ? extractMediaMeta(item.result!) : {};
   const hasMedia = media.length > 0;
+
+  // Расчёт стоимости генерации через тариф get_pricing × inference_time
+  const falPricing = useContext(FalPricingContext);
+  const estimatedCostUsd = useMemo(() => {
+    if (!hasMedia || !hasResult || item.isError) return undefined;
+    if (mediaMeta.costUsd) return mediaMeta.costUsd; // уже есть в ответе
+    try {
+      const endpointId: string | undefined = JSON.parse(item.result!).endpoint_id;
+      if (!endpointId) return undefined;
+      const pricing = falPricing.get(endpointId);
+      if (!pricing) return undefined;
+      if (pricing.type === 'per_request') return pricing.price;
+      if (pricing.type === 'per_second' && mediaMeta.inferenceTime)
+        return pricing.price * mediaMeta.inferenceTime;
+    } catch { /* некорректный JSON */ }
+    return undefined;
+  }, [hasMedia, hasResult, item.isError, item.result, mediaMeta, falPricing]);
   // Медиа показываем сразу, без клика; текст/diff — за клик
   const hasBody = hasDiff || (hasResult && !hasMedia);
   // Консольные инструменты (Bash/shell) → тёмный «терминальный» вывод.
@@ -1740,7 +1795,7 @@ function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 
           {media.map((m, i) => {
             const filename = m.url.split('/').pop()?.split('?')[0] || (m.kind === 'image' ? 'image' : 'video');
             return (
-              <MediaBlock key={i} m={m} filename={filename} model={mediaMeta.model} inferenceTime={mediaMeta.inferenceTime} costUsd={mediaMeta.costUsd} online={online} />
+              <MediaBlock key={i} m={m} filename={filename} model={mediaMeta.model} inferenceTime={mediaMeta.inferenceTime} costUsd={estimatedCostUsd} online={online} />
             );
           })}
         </div>

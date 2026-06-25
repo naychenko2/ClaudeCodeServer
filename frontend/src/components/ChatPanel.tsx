@@ -1382,12 +1382,14 @@ function isProxiable(url: string): boolean {
 
 type MediaItem =
   | { kind: 'image'; url: string; width?: number; height?: number }
-  | { kind: 'video'; url: string; width?: number; height?: number; duration?: number };
+  | { kind: 'video'; url: string; width?: number; height?: number; duration?: number }
+  | { kind: 'audio'; url: string; duration?: number };
 
-function classifyUrl(item: any): 'image' | 'video' | null {
+function classifyUrl(item: any): 'image' | 'video' | 'audio' | null {
   if (typeof item?.url !== 'string') return null;
   const ct: string = item.content_type ?? '';
   if (ct.startsWith('video/') || /\.(mp4|webm|mov|avi|mkv)(\?|$)/i.test(item.url)) return 'video';
+  if (ct.startsWith('audio/') || /\.(mp3|wav|ogg|flac|aac|m4a|opus|weba)(\?|$)/i.test(item.url)) return 'audio';
   if (ct.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|svg|avif)(\?|$)/i.test(item.url)) return 'image';
   // fal.media без content_type — по умолчанию изображение (совместимость)
   if (item.url.includes('fal.media') || item.url.includes('fal.run')) return 'image';
@@ -1400,14 +1402,15 @@ function extractMediaFromResult(result: string): MediaItem[] {
     const parsed = JSON.parse(result);
     const items: MediaItem[] = [];
 
-    // Массив images/videos в разных местах ответа
+    // Массив images/videos/audio в разных местах ответа
     for (const root of [parsed, parsed?.result, parsed?.data, parsed?.output]) {
       if (!root) continue;
-      for (const arr of [root.images, root.videos]) {
+      for (const arr of [root.images, root.videos, root.audio_files, root.audios]) {
         if (Array.isArray(arr)) {
           for (const item of arr) {
             const kind = classifyUrl(item);
-            if (kind) items.push({ kind, url: item.url, width: item.width, height: item.height, ...(kind === 'video' ? { duration: item.duration } : {}) } as MediaItem);
+            if (kind === 'audio') items.push({ kind: 'audio', url: item.url, duration: item.duration });
+            else if (kind) items.push({ kind, url: item.url, width: item.width, height: item.height, ...(kind === 'video' ? { duration: item.duration } : {}) } as MediaItem);
           }
         }
       }
@@ -1415,6 +1418,13 @@ function extractMediaFromResult(result: string): MediaItem[] {
       if (root.video && typeof root.video?.url === 'string') {
         const v = root.video;
         items.push({ kind: 'video', url: v.url, width: v.width, height: v.height, duration: v.duration });
+      }
+      // Одиночный объект audio / audio_file
+      for (const key of ['audio', 'audio_file']) {
+        const a = root[key];
+        if (a && typeof a?.url === 'string') {
+          items.push({ kind: 'audio', url: a.url, duration: a.duration });
+        }
       }
     }
 
@@ -1520,8 +1530,8 @@ function MediaBlock({
 
   // Строка метаданных
   const metaParts: string[] = [];
-  if (m.width && m.height) metaParts.push(`${m.width}×${m.height}`);
-  if (m.kind === 'video' && m.duration) metaParts.push(`${m.duration.toFixed(1)}с`);
+  if (m.kind !== 'audio' && m.width && m.height) metaParts.push(`${m.width}×${m.height}`);
+  if ((m.kind === 'video' || m.kind === 'audio') && m.duration) metaParts.push(`${m.duration.toFixed(1)}с`);
   if (inferenceTime) metaParts.push(`${inferenceTime.toFixed(1)}с`);
   if (model) metaParts.push(model);
   if (costUsd) metaParts.push(costUsd < 0.01 ? `~$${costUsd.toFixed(4)}` : `~$${costUsd.toFixed(2)}`);
@@ -1577,29 +1587,60 @@ function MediaBlock({
 
   return (
     <div>
-      <div style={{ display: 'inline-block', maxWidth: '100%' }}>
-        {m.kind === 'image' ? (
-          <a href={proxyUrl(m.url)} target="_blank" rel="noopener noreferrer"
-             style={{ display: 'block' }} onClick={handleImageClick}>
-            <img src={proxyUrl(m.url)} alt="" loading="lazy"
-              style={{ maxWidth: '100%', height: 'auto', display: 'block',
-                borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'pointer' }} />
-          </a>
-        ) : (
-          <video controls style={{ maxWidth: '100%', height: 'auto', display: 'block',
-            borderRadius: 8, border: `1px solid ${C.border}` }}>
+      {m.kind === 'audio' ? (
+        /* Аудиоплеер — карточка в стиле дизайн-системы */
+        <div style={{
+          background: C.bgPanel, borderRadius: 10, border: `1px solid ${C.border}`,
+          padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8,
+          minWidth: 260, maxWidth: 400,
+        }}>
+          {/* Шапка: иконка + имя файла */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span style={{ fontSize: 16, lineHeight: 1, flexShrink: 0 }}>🎵</span>
+            <span style={{
+              fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+            }}>{filename}</span>
+          </div>
+          {/* Нативный плеер */}
+          <audio controls style={{ width: '100%', height: 36, outline: 'none' }}>
             <source src={proxyUrl(m.url)} />
-          </video>
-        )}
-      </div>
+          </audio>
+          {/* Метаданные + кнопки */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ flex: 1, fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {metaParts.join(' · ')}
+            </span>
+            {renderButtons()}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'inline-block', maxWidth: '100%' }}>
+            {m.kind === 'image' ? (
+              <a href={proxyUrl(m.url)} target="_blank" rel="noopener noreferrer"
+                 style={{ display: 'block' }} onClick={handleImageClick}>
+                <img src={proxyUrl(m.url)} alt="" loading="lazy"
+                  style={{ maxWidth: '100%', height: 'auto', display: 'block',
+                    borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'pointer' }} />
+              </a>
+            ) : (
+              <video controls style={{ maxWidth: '100%', height: 'auto', display: 'block',
+                borderRadius: 8, border: `1px solid ${C.border}` }}>
+                <source src={proxyUrl(m.url)} />
+              </video>
+            )}
+          </div>
 
-      {/* Футер: метаданные слева (flex:1, обрезается), кнопки прижаты вправо */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5 }}>
-        <span style={{ flex: 1, fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {metaParts.join(' · ')}
-        </span>
-        {renderButtons()}
-      </div>
+          {/* Футер: метаданные слева (flex:1, обрезается), кнопки прижаты вправо */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5 }}>
+            <span style={{ flex: 1, fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {metaParts.join(' · ')}
+            </span>
+            {renderButtons()}
+          </div>
+        </>
+      )}
 
       {/* Лайтбокс — только тач/мобайл, pop-up с кнопкой закрытия */}
       {lightbox && (

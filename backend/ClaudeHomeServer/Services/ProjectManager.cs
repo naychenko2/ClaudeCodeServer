@@ -10,6 +10,7 @@ public class ProjectManager
     private readonly string _storePath;
     private readonly UserStore _users;
     private readonly AppSettingsService _appSettings;
+    private readonly Lock _saveLock = new();
 
     public ProjectManager(IConfiguration config, UserStore users, AppSettingsService appSettings)
     {
@@ -104,7 +105,10 @@ public class ProjectManager
 
     private void Save()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
-        File.WriteAllText(_storePath, JsonSerializer.Serialize(_projects.Values.ToList()));
+        lock (_saveLock)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
+            File.WriteAllText(_storePath, JsonSerializer.Serialize(_projects.Values.ToList()));
+        }
     }
 }

@@ -22,6 +22,7 @@ public class SessionManager
     private readonly IHubContext<Hubs.SessionHub> _hub;
     private readonly ChatHistoryService _history;
     private readonly string _sessionsFilePath;
+    private readonly Lock _saveLock = new();
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config)
@@ -59,13 +60,16 @@ public class SessionManager
 
     private void SaveSessions()
     {
-        try
+        lock (_saveLock)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_sessionsFilePath)!);
-            var sessions = _sessions.Values.Select(e => e.Info).ToList();
-            File.WriteAllText(_sessionsFilePath, JsonSerializer.Serialize(sessions));
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(_sessionsFilePath)!);
+                var sessions = _sessions.Values.Select(e => e.Info).ToList();
+                File.WriteAllText(_sessionsFilePath, JsonSerializer.Serialize(sessions));
+            }
+            catch { }
         }
-        catch { }
     }
 
     // --- Публичное API ---

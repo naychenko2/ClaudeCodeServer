@@ -1287,6 +1287,17 @@ function DiffBody({ hunks }: { hunks: Array<{ old?: string; new?: string }> }) {
   );
 }
 
+function mediaLabel(items: MediaItem[]): string {
+  const imgCount = items.filter(m => m.kind === 'image').length;
+  const vidCount = items.filter(m => m.kind === 'video').length;
+  const fmt = (n: number, one: string, few: string, many: string) =>
+    n === 1 ? `1 ${one}` : n < 5 ? `${n} ${few}` : `${n} ${many}`;
+  const parts = [];
+  if (vidCount > 0) parts.push(fmt(vidCount, 'видео', 'видео', 'видео'));
+  if (imgCount > 0) parts.push(fmt(imgCount, 'изображение', 'изображения', 'изображений'));
+  return parts.join(' + ');
+}
+
 // Оборачивает внешний URL через backend-прокси (/api/proxy) — поддерживает любой тип контента
 function proxyUrl(url: string): string {
   const token = typeof localStorage !== 'undefined'
@@ -1297,24 +1308,45 @@ function proxyUrl(url: string): string {
   return `/api/proxy?${params}`;
 }
 
-// Извлекает URL изображений из JSON-результата MCP-инструмента (fal-ai и аналогичные)
-function extractImagesFromResult(result: string): Array<{ url: string; width?: number; height?: number }> {
+type MediaItem =
+  | { kind: 'image'; url: string; width?: number; height?: number }
+  | { kind: 'video'; url: string; width?: number; height?: number; duration?: number };
+
+function classifyUrl(item: any): 'image' | 'video' | null {
+  if (typeof item?.url !== 'string') return null;
+  const ct: string = item.content_type ?? '';
+  if (ct.startsWith('video/') || /\.(mp4|webm|mov|avi|mkv)(\?|$)/i.test(item.url)) return 'video';
+  if (ct.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|svg|avif)(\?|$)/i.test(item.url)) return 'image';
+  // fal.media без content_type — по умолчанию изображение (совместимость)
+  if (item.url.includes('fal.media') || item.url.includes('fal.run')) return 'image';
+  return null;
+}
+
+// Извлекает изображения и видео из JSON-результата MCP-инструмента (fal-ai и аналогичные)
+function extractMediaFromResult(result: string): MediaItem[] {
   try {
     const parsed = JSON.parse(result);
-    const imagesArr =
-      parsed?.images ??
-      parsed?.result?.images ??
-      parsed?.data?.images ??
-      parsed?.output?.images;
-    if (!Array.isArray(imagesArr) || imagesArr.length === 0) return [];
-    return imagesArr
-      .filter((img: any) =>
-        typeof img?.url === 'string' &&
-        (img.content_type?.startsWith('image/') ||
-          /\.(png|jpg|jpeg|gif|webp|svg|avif)(\?|$)/i.test(img.url) ||
-          img.url.includes('fal.media') || img.url.includes('fal.run'))
-      )
-      .map((img: any) => ({ url: img.url as string, width: img.width, height: img.height }));
+    const items: MediaItem[] = [];
+
+    // Массив images/videos в разных местах ответа
+    for (const root of [parsed, parsed?.result, parsed?.data, parsed?.output]) {
+      if (!root) continue;
+      for (const arr of [root.images, root.videos]) {
+        if (Array.isArray(arr)) {
+          for (const item of arr) {
+            const kind = classifyUrl(item);
+            if (kind) items.push({ kind, url: item.url, width: item.width, height: item.height, ...(kind === 'video' ? { duration: item.duration } : {}) } as MediaItem);
+          }
+        }
+      }
+      // Одиночный объект video
+      if (root.video && typeof root.video?.url === 'string') {
+        const v = root.video;
+        items.push({ kind: 'video', url: v.url, width: v.width, height: v.height, duration: v.duration });
+      }
+    }
+
+    return items;
   } catch {
     return [];
   }
@@ -1351,11 +1383,11 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
     : [];
   const hasDiff = editHunks.length > 0;
   const hasResult = item.result !== undefined && item.result.trim().length > 0;
-  // Изображения из результата MCP-инструментов (fal-ai и аналогичные)
-  const images = hasResult && !item.isError ? extractImagesFromResult(item.result!) : [];
-  const hasImages = images.length > 0;
-  // Картинки показываем сразу, без клика; текст/diff — за клик
-  const hasBody = hasDiff || (hasResult && !hasImages);
+  // Медиа (изображения + видео) из результата MCP-инструментов
+  const media = hasResult && !item.isError ? extractMediaFromResult(item.result!) : [];
+  const hasMedia = media.length > 0;
+  // Медиа показываем сразу, без клика; текст/diff — за клик
+  const hasBody = hasDiff || (hasResult && !hasMedia);
   // Консольные инструменты (Bash/shell) → тёмный «терминальный» вывод.
   // Остальные (Read/Grep/Glob/MCP и пр.) → светлая «панель вывода», чтобы текст/код не давил тёмным фоном.
   const isConsole = n.startsWith('bash') || n.includes('shell');
@@ -1376,40 +1408,38 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
           : <span style={{ flex: 1 }} />}
         {item.result !== undefined && (
           <span style={{ fontSize: 11, color: item.isError ? '#C0392B' : C.textMuted, flexShrink: 0 }}>
-            {item.isError
-              ? 'ошибка'
-              : hasImages
-              ? `${images.length} ${images.length === 1 ? 'изображение' : images.length < 5 ? 'изображения' : 'изображений'}`
-              : 'готово'}
+            {item.isError ? 'ошибка' : hasMedia ? mediaLabel(media) : 'готово'}
           </span>
         )}
         {hasBody && (
           <span style={{ color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
         )}
       </div>
-      {/* Картинки — сразу под шапкой, без клика */}
-      {hasImages && (
-        <div style={{ paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {images.map((img, i) => (
+      {/* Медиа (изображения + видео) — сразу под шапкой, без клика */}
+      {hasMedia && (
+        <div style={{ paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {media.map((m, i) => (
             <div key={i}>
-              <a href={proxyUrl(img.url)} target="_blank" rel="noopener noreferrer" style={{ display: 'block' }}>
-                <img
-                  src={proxyUrl(img.url)}
-                  alt=""
-                  loading="lazy"
-                  style={{
-                    maxWidth: '100%',
-                    height: 'auto',
-                    display: 'block',
-                    borderRadius: 8,
-                    border: `1px solid ${C.border}`,
-                    cursor: 'pointer',
-                  }}
-                />
-              </a>
-              {(img.width && img.height) ? (
+              {m.kind === 'image' ? (
+                <a href={proxyUrl(m.url)} target="_blank" rel="noopener noreferrer" style={{ display: 'block' }}>
+                  <img
+                    src={proxyUrl(m.url)}
+                    alt=""
+                    loading="lazy"
+                    style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'pointer' }}
+                  />
+                </a>
+              ) : (
+                <video
+                  controls
+                  style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 8, border: `1px solid ${C.border}` }}
+                >
+                  <source src={proxyUrl(m.url)} />
+                </video>
+              )}
+              {(m.width && m.height) ? (
                 <div style={{ fontSize: 10, color: C.textMuted, marginTop: 3, fontFamily: FONT.mono }}>
-                  {img.width}×{img.height}
+                  {m.width}×{m.height}{m.kind === 'video' && m.duration ? ` · ${m.duration.toFixed(1)}с` : ''}
                 </div>
               ) : null}
             </div>
@@ -1417,7 +1447,7 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
         </div>
       )}
       {open && hasDiff && <DiffBody hunks={editHunks} />}
-      {open && !hasDiff && hasResult && !hasImages && (
+      {open && !hasDiff && hasResult && !hasMedia && (
         <pre style={{
           margin: '0 0 9px', padding: '8px 10px', borderRadius: 7,
           // Bash → тёмный терминал; остальное → светлая панель вывода

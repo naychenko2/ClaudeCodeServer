@@ -1,6 +1,8 @@
 ﻿using System.Collections.Concurrent;
+using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Security;
+using System.Security.Claims;
 using System.Text;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authentication;
@@ -77,13 +79,15 @@ public static class WebDavHandler
 
         var projects = ctx.RequestServices.GetRequiredService<ProjectManager>();
 
+        var davUserId = ctx.Items["DavUserId"]?.ToString() ?? "";
+
         // PROPFIND на корне /projects/ — виртуальная коллекция со списком проектов
         // Windows WebClient зондирует этот путь перед монтированием подпапки
         if (string.IsNullOrEmpty(projectName))
         {
             if (ctx.Request.Method.Equals("PROPFIND", StringComparison.OrdinalIgnoreCase))
             {
-                await HandlePropfindRootAsync(ctx, projects);
+                await HandlePropfindRootAsync(ctx, projects, davUserId);
             }
             else
             {
@@ -93,7 +97,10 @@ public static class WebDavHandler
             return;
         }
 
-        var project  = projects.GetByName(projectName);
+        // Ищем проект по имени только среди проектов текущего пользователя,
+        // чтобы не попасть на чужой проект с тем же именем.
+        var project = projects.GetByOwner(davUserId)
+            .FirstOrDefault(p => string.Equals(p.Name, projectName, StringComparison.OrdinalIgnoreCase));
         if (project is null)
         {
             ctx.Response.StatusCode = 404;
@@ -154,7 +161,12 @@ public static class WebDavHandler
     private static async Task<bool> TryAuthenticateAsync(HttpContext ctx, UserStore users)
     {
         // Basic — проверяем первым, Mini-Redirector всегда шлёт Basic напрямую
-        if (TryAuthenticateBasic(ctx, users)) return true;
+        var basicUser = TryAuthenticateBasic(ctx, users);
+        if (basicUser is not null)
+        {
+            ctx.Items["DavUserId"] = basicUser.Id;
+            return true;
+        }
 
         var authHeader = ctx.Request.Headers.Authorization.ToString();
 
@@ -162,7 +174,11 @@ public static class WebDavHandler
         // и шлёт Bearer вместо NTLM. UseAuthentication() уже проверил токен и выставил ctx.User.
         if (authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
-            if (ctx.User.Identity?.IsAuthenticated == true) return true;
+            if (ctx.User.Identity?.IsAuthenticated == true)
+            {
+                ctx.Items["DavUserId"] = ctx.User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+                return true;
+            }
             // Токен недействителен — выдаём Negotiate-вызов, чтобы Word переключился на NTLM/Basic
             await ctx.ChallengeAsync("Negotiate");
             ctx.Response.Headers.Append("WWW-Authenticate", "Basic realm=\"ClaudeHomeServer\"");
@@ -175,7 +191,24 @@ public static class WebDavHandler
         // Negotiate (NTLM) — ASP.NET Core Negotiate handler обрабатывает Type1/Type3 через SSPI
         // и сохраняет состояние в IConnectionItems между запросами одного соединения.
         var result = await ctx.AuthenticateAsync("Negotiate");
-        if (result.Succeeded) return true;
+        if (result.Succeeded)
+        {
+            // result.Principal — не ctx.User: Negotiate не обновляет ctx.User автоматически
+            var winName = result.Principal?.Identity?.Name ?? "";
+            var shortName = winName.Contains('\\') ? winName.Split('\\').Last() : winName;
+            var ntlmUser = users.FindByUsername(shortName);
+            if (ntlmUser is not null)
+            {
+                ctx.Items["DavUserId"] = ntlmUser.Id;
+                return true;
+            }
+            // Windows-имя не найдено в UserStore — требуем Basic, чтобы пользователь ввёл свои учётные данные.
+            // Отвечаем только Basic (без Negotiate), иначе Windows зациклится на NTLM-рукопожатии.
+            ctx.Response.StatusCode = 401;
+            ctx.Response.ContentLength = 0;
+            ctx.Response.Headers["WWW-Authenticate"] = "Basic realm=\"ClaudeHomeServer\"";
+            return false;
+        }
 
         // Type 1: хендлер записал Type2 в connection items → ChallengeAsync добавит его в ответ.
         // Type 3 failure: хендлер вернул Fail.
@@ -185,11 +218,11 @@ public static class WebDavHandler
         return false;
     }
 
-    private static bool TryAuthenticateBasic(HttpContext ctx, UserStore users)
+    private static Models.User? TryAuthenticateBasic(HttpContext ctx, UserStore users)
     {
         var header = ctx.Request.Headers.Authorization.ToString();
         if (!header.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
-            return false;
+            return null;
 
         string decoded;
         try
@@ -198,17 +231,17 @@ public static class WebDavHandler
         }
         catch
         {
-            return false;
+            return null;
         }
 
         var colon = decoded.IndexOf(':');
-        if (colon < 0) return false;
+        if (colon < 0) return null;
 
         var username = decoded[..colon];
         var password = decoded[(colon + 1)..];
 
         var user = users.FindByUsername(username);
-        return user is not null && users.VerifyPassword(user, password);
+        return (user is not null && users.VerifyPassword(user, password)) ? user : null;
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -228,7 +261,7 @@ public static class WebDavHandler
     // PROPFIND /projects/ — корневая коллекция
     // ────────────────────────────────────────────────────────────────────────
 
-    private static async Task HandlePropfindRootAsync(HttpContext ctx, ProjectManager projects)
+    private static async Task HandlePropfindRootAsync(HttpContext ctx, ProjectManager projects, string davUserId)
     {
         var pb   = ctx.Request.PathBase.ToString().TrimEnd('/');
         // href — абсолютный URI с trailing slash для коллекции (IIS-поведение)
@@ -259,7 +292,7 @@ public static class WebDavHandler
         var depth = ctx.Request.Headers["Depth"].ToString();
         if (depth == "1")
         {
-            foreach (var p in projects.GetAll())
+            foreach (var p in projects.GetByOwner(davUserId))
             {
                 var pHref = $"{ctx.Request.Scheme}://{ctx.Request.Host}{pb}/projects/{Uri.EscapeDataString(p.Name)}/";
                 DateTime pModified = now, pCreated = now;

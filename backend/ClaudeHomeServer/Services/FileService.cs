@@ -130,6 +130,12 @@ public class FileService
         return new[] { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp" }.Contains(ext);
     }
 
+    public static bool IsVideoFile(string relativePath)
+    {
+        var ext = Path.GetExtension(relativePath).ToLowerInvariant();
+        return new[] { ".mp4", ".webm", ".mov", ".avi", ".mkv" }.Contains(ext);
+    }
+
     // Документы, которые рендерим на клиенте (pdf.js / docx-preview / SheetJS).
     // Отдаём их как base64 + mimeType, чтобы фронт собрал Blob и отрисовал, а офлайн-кеш сработал.
     private static readonly Dictionary<string, (string Kind, string Mime)> ViewableDocuments = new(StringComparer.OrdinalIgnoreCase)

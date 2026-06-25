@@ -92,6 +92,11 @@ export const api = {
       }),
     delete: (projectId: string, path: string) =>
       request<void>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+    saveFromUrl: (projectId: string, url: string, path: string) =>
+      request<{ path: string }>(`/projects/${projectId}/files/save-from-url`, {
+        method: 'POST',
+        body: JSON.stringify({ url, path }),
+      }),
     upload: async (projectId: string, file: File, targetPath = ''): Promise<void> => {
       const token = typeof localStorage !== 'undefined'
         ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))

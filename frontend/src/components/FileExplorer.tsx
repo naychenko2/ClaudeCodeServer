@@ -29,6 +29,11 @@ interface ExplorerState {
 }
 const _explorerStore = new Map<string, ExplorerState>();
 
+/** Возвращает текущую папку для создания файлов в проводнике (используется из ChatPanel). */
+export function getExplorerCreateInDir(projectId: string): string {
+  return _explorerStore.get(projectId)?.createInDir ?? '';
+}
+
 const normPath = (p?: string | null) => (p ?? '').replace(/\\/g, '/');
 
 const EXT_META: Record<string, { bg: string; fg: string; label: string }> = {

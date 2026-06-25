@@ -2,6 +2,7 @@ export interface Project {
   id: string;
   name: string;
   rootPath: string;
+  relativePath?: string;
   createdAt: string;
   updatedAt: string;
   sessionCount?: number;

@@ -10,16 +10,17 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    private object WithCount(Project p) => new
+    private object WithCount(Project p)
     {
-        p.Id, p.Name, p.RootPath, p.CreatedAt, p.UpdatedAt,
-        SessionCount = sessions.CountByProject(p.Id),
-    };
+        var basePath = appSettings.Get().DefaultProjectsPath;
+        var relativePath = string.IsNullOrEmpty(basePath) ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, SessionCount = sessions.CountByProject(p.Id) };
+    }
 
     [HttpGet]
     public IActionResult GetAll() => Ok(projects.GetByOwner(UserId).Select(WithCount));

@@ -58,17 +58,28 @@ interface Props {
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
   isMobile?: boolean;
+  onOpenSidebar?: () => void;
 }
 
 interface FileContent {
   content: string | null;
   isBinary: boolean;
   isImage: boolean;
+  isVideo?: boolean;
   isDocument?: boolean;
   docKind?: DocKind;
   mimeType?: string;
   base64?: string;
   fileSize?: number;
+}
+
+function streamUrl(projectId: string, filePath: string): string {
+  const token = typeof localStorage !== 'undefined'
+    ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+    : null;
+  const params = new URLSearchParams({ path: filePath });
+  if (token) params.set('access_token', token);
+  return `/api/projects/${projectId}/files/stream?${params}`;
 }
 
 type ViewTab = 'file' | 'diff';
@@ -194,7 +205,7 @@ function DiffView({ diff }: { diff: string }) {
   );
 }
 
-export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleFullscreen, isMobile }: Props) {
+export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleFullscreen, isMobile, onOpenSidebar }: Props) {
   const online = useOnline();
   const [fileContent, setFileContent] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(true);
@@ -347,6 +358,14 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative' }}>
       {/* Шапка */}
       <Toolbar isMobile={isMobile}>
+        {/* Кнопка открытия сайдбара — только когда он свёрнут (не на мобиле) */}
+        {onOpenSidebar && !isMobile && (
+          <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+              <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+            </svg>
+          </ToolbarIconButton>
+        )}
         {/* Кнопка назад — только в обычном режиме */}
         {!isFullscreen && (
           <BackButton onClick={handleClose} title="К списку файлов" style={{ height: 32 }}>
@@ -460,9 +479,9 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
             </ToolbarIconButton>
           )}
 
-          {/* Закрыть — на мобиле не нужен: слева уже есть кнопка «‹ Файлы» (обе зовут handleClose).
-              Оставляем только на десктопе, где в fullscreen кнопки «назад» нет. */}
-          {!isMobile && (
+          {/* Закрыть — только в split-режиме на десктопе (рядом с кнопкой «‹ Файлы»);
+              в fullscreen закрывать нечем — там кнопка split view или системная кнопка назад. */}
+          {!isMobile && !isFullscreen && (
             <ToolbarIconButton isMobile={isMobile} onClick={handleClose} title="Закрыть">
               <CloseIcon />
             </ToolbarIconButton>
@@ -525,6 +544,21 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
               </div>
             )}
 
+            {fileContent?.isVideo && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 16 }}>
+                <video
+                  controls
+                  style={{ maxWidth: '100%', borderRadius: 8, boxShadow: '0 2px 12px rgba(60,50,35,0.10)' }}
+                >
+                  <source src={streamUrl(project.id, filePath)} type={fileContent.mimeType} />
+                </video>
+                <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.mono, display: 'flex', gap: 7, flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <span>{(fileContent.mimeType?.split('/')[1] ?? fileName.split('.').pop() ?? '').toUpperCase()}</span>
+                  {fileSizeMb && <><span style={{ opacity: 0.5 }}>·</span><span>{fileSizeMb} МБ</span></>}
+                </div>
+              </div>
+            )}
+
             {/* Документы: PDF / Word / Excel — клиентский рендеринг */}
             {fileContent?.isDocument && (
               fileContent.base64 && fileContent.docKind
@@ -536,7 +570,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
                   />
             )}
 
-            {fileContent?.isBinary && !fileContent.isImage && !fileContent.isDocument && (
+            {fileContent?.isBinary && !fileContent.isImage && !fileContent.isVideo && !fileContent.isDocument && (
               <EmptyState
                 icon={<FileSvg />}
                 title="Нельзя показать"

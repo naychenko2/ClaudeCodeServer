@@ -70,9 +70,21 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                     return Ok(new { content = (string?)null, isBinary = true, isImage = true,
                         mimeType = mime, base64 = files.GetFileBase64(root, path) });
                 }
-                var info = new System.IO.FileInfo(System.IO.Path.Combine(root, path));
+                if (FileService.IsVideoFile(path))
+                {
+                    var ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLower();
+                    var mime = ext switch {
+                        "mp4" => "video/mp4", "webm" => "video/webm",
+                        "mov" => "video/quicktime", "avi" => "video/x-msvideo",
+                        "mkv" => "video/x-matroska", _ => "video/mp4"
+                    };
+                    var info = new System.IO.FileInfo(System.IO.Path.Combine(root, path));
+                    return Ok(new { content = (string?)null, isBinary = true, isImage = false,
+                        isVideo = true, mimeType = mime, fileSize = info.Length });
+                }
+                var fileInfo = new System.IO.FileInfo(System.IO.Path.Combine(root, path));
                 return Ok(new { content = (string?)null, isBinary = true, isImage = false,
-                    mimeType = "application/octet-stream", fileSize = info.Length });
+                    mimeType = "application/octet-stream", fileSize = fileInfo.Length });
             }
             return Ok(new { content = files.ReadFile(root, path), isBinary = false, isImage = false });
         }
@@ -169,8 +181,54 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
+
+    [HttpGet("stream")]
+    public IActionResult Stream(string projectId, [FromQuery] string path)
+    {
+        try
+        {
+            var root = GetRoot(projectId);
+            var safePath = FileService.SafeJoinPublic(root, path);
+            if (!System.IO.File.Exists(safePath)) return NotFound();
+            var ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLower();
+            var mime = ext switch {
+                "mp4" => "video/mp4", "webm" => "video/webm",
+                "mov" => "video/quicktime", "avi" => "video/x-msvideo",
+                "mkv" => "video/x-matroska", _ => "application/octet-stream"
+            };
+            return PhysicalFile(safePath, mime, enableRangeProcessing: true);
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
+    }
+
+    [HttpPost("save-from-url")]
+    [RequestSizeLimit(200 * 1024 * 1024)] // 200 МБ для видео
+    public async Task<IActionResult> SaveFromUrl(
+        string projectId,
+        [FromBody] SaveFromUrlRequest req,
+        [FromServices] IHttpClientFactory httpClientFactory,
+        CancellationToken ct)
+    {
+        if (!Uri.TryCreate(req.Url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != "https" && uri.Scheme != "http"))
+            return BadRequest(new { error = "Некорректный URL" });
+
+        try
+        {
+            var root = GetRoot(projectId);
+            var client = httpClientFactory.CreateClient("proxy");
+            var bytes = await client.GetByteArrayAsync(uri, ct);
+            files.WriteFileBytes(root, req.Path, bytes);
+            return Ok(new { path = req.Path });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (HttpRequestException ex) { return StatusCode(502, new { error = ex.Message }); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
+    }
 }
 
 public record SaveContentRequest(string Content);
 public record PathRequest(string Path);
 public record RenameRequest(string OldPath, string NewPath);
+public record SaveFromUrlRequest(string Url, string Path);

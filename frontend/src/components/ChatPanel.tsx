@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback, createContext, useContext, Fragment } from 'react';
+import { getExplorerCreateInDir } from './FileExplorer';
 import type { Project, Session, ChatItem, FileEntry } from '../types';
 import { useSession } from '../hooks/useSession';
 import { useOnline } from '../hooks/useOnline';
@@ -8,7 +9,7 @@ import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, FONT, R, MODAL_W, SHADOW } from '../lib/design';
 import { Toolbar, ToolbarIconButton } from './Toolbar';
-import { BackButton, Modal } from './ui';
+import { BackButton, Modal, ModalActions } from './ui';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -258,7 +259,8 @@ const ChatProjectContext = createContext<{ id: string; rootPath: string } | null
 // проекта (например, картинка, скачанная Claude) — грузим через API и показываем как data-URL.
 function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   const project = useContext(ChatProjectContext);
-  const isRemote = !!src && /^(https?:|data:)/i.test(src);
+  // /api/proxy?... — уже проксированный URL (от urlTransform)
+  const isRemote = !!src && /^(https?:|data:|\/api\/proxy)/i.test(src);
   const [resolved, setResolved] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -298,7 +300,12 @@ function MarkdownContent({ text }: { text: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      urlTransform={(url, key) => (key === 'src' ? url : defaultUrlTransform(url))}
+      urlTransform={(url, key) => {
+        // fal.media src — не проксируем: картинки уже показаны в MediaBlock из tool_result
+        if (key === 'src' && matchesHosts(url, FAL_HOSTS)) return url;
+        // остальные внешние URL (src и href) — через прокси если домен разрешён
+        return isProxiable(url) ? proxyUrl(url) : defaultUrlTransform(url);
+      }}
       components={{
         p: ({ children }) => (
           <p style={{ margin: '0 0 8px 0', lineHeight: 1.6 }}>{children}</p>
@@ -1308,6 +1315,31 @@ function proxyUrl(url: string): string {
   return `/api/proxy?${params}`;
 }
 
+// Домены, которые разрешены прокси-контроллером на бэкенде (синхронизировать с AllowedHosts)
+const PROXY_ALLOWED_HOSTS = [
+  'fal.media', 'fal.run', 'queue.fal.run', 'cdn.fal.ai',
+  'storage.googleapis.com', 'replicate.delivery', 'pbxt.replicate.delivery',
+];
+
+// Домены fal.ai — их src в markdown не проксируем: картинки уже показаны в MediaBlock
+const FAL_HOSTS = ['fal.media', 'fal.run', 'queue.fal.run', 'cdn.fal.ai'];
+
+function matchesHosts(url: string, hosts: string[]): boolean {
+  try {
+    const u = new URL(url);
+    return hosts.some(h => u.hostname === h || u.hostname.endsWith('.' + h));
+  } catch { return false; }
+}
+
+function isProxiable(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    return matchesHosts(url, PROXY_ALLOWED_HOSTS);
+  } catch { return false; }
+}
+
+
 type MediaItem =
   | { kind: 'image'; url: string; width?: number; height?: number }
   | { kind: 'video'; url: string; width?: number; height?: number; duration?: number };
@@ -1352,93 +1384,294 @@ function extractMediaFromResult(result: string): MediaItem[] {
   }
 }
 
-// Один медиа-блок (изображение или видео) с кнопкой скачивания.
-// Десктоп: кнопка появляется при hover поверх медиа (правый верхний угол).
-// Мобайл (≤640px): постоянная строка с кнопкой под медиа.
-function MediaBlock({ m, proxyUrl, filename }: { m: MediaItem; proxyUrl: (u: string) => string; filename: string }) {
-  const [hovered, setHovered] = useState(false);
-  const [btnHovered, setBtnHovered] = useState(false);
-  // Кнопка скачивания — общий вид
-  const dlBtn = (
-    <a
-      href={proxyUrl(m.url)}
-      download={filename}
-      onMouseEnter={() => setBtnHovered(true)}
-      onMouseLeave={() => setBtnHovered(false)}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4,
-        padding: '4px 9px', borderRadius: 6,
-        background: btnHovered ? C.accent : 'rgba(237,231,218,0.92)',
-        color: btnHovered ? '#fff' : C.textPrimary,
-        fontSize: 11, fontFamily: FONT.sans, fontWeight: 500,
-        textDecoration: 'none', lineHeight: 1,
-        border: `1px solid ${btnHovered ? C.accent : C.border}`,
-        boxShadow: SHADOW.card,
-        transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-        cursor: 'pointer',
-        // останавливаем всплытие, чтобы не открывать изображение по клику в родителе
-      }}
-      onClick={e => e.stopPropagation()}
-    >
-      ↓
-    </a>
+// Извлекает метаданные генерации (модель, время, цену) из JSON-результата MCP-инструмента
+function extractMediaMeta(result: string): { model?: string; inferenceTime?: number; costUsd?: number } {
+  try {
+    const parsed = JSON.parse(result);
+    // Имя модели: endpoint_id → берём только короткое имя после последнего /
+    const endpointId: string | undefined = parsed?.endpoint_id;
+    const model = endpointId ? endpointId.split('/').pop() : undefined;
+    // Время генерации: ищем в нескольких местах
+    const r = parsed?.result ?? parsed;
+    const inferenceTime: number | undefined =
+      r?.timings?.inference ??
+      r?.metrics?.inference_time ??
+      parsed?.timings?.inference ??
+      parsed?.metrics?.inference_time ??
+      undefined;
+    // Стоимость (fal-ai обычно не возвращает её в ответе, но проверяем на всякий случай)
+    const costUsd: number | undefined =
+      parsed?.cost?.usd ??
+      parsed?.billing?.cost_usd ??
+      parsed?.usage?.cost ??
+      r?.cost?.usd ??
+      undefined;
+    return {
+      model: model || undefined,
+      inferenceTime: inferenceTime ? Number(inferenceTime) : undefined,
+      costUsd: costUsd ? Number(costUsd) : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+// Один медиа-блок (изображение или видео).
+// Футер: метаданные (размер, модель, время, цена) + кнопки «Скачать» и «В проект».
+// Тач-устройства: тап по изображению открывает лайтбокс с навигацией назад.
+function MediaBlock({
+  m,
+  filename,
+  model,
+  inferenceTime,
+  costUsd,
+  online = true,
+}: {
+  m: MediaItem;
+  filename: string;
+  model?: string;
+  inferenceTime?: number;
+  costUsd?: number;
+  online?: boolean;
+}) {
+  const project = useContext(ChatProjectContext);
+  const [lightbox, setLightbox] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveDialog, setSaveDialog] = useState<{ baseName: string; ext: string } | null>(null);
+  const [dlHov, setDlHov] = useState(false);
+  const [saveHov, setSaveHov] = useState(false);
+
+  // Определяем тач-устройство один раз при монтировании
+  const isTouch = useRef(
+    typeof window !== 'undefined' &&
+    ('ontouchstart' in window || window.matchMedia('(pointer: coarse)').matches)
   );
+
+  const handleImageClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (isTouch.current) {
+      e.preventDefault();
+      setLightbox(true);
+    }
+  };
+
+  const doSave = async (customName: string) => {
+    if (!project) return;
+    const dir = getExplorerCreateInDir(project.id);
+    const path = dir ? `${dir}/${customName}` : customName;
+    setSaveState('saving');
+    try {
+      await api.files.saveFromUrl(project.id, m.url, path);
+      setSaveState('saved');
+      setTimeout(() => setSaveState('idle'), 3000);
+    } catch {
+      setSaveState('error');
+      setTimeout(() => setSaveState('idle'), 3000);
+    }
+  };
+
+  const openSaveDialog = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!project || saveState === 'saving') return;
+    const dotIdx = filename.lastIndexOf('.');
+    const baseName = dotIdx > 0 ? filename.slice(0, dotIdx) : filename;
+    const ext = dotIdx > 0 ? filename.slice(dotIdx) : '';
+    setSaveDialog({ baseName, ext });
+  };
+
+  // Строка метаданных
+  const metaParts: string[] = [];
+  if (m.width && m.height) metaParts.push(`${m.width}×${m.height}`);
+  if (m.kind === 'video' && m.duration) metaParts.push(`${m.duration.toFixed(1)}с`);
+  if (inferenceTime) metaParts.push(`${inferenceTime.toFixed(1)}с`);
+  if (model) metaParts.push(model);
+  if (costUsd) metaParts.push(costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`);
+
+  const btnBase: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    padding: '4px 10px', borderRadius: 6,
+    fontSize: 11, fontFamily: FONT.sans, fontWeight: 500,
+    lineHeight: 1, cursor: 'pointer', textDecoration: 'none',
+    border: `1px solid ${C.border}`,
+    boxShadow: SHADOW.card,
+    transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+  };
+
+  const saveBtnLabel =
+    saveState === 'saved' ? '✓ Сохранено'
+    : saveState === 'error' ? '✗ Ошибка'
+    : 'Добавить в проект';
+
+  const renderButtons = (dark = false) => (
+    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+      <a
+        href={online ? proxyUrl(m.url) : undefined}
+        download={online ? filename : undefined}
+        onClick={e => { if (!online) { e.preventDefault(); return; } e.stopPropagation(); }}
+        onMouseEnter={() => { if (online) setDlHov(true); }}
+        onMouseLeave={() => setDlHov(false)}
+        style={dark
+          ? { ...btnBase, background: 'rgba(255,255,255,0.15)', color: '#fff', borderColor: 'rgba(255,255,255,0.25)', opacity: online ? 1 : 0.4, cursor: online ? 'pointer' : 'not-allowed' }
+          : { ...btnBase, background: online && dlHov ? C.accent : 'rgba(237,231,218,0.92)', color: online && dlHov ? '#fff' : C.textPrimary, borderColor: online && dlHov ? C.accent : C.border, opacity: online ? 1 : 0.4, cursor: online ? 'pointer' : 'not-allowed' }
+        }
+      >
+        ↓ Скачать
+      </a>
+      {project && (
+        <button
+          onClick={openSaveDialog}
+          disabled={!online || saveState === 'saving'}
+          onMouseEnter={() => { if (online) setSaveHov(true); }}
+          onMouseLeave={() => setSaveHov(false)}
+          style={dark
+            ? { ...btnBase, background: saveState === 'saved' ? '#4CAF50' : saveState === 'error' ? '#e05252' : 'rgba(255,255,255,0.15)', color: '#fff', borderColor: 'rgba(255,255,255,0.25)', opacity: (!online || saveState === 'saving') ? 0.4 : 1, cursor: online ? 'pointer' : 'not-allowed' }
+            : { ...btnBase, background: saveState === 'saved' ? '#4CAF50' : saveState === 'error' ? '#e05252' : (online && saveHov ? C.accent : 'rgba(237,231,218,0.92)'), color: (saveState === 'saved' || saveState === 'error' || (online && saveHov)) ? '#fff' : C.textPrimary, borderColor: saveState === 'saved' ? '#4CAF50' : saveState === 'error' ? '#e05252' : (online && saveHov ? C.accent : C.border), opacity: (!online || saveState === 'saving') ? 0.4 : 1, cursor: online ? 'pointer' : 'not-allowed' }
+          }
+        >
+          {saveState === 'saving'
+            ? <><div className="tool-spinner" style={{ width: 10, height: 10, borderWidth: '1.5px' }} /><span style={{ marginLeft: 3 }}>Копируется…</span></>
+            : saveBtnLabel}
+        </button>
+      )}
+    </div>
+  );
+
   return (
     <div>
-      {/* Обёртка медиа с hover-оверлеем (скрыт на мобайле через inline CSS-переменную) */}
-      <div
-        style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => { setHovered(false); setBtnHovered(false); }}
-      >
+      <div style={{ display: 'inline-block', maxWidth: '100%' }}>
         {m.kind === 'image' ? (
-          <a href={proxyUrl(m.url)} target="_blank" rel="noopener noreferrer" style={{ display: 'block' }}>
-            <img
-              src={proxyUrl(m.url)}
-              alt=""
-              loading="lazy"
-              style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'pointer' }}
-            />
+          <a href={proxyUrl(m.url)} target="_blank" rel="noopener noreferrer"
+             style={{ display: 'block' }} onClick={handleImageClick}>
+            <img src={proxyUrl(m.url)} alt="" loading="lazy"
+              style={{ maxWidth: '100%', height: 'auto', display: 'block',
+                borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'pointer' }} />
           </a>
         ) : (
-          <video
-            controls
-            style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 8, border: `1px solid ${C.border}` }}
-          >
+          <video controls style={{ maxWidth: '100%', height: 'auto', display: 'block',
+            borderRadius: 8, border: `1px solid ${C.border}` }}>
             <source src={proxyUrl(m.url)} />
           </video>
         )}
-        {/* Hover-кнопка — только десктоп (на мобайле display:none через медиа-класс) */}
-        <span
-          className="cc-media-dl-hover"
+      </div>
+
+      {/* Футер: метаданные слева (flex:1, обрезается), кнопки прижаты вправо */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5 }}>
+        <span style={{ flex: 1, fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {metaParts.join(' · ')}
+        </span>
+        {renderButtons()}
+      </div>
+
+      {/* Лайтбокс — только тач/мобайл, pop-up с кнопкой закрытия */}
+      {lightbox && (
+        <div
+          onClick={() => setLightbox(false)}
           style={{
-            position: 'absolute', top: 8, right: 8,
-            opacity: hovered ? 1 : 0,
-            pointerEvents: hovered ? 'auto' : 'none',
-            transition: 'opacity 0.15s',
+            position: 'fixed', inset: 0, zIndex: 9999,
+            background: 'rgba(0,0,0,0.92)',
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', padding: 16,
           }}
         >
-          {dlBtn}
-        </span>
-      </div>
-      {/* Мета-строка: размер + кнопка скачивания на мобайле */}
-      <div
-        style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3 }}
-      >
-        {(m.width && m.height) ? (
-          <span style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono }}>
-            {m.width}×{m.height}{m.kind === 'video' && m.duration ? ` · ${m.duration.toFixed(1)}с` : ''}
-          </span>
-        ) : null}
-        {/* Постоянная кнопка — только мобайл */}
-        <span className="cc-media-dl-mobile">{dlBtn}</span>
-      </div>
+          <button
+            onClick={e => { e.stopPropagation(); setLightbox(false); }}
+            style={{
+              position: 'absolute', top: 16, right: 16,
+              background: 'rgba(255,255,255,0.15)',
+              border: '1px solid rgba(255,255,255,0.3)',
+              borderRadius: 10, color: '#fff', fontSize: 18,
+              width: 44, height: 44, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              lineHeight: 1, fontWeight: 300,
+            }}
+          >
+            ✕
+          </button>
+          <img
+            src={proxyUrl(m.url)}
+            alt=""
+            onClick={e => e.stopPropagation()}
+            style={{ maxWidth: '92vw', maxHeight: '76vh', objectFit: 'contain',
+                     borderRadius: 8, display: 'block' }}
+          />
+          <div onClick={e => e.stopPropagation()} style={{ marginTop: 16 }}>
+            {renderButtons(true)}
+          </div>
+        </div>
+      )}
+
+      {/* Диалог «Добавить в проект» */}
+      {saveDialog && project && (
+        <Modal
+          title="Добавить в проект"
+          onClose={() => setSaveDialog(null)}
+          footer={
+            <ModalActions
+              confirmLabel="Сохранить"
+              cancelLabel="Отмена"
+              onCancel={() => setSaveDialog(null)}
+              onConfirm={() => {
+                const name = (saveDialog.baseName.trim() + saveDialog.ext);
+                if (!saveDialog.baseName.trim()) return;
+                setSaveDialog(null);
+                doSave(name);
+              }}
+              confirmDisabled={!saveDialog.baseName.trim()}
+            />
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* Split-input: редактируемое имя + залоченное расширение */}
+            <div style={{
+              display: 'flex', alignItems: 'stretch',
+              border: `1.5px solid ${C.border}`, borderRadius: 8,
+              overflow: 'hidden', background: C.bgMain,
+            }}>
+              <input
+                value={saveDialog.baseName}
+                onChange={e => setSaveDialog({ ...saveDialog, baseName: e.target.value })}
+                placeholder="имя файла"
+                // eslint-disable-next-line jsx-a11y/no-autofocus
+                autoFocus
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && saveDialog.baseName.trim()) {
+                    setSaveDialog(null);
+                    doSave(saveDialog.baseName.trim() + saveDialog.ext);
+                  }
+                }}
+                style={{
+                  flex: 1, padding: '9px 10px', border: 'none', outline: 'none',
+                  fontFamily: FONT.sans, fontSize: 14, background: 'transparent',
+                  color: C.textPrimary, minWidth: 0,
+                }}
+              />
+              {saveDialog.ext && (
+                <div style={{
+                  padding: '9px 11px', background: C.bgPanel,
+                  color: C.textMuted, fontFamily: FONT.mono, fontSize: 13,
+                  borderLeft: `1px solid ${C.border}`, userSelect: 'none',
+                  flexShrink: 0, display: 'flex', alignItems: 'center',
+                }}>
+                  {saveDialog.ext}
+                </div>
+              )}
+            </div>
+            {(() => {
+              const dir = getExplorerCreateInDir(project.id);
+              return dir ? (
+                <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono }}>
+                  Папка: {dir}/
+                </span>
+              ) : null;
+            })()}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
 
 // Строка инструмента с раскрываемым телом результата (вывод Bash/Read и т.п.)
-function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }) {
+function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 'tool_use' }>; online?: boolean }) {
   const meta = toolMeta(item.name);
   const [open, setOpen] = useState(false);
   const project = useContext(ChatProjectContext);
@@ -1470,6 +1703,7 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
   const hasResult = item.result !== undefined && item.result.trim().length > 0;
   // Медиа (изображения + видео) из результата MCP-инструментов
   const media = hasResult && !item.isError ? extractMediaFromResult(item.result!) : [];
+  const mediaMeta = hasResult && !item.isError ? extractMediaMeta(item.result!) : {};
   const hasMedia = media.length > 0;
   // Медиа показываем сразу, без клика; текст/diff — за клик
   const hasBody = hasDiff || (hasResult && !hasMedia);
@@ -1506,7 +1740,7 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
           {media.map((m, i) => {
             const filename = m.url.split('/').pop()?.split('?')[0] || (m.kind === 'image' ? 'image' : 'video');
             return (
-              <MediaBlock key={i} m={m} proxyUrl={proxyUrl} filename={filename} />
+              <MediaBlock key={i} m={m} filename={filename} model={mediaMeta.model} inferenceTime={mediaMeta.inferenceTime} costUsd={mediaMeta.costUsd} online={online} />
             );
           })}
         </div>
@@ -2639,7 +2873,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
     case 'tool_use':
       // План задач рисуем отдельной карточкой-чек-листом. Линию-коннектор для дочерних
       // вызовов субагента (parentToolUseId) рисует renderItems — единой непрерывной полосой.
-      return item.name === 'TodoWrite' ? <TodoPlanView input={item.input} /> : <ToolUseView item={item} />;
+      return item.name === 'TodoWrite' ? <TodoPlanView input={item.input} /> : <ToolUseView item={item} online={online} />;
 
     case 'ask_question':
       return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} />;

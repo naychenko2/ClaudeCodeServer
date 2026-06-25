@@ -68,6 +68,10 @@ public class ProxyController(IHttpClientFactory httpClientFactory) : ControllerB
         Response.ContentType = upstreamResponse.Content.Headers.ContentType?.ToString()
                                ?? "application/octet-stream";
 
+        // Кэшируем успешные ответы в браузере на 1 час (private — токен в URL)
+        if (upstreamResponse.IsSuccessStatusCode)
+            Response.Headers.Append("Cache-Control", "private, max-age=3600");
+
         if (upstreamResponse.Content.Headers.ContentLength is long len)
             Response.ContentLength = len;
 

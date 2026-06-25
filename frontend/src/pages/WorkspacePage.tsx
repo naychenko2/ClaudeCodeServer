@@ -505,7 +505,7 @@ export function WorkspacePage({ project, onBack }: Props) {
                 <Splitter orientation="v" active={draggingSplitter === 'split'}
                   onMouseDown={e => { setDraggingSplitter('split'); handleSplitterMouseDown(e); }} />
                 <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
-                  <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} onToggleFullscreen={handleEnterFullscreen} />
+                  <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} onToggleFullscreen={handleEnterFullscreen} onOpenSidebar={openSidebar} />
                 </div>
               </div>
             )}
@@ -514,7 +514,7 @@ export function WorkspacePage({ project, onBack }: Props) {
             {openFile && (fileFullscreen || isTablet) && (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 <div style={{ flex: 1, overflow: 'hidden', minHeight: 100 }}>
-                  <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} isFullscreen onToggleFullscreen={isTablet ? undefined : () => setFileFullscreen(false)} />
+                  <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} isFullscreen onToggleFullscreen={isTablet ? undefined : () => setFileFullscreen(false)} onOpenSidebar={openSidebar} />
                 </div>
                 {chatDockExpanded && (
                   <Splitter orientation="h" active={draggingSplitter === 'vertical'}

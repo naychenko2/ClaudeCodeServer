@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, createContext, useContext, Fragment } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, createContext, useContext, Fragment } from 'react';
 import type { Project, Session, ChatItem, FileEntry } from '../types';
 import { useSession } from '../hooks/useSession';
 import { useOnline } from '../hooks/useOnline';
@@ -25,7 +25,7 @@ interface Props {
   onToggleDock?: () => void;
   isMobile?: boolean;
   onBack?: () => void;
-  onWorkflowRunning?: (active: boolean) => void;
+  onWorkflowRunning?: (active: boolean, sessionId: string) => void;
   isFirstSession?: boolean;
 }
 
@@ -451,6 +451,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const pendingRef = useRef<string | undefined>(pendingMessage);
   pendingRef.current = pendingMessage;
 
+  // Для монотонного счётчика фаз workflow — не прыгать назад когда total растёт
+  const workflowPhaseRef = useRef<{ wfId: string; phasesDone: number }>({ wfId: '', phasesDone: 0 });
+
   // Измеряем высоту плавающего composer → задаём нижний отступ ленты (упор ровно под него)
   useEffect(() => {
     const el = composerWrapRef.current;
@@ -462,13 +465,26 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return () => ro.disconnect();
   }, [online, dockMode]);
 
-  const handleMessagesScroll = () => {
+  // Единая точка проверки позиции скролла — вызывается из onScroll, ResizeObserver и эффектов
+  const syncScrollState = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     atBottomRef.current = atBottom;
     setShowScrollDown(!atBottom);
-  };
+  }, []);
+
+  // Следим за изменением высоты scroll-контейнера (resize окна, dock expand) — переразмер
+  // может сделать позицию «не внизу» без события scroll
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(syncScrollState);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [syncScrollState]);
+
+  const handleMessagesScroll = syncScrollState;
 
   // Программный скролл в конец ленты (клик по плавающей кнопке)
   const scrollToBottom = () => {
@@ -551,18 +567,24 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       const serverAgents = wf.workflowAgents;
       const transcriptDone = serverAgents?.filter(a => a.isDone).length ?? 0;
       const transcriptTotal = serverAgents?.length ?? 0;
-      const phasesDone = transcriptTotal > 0
+      const rawPhasesDone = transcriptTotal > 0
         ? Math.min(Math.floor((transcriptDone / transcriptTotal) * phases.length), phases.length - 1)
         : 0;
-      return { phasesDone, phasesTotal: phases.length };
+      // Монотонный максимум: когда агенты новой фазы появляются, total растёт и
+      // пропорция temporarily падает — счётчик не должен прыгать назад
+      const ref = workflowPhaseRef.current;
+      if (ref.wfId !== wf.id) { ref.wfId = wf.id; ref.phasesDone = 0; }
+      ref.phasesDone = Math.max(ref.phasesDone, rawPhasesDone);
+      return { phasesDone: ref.phasesDone, phasesTotal: phases.length };
     }
     return null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items]);
 
   const isWorkflowRunning = activeWorkflowInfo !== null;
   useEffect(() => {
-    onWorkflowRunning?.(isWorkflowRunning);
-  }, [isWorkflowRunning, onWorkflowRunning]);
+    onWorkflowRunning?.(isWorkflowRunning, session.id);
+  }, [isWorkflowRunning, onWorkflowRunning, session.id]);
 
   // Единое условие показа WaitingIndicator — синхронизировано с флагом активности на карточке.
   // session.status покрывает случай когда isWaiting ещё не обновился (перезагрузка, переключение чата).
@@ -1010,7 +1032,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       </div></div>
 
       {/* Плавающая кнопка «вниз» — появляется, когда лента отлистана вверх */}
-      {showScrollDown && items.length > 0 && (
+      {showScrollDown && (
         <button
           onClick={scrollToBottom}
           title="Вниз чата"

@@ -97,10 +97,11 @@ export function WorkspacePage({ project, onBack }: Props) {
   const [chatFlex, setChatFlex] = useState(1); // 1:1 = 50/50 по умолчанию
   const [sessionCount, setSessionCount] = useState(0);
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
-  const activeSessionIdRef = useRef<string | undefined>(undefined);
-  activeSessionIdRef.current = activeSession?.id;
-  const handleWorkflowRunning = useCallback((active: boolean) => {
-    setWorkflowRunningFor(active ? activeSessionIdRef.current ?? null : null);
+  const handleWorkflowRunning = useCallback((active: boolean, sessionId: string) => {
+    setWorkflowRunningFor(prev => {
+      if (active) return sessionId;
+      return prev === sessionId ? null : prev;
+    });
   }, []);
   const [chatHeight, setChatHeight] = useState(280);
   const splitContainerRef = useRef<HTMLDivElement>(null);
@@ -111,12 +112,19 @@ export function WorkspacePage({ project, onBack }: Props) {
   const viewportH = useViewportHeight();
   const isMobile = windowWidth < 768;
   const isTablet = windowWidth >= 768 && windowWidth < 1100;
-  // Ширина сайдбара — перетаскиваемая, сохраняется между сессиями
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
+  // Ширина drawer-сайдбара — читается из localStorage (изменение через ресайз-ручку в будущем)
+  const sidebarWidth = (() => {
     const v = localStorage.getItem('cc_sidebar_width');
     return v ? Math.max(220, Math.min(520, Number(v))) : 300;
+  })();
+
+  // Drawer: свёрнут/развёрнут, сохраняется между сессиями
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return localStorage.getItem('cc_sidebar_collapsed') === 'true';
   });
-  useEffect(() => { localStorage.setItem('cc_sidebar_width', String(sidebarWidth)); }, [sidebarWidth]);
+  useEffect(() => {
+    localStorage.setItem('cc_sidebar_collapsed', String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
 
   // Какой сплиттер сейчас тащим — для подсветки на всём протяжении drag (даже если курсор соскользнул)
   const [draggingSplitter, setDraggingSplitter] = useState<null | 'sidebar' | 'split' | 'vertical'>(null);
@@ -126,25 +134,6 @@ export function WorkspacePage({ project, onBack }: Props) {
     window.addEventListener('mouseup', up);
     return () => window.removeEventListener('mouseup', up);
   }, [draggingSplitter]);
-
-  const handleSidebarSplitterMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = sidebarWidth;
-    const onMove = (ev: MouseEvent) => {
-      setSidebarWidth(Math.max(220, Math.min(520, startW + (ev.clientX - startX))));
-    };
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  };
 
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
@@ -290,7 +279,7 @@ export function WorkspacePage({ project, onBack }: Props) {
   );
 
   const Sidebar = (
-    <div style={{ width: isMobile ? '100%' : sidebarWidth, display: 'flex', flexDirection: 'column', background: C.bgPanel, flexShrink: 0, height: '100%' }}>
+    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel, flexShrink: 0, height: '100%' }}>
       {/* Планшет/десктоп: логотип + tabs в одном header блоке */}
       {!isMobile && (
         <div style={{ padding: '16px 16px 14px', flexShrink: 0 }}>
@@ -305,7 +294,16 @@ export function WorkspacePage({ project, onBack }: Props) {
                 </g>
               </svg>
             </div>
-            <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading }}>Claude Home Server</span>
+            <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, flex: 1, minWidth: 0 }}>Claude Home Server</span>
+            {/* Кнопка свернуть drawer */}
+            <button
+              onClick={() => setSidebarCollapsed(true)}
+              style={{ width: 28, height: 28, border: 'none', borderRadius: 8, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M15 6l-6 6 6 6"/>
+              </svg>
+            </button>
           </div>
           {TabSwitcher}
         </div>
@@ -322,7 +320,7 @@ export function WorkspacePage({ project, onBack }: Props) {
         onClick={onBack}
         style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 11, background: C.bgInset, cursor: 'pointer', flexShrink: 0 }}
       >
-        <ConnectionStatus variant="footer" title={project.name} subtitle={project.rootPath} />
+        <ConnectionStatus variant="footer" title={project.name} subtitle={project.relativePath ?? project.rootPath} />
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A8F7E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M7 10l5-5 5 5M7 14l5 5 5-5" />
         </svg>
@@ -360,7 +358,7 @@ export function WorkspacePage({ project, onBack }: Props) {
             onClick={onBack}
             style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 11, background: C.bgInset, cursor: 'pointer', flexShrink: 0 }}
           >
-            <ConnectionStatus variant="footer" title={project.name} subtitle={project.rootPath} />
+            <ConnectionStatus variant="footer" title={project.name} subtitle={project.relativePath ?? project.rootPath} />
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A8F7E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M7 10l5-5 5 5M7 14l5 5 5-5" />
             </svg>
@@ -390,12 +388,45 @@ export function WorkspacePage({ project, onBack }: Props) {
   );
 
   return (
-    <div style={{ display: 'flex', height: '100vh', background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden' }}>
-      {Sidebar}
+    <div style={{ display: 'flex', height: '100vh', background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden', position: 'relative' }}>
 
-      {/* Сплиттер между сайдбаром и контентом */}
-      <Splitter orientation="v" active={draggingSplitter === 'sidebar'}
-        onMouseDown={e => { setDraggingSplitter('sidebar'); handleSidebarSplitterMouseDown(e); }} />
+      {/* Drawer-сайдбар: всегда absolute, уезжает за левый край при collapse */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10,
+        width: sidebarWidth,
+        transform: sidebarCollapsed ? `translateX(-${sidebarWidth}px)` : 'translateX(0)',
+        transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+        boxShadow: sidebarCollapsed ? 'none' : '4px 0 20px rgba(20,16,10,0.15)',
+      }}>
+        {Sidebar}
+      </div>
+
+      {/* Overlay — закрывает drawer при клике мимо */}
+      {!sidebarCollapsed && (
+        <div
+          onClick={() => setSidebarCollapsed(true)}
+          style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }}
+        />
+      )}
+
+      {/* Гамбургер — виден только когда sidebar свёрнут */}
+      {sidebarCollapsed && (
+        <button
+          onClick={() => setSidebarCollapsed(false)}
+          style={{
+            position: 'absolute', top: 12, left: 12, zIndex: 11,
+            width: 32, height: 32, borderRadius: 9,
+            background: C.bgPanel, border: `1px solid ${C.border}`,
+            cursor: 'pointer', padding: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 2px 8px rgba(20,16,10,0.12)',
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M2 4h12M2 8h12M2 12h12" stroke={C.textMuted} strokeWidth="1.8" strokeLinecap="round"/>
+          </svg>
+        </button>
+      )}
 
       {/* Нет открытого файла — только чат */}
       {!openFile && (

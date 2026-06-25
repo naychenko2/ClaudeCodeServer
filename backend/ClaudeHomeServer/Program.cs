@@ -30,6 +30,7 @@ builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddSingleton<ChatHistoryService>();
 builder.Services.AddSingleton<SessionManager>();
+builder.Services.AddHttpClient("proxy");
 
 // JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office)
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

@@ -797,7 +797,16 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         );
         prevNodeWasBlock = true;
       } else {
-        pushNode(renderItem(items[i], i), i); i++;
+        const kind = items[i].kind;
+        const node = renderItem(items[i], i);
+        const needsTopSpacing = kind === 'text' || kind === 'user_message' || kind === 'result' || kind === 'error';
+        pushNode(
+          needsTopSpacing
+            ? <div key={`sp-${i}`} style={{ marginTop: 12 }}>{node}</div>
+            : node,
+          i
+        );
+        i++;
         prevNodeWasBlock = false;
       }
     }
@@ -814,7 +823,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const groupStart = nodes[j].start;
         while (j < nodes.length && inZone(nodes[j])) { group.push(nodes[j].node); j++; }
         result.push(
-          <div key={`exec-${groupStart}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `3px solid ${C.success}`, display: 'flex', flexDirection: 'column', gap: 14, marginTop: -14 }}>
+          <div key={`exec-${groupStart}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `3px solid ${C.success}`, display: 'flex', flexDirection: 'column', gap: 6, marginTop: -6 }}>
             {group}
           </div>
         );
@@ -888,7 +897,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
         {/* Сообщения (нижний отступ = высота плавающего composer) */}
         <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
             {online && showWaiting && (
               <WaitingIndicator planning={planningKind} />
@@ -947,7 +956,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {/* Empty state */}
         {items.length === 0 && online && (
           <div style={{
@@ -1278,6 +1287,39 @@ function DiffBody({ hunks }: { hunks: Array<{ old?: string; new?: string }> }) {
   );
 }
 
+// Оборачивает внешний URL через backend-прокси (/api/proxy) — поддерживает любой тип контента
+function proxyUrl(url: string): string {
+  const token = typeof localStorage !== 'undefined'
+    ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+    : null;
+  const params = new URLSearchParams({ url });
+  if (token) params.set('access_token', token);
+  return `/api/proxy?${params}`;
+}
+
+// Извлекает URL изображений из JSON-результата MCP-инструмента (fal-ai и аналогичные)
+function extractImagesFromResult(result: string): Array<{ url: string; width?: number; height?: number }> {
+  try {
+    const parsed = JSON.parse(result);
+    const imagesArr =
+      parsed?.images ??
+      parsed?.result?.images ??
+      parsed?.data?.images ??
+      parsed?.output?.images;
+    if (!Array.isArray(imagesArr) || imagesArr.length === 0) return [];
+    return imagesArr
+      .filter((img: any) =>
+        typeof img?.url === 'string' &&
+        (img.content_type?.startsWith('image/') ||
+          /\.(png|jpg|jpeg|gif|webp|svg|avif)(\?|$)/i.test(img.url) ||
+          img.url.includes('fal.media') || img.url.includes('fal.run'))
+      )
+      .map((img: any) => ({ url: img.url as string, width: img.width, height: img.height }));
+  } catch {
+    return [];
+  }
+}
+
 // Строка инструмента с раскрываемым телом результата (вывод Bash/Read и т.п.)
 function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }) {
   const meta = toolMeta(item.name);
@@ -1309,7 +1351,11 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
     : [];
   const hasDiff = editHunks.length > 0;
   const hasResult = item.result !== undefined && item.result.trim().length > 0;
-  const hasBody = hasDiff || hasResult;
+  // Изображения из результата MCP-инструментов (fal-ai и аналогичные)
+  const images = hasResult && !item.isError ? extractImagesFromResult(item.result!) : [];
+  const hasImages = images.length > 0;
+  // Картинки показываем сразу, без клика; текст/diff — за клик
+  const hasBody = hasDiff || (hasResult && !hasImages);
   // Консольные инструменты (Bash/shell) → тёмный «терминальный» вывод.
   // Остальные (Read/Grep/Glob/MCP и пр.) → светлая «панель вывода», чтобы текст/код не давил тёмным фоном.
   const isConsole = n.startsWith('bash') || n.includes('shell');
@@ -1330,15 +1376,48 @@ function ToolUseView({ item }: { item: Extract<ChatItem, { kind: 'tool_use' }> }
           : <span style={{ flex: 1 }} />}
         {item.result !== undefined && (
           <span style={{ fontSize: 11, color: item.isError ? '#C0392B' : C.textMuted, flexShrink: 0 }}>
-            {item.isError ? 'ошибка' : 'готово'}
+            {item.isError
+              ? 'ошибка'
+              : hasImages
+              ? `${images.length} ${images.length === 1 ? 'изображение' : images.length < 5 ? 'изображения' : 'изображений'}`
+              : 'готово'}
           </span>
         )}
         {hasBody && (
           <span style={{ color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
         )}
       </div>
+      {/* Картинки — сразу под шапкой, без клика */}
+      {hasImages && (
+        <div style={{ paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {images.map((img, i) => (
+            <div key={i}>
+              <a href={proxyUrl(img.url)} target="_blank" rel="noopener noreferrer" style={{ display: 'block' }}>
+                <img
+                  src={proxyUrl(img.url)}
+                  alt=""
+                  loading="lazy"
+                  style={{
+                    maxWidth: '100%',
+                    height: 'auto',
+                    display: 'block',
+                    borderRadius: 8,
+                    border: `1px solid ${C.border}`,
+                    cursor: 'pointer',
+                  }}
+                />
+              </a>
+              {(img.width && img.height) ? (
+                <div style={{ fontSize: 10, color: C.textMuted, marginTop: 3, fontFamily: FONT.mono }}>
+                  {img.width}×{img.height}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
       {open && hasDiff && <DiffBody hunks={editHunks} />}
-      {open && !hasDiff && hasResult && (
+      {open && !hasDiff && hasResult && !hasImages && (
         <pre style={{
           margin: '0 0 9px', padding: '8px 10px', borderRadius: 7,
           // Bash → тёмный терминал; остальное → светлая панель вывода

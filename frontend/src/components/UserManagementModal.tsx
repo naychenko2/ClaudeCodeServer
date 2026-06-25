@@ -4,6 +4,28 @@ import { api } from '../lib/api';
 import { C, R, FONT, SHADOW, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, TextField, Button, SegmentedControl } from './ui';
 
+const MOBILE_BP = 600;
+
+function useIsMobile() {
+  const [mobile, setMobile] = useState(() =>
+    typeof window !== 'undefined'
+      ? window.matchMedia(`(max-width: ${MOBILE_BP - 1}px)`).matches
+      : false
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${MOBILE_BP - 1}px)`);
+    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
+    setMobile(mq.matches);
+    if (mq.addEventListener) mq.addEventListener('change', handler);
+    else mq.addListener(handler);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', handler);
+      else mq.removeListener(handler);
+    };
+  }, []);
+  return mobile;
+}
+
 interface Props {
   currentUserId?: string;
   onClose: () => void;
@@ -60,6 +82,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     api.users.list()
@@ -72,26 +95,45 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
     prev.some(x => x.id === u.id) ? prev.map(x => x.id === u.id ? u : x) : [...prev, u]
   );
 
+  // Заголовок: на мобиле — column, кнопка под названием; на десктопе — row
+  const titleNode = isMobile ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <span>Пользователи</span>
+      <Button
+        size="sm"
+        variant="primary"
+        onClick={() => setDialog({ kind: 'add' })}
+        leftIcon={
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+        }
+      >
+        Добавить пользователя
+      </Button>
+    </div>
+  ) : (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <span>Пользователи</span>
+      <Button
+        size="sm"
+        variant="primary"
+        onClick={() => setDialog({ kind: 'add' })}
+        leftIcon={
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+        }
+      >
+        Добавить
+      </Button>
+    </div>
+  );
+
   return (
     <>
       <Modal
-        title={
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>Пользователи</span>
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => setDialog({ kind: 'add' })}
-              leftIcon={
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-                </svg>
-              }
-            >
-              Добавить
-            </Button>
-          </div>
-        }
+        title={titleNode}
         width={620}
         onClose={onClose}
       >
@@ -108,13 +150,83 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
           }}>
             {users.map((user, i) => {
               const isSelf = user.id === currentUserId;
+              const isLast = i === users.length - 1;
+
+              if (isMobile) {
+                // Мобильный вид: карточка с вертикальным layout
+                return (
+                  <div
+                    key={user.id}
+                    style={{
+                      display: 'flex', flexDirection: 'column', gap: 10,
+                      padding: '12px 14px',
+                      borderBottom: !isLast ? `1px solid ${C.borderLight}` : 'none',
+                      background: C.bgWhite,
+                    }}
+                  >
+                    {/* Верхняя строка: аватар + имя + бейдж роли */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <Avatar username={user.username} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <span style={{
+                            fontSize: 14, fontWeight: 600, color: C.textHeading,
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}>
+                            {user.username}
+                          </span>
+                          {isSelf && (
+                            <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>(вы)</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2 }}>
+                          {new Date(user.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })}
+                        </div>
+                      </div>
+                      <RoleBadge role={user.role} />
+                    </div>
+
+                    {/* Нижняя строка: кнопки действий — растянутые */}
+                    {!isSelf && (
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          onClick={() => setDialog({ kind: 'resetPassword', user })}
+                          title="Сбросить пароль"
+                          style={{ ...actionBtn(false), flex: 1, justifyContent: 'center' }}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                          </svg>
+                          Сброс пароля
+                        </button>
+                        <button
+                          onClick={() => setDialog({ kind: 'delete', user })}
+                          title="Удалить пользователя"
+                          style={{ ...actionBtn(false, true), flex: 1, justifyContent: 'center' }}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <polyline points="3 6 5 6 21 6"/>
+                            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                            <path d="M10 11v6"/><path d="M14 11v6"/>
+                            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                          </svg>
+                          Удалить
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              // Десктопный вид: горизонтальная строка
               return (
                 <div
                   key={user.id}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 12,
                     padding: '10px 16px',
-                    borderBottom: i < users.length - 1 ? `1px solid ${C.borderLight}` : 'none',
+                    borderBottom: !isLast ? `1px solid ${C.borderLight}` : 'none',
                     background: C.bgWhite,
                   }}
                 >

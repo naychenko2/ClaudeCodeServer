@@ -112,19 +112,24 @@ export function WorkspacePage({ project, onBack }: Props) {
   const viewportH = useViewportHeight();
   const isMobile = windowWidth < 768;
   const isTablet = windowWidth >= 768 && windowWidth < 1100;
-  // Ширина drawer-сайдбара — читается из localStorage (изменение через ресайз-ручку в будущем)
-  const sidebarWidth = (() => {
+  // Ширина сайдбара — перетаскиваемая, сохраняется между сессиями
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
     const v = localStorage.getItem('cc_sidebar_width');
     return v ? Math.max(220, Math.min(520, Number(v))) : 300;
-  })();
+  });
+  useEffect(() => { localStorage.setItem('cc_sidebar_width', String(sidebarWidth)); }, [sidebarWidth]);
 
-  // Drawer: свёрнут/развёрнут, сохраняется между сессиями
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    return localStorage.getItem('cc_sidebar_collapsed') === 'true';
+  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут) | open (drawer поверх контента)
+  // Персистируется только 'pinned'/'collapsed'; 'open' — временное состояние
+  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed' | 'open'>(() => {
+    const v = localStorage.getItem('cc_sidebar_mode');
+    return v === 'collapsed' ? 'collapsed' : 'pinned';
   });
   useEffect(() => {
-    localStorage.setItem('cc_sidebar_collapsed', String(sidebarCollapsed));
-  }, [sidebarCollapsed]);
+    if (sidebarMode !== 'open') {
+      localStorage.setItem('cc_sidebar_mode', sidebarMode);
+    }
+  }, [sidebarMode]);
 
   // Какой сплиттер сейчас тащим — для подсветки на всём протяжении drag (даже если курсор соскользнул)
   const [draggingSplitter, setDraggingSplitter] = useState<null | 'sidebar' | 'split' | 'vertical'>(null);
@@ -134,6 +139,25 @@ export function WorkspacePage({ project, onBack }: Props) {
     window.addEventListener('mouseup', up);
     return () => window.removeEventListener('mouseup', up);
   }, [draggingSplitter]);
+
+  const handleSidebarSplitterMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    const onMove = (ev: MouseEvent) => {
+      setSidebarWidth(Math.max(220, Math.min(520, startW + (ev.clientX - startX))));
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
@@ -295,9 +319,22 @@ export function WorkspacePage({ project, onBack }: Props) {
               </svg>
             </div>
             <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, flex: 1, minWidth: 0 }}>Claude Home Server</span>
-            {/* Кнопка свернуть drawer */}
+            {/* В режиме open — кнопка «закрепить» (📌) */}
+            {sidebarMode === 'open' && (
+              <button
+                onClick={() => setSidebarMode('pinned')}
+                title="Закрепить панель"
+                style={{ width: 28, height: 28, border: 'none', borderRadius: 8, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
+                </svg>
+              </button>
+            )}
+            {/* Кнопка свернуть (◀) — в обоих режимах */}
             <button
-              onClick={() => setSidebarCollapsed(true)}
+              onClick={() => setSidebarMode('collapsed')}
+              title="Свернуть панель"
               style={{ width: 28, height: 28, border: 'none', borderRadius: 8, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -390,29 +427,43 @@ export function WorkspacePage({ project, onBack }: Props) {
   return (
     <div style={{ display: 'flex', height: '100vh', background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden', position: 'relative' }}>
 
-      {/* Drawer-сайдбар: всегда absolute, уезжает за левый край при collapse */}
-      <div style={{
-        position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10,
-        width: sidebarWidth,
-        transform: sidebarCollapsed ? `translateX(-${sidebarWidth}px)` : 'translateX(0)',
-        transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-        boxShadow: sidebarCollapsed ? 'none' : '4px 0 20px rgba(20,16,10,0.15)',
-      }}>
-        {Sidebar}
-      </div>
+      {/* === Pinned: sidebar в flex-потоке, толкает контент === */}
+      {sidebarMode === 'pinned' && (
+        <>
+          <div style={{ width: sidebarWidth, flexShrink: 0, height: '100%' }}>
+            {Sidebar}
+          </div>
+          <Splitter orientation="v" active={draggingSplitter === 'sidebar'}
+            onMouseDown={e => { setDraggingSplitter('sidebar'); handleSidebarSplitterMouseDown(e); }} />
+        </>
+      )}
 
-      {/* Overlay — закрывает drawer при клике мимо */}
-      {!sidebarCollapsed && (
+      {/* === Collapsed / Open: sidebar absolute drawer === */}
+      {sidebarMode !== 'pinned' && (
+        <div style={{
+          position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10,
+          width: sidebarWidth,
+          transform: sidebarMode === 'open' ? 'translateX(0)' : `translateX(-${sidebarWidth}px)`,
+          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+          boxShadow: sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
+        }}>
+          {Sidebar}
+        </div>
+      )}
+
+      {/* Overlay — только когда drawer открыт */}
+      {sidebarMode === 'open' && (
         <div
-          onClick={() => setSidebarCollapsed(true)}
+          onClick={() => setSidebarMode('collapsed')}
           style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }}
         />
       )}
 
-      {/* Гамбургер — виден только когда sidebar свёрнут */}
-      {sidebarCollapsed && (
+      {/* Гамбургер — только когда свёрнут */}
+      {sidebarMode === 'collapsed' && (
         <button
-          onClick={() => setSidebarCollapsed(false)}
+          onClick={() => setSidebarMode('open')}
+          title="Открыть панель"
           style={{
             position: 'absolute', top: 12, left: 12, zIndex: 11,
             width: 32, height: 32, borderRadius: 9,

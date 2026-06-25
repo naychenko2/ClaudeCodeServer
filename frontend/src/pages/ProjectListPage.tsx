@@ -348,7 +348,7 @@ export function ProjectListPage({ onOpen, onLogout }: Props) {
             <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, letterSpacing: '0.06em', marginBottom: 8 }}>WEBDAV</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '7px 10px' }}>
               <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {`${window.location.origin}/webdav/${encodeURIComponent(editTarget.name)}/`}
+                {`${window.location.origin}/webdav/${editTarget.name}/`}
               </span>
               <button
                 onClick={() => handleCopyWebDav(editTarget.name)}

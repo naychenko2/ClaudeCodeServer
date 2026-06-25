@@ -1,4 +1,4 @@
-import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings } from '../types';
+import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -13,6 +13,22 @@ export const api = {
       }),
     me: () =>
       request<{ userId: string; username: string; role: string }>('/auth/me'),
+    changePassword: (currentPassword: string, newPassword: string) =>
+      request<void>('/auth/password', {
+        method: 'PUT',
+        body: JSON.stringify({ currentPassword, newPassword }),
+      }),
+  },
+
+  users: {
+    list: () => request<UserProfile[]>('/users'),
+    create: (data: { username: string; password: string; role: string }) =>
+      request<UserProfile>('/users', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { username?: string; role?: string }) =>
+      request<UserProfile>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: string) => request<void>(`/users/${id}`, { method: 'DELETE' }),
+    resetPassword: (id: string, newPassword: string) =>
+      request<void>(`/users/${id}/password`, { method: 'PUT', body: JSON.stringify({ newPassword }) }),
   },
 
   settings: {

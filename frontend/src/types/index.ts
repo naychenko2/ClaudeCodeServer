@@ -105,4 +105,13 @@ export interface AuthState {
   serverUrl: string;
   token: string;
   username: string;
+  role?: string;
+  id?: string;
+}
+
+export interface UserProfile {
+  id: string;
+  username: string;
+  role: 'admin' | 'user';
+  createdAt: string;
 }

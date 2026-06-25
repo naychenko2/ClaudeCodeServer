@@ -97,6 +97,83 @@ public class UserStore
 
     public User? GetFirst() => _users.FirstOrDefault();
 
+    public IReadOnlyList<User> GetAll() => _users.AsReadOnly();
+
+    public User Add(string username, string password, string role)
+    {
+        if (_users.Any(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"Пользователь '{username}' уже существует");
+
+        var user = new User { Username = username, Role = role };
+        SetPasswordInternal(user, password);
+        _users.Add(user);
+        Save();
+        return user;
+    }
+
+    public bool Update(string id, string? username, string? role)
+    {
+        var user = _users.FirstOrDefault(u => u.Id == id);
+        if (user is null) return false;
+
+        if (username is not null && !string.Equals(username, user.Username, StringComparison.OrdinalIgnoreCase))
+        {
+            if (_users.Any(u => u.Id != id && string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"Пользователь '{username}' уже существует");
+            user.Username = username;
+        }
+
+        if (role is not null && role != user.Role)
+        {
+            // Понижение роли admin → user: проверяем что останется хотя бы один admin
+            if (user.Role == "admin" && role == "user" && !HasOtherAdmin(id))
+                throw new InvalidOperationException("Нельзя понизить роль единственного администратора");
+            user.Role = role;
+        }
+
+        Save();
+        return true;
+    }
+
+    public bool Delete(string id)
+    {
+        var user = _users.FirstOrDefault(u => u.Id == id);
+        if (user is null) return false;
+
+        if (user.Role == "admin" && !HasOtherAdmin(id))
+            throw new InvalidOperationException("Нельзя удалить единственного администратора");
+
+        _users.Remove(user);
+        Save();
+        return true;
+    }
+
+    public bool ResetPassword(string id, string newPassword)
+    {
+        var user = _users.FirstOrDefault(u => u.Id == id);
+        if (user is null) return false;
+
+        user.PasswordHash = _hasher.HashPassword(user, newPassword);
+        // NtHash пересчитается лениво при следующем логине
+        user.NtHash = null;
+        Save();
+        return true;
+    }
+
+    public bool ChangePassword(string id, string currentPassword, string newPassword)
+    {
+        var user = _users.FirstOrDefault(u => u.Id == id);
+        if (user is null) return false;
+        if (!VerifyPassword(user, currentPassword)) return false;
+
+        SetPasswordInternal(user, newPassword);
+        Save();
+        return true;
+    }
+
+    private bool HasOtherAdmin(string excludeId) =>
+        _users.Any(u => u.Id != excludeId && u.Role == "admin");
+
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 }
 

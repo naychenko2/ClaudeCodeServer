@@ -40,6 +40,23 @@ public class AuthController(UserStore users, JwtService jwt) : ControllerBase
         var role = User.FindFirstValue(ClaimTypes.Role);
         return Ok(new { userId, username, role });
     }
+
+    [Authorize]
+    [HttpPut("password")]
+    public IActionResult ChangePassword([FromBody] ChangePasswordRequest req)
+    {
+        if (string.IsNullOrEmpty(req.NewPassword) || req.NewPassword.Length < 8)
+            return BadRequest(new { error = "Новый пароль должен содержать не менее 8 символов" });
+
+        var userId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (userId is null) return Unauthorized();
+
+        if (!users.ChangePassword(userId, req.CurrentPassword ?? "", req.NewPassword))
+            return BadRequest(new { error = "Неверный текущий пароль" });
+
+        return NoContent();
+    }
 }
 
 public record LoginRequest(string? Username, string? Password);
+public record ChangePasswordRequest(string? CurrentPassword, string NewPassword);

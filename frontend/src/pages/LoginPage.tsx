@@ -24,18 +24,37 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
     setErrorMessage('');
     try {
       const result = await api.auth.login(username, password);
+      // Получаем роль сразу после логина — токен уже активен в request через storage
+      let role: string | undefined;
+      let userId: string | undefined;
+      try {
+        // Временно кладём токен в sessionStorage чтобы request его подхватил
+        sessionStorage.setItem('cc_token', result.token);
+        const me = await api.auth.me();
+        role = me.role;
+        userId = me.userId;
+      } catch { /* роль недоступна — не критично */ }
+
       if (remember) {
         localStorage.setItem('cc_server_url', serverUrl);
         localStorage.setItem('cc_token', result.token);
         localStorage.setItem('cc_username', result.username);
+        if (role) localStorage.setItem('cc_role', role);
+        if (userId) localStorage.setItem('cc_user_id', userId);
         sessionStorage.removeItem('cc_token');
+        sessionStorage.removeItem('cc_role');
+        sessionStorage.removeItem('cc_user_id');
       } else {
         sessionStorage.setItem('cc_token', result.token);
+        if (role) sessionStorage.setItem('cc_role', role);
+        if (userId) sessionStorage.setItem('cc_user_id', userId);
         localStorage.removeItem('cc_token');
         localStorage.removeItem('cc_server_url');
         localStorage.removeItem('cc_username');
+        localStorage.removeItem('cc_role');
+        localStorage.removeItem('cc_user_id');
       }
-      onConnect({ serverUrl, token: result.token, username: result.username });
+      onConnect({ serverUrl, token: result.token, username: result.username, role, id: userId });
     } catch (err: unknown) {
       const message = err instanceof OfflineError
         ? 'Нет соединения с сервером. Проверьте подключение к интернету.'

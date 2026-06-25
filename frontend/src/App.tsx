@@ -21,7 +21,9 @@ export default function App() {
     if (!token) return null
     const url = localStorage.getItem('cc_server_url') || window.location.origin
     const username = localStorage.getItem('cc_username') || ''
-    return { serverUrl: url, token, username }
+    const role = localStorage.getItem('cc_role') || sessionStorage.getItem('cc_role') || undefined
+    const id = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id') || undefined
+    return { serverUrl: url, token, username, role, id }
   })
   // Если токен восстановлен из localStorage — ждём ответа сервера перед показом контента,
   // чтобы не было flash рабочего экрана с последующим переключением на пустой фон.
@@ -62,8 +64,12 @@ export default function App() {
       localStorage.removeItem('cc_token')
       localStorage.removeItem('cc_username')
       localStorage.removeItem('cc_server_url')
+      localStorage.removeItem('cc_role')
+      localStorage.removeItem('cc_user_id')
       localStorage.removeItem(OPEN_PROJECT_KEY)
       sessionStorage.removeItem('cc_token')
+      sessionStorage.removeItem('cc_role')
+      sessionStorage.removeItem('cc_user_id')
       idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
       navReplace({ screen: 'projects' })
       setProject(null)
@@ -140,8 +146,12 @@ export default function App() {
     localStorage.removeItem('cc_token')
     localStorage.removeItem('cc_username')
     localStorage.removeItem('cc_server_url')
+    localStorage.removeItem('cc_role')
+    localStorage.removeItem('cc_user_id')
     localStorage.removeItem(OPEN_PROJECT_KEY)
     sessionStorage.removeItem('cc_token')
+    sessionStorage.removeItem('cc_role')
+    sessionStorage.removeItem('cc_user_id')
     idbClear() // чистим кэш при смене аккаунта/сервера
     navReplace({ screen: 'projects' })
     setProject(null)
@@ -152,5 +162,5 @@ export default function App() {
   if (!auth) return <LoginPage onConnect={setAuth} />
   // onBack ведёт через историю — едино с кнопкой «назад» браузера
   if (project) return <WorkspacePage project={project} onBack={() => window.history.back()} />
-  return <ProjectListPage onOpen={openProject} onLogout={logout} />
+  return <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} />
 }

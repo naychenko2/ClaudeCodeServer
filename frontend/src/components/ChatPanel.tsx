@@ -26,6 +26,7 @@ interface Props {
   isMobile?: boolean;
   onBack?: () => void;
   onWorkflowRunning?: (active: boolean) => void;
+  isFirstSession?: boolean;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -428,7 +429,7 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile, onBack, onWorkflowRunning }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile, onBack, onWorkflowRunning, isFirstSession }: Props) {
   const { items, isWaiting, isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
   const online = useOnline();
   const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
@@ -930,38 +931,73 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               }} />
             </div>
 
-            {/* Заголовок */}
-            <div style={{
-              fontFamily: '"PT Serif", Georgia, serif',
-              fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
-            }}>
-              Чем помочь?
-            </div>
+            {isFirstSession ? (
+              <>
+                {/* Заголовок */}
+                <div style={{
+                  fontFamily: '"PT Serif", Georgia, serif',
+                  fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
+                }}>
+                  Новый проект
+                </div>
 
-            {/* Подзаголовок */}
-            <div style={{ fontSize: 13, color: '#8A8070', textAlign: 'center' }}>
-              Опишите задачу или начните с подсказки
-            </div>
+                {/* Подзаголовок */}
+                <div style={{ fontSize: 13, color: '#8A8070', textAlign: 'center', maxWidth: 260 }}>
+                  Запустите /init, чтобы Claude изучил проект и создал CLAUDE.md
+                </div>
 
-            {/* Чипы */}
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
-              {HINTS.map(hint => (
+                {/* Кнопка CTA */}
                 <button
-                  key={hint}
-                  onClick={() => handleHint(hint)}
+                  onClick={() => handleHint('/init')}
                   style={{
-                    background: '#FFF', border: `1px solid ${C.borderLight}`,
-                    borderRadius: 10, padding: '9px 12px',
-                    fontSize: 13, color: C.textPrimary, cursor: 'pointer',
-                    fontFamily: 'inherit',
+                    marginTop: 4,
+                    background: C.accent, border: 'none',
+                    borderRadius: 10, padding: '10px 20px',
+                    fontSize: 13, color: '#FFF', cursor: 'pointer',
+                    fontFamily: 'inherit', fontWeight: 500,
                   }}
-                  onMouseEnter={e => (e.currentTarget.style.background = C.accentLight)}
-                  onMouseLeave={e => (e.currentTarget.style.background = '#FFF')}
+                  onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
+                  onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
                 >
-                  {hint}
+                  Инициализировать проект
                 </button>
-              ))}
-            </div>
+              </>
+            ) : (
+              <>
+                {/* Заголовок */}
+                <div style={{
+                  fontFamily: '"PT Serif", Georgia, serif',
+                  fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
+                }}>
+                  Чем помочь?
+                </div>
+
+                {/* Подзаголовок */}
+                <div style={{ fontSize: 13, color: '#8A8070', textAlign: 'center' }}>
+                  Опишите задачу или начните с подсказки
+                </div>
+
+                {/* Чипы */}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
+                  {HINTS.map(hint => (
+                    <button
+                      key={hint}
+                      onClick={() => handleHint(hint)}
+                      style={{
+                        background: '#FFF', border: `1px solid ${C.borderLight}`,
+                        borderRadius: 10, padding: '9px 12px',
+                        fontSize: 13, color: C.textPrimary, cursor: 'pointer',
+                        fontFamily: 'inherit',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = C.accentLight)}
+                      onMouseLeave={e => (e.currentTarget.style.background = '#FFF')}
+                    >
+                      {hint}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
 

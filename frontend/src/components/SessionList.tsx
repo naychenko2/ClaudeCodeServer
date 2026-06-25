@@ -14,16 +14,19 @@ interface Props {
   activeSession: Session | null;
   onSelect: (session: Session, firstMessage?: string, autoSelect?: boolean) => void;
   onSessionUpdated?: (session: Session) => void;
+  onSessionsChanged?: (count: number) => void;
   isMobile?: boolean;
   workflowRunningFor?: string;
 }
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, isMobile = false, workflowRunningFor }: Props) {
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor }: Props) {
   const online = useOnline();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [editTarget, setEditTarget] = useState<Session | null>(null);
   const initializedRef = useRef(false);
+
+  useEffect(() => { onSessionsChanged?.(sessions.length); }, [sessions.length, onSessionsChanged]);
 
   const createNew = async (): Promise<Session> => {
     const s = await api.sessions.create(project.id);

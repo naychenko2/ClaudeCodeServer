@@ -1602,10 +1602,12 @@ function MediaBlock({
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
             }}>{filename}</span>
           </div>
-          {/* Нативный плеер */}
-          <audio controls style={{ width: '100%', height: 36, outline: 'none', borderRadius: 6, display: 'block' }}>
-            <source src={proxyUrl(m.url)} />
-          </audio>
+          {/* Нативный плеер — обёртка с overflow:hidden обрезает углы shadow DOM */}
+          <div style={{ borderRadius: 6, overflow: 'hidden' }}>
+            <audio controls style={{ width: '100%', height: 36, outline: 'none', display: 'block' }}>
+              <source src={proxyUrl(m.url)} />
+            </audio>
+          </div>
           {/* Метаданные + кнопки */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ flex: 1, fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

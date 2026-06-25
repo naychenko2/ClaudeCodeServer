@@ -52,9 +52,15 @@ export default function App() {
   // выставился правильно ещё до первого рендера страниц (navigator.onLine ≠ «сервер доступен»)
   useEffect(() => {
     if (!auth) { setAuthChecking(false); return }
+    // Максимум 3 секунды на проверку доступности сервера.
+    // Если не ответил — показываем приложение в текущем (возможно офлайн) состоянии.
+    const timer = setTimeout(() => setAuthChecking(false), 3_000)
     api.auth.me()
       .catch(() => { /* результат отразится в _online */ })
-      .finally(() => setAuthChecking(false))
+      .finally(() => {
+        clearTimeout(timer)
+        setAuthChecking(false)
+      })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth?.serverUrl])
 

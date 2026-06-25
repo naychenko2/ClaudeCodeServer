@@ -1383,7 +1383,7 @@ function isProxiable(url: string): boolean {
 type MediaItem =
   | { kind: 'image'; url: string; width?: number; height?: number }
   | { kind: 'video'; url: string; width?: number; height?: number; duration?: number }
-  | { kind: 'audio'; url: string; duration?: number };
+  | { kind: 'audio'; url: string; duration?: number; fileName?: string };
 
 function classifyUrl(item: any): 'image' | 'video' | 'audio' | null {
   if (typeof item?.url !== 'string') return null;
@@ -1423,7 +1423,7 @@ function extractMediaFromResult(result: string): MediaItem[] {
       for (const key of ['audio', 'audio_file']) {
         const a = root[key];
         if (a && typeof a?.url === 'string') {
-          items.push({ kind: 'audio', url: a.url, duration: a.duration });
+          items.push({ kind: 'audio', url: a.url, duration: a.duration, fileName: a.file_name });
         }
       }
     }
@@ -1836,7 +1836,7 @@ function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 
       {hasMedia && (
         <div style={{ paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {media.map((m, i) => {
-            const filename = m.url.split('/').pop()?.split('?')[0] || (m.kind === 'image' ? 'image' : 'video');
+            const filename = (m.kind === 'audio' && m.fileName) ? m.fileName : (m.url.split('/').pop()?.split('?')[0] || (m.kind === 'image' ? 'image' : m.kind === 'audio' ? 'audio' : 'video'));
             return (
               <MediaBlock key={i} m={m} filename={filename} model={mediaMeta.model} inferenceTime={mediaMeta.inferenceTime} costUsd={estimatedCostUsd} online={online} />
             );

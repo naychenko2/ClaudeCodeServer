@@ -28,7 +28,7 @@ public class FileService
     public static string SafeJoinPublic(string root, string relativePath) =>
         SafeJoin(root, relativePath);
 
-    public IEnumerable<FileEntry> List(string rootPath, string relativePath = "")
+    public IEnumerable<FileEntry> List(string rootPath, string relativePath = "", bool showHidden = false)
     {
         var dir = SafeJoin(rootPath, relativePath);
         if (!Directory.Exists(dir)) throw new DirectoryNotFoundException();
@@ -39,6 +39,8 @@ public class FileService
         foreach (var d in Directory.GetDirectories(dir).OrderBy(x => x))
         {
             var info = new DirectoryInfo(d);
+            if (TreeExcludes.Contains(info.Name)) continue;
+            if (!showHidden && info.Name.StartsWith('.')) continue;
             entries.Add(new FileEntry(info.Name, Path.GetRelativePath(rootPath, d).Replace('\\', '/'),
                 true, null, info.LastWriteTimeUtc, false));
         }
@@ -46,6 +48,7 @@ public class FileService
         foreach (var f in Directory.GetFiles(dir).OrderBy(x => x))
         {
             var info = new FileInfo(f);
+            if (!showHidden && info.Name.StartsWith('.')) continue;
             var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
             entries.Add(new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
                 modified.Contains(rel)));
@@ -71,7 +74,7 @@ public class FileService
 
     // Рекурсивный листинг всего поддерева — для prefetch офлайн-снапшота и синхронизации папок.
     // Исключает тяжёлые папки (TreeExcludes), ограничен TreeMaxEntries.
-    public IEnumerable<FileEntry> Tree(string rootPath, string relativePath = "")
+    public IEnumerable<FileEntry> Tree(string rootPath, string relativePath = "", bool showHidden = false)
     {
         var start = SafeJoin(rootPath, relativePath);
         if (!Directory.Exists(start)) throw new DirectoryNotFoundException();
@@ -88,6 +91,7 @@ public class FileService
                 if (result.Count >= TreeMaxEntries) return;
                 var info = new DirectoryInfo(d);
                 if (TreeExcludes.Contains(info.Name)) continue;
+                if (!showHidden && info.Name.StartsWith('.')) continue;
                 result.Add(new FileEntry(info.Name, Path.GetRelativePath(rootPath, d).Replace('\\', '/'),
                     true, null, info.LastWriteTimeUtc, false));
                 Walk(d);
@@ -97,6 +101,7 @@ public class FileService
             {
                 if (result.Count >= TreeMaxEntries) return;
                 var info = new FileInfo(f);
+                if (!showHidden && info.Name.StartsWith('.')) continue;
                 var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
                 result.Add(new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
                     modified.Contains(rel)));
@@ -121,7 +126,7 @@ public class FileService
         var binaryExts = new[] { ".zip", ".tar", ".gz", ".exe", ".dll", ".bin", ".pdf",
             ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
             ".mp3", ".mp4", ".avi", ".mov", ".wasm", ".so", ".dylib",
-            ".pptx", ".ppt" };
+            ".ppt" };
         return binaryExts.Contains(ext);
     }
 
@@ -149,13 +154,13 @@ public class FileService
         return File.ReadAllBytes(path);
     }
 
-    // Документы, которые рендерим на клиенте (pdf.js / docx-preview / SheetJS).
-    // Отдаём их как base64 + mimeType, чтобы фронт собрал Blob и отрисовал, а офлайн-кеш сработал.
+    // Документы: PDF рендерится на клиенте (pdf.js), Office-форматы — через OnlyOffice DS.
     private static readonly Dictionary<string, (string Kind, string Mime)> ViewableDocuments = new(StringComparer.OrdinalIgnoreCase)
     {
-        [".pdf"] = ("pdf", "application/pdf"),
+        [".pdf"]  = ("pdf",  "application/pdf"),
         [".docx"] = ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
         [".xlsx"] = ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        [".pptx"] = ("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
     };
 
     // Предельный размер документа для отдачи base64; больше — только скачивание.

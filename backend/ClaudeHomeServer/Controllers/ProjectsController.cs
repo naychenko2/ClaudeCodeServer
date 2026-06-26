@@ -19,7 +19,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         var basePath = appSettings.Get().DefaultProjectsPath;
         var relativePath = string.IsNullOrEmpty(basePath) ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.SystemPrompt, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.SystemPrompt, p.ShowHiddenFiles, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
     }
 
     [HttpGet("builtin-prompt")]
@@ -56,7 +56,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         if (p is null || p.OwnerId != UserId) return NotFound();
         try
         {
-            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt);
+            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles);
             return Ok(WithCount(updated));
         }
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
@@ -73,4 +73,4 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 }
 
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false);
-public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt);
+public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles);

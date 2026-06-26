@@ -47,7 +47,7 @@ export const api = {
     list: () => request<Project[]>('/projects'),
     create: (name: string, rootPath: string | null, createDirectory = false) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string }) =>
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
     getBuiltinPrompt: () => request<{ content: string }>('/projects/builtin-prompt'),

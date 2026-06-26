@@ -1,20 +1,19 @@
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Controllers;
 
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/files")]
-public class FilesController(FileService files, ProjectManager projects, SyncService sync) : ControllerBase
+public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config) : ControllerBase
 {
-    private string GetRoot(string projectId)
-    {
-        var p = projects.GetById(projectId)
-            ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
-        return p.RootPath;
-    }
+    private ClaudeHomeServer.Models.Project GetProject(string projectId) =>
+        projects.GetById(projectId) ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
+
+    private string GetRoot(string projectId) => GetProject(projectId).RootPath;
 
     // Проставляет состояние синхронизации (direct/inherited/null) каждой записи
     private IEnumerable<FileEntry> Annotate(string projectId, IEnumerable<FileEntry> entries) =>
@@ -23,7 +22,11 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     [HttpGet]
     public IActionResult List(string projectId, [FromQuery] string path = "")
     {
-        try { return Ok(Annotate(projectId, files.List(GetRoot(projectId), path))); }
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(Annotate(projectId, files.List(p.RootPath, path, p.ShowHiddenFiles)));
+        }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }
     }
@@ -31,7 +34,11 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     [HttpGet("tree")]
     public IActionResult Tree(string projectId, [FromQuery] string path = "")
     {
-        try { return Ok(Annotate(projectId, files.Tree(GetRoot(projectId), path))); }
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(Annotate(projectId, files.Tree(p.RootPath, path, p.ShowHiddenFiles)));
+        }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }
     }
@@ -215,6 +222,87 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
+
+    // Отдаёт байты файла OnlyOffice Document Server (без Authorization — DS не знает API-ключ).
+    // Защита: проверка download-токена, который DS получает через office-config.
+    [HttpGet("office-download")]
+    [AllowAnonymous]
+    public IActionResult OfficeDownload(string projectId, [FromQuery] string path, [FromQuery] string token)
+    {
+        var expected = GetDownloadToken();
+        if (string.IsNullOrEmpty(token) || token != expected)
+            return Unauthorized();
+
+        try
+        {
+            var root = GetRoot(projectId);
+            var bytes = files.ReadFileBytes(root, path);
+            var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+            var mime = ext switch {
+                "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "pdf"  => "application/pdf",
+                _ => "application/octet-stream",
+            };
+            return File(bytes, mime);
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (FileNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
+    }
+
+    // Возвращает конфиг для DocsAPI.DocEditor: URL сервера DS и параметры документа.
+    [HttpGet("office-config")]
+    public IActionResult OfficeConfig(string projectId, [FromQuery] string path)
+    {
+        try
+        {
+            var root = GetRoot(projectId);
+            var size = files.GetFileSize(root, path);
+            var fileName = Path.GetFileName(path);
+            var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+
+            var serverUrl = config["OnlyOffice:ServerUrl"] ?? "http://localhost:8090";
+            var backendUrl = config["OnlyOffice:BackendUrl"] ?? "http://host.docker.internal:5000";
+            var token = GetDownloadToken();
+
+            // Ключ документа: хэш пути + размер файла (DS кеширует по ключу)
+            var key = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes($"{projectId}/{path}/{size}")))
+                [..20];
+
+            var downloadUrl = $"{backendUrl}/api/projects/{projectId}/files/office-download" +
+                              $"?path={Uri.EscapeDataString(path)}&token={Uri.EscapeDataString(token)}";
+
+            return Ok(new {
+                serverUrl,
+                document = new {
+                    fileType = ext,
+                    key,
+                    title = fileName,
+                    url = downloadUrl,
+                },
+                editorConfig = new { mode = "view", lang = "ru" },
+            });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (FileNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
+    }
+
+    private string GetDownloadToken()
+    {
+        var token = config["OnlyOffice:DownloadToken"];
+        if (!string.IsNullOrEmpty(token)) return token;
+
+        // Авто-генерация и кеш на время жизни приложения
+        return _downloadTokenCache ??= Convert.ToHexString(
+            System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
+    }
+
+    private static string? _downloadTokenCache;
 
     [HttpPost("save-from-url")]
     [RequestSizeLimit(200 * 1024 * 1024)] // 200 МБ для видео

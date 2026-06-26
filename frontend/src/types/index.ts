@@ -8,6 +8,7 @@ export interface Project {
   sessionCount?: number;
   difyDatasetId?: string;
   systemPrompt?: string;
+  showHiddenFiles?: boolean;
   builtInSystemPrompt?: string;
 }
 

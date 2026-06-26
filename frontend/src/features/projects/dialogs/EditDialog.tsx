@@ -19,6 +19,7 @@ export function EditDialog({ project, onSuccess, onClose }: Props) {
   const [view, setView] = useState<View>('main');
   const [name, setName] = useState(project.name);
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
+  const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
   const [draftPrompt, setDraftPrompt] = useState('');
   const builtinPrompt = project.builtInSystemPrompt ?? '';
   const [error, setError] = useState('');
@@ -29,6 +30,7 @@ export function EditDialog({ project, onSuccess, onClose }: Props) {
       const updated = await api.projects.update(project.id, {
         name: name.trim(),
         systemPrompt,
+        showHiddenFiles,
       });
       onSuccess(updated);
     } catch (e: any) {
@@ -154,6 +156,39 @@ export function EditDialog({ project, onSuccess, onClose }: Props) {
           }}
         >
           Редактировать
+        </button>
+      </div>
+      {/* Скрытые файлы */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '11px 14px', background: C.bgWhite,
+        border: `1px solid ${C.border}`, borderRadius: R.xl,
+      }}>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>
+            Скрытые файлы и папки
+          </div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>
+            Показывать файлы и папки, начинающиеся с точки
+          </div>
+        </div>
+        <button
+          onClick={() => setShowHiddenFiles(v => !v)}
+          style={{
+            flexShrink: 0,
+            width: 40, height: 22,
+            background: showHiddenFiles ? C.accent : C.border,
+            border: 'none', borderRadius: 11, cursor: 'pointer',
+            position: 'relative', transition: 'background 0.15s',
+          }}
+        >
+          <span style={{
+            position: 'absolute', top: 3,
+            left: showHiddenFiles ? 21 : 3,
+            width: 16, height: 16,
+            background: '#fff', borderRadius: '50%',
+            transition: 'left 0.15s',
+          }} />
         </button>
       </div>
       <ProjectSyncToggle projectId={project.id} online={online} />

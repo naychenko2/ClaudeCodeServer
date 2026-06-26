@@ -57,7 +57,7 @@ public class ProjectManager
         return project;
     }
 
-    public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null)
+    public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null, bool? showHiddenFiles = null)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
@@ -70,6 +70,7 @@ public class ProjectManager
             project.RootPath = rootPath;
         }
         if (systemPrompt is not null) project.SystemPrompt = systemPrompt;
+        if (showHiddenFiles is not null) project.ShowHiddenFiles = showHiddenFiles.Value;
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;

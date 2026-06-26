@@ -15,6 +15,8 @@ public class Session
     public string? LastMessage { get; set; }
     public int MessageCount { get; set; }
     public string? Name { get; set; }
+    // Имя агента (.claude/agents/<name>.md), чей промпт инжектируется в системный контекст
+    public string? AgentName { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

@@ -136,6 +136,18 @@ public class FileService
         return new[] { ".mp4", ".webm", ".mov", ".avi", ".mkv" }.Contains(ext);
     }
 
+    public static bool IsAudioFile(string relativePath)
+    {
+        var ext = Path.GetExtension(relativePath).ToLowerInvariant();
+        return new[] { ".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".opus", ".weba" }.Contains(ext);
+    }
+
+    public byte[] ReadFileBytes(string rootPath, string relativePath)
+    {
+        var path = SafeJoin(rootPath, relativePath);
+        return File.ReadAllBytes(path);
+    }
+
     // Документы, которые рендерим на клиенте (pdf.js / docx-preview / SheetJS).
     // Отдаём их как base64 + mimeType, чтобы фронт собрал Blob и отрисовал, а офлайн-кеш сработал.
     private static readonly Dictionary<string, (string Kind, string Mime)> ViewableDocuments = new(StringComparer.OrdinalIgnoreCase)

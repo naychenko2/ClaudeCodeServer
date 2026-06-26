@@ -2,6 +2,7 @@
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.Negotiate;
@@ -27,10 +28,15 @@ builder.Services.AddSingleton<AppSettingsService>();
 builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<FileService>();
 builder.Services.AddSingleton<SyncService>();
+builder.Services.AddSingleton<SkillsService>();
 builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddSingleton<ChatHistoryService>();
+builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddHttpClient("proxy");
+builder.Services.AddHttpClient("dify");
+builder.Services.Configure<DifyOptions>(builder.Configuration.GetSection(DifyOptions.Section));
+builder.Services.AddSingleton<KnowledgeService>();
 
 // JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office)
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -87,6 +93,10 @@ var app = builder.Build();
 // Прогрев сервисов на старте — UserStore печатает предупреждение если создал admin/admin
 app.Services.GetRequiredService<UserStore>();
 app.Services.GetRequiredService<JwtService>();
+
+// Однократная миграция: переносим DifyDatasetId/DocumentTags из старых Project-записей в WorkspaceKnowledge
+app.Services.GetRequiredService<WorkspaceKnowledgeStore>()
+    .MigrateFromProjects(app.Services.GetRequiredService<ProjectManager>().GetAll());
 
 app.UseForwardedHeaders();
 

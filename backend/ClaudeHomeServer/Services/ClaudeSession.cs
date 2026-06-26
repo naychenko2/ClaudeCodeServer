@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
@@ -42,11 +42,44 @@ public class ClaudeSession : IAsyncDisposable
     private readonly ConcurrentDictionary<string, string?> _fileCache = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _debounce = new();
 
-    public ClaudeSession(Session info, string rootPath, Func<ServerMessage, Task> onMessage)
+    private readonly string? _difyDatasetId;
+    private readonly string? _mcpConfigPath;
+    private readonly string? _sessionMcpConfigPath;
+    private readonly string? _systemPrompt;
+    private readonly SkillsService? _skills;
+
+    public ClaudeSession(Session info, string rootPath, Func<ServerMessage, Task> onMessage,
+        string? difyDatasetId = null, string? mcpConfigPath = null, string? systemPrompt = null,
+        SkillsService? skills = null)
     {
         Info = info;
         _rootPath = rootPath;
         _onMessage = onMessage;
+        _difyDatasetId = difyDatasetId;
+        _mcpConfigPath = mcpConfigPath;
+        _systemPrompt = systemPrompt;
+        _skills = skills;
+        _sessionMcpConfigPath = CreateSessionMcpConfig(mcpConfigPath, difyDatasetId);
+    }
+
+    private static string? CreateSessionMcpConfig(string? basePath, string? datasetId)
+    {
+        if (string.IsNullOrEmpty(basePath) || !File.Exists(basePath) || string.IsNullOrEmpty(datasetId))
+            return null;
+        try
+        {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(basePath))!;
+            var env = node["mcpServers"]?["dify"]?["env"];
+            if (env != null)
+            {
+                env["DIFY_DEFAULT_DATASET_ID"] = datasetId;
+                env["DIFY_SEARCH_ONLY"] = "true";
+            }
+            var tmpPath = Path.Combine(Path.GetTempPath(), $"claude-mcp-{Guid.NewGuid():N}.json");
+            File.WriteAllText(tmpPath, node.ToJsonString());
+            return tmpPath;
+        }
+        catch { return null; }
     }
 
     // Ничего не делаем при старте — процесс запускается при первом сообщении
@@ -58,7 +91,9 @@ public class ClaudeSession : IAsyncDisposable
         Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
         Info.UpdatedAt = DateTime.UtcNow;
 
-        var fullText = BuildMessageText(text, attachedPaths);
+        // Если сообщение — вызов скилла (/skill-name [args]), разворачиваем его содержимое
+        var effectiveText = _skills?.TryExpandSkill(text) ?? text;
+        var fullText = BuildMessageText(effectiveText, attachedPaths);
 
         // Запускаем ход в фоне, чтобы не блокировать SignalR-соединение
         _ = Task.Run(async () =>
@@ -234,6 +269,10 @@ public class ClaudeSession : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(Info.Model))
             args.AddRange(["--model", Info.Model]);
 
+        var effectiveMcpConfig = _sessionMcpConfigPath ?? _mcpConfigPath;
+        if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
+            args.AddRange(["--mcp-config", effectiveMcpConfig]);
+
         // claude.exe пишет/читает UTF-8. Без явной кодировки .NET берёт системную
         // OEM code page (напр. CP866 на русской Windows) → кракозябры в ответах.
         // Задаём UTF-8 без BOM (BOM сломал бы первое сообщение в stdin).
@@ -268,17 +307,34 @@ public class ClaudeSession : IAsyncDisposable
         // Читаем stderr асинхронно, иначе при переполнении буфера процесс зависнет
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
 
-        // Для новой сессии (не resume) — системная инструкция по тарификации fal-ai.
+        // Для новой сессии (не resume) — системный промпт проекта.
         // Claude Code CLI stream-json принимает {"type":"system",...} до первого user-сообщения.
+        // null = проект создан до введения фичи → откат к дефолту; "" = пользователь очистил.
         if (Info.ClaudeSessionId is null)
         {
-            var sysMsg = JsonSerializer.Serialize(new
+            var basePrompt = _systemPrompt ?? ProjectManager.BuiltInSystemPrompt;
+
+            // Если выбран агент — инжектируем его системный промпт в дополнение к базовому
+            string? agentPrompt = null;
+            if (!string.IsNullOrEmpty(Info.AgentName) && _skills is not null)
+                agentPrompt = _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName);
+
+            var combinedPrompt = agentPrompt is not null
+                ? (string.IsNullOrWhiteSpace(basePrompt)
+                    ? agentPrompt
+                    : basePrompt + "\n\n---\n\n" + agentPrompt)
+                : basePrompt;
+
+            if (!string.IsNullOrWhiteSpace(combinedPrompt))
             {
-                type = "system",
-                content = "When you use fal-ai MCP tools to generate images or videos, always call get_pricing(endpoint_id) right after receiving the job result. This lets the interface display the estimated generation cost."
-            });
-            await process.StandardInput.WriteLineAsync(sysMsg);
-            await process.StandardInput.FlushAsync();
+                var sysMsg = JsonSerializer.Serialize(new
+                {
+                    type = "system",
+                    content = combinedPrompt,
+                });
+                await process.StandardInput.WriteLineAsync(sysMsg);
+                await process.StandardInput.FlushAsync();
+            }
         }
 
         // stdin оставляем открытым — claude пишет control_response в него при permission-запросах
@@ -802,5 +858,7 @@ public class ClaudeSession : IAsyncDisposable
         _currentProcess?.Dispose();
         _cts.Dispose();
         _turnLock.Dispose();
+        if (_sessionMcpConfigPath != null)
+            try { File.Delete(_sessionMcpConfigPath); } catch { }
     }
 }

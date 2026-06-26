@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
@@ -19,6 +20,14 @@ public record DifyDocumentsPage(
     [property: JsonPropertyName("data")] List<DifyDocumentItem> Data,
     [property: JsonPropertyName("has_more")] bool HasMore,
     [property: JsonPropertyName("total")] int Total);
+
+public record DifyMetadataField(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("type")] string Type);
+
+public record DifyDatasetMetadataResponse(
+    [property: JsonPropertyName("doc_metadata")] List<DifyMetadataField> DocMetadata);
 
 public record DifyDatasetResponse(
     [property: JsonPropertyName("id")] string Id);
@@ -58,14 +67,17 @@ public class KnowledgeService
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly DifyOptions _cfg;
-    private readonly ProjectManager _projects;
+    private readonly WorkspaceKnowledgeStore _workspaceStore;
     private readonly SemaphoreSlim _createLock = new(1, 1);
+    // Кэш: datasetId → fieldId поля "tags" (чтобы не делать GET metadata при каждом сохранении тегов)
+    private readonly ConcurrentDictionary<string, string> _tagsFieldIdCache = new();
 
-    public KnowledgeService(IHttpClientFactory httpClientFactory, IOptions<DifyOptions> options, ProjectManager projects)
+    public KnowledgeService(IHttpClientFactory httpClientFactory, IOptions<DifyOptions> options,
+        WorkspaceKnowledgeStore workspaceStore)
     {
         _httpClientFactory = httpClientFactory;
         _cfg = options.Value;
-        _projects = projects;
+        _workspaceStore = workspaceStore;
     }
 
     private HttpClient CreateClient()
@@ -77,18 +89,21 @@ public class KnowledgeService
         return client;
     }
 
-    // Lazy-создание датасета при первом обращении; SemaphoreSlim с double-check защищает от гонки
+    // Lazy-создание датасета при первом обращении; SemaphoreSlim с double-check защищает от гонки.
+    // Данные хранятся в WorkspaceKnowledgeStore, привязанные к rootPath — общие для всех проектов
+    // в одной папке.
     public async Task<string> EnsureDatasetAsync(Project project, string username)
     {
-        if (!string.IsNullOrEmpty(project.DifyDatasetId))
-            return project.DifyDatasetId;
+        var wk = _workspaceStore.GetOrCreate(project.RootPath);
+        if (!string.IsNullOrEmpty(wk.DifyDatasetId))
+            return wk.DifyDatasetId;
 
         await _createLock.WaitAsync();
         try
         {
-            // Двойная проверка после захвата замка
-            if (!string.IsNullOrEmpty(project.DifyDatasetId))
-                return project.DifyDatasetId;
+            wk = _workspaceStore.GetOrCreate(project.RootPath);
+            if (!string.IsNullOrEmpty(wk.DifyDatasetId))
+                return wk.DifyDatasetId;
 
             if (string.IsNullOrEmpty(_cfg.ApiUrl) || string.IsNullOrEmpty(_cfg.ApiKey))
                 throw new InvalidOperationException("Dify не настроен: задайте Dify:ApiUrl и Dify:ApiKey в конфигурации");
@@ -105,8 +120,9 @@ public class KnowledgeService
             var body = await resp.Content.ReadFromJsonAsync<DifyDatasetResponse>()
                 ?? throw new InvalidOperationException("Пустой ответ от Dify при создании датасета");
 
-            _projects.SetDifyDataset(project.Id, body.Id);
-            return body.Id;
+            wk.DifyDatasetId = body.Id;
+            _workspaceStore.Save(wk);
+            return wk.DifyDatasetId;
         }
         finally
         {
@@ -152,6 +168,55 @@ public class KnowledgeService
         var body = await resp.Content.ReadFromJsonAsync<DifyDocumentCreateResponse>()
             ?? throw new InvalidOperationException("Пустой ответ от Dify при загрузке файла");
         return new DifyDocumentInfo(body.Document.Id, body.Document.Name, body.Document.IndexingStatus);
+    }
+
+    // Возвращает fieldId поля "tags" в метаданных датасета; создаёт поле если его нет
+    public async Task<string> EnsureTagsFieldAsync(string datasetId)
+    {
+        if (_tagsFieldIdCache.TryGetValue(datasetId, out var cached))
+            return cached;
+
+        var client = CreateClient();
+        var resp = await client.GetAsync($"datasets/{datasetId}/metadata");
+        resp.EnsureSuccessStatusCode();
+
+        var meta = await resp.Content.ReadFromJsonAsync<DifyDatasetMetadataResponse>();
+        var existing = meta?.DocMetadata.FirstOrDefault(f => f.Name == "tags");
+        if (existing is not null)
+        {
+            _tagsFieldIdCache[datasetId] = existing.Id;
+            return existing.Id;
+        }
+
+        var createResp = await client.PostAsJsonAsync($"datasets/{datasetId}/metadata",
+            new { type = "string", name = "tags" });
+        createResp.EnsureSuccessStatusCode();
+
+        var created = await createResp.Content.ReadFromJsonAsync<DifyMetadataField>()
+            ?? throw new InvalidOperationException("Пустой ответ при создании поля tags");
+        _tagsFieldIdCache[datasetId] = created.Id;
+        return created.Id;
+    }
+
+    // Обновляет значение тегов для документа в Dify без переиндексирования
+    public async Task UpdateDocumentTagsAsync(string datasetId, string documentId, List<string> tags)
+    {
+        var fieldId = await EnsureTagsFieldAsync(datasetId);
+        var tagValue = string.Join(",", tags);
+        var client = CreateClient();
+        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/documents/metadata", new
+        {
+            operation_data = new[]
+            {
+                new
+                {
+                    document_id = documentId,
+                    metadata_list = new[] { new { id = fieldId, name = "tags", value = tagValue } },
+                    partial_update = true,
+                }
+            }
+        });
+        resp.EnsureSuccessStatusCode();
     }
 
     public async Task<DifyDocumentsPage> ListDocumentsAsync(string datasetId, int page = 1, int limit = 20)

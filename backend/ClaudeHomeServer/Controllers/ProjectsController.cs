@@ -1,4 +1,4 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
@@ -19,8 +19,11 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         var basePath = appSettings.Get().DefaultProjectsPath;
         var relativePath = string.IsNullOrEmpty(basePath) ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, SessionCount = sessions.CountByProject(p.Id) };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.SystemPrompt, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
     }
+
+    [HttpGet("builtin-prompt")]
+    public IActionResult GetBuiltinPrompt() => Ok(new { content = ProjectManager.BuiltInSystemPrompt });
 
     [HttpGet]
     public IActionResult GetAll() => Ok(projects.GetByOwner(UserId).Select(WithCount));
@@ -53,7 +56,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         if (p is null || p.OwnerId != UserId) return NotFound();
         try
         {
-            var updated = projects.Update(id, req.Name, req.RootPath);
+            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt);
             return Ok(WithCount(updated));
         }
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
@@ -70,4 +73,4 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 }
 
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false);
-public record UpdateProjectRequest(string? Name, string? RootPath);
+public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt);

@@ -124,37 +124,6 @@ public class ProjectManager
         return sb.ToString();
     }
 
-    public void SetDifyDataset(string projectId, string datasetId)
-    {
-        var project = _projects.GetValueOrDefault(projectId)
-            ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
-        project.DifyDatasetId = datasetId;
-        project.UpdatedAt = DateTime.UtcNow;
-        Save();
-    }
-
-    public void SetDocumentTags(string projectId, string documentName, List<string> tags)
-    {
-        var project = _projects.GetValueOrDefault(projectId)
-            ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
-        project.DocumentTags ??= new Dictionary<string, List<string>>();
-        if (tags.Count == 0)
-            project.DocumentTags.Remove(documentName);
-        else
-            project.DocumentTags[documentName] = tags;
-        project.UpdatedAt = DateTime.UtcNow;
-        Save();
-    }
-
-    public void ClearDifyDataset(string projectId)
-    {
-        var project = _projects.GetValueOrDefault(projectId)
-            ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
-        project.DifyDatasetId = null;
-        project.UpdatedAt = DateTime.UtcNow;
-        Save();
-    }
-
     public bool Delete(string id)
     {
         var removed = _projects.TryRemove(id, out _);

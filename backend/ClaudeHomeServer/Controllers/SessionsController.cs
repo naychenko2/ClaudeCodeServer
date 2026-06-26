@@ -1,4 +1,4 @@
-﻿using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,7 +19,7 @@ public class SessionsController(SessionManager sessions) : ControllerBase
         try
         {
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
-            var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name, req.Model);
+            var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name, req.Model, req.AgentName);
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
@@ -51,6 +51,6 @@ public class SessionsController(SessionManager sessions) : ControllerBase
     }
 }
 
-public record CreateSessionRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null, string? Model = null);
+public record CreateSessionRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null);
 
 public record UpdateSessionRequest(string? Name = null, string? Model = null);

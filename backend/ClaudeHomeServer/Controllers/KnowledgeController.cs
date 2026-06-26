@@ -13,7 +13,8 @@ namespace ClaudeHomeServer.Controllers;
 public class KnowledgeController(
     ProjectManager projects,
     KnowledgeService knowledge,
-    FileService files) : ControllerBase
+    FileService files,
+    WorkspaceKnowledgeStore workspaceStore) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
     private string Username => User.FindFirstValue(System.Security.Claims.ClaimTypes.Name) ?? UserId;
@@ -31,13 +32,14 @@ public class KnowledgeController(
         var p = GetOwnedProject(projectId);
         if (p is null) return NotFound();
 
-        if (string.IsNullOrEmpty(p.DifyDatasetId))
+        var wk = workspaceStore.GetByPath(p.RootPath);
+        if (string.IsNullOrEmpty(wk?.DifyDatasetId))
             return Ok(new { datasetId = (string?)null, documents = Array.Empty<object>(), total = 0 });
 
         try
         {
-            var docs = await knowledge.ListDocumentsAsync(p.DifyDatasetId);
-            var tags = p.DocumentTags ?? new Dictionary<string, List<string>>();
+            var docs = await knowledge.ListDocumentsAsync(wk.DifyDatasetId);
+            var tags = wk.DocumentTags ?? new Dictionary<string, List<string>>();
             var docsDto = docs.Data.Select(d => new
             {
                 id = d.Id,
@@ -45,7 +47,7 @@ public class KnowledgeController(
                 indexingStatus = d.IndexingStatus,
                 tags = tags.TryGetValue(d.Name, out var t) ? t : [],
             });
-            return Ok(new { datasetId = p.DifyDatasetId, documents = docsDto, total = docs.Total });
+            return Ok(new { datasetId = wk.DifyDatasetId, documents = docsDto, total = docs.Total });
         }
         catch (HttpRequestException ex)
         {
@@ -68,8 +70,9 @@ public class KnowledgeController(
             var datasetId = await knowledge.EnsureDatasetAsync(p, Username);
             // Сохраняем относительный путь как имя документа, чтобы можно было переиндексировать из панели БЗ
             var docName = req.RelativePath.Replace('\\', '/');
-            // Передаём существующие теги из локального кэша в Dify как doc_metadata
-            var existingTags = p.DocumentTags?.TryGetValue(docName, out var t) == true ? t : null;
+            // Передаём существующие теги из workspace store в Dify как doc_metadata
+            var wk = workspaceStore.GetByPath(p.RootPath);
+            var existingTags = wk?.DocumentTags?.TryGetValue(docName, out var t) == true ? t : null;
 
             DifyDocumentInfo doc;
             if (KnowledgeService.IsTextIndexable(req.RelativePath))
@@ -83,7 +86,7 @@ public class KnowledgeController(
                 doc = await knowledge.IndexFileByBytesAsync(datasetId, docName, bytes, existingTags);
             }
 
-            var docTags = p.DocumentTags?.TryGetValue(docName, out var dt) == true ? dt : new List<string>();
+            var docTags = wk?.DocumentTags?.TryGetValue(docName, out var dt) == true ? dt : new List<string>();
             return Ok(new { datasetId, document = new { id = doc.Id, name = doc.Name, indexingStatus = doc.IndexingStatus, tags = docTags } });
         }
         catch (FileNotFoundException) { return NotFound(new { error = "Файл не найден" }); }
@@ -97,16 +100,42 @@ public class KnowledgeController(
     {
         var p = GetOwnedProject(projectId);
         if (p is null) return NotFound();
-        return Ok(p.DocumentTags ?? new Dictionary<string, List<string>>());
+        var wk = workspaceStore.GetByPath(p.RootPath);
+        return Ok(wk?.DocumentTags ?? new Dictionary<string, List<string>>());
     }
 
     // PUT /api/projects/{id}/knowledge/tags — задать теги для документа
     [HttpPut("tags")]
-    public IActionResult SetTags(string projectId, [FromBody] SetTagsRequest req)
+    public async Task<IActionResult> SetTags(string projectId, [FromBody] SetTagsRequest req)
     {
         var p = GetOwnedProject(projectId);
         if (p is null) return NotFound();
-        projects.SetDocumentTags(projectId, req.DocumentName, req.Tags ?? []);
+
+        var tags = req.Tags ?? [];
+
+        // Сохраняем в Dify если датасет настроен и передан documentId
+        var wk = workspaceStore.GetByPath(p.RootPath);
+        if (!string.IsNullOrEmpty(wk?.DifyDatasetId) && !string.IsNullOrEmpty(req.DocumentId))
+        {
+            try
+            {
+                await knowledge.UpdateDocumentTagsAsync(wk.DifyDatasetId, req.DocumentId, tags);
+            }
+            catch (HttpRequestException ex)
+            {
+                return StatusCode(502, new { error = ex.Message });
+            }
+        }
+
+        // Локальный кэш в WorkspaceKnowledge — для быстрого отображения без запросов к Dify
+        var workspace = workspaceStore.GetOrCreate(p.RootPath);
+        workspace.DocumentTags ??= new Dictionary<string, List<string>>();
+        if (tags.Count == 0)
+            workspace.DocumentTags.Remove(req.DocumentName);
+        else
+            workspace.DocumentTags[req.DocumentName] = tags;
+        workspaceStore.Save(workspace);
+
         return NoContent();
     }
 
@@ -115,11 +144,14 @@ public class KnowledgeController(
     public async Task<IActionResult> DeleteDocument(string projectId, string documentId)
     {
         var p = GetOwnedProject(projectId);
-        if (p is null || string.IsNullOrEmpty(p.DifyDatasetId)) return NotFound();
+        if (p is null) return NotFound();
+
+        var wk = workspaceStore.GetByPath(p.RootPath);
+        if (string.IsNullOrEmpty(wk?.DifyDatasetId)) return NotFound();
 
         try
         {
-            await knowledge.DeleteDocumentAsync(p.DifyDatasetId, documentId);
+            await knowledge.DeleteDocumentAsync(wk.DifyDatasetId, documentId);
             return NoContent();
         }
         catch (HttpRequestException ex) { return StatusCode(502, new { error = ex.Message }); }
@@ -131,15 +163,17 @@ public class KnowledgeController(
     {
         var p = GetOwnedProject(projectId);
         if (p is null) return NotFound();
-        if (string.IsNullOrEmpty(p.DifyDatasetId)) return NoContent();
 
-        try { await knowledge.DeleteDatasetAsync(p.DifyDatasetId); }
+        var wk = workspaceStore.GetByPath(p.RootPath);
+        if (string.IsNullOrEmpty(wk?.DifyDatasetId)) return NoContent();
+
+        try { await knowledge.DeleteDatasetAsync(wk.DifyDatasetId); }
         catch (HttpRequestException) { /* датасет мог быть удалён в Dify — сбрасываем ссылку */ }
 
-        projects.ClearDifyDataset(projectId);
+        workspaceStore.Delete(p.RootPath);
         return NoContent();
     }
 }
 
 public record IndexFileRequest(string RelativePath);
-public record SetTagsRequest(string DocumentName, List<string>? Tags);
+public record SetTagsRequest(string DocumentName, string? DocumentId, List<string>? Tags);

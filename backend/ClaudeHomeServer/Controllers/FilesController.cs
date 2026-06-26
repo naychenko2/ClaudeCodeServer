@@ -1,4 +1,4 @@
-﻿using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -81,6 +81,20 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                     var info = new System.IO.FileInfo(System.IO.Path.Combine(root, path));
                     return Ok(new { content = (string?)null, isBinary = true, isImage = false,
                         isVideo = true, mimeType = mime, fileSize = info.Length });
+                }
+                if (FileService.IsAudioFile(path))
+                {
+                    var ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLower();
+                    var mime = ext switch {
+                        "mp3" => "audio/mpeg", "wav" => "audio/wav",
+                        "ogg" => "audio/ogg", "flac" => "audio/flac",
+                        "aac" => "audio/aac", "m4a" => "audio/mp4",
+                        "opus" => "audio/opus", "weba" => "audio/webm",
+                        _ => "audio/mpeg"
+                    };
+                    var info = new System.IO.FileInfo(System.IO.Path.Combine(root, path));
+                    return Ok(new { content = (string?)null, isBinary = true, isImage = false,
+                        isAudio = true, mimeType = mime, fileSize = info.Length });
                 }
                 var fileInfo = new System.IO.FileInfo(System.IO.Path.Combine(root, path));
                 return Ok(new { content = (string?)null, isBinary = true, isImage = false,

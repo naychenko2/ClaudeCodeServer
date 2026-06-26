@@ -25,13 +25,18 @@ public class SessionManager
     private readonly Lock _saveLock = new();
 
     private readonly string? _mcpConfigPath;
+    private readonly SkillsService _skills;
+    private readonly WorkspaceKnowledgeStore _workspaceStore;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
-        ChatHistoryService history, IConfiguration config)
+        ChatHistoryService history, IConfiguration config, SkillsService skills,
+        WorkspaceKnowledgeStore workspaceStore)
     {
         _projects = projects;
         _hub = hub;
         _history = history;
+        _skills = skills;
+        _workspaceStore = workspaceStore;
 
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
@@ -93,7 +98,7 @@ public class SessionManager
         _sessions.TryGetValue(id, out var entry) ? entry.Info : null;
 
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
-        string? resumeSessionId = null, string? name = null, string? model = null)
+        string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -105,6 +110,7 @@ public class SessionManager
             ClaudeSessionId = resumeSessionId,
             Name = name,
             Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
+            AgentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim(),
         };
 
         var existingHistory = resumeSessionId != null
@@ -115,10 +121,12 @@ public class SessionManager
         var entry = new SessionEntry { Info = session, Accumulator = accumulator };
         _sessions[session.Id] = entry;
 
+        var wk = _workspaceStore.GetByPath(project.RootPath);
         var claudeSession = new ClaudeSession(session, project.RootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
-            project.DifyDatasetId, _mcpConfigPath,
-            ProjectManager.BuildSystemPrompt(project.SystemPrompt, project.DifyDatasetId != null, project.DocumentTags));
+            wk?.DifyDatasetId, _mcpConfigPath,
+            ProjectManager.BuildSystemPrompt(project.SystemPrompt, wk?.DifyDatasetId != null, wk?.DocumentTags),
+            _skills);
         entry.Process = claudeSession;
 
         await claudeSession.StartAsync();
@@ -150,9 +158,12 @@ public class SessionManager
                 : [];
             var accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
             entry.Accumulator = accumulator;
+            var wkRestore = _workspaceStore.GetByPath(project.RootPath);
             var claudeSession = new ClaudeSession(entry.Info, project.RootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
-                project.DifyDatasetId, _mcpConfigPath);
+                wkRestore?.DifyDatasetId, _mcpConfigPath,
+                ProjectManager.BuildSystemPrompt(project.SystemPrompt, wkRestore?.DifyDatasetId != null, wkRestore?.DocumentTags),
+                _skills);
             entry.Process = claudeSession;
             await claudeSession.StartAsync();
         }

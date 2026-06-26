@@ -8,4 +8,7 @@ public class Project
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public string? OwnerId { get; set; }
+    public string? DifyDatasetId { get; set; }
+    public string? SystemPrompt { get; set; }
+    public Dictionary<string, List<string>>? DocumentTags { get; set; }
 }

@@ -24,6 +24,8 @@ public class SessionManager
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
 
+    private readonly string? _mcpConfigPath;
+
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config)
     {
@@ -35,6 +37,8 @@ public class SessionManager
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
             ?? Path.Combine(AppContext.BaseDirectory, "data");
         _sessionsFilePath = Path.Combine(dataDir, "sessions.json");
+
+        _mcpConfigPath = config["McpConfigPath"];
 
         LoadSessions();
     }
@@ -112,7 +116,9 @@ public class SessionManager
         _sessions[session.Id] = entry;
 
         var claudeSession = new ClaudeSession(session, project.RootPath,
-            msg => OnMessageAsync(session.Id, accumulator, msg));
+            msg => OnMessageAsync(session.Id, accumulator, msg),
+            project.DifyDatasetId, _mcpConfigPath,
+            ProjectManager.BuildSystemPrompt(project.SystemPrompt, project.DifyDatasetId != null, project.DocumentTags));
         entry.Process = claudeSession;
 
         await claudeSession.StartAsync();
@@ -145,7 +151,8 @@ public class SessionManager
             var accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
             entry.Accumulator = accumulator;
             var claudeSession = new ClaudeSession(entry.Info, project.RootPath,
-                msg => OnMessageAsync(sessionId, accumulator, msg));
+                msg => OnMessageAsync(sessionId, accumulator, msg),
+                project.DifyDatasetId, _mcpConfigPath);
             entry.Process = claudeSession;
             await claudeSession.StartAsync();
         }

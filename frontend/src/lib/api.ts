@@ -3,6 +3,13 @@ import { request } from './offline';
 
 export type { WorkflowAgentInfo };
 
+export interface DifyDocument {
+  id: string;
+  name: string;
+  indexingStatus: string;
+  tags?: string[];
+}
+
 // Projects
 export const api = {
   auth: {
@@ -40,9 +47,10 @@ export const api = {
     list: () => request<Project[]>('/projects'),
     create: (name: string, rootPath: string | null, createDirectory = false) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory }) }),
-    update: (id: string, data: { name?: string; rootPath?: string }) =>
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
+    getBuiltinPrompt: () => request<{ content: string }>('/projects/builtin-prompt'),
   },
 
   sessions: {
@@ -116,6 +124,25 @@ export const api = {
         throw new Error(err.error ?? res.statusText);
       }
     },
+  },
+
+  knowledge: {
+    getStatus: (projectId: string) =>
+      request<{ datasetId: string | null; documents: DifyDocument[]; total: number }>(`/projects/${projectId}/knowledge`),
+    indexFile: (projectId: string, relativePath: string) =>
+      request<{ datasetId: string; document: DifyDocument }>(
+        `/projects/${projectId}/knowledge/index`,
+        { method: 'POST', body: JSON.stringify({ relativePath }) }
+      ),
+    deleteDocument: (projectId: string, documentId: string) =>
+      request<void>(`/projects/${projectId}/knowledge/documents/${documentId}`, { method: 'DELETE' }),
+    deleteDataset: (projectId: string) =>
+      request<void>(`/projects/${projectId}/knowledge`, { method: 'DELETE' }),
+    setDocumentTags: (projectId: string, documentName: string, tags: string[]) =>
+      request<void>(`/projects/${projectId}/knowledge/tags`, {
+        method: 'PUT',
+        body: JSON.stringify({ documentName, tags }),
+      }),
   },
 
   workflow: {

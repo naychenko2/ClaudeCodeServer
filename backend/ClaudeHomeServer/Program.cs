@@ -36,6 +36,8 @@ builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");
+builder.Services.AddReverseProxy()
+    .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
 builder.Services.Configure<DifyOptions>(builder.Configuration.GetSection(DifyOptions.Section));
 builder.Services.AddSingleton<KnowledgeService>();
 
@@ -184,6 +186,7 @@ if (Directory.Exists(distPath))
     app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });
 }
 
+app.MapReverseProxy();
 app.MapControllers();
 app.MapHub<SessionHub>("/hubs/session");
 

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type ReactNode } from 'react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
@@ -14,6 +14,8 @@ interface Props {
   onOpenFile: (path: string) => void;
   activeFilePath?: string | null;
   isMobile?: boolean;
+  onAddToKnowledge?: (relativePath: string) => void;
+  indexedFileNames?: Set<string>;
 }
 
 // Персистентное состояние дерева на уровне модуля — переживает размонтирование
@@ -102,7 +104,64 @@ interface TreeNode {
   depth: number;
 }
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false }: Props) {
+function FilesTip({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
+  return (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+      <div style={{
+        width: 28, height: 28, borderRadius: R.md, background: C.bgInset,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0, color: C.textSecondary,
+      }}>
+        {icon}
+      </div>
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, marginBottom: 2 }}>{title}</div>
+        <div style={{ fontSize: 11.5, color: C.textMuted, lineHeight: 1.55 }}>{text}</div>
+      </div>
+    </div>
+  );
+}
+
+function FilesRootEmptyState() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 16 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+        <div style={{ width: 48, height: 48, borderRadius: 14, background: C.bgInset, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>Проект пуст</div>
+          <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>Здесь пока нет файлов</div>
+        </div>
+      </div>
+
+      <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
+        <FilesTip
+          icon={
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+            </svg>
+          }
+          title="Файлы и структура проекта"
+          text="Создавайте и загружайте файлы, организуйте их по папкам. Claude видит всю структуру проекта при работе над задачами."
+        />
+        <FilesTip
+          icon={
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+            </svg>
+          }
+          title="Офлайн-доступ"
+          text="Нажмите иконку облачка рядом с файлом или папкой — они сохранятся для просмотра без интернета. Помеченные файлы доступны в приложении даже при отсутствии соединения."
+        />
+      </div>
+    </div>
+  );
+}
+
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, onAddToKnowledge, indexedFileNames }: Props) {
   const online = useOnline();
   const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
@@ -372,8 +431,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             fontFamily: "'JetBrains Mono', monospace",
             fontSize: 13,
             fontWeight: entry.isDirectory ? 700 : 500,
-            color: '#39332B',
-            // мобайл: переносим имя целиком (тач без hover); десктоп: ellipsis + тултип
+            color: (!entry.isDirectory && indexedFileNames?.has(entry.name))
+              ? '#3F7A4F'
+              : '#39332B',
             ...(isMobile
               ? { whiteSpace: 'normal', wordBreak: 'break-all', lineHeight: 1.35 }
               : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
@@ -387,6 +447,26 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         </span>
         {entry.isModified && (
           <span style={{ fontSize: 9, fontWeight: 700, color: '#C2693B', background: '#FBEBE0', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
+        )}
+        {/* Кнопка «добавить в БЗ» — только для файлов не в БЗ.
+            Десктоп: появляется при hover. Мобила: всегда видна (hover недоступен). */}
+        {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && (
+          isMobile || hoveredPath === entry.path ? (
+            <button
+              onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
+              title="Добавить в базу знаний"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+                {/* крупный плюс в верхней трети */}
+                <path d="M12 1v7M8.5 4.5h7" strokeWidth="2.5"/>
+                {/* бочка в нижних двух третях */}
+                <ellipse cx="12" cy="11" rx="9" ry="3" strokeWidth="1.8"/>
+                <path d="M21 17.5c0 1.66-4 3-9 3s-9-1.34-9-3" strokeWidth="1.8"/>
+                <path d="M3 11v9c0 1.66 4 3 9 3s9-1.34 9-3V11" strokeWidth="1.8"/>
+              </svg>
+            </button>
+          ) : null
         )}
         {/* Маркер/тоггл синхронизации */}
         {(() => {
@@ -407,7 +487,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             if (sstate === 'direct') {
               return <button onClick={e => handleToggleSync(entry, e)} title="Отключить синхронизацию" style={btnStyle}><CloudIcon variant="direct" /></button>;
             }
-            if (hoveredPath === entry.path) {
+            if (isMobile || hoveredPath === entry.path) {
               return <button onClick={e => handleToggleSync(entry, e)} title="Синхронизировать для офлайна" style={btnStyle}><CloudIcon variant="idle" /></button>;
             }
             return null;
@@ -537,23 +617,20 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           mobileDirLoading ? (
             <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
           ) : mobileEntries.length === 0 ? (
-            <EmptyState
-              icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
-              title="Папка пуста"
-              subtitle="Здесь пока нет файлов"
-            />
+            mobileDir === '' ? <FilesRootEmptyState /> : (
+              <EmptyState
+                icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
+                title="Папка пуста"
+                subtitle="Здесь пока нет файлов"
+              />
+            )
           ) : (
             mobileEntries.map(entry => renderFileRow(entry, 0, false, true))
           )
         ) : rootLoading ? (
           <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
         ) : flatTree.length === 0 ? (
-          // Дерево (десктоп/планшет)
-          <EmptyState
-            icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
-            title="Папка пуста"
-            subtitle="Здесь пока нет файлов"
-          />
+          <FilesRootEmptyState />
         ) : (
           flatTree.map(({ entry, depth }) => renderFileRow(entry, depth))
         )}

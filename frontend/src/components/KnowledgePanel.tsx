@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import type { Project } from '../types';
 import type { DifyDocument } from '../lib/api';
 import { api } from '../lib/api';
@@ -63,26 +63,40 @@ function statusColor(indexingStatus: string): string {
 
 // --- Диалог редактирования тегов ---
 
+const MAX_VISIBLE_SUGGESTIONS = 9;
+
 interface TagsDialogProps {
   doc: DifyDocument;
+  existingTags: string[];
   onClose: () => void;
   onSave: (tags: string[]) => Promise<void>;
 }
 
-function TagsDialog({ doc, onClose, onSave }: TagsDialogProps) {
+function TagsDialog({ doc, existingTags, onClose, onSave }: TagsDialogProps) {
   const displayName = doc.name.includes('/') ? doc.name.split('/').pop()! : doc.name;
   const [tags, setTags] = useState<string[]>(doc.tags ?? []);
   const [input, setInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [suggestionsExpanded, setSuggestionsExpanded] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  const addTag = () => {
-    const tag = input.trim().toLowerCase();
-    if (!tag || tags.includes(tag)) { setInput(''); return; }
-    setTags(prev => [...prev, tag]);
+  const query = input.trim().toLowerCase();
+
+  // Теги из других документов, не добавленные в текущий
+  const available = existingTags.filter(t => !tags.includes(t));
+  const filtered = query ? available.filter(t => t.includes(query)) : available;
+  const visibleSuggestions = (query || suggestionsExpanded)
+    ? filtered
+    : filtered.slice(0, MAX_VISIBLE_SUGGESTIONS);
+  const hiddenCount = (!query && !suggestionsExpanded) ? Math.max(0, filtered.length - MAX_VISIBLE_SUGGESTIONS) : 0;
+
+  const addTag = (tag?: string) => {
+    const value = (tag ?? (filtered.length === 1 ? filtered[0] : input)).trim().toLowerCase();
+    if (!value || tags.includes(value)) { if (!tag) setInput(''); return; }
+    setTags(prev => [...prev, value]);
     setInput('');
   };
 
@@ -151,7 +165,7 @@ function TagsDialog({ doc, onClose, onSave }: TagsDialogProps) {
 
         {/* Тело */}
         <div style={{ padding: '14px 16px', flex: 1 }}>
-          {/* Существующие теги */}
+          {/* Активные теги документа */}
           {tags.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
               {tags.map(tag => (
@@ -177,10 +191,9 @@ function TagsDialog({ doc, onClose, onSave }: TagsDialogProps) {
           <input
             ref={inputRef}
             value={input}
-            onChange={e => setInput(e.target.value)}
+            onChange={e => { setInput(e.target.value); setSuggestionsExpanded(false); }}
             onKeyDown={handleKeyDown}
-            onBlur={addTag}
-            placeholder="Добавить тег… (Enter)"
+            placeholder="Новый тег… (Enter)"
             style={{
               width: '100%', boxSizing: 'border-box',
               padding: '7px 10px',
@@ -192,6 +205,60 @@ function TagsDialog({ doc, onClose, onSave }: TagsDialogProps) {
               fontFamily: FONT.sans,
             }}
           />
+
+          {/* Теги из других документов */}
+          {existingTags.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 10, color: C.textMuted, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {query ? `Из других документов (${filtered.length})` : 'Из других документов'}
+              </div>
+              {filtered.length === 0 && query ? (
+                <div style={{ fontSize: 11, color: C.textMuted }}>Нет совпадений — нажмите Enter чтобы создать «{query}»</div>
+              ) : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                  {visibleSuggestions.map(tag => (
+                    <button
+                      key={tag}
+                      onClick={() => addTag(tag)}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center',
+                        background: C.bgInset, color: C.textSecondary,
+                        border: `1px solid ${C.border}`,
+                        borderRadius: R.sm, padding: '3px 8px',
+                        fontSize: 11, fontWeight: 400,
+                        cursor: 'pointer', fontFamily: FONT.sans,
+                        transition: 'background 0.1s, color 0.1s',
+                      }}
+                      onMouseEnter={e => {
+                        (e.currentTarget as HTMLButtonElement).style.background = C.accentLight;
+                        (e.currentTarget as HTMLButtonElement).style.color = C.accent;
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = `${C.accent}40`;
+                      }}
+                      onMouseLeave={e => {
+                        (e.currentTarget as HTMLButtonElement).style.background = C.bgInset;
+                        (e.currentTarget as HTMLButtonElement).style.color = C.textSecondary;
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = C.border;
+                      }}
+                    >
+                      + {tag}
+                    </button>
+                  ))}
+                  {hiddenCount > 0 && (
+                    <button
+                      onClick={() => setSuggestionsExpanded(true)}
+                      style={{
+                        background: 'none', border: 'none', cursor: 'pointer',
+                        fontSize: 11, color: C.textMuted, padding: '3px 4px',
+                        fontFamily: FONT.sans,
+                      }}
+                    >
+                      ещё {hiddenCount} ↓
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {error && (
             <div style={{ fontSize: 11, color: C.accent, marginTop: 8 }}>{error}</div>
@@ -343,6 +410,26 @@ function DocumentRow({ doc, deleting, retrying, isMobile, onDelete, onRetry, onE
   );
 }
 
+// --- Подсказка в empty state ---
+
+function KnowledgeTip({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
+  return (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+      <div style={{
+        width: 28, height: 28, borderRadius: R.md, background: C.bgInset,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0, color: C.textSecondary,
+      }}>
+        {icon}
+      </div>
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, marginBottom: 2 }}>{title}</div>
+        <div style={{ fontSize: 11.5, color: C.textMuted, lineHeight: 1.55 }}>{text}</div>
+      </div>
+    </div>
+  );
+}
+
 // --- Главный компонент ---
 
 export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged }: Props) {
@@ -433,7 +520,7 @@ export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged }
 
   const handleSaveTags = async (tags: string[]) => {
     if (!tagEditDoc) return;
-    await api.knowledge.setDocumentTags(project.id, tagEditDoc.name, tags);
+    await api.knowledge.setDocumentTags(project.id, tagEditDoc.name, tagEditDoc.id, tags);
     // Оптимистичное обновление локального состояния
     setStatus(prev => prev ? {
       ...prev,
@@ -482,15 +569,50 @@ export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged }
       {/* Список документов */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {!error && (!status?.datasetId || status.documents.length === 0) ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 10, padding: '24px 16px' }}>
-            <div style={{ width: 44, height: 44, borderRadius: 12, background: C.bgInset, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <DatabaseIcon size={22} />
-            </div>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: C.textSecondary, marginBottom: 4 }}>Нет документов</div>
-              <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.5 }}>
-                Добавьте файл через<br />файловый менеджер
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 16 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 48, height: 48, borderRadius: 14, background: C.bgInset, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <DatabaseIcon size={24} />
               </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>Нет документов</div>
+                <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
+                  Добавьте файл через<br />файловый менеджер
+                </div>
+              </div>
+            </div>
+
+            {/* Подсказки о базе знаний */}
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
+              <KnowledgeTip
+                icon={
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+                  </svg>
+                }
+                title="Что такое база знаний"
+                text="Большие документы — книги, статьи — Claude обрабатывает медленно: ему нужно прочитать их целиком. В базе знаний документы индексируются заранее, поэтому Claude ищет по ним быстро, не читая каждый раз с начала."
+              />
+              <KnowledgeTip
+                icon={
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                    <line x1="9" y1="5" x2="9" y2="8" strokeWidth="2.5"/><line x1="6.5" y1="6.5" x2="11.5" y2="6.5" strokeWidth="2.5"/>
+                  </svg>
+                }
+                title="Как добавить документ"
+                text="В файловом менеджере нажмите иконку базы данных рядом с нужным файлом — он появится здесь и будет проиндексирован."
+              />
+              <KnowledgeTip
+                icon={
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+                    <line x1="7" y1="7" x2="7.01" y2="7"/>
+                  </svg>
+                }
+                title="Зачем нужны теги"
+                text="Теги позволяют обращаться к базе знаний выборочно: когда Claude ищет информацию, можно ограничить поиск только документами с нужными тегами — это сокращает объём обработки и повышает точность ответа."
+              />
             </div>
           </div>
         ) : (
@@ -533,6 +655,14 @@ export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged }
       {tagEditDoc && (
         <TagsDialog
           doc={tagEditDoc}
+          existingTags={
+            [...new Set(
+              status?.documents
+                .filter(d => d.id !== tagEditDoc.id)
+                .flatMap(d => d.tags ?? [])
+                .sort() ?? []
+            )]
+          }
           onClose={() => setTagEditDoc(null)}
           onSave={handleSaveTags}
         />

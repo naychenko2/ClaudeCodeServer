@@ -120,7 +120,8 @@ public class FileService
         var ext = Path.GetExtension(path).ToLowerInvariant();
         var binaryExts = new[] { ".zip", ".tar", ".gz", ".exe", ".dll", ".bin", ".pdf",
             ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
-            ".mp3", ".mp4", ".avi", ".mov", ".wasm", ".so", ".dylib" };
+            ".mp3", ".mp4", ".avi", ".mov", ".wasm", ".so", ".dylib",
+            ".pptx", ".ppt" };
         return binaryExts.Contains(ext);
     }
 

@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import type { Project, Session } from '../types';
+import type { Project, Session, AgentInfo } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
@@ -17,9 +17,10 @@ interface Props {
   onSessionsChanged?: (count: number) => void;
   isMobile?: boolean;
   workflowRunningFor?: string;
+  selectedAgent?: AgentInfo | null;
 }
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor }: Props) {
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor, selectedAgent }: Props) {
   const online = useOnline();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
@@ -29,7 +30,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { onSessionsChanged?.(sessions.length); }, [sessions.length, onSessionsChanged]);
 
   const createNew = async (): Promise<Session> => {
-    const s = await api.sessions.create(project.id);
+    const s = await api.sessions.create(project.id, 'auto', undefined, undefined, undefined, selectedAgent?.fileName);
     setSessions(prev => [s, ...prev]);
     onSelect(s);
     return s;

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback, createContext, useContext, Fragment } from 'react';
 import { getExplorerCreateInDir } from './FileExplorer';
-import type { Project, Session, ChatItem, FileEntry } from '../types';
+import type { Project, Session, ChatItem, FileEntry, SkillInfo, AgentInfo } from '../types';
 import { useSession } from '../hooks/useSession';
 import { useOnline } from '../hooks/useOnline';
 import { api, type WorkflowAgentInfo } from '../lib/api';
@@ -27,8 +27,11 @@ interface Props {
   isMobile?: boolean;
   onBack?: () => void;
   onWorkflowRunning?: (active: boolean, sessionId: string) => void;
-  isFirstSession?: boolean;
   onOpenSidebar?: () => void;
+  skills?: SkillInfo[];
+  agents?: AgentInfo[];
+  selectedAgent?: AgentInfo | null;
+  onAgentChange?: (agent: AgentInfo | null) => void;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -454,9 +457,16 @@ function AttachPicker({ projectId, onPick, onClose }: AttachPickerProps) {
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile, onBack, onWorkflowRunning, isFirstSession, onOpenSidebar }: Props) {
-  const { items, isWaiting, isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange }: Props) {
+  const { items, isWaiting, isJoined, isHistoryLoading, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
   const online = useOnline();
+
+  const [hasCLAUDEmd, setHasCLAUDEmd] = useState<boolean | null>(null);
+  useEffect(() => {
+    api.files.list(project.id)
+      .then(files => setHasCLAUDEmd(files.some(f => !f.isDirectory && f.name === 'CLAUDE.md')))
+      .catch(() => setHasCLAUDEmd(true)); // при ошибке не показываем баннер
+  }, [project.id]);
 
   // Строим кэш тарифов fal-ai из результатов get_pricing в ленте
   const falPricing = useMemo(() => {
@@ -848,9 +858,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         pushNode(
           kind === 'user_message'
             ? <div key={`sp-${i}`} style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>{node}</div>
-            : needsTopSpacing
-              ? <div key={`sp-${i}`} style={{ marginTop: 12 }}>{node}</div>
-              : node,
+            : kind === 'result'
+              ? <div key={`sp-${i}`} style={{ marginTop: 12, display: 'flex', justifyContent: 'center' }}>{node}</div>
+              : needsTopSpacing
+                ? <div key={`sp-${i}`} style={{ marginTop: 12 }}>{node}</div>
+                : node,
           i
         );
         i++;
@@ -966,6 +978,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               onModeChange={setMode}
               attachments={attachedFiles}
               onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
+              skills={skills}
+              agents={agents}
+              selectedAgent={selectedAgent}
+              onAgentChange={onAgentChange}
             />
           </div>
         </div>
@@ -1003,9 +1019,19 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {/* Спиннер загрузки истории */}
+        {items.length === 0 && isHistoryLoading && (
+          <div style={{
+            position: 'absolute', inset: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <div className="tool-spinner" style={{ width: 22, height: 22, borderWidth: 2.5 }} />
+          </div>
+        )}
+
         {/* Empty state */}
-        {items.length === 0 && online && (
+        {items.length === 0 && !isHistoryLoading && online && (
           <div style={{
             flex: 1, display: 'flex', flexDirection: 'column',
             alignItems: 'center', justifyContent: 'center',
@@ -1021,7 +1047,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               }} />
             </div>
 
-            {isFirstSession ? (
+            {hasCLAUDEmd === false ? (
               <>
                 {/* Заголовок */}
                 <div style={{
@@ -1136,6 +1162,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             attachments={attachedFiles}
             onRemoveAttachment={path => setAttachedFiles(prev => prev.filter(p => p !== path))}
             isMobile={isMobile}
+            skills={skills}
+            agents={agents}
+            selectedAgent={selectedAgent}
+            onAgentChange={onAgentChange}
           />
         </div>
       </div>
@@ -1783,7 +1813,7 @@ function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 
       ? [{ new: inp.content }]
     : [];
   const hasDiff = editHunks.length > 0;
-  const hasResult = item.result !== undefined && item.result.trim().length > 0;
+  const hasResult = item.result != null && item.result.trim().length > 0;
   // Медиа (изображения + видео) из результата MCP-инструментов
   const media = hasResult && !item.isError ? extractMediaFromResult(item.result!) : [];
   const mediaMeta = hasResult && !item.isError ? extractMediaMeta(item.result!) : {};

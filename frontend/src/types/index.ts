@@ -6,6 +6,9 @@ export interface Project {
   createdAt: string;
   updatedAt: string;
   sessionCount?: number;
+  difyDatasetId?: string;
+  systemPrompt?: string;
+  builtInSystemPrompt?: string;
 }
 
 export interface AppSettings {
@@ -24,6 +27,7 @@ export interface Session {
   updatedAt: string;
   name?: string;
   model?: string;
+  agentName?: string;
 }
 
 export interface FileEntry {
@@ -101,6 +105,28 @@ export type ChatItem =
   | { kind: 'resumed' }
   | { kind: 'session_ended' }
   | { kind: 'error'; text: string; canRetry?: boolean };
+
+// Скиллы и агенты
+export interface SkillInfo {
+  name: string;
+  description: string;
+  argumentHint?: string;
+  filePath: string;
+}
+
+export interface AgentInfo {
+  name: string;
+  description: string;
+  color?: string;
+  tools: string[];
+  permissionMode?: string;
+  fileName: string; // без .md
+}
+
+export interface SkillsData {
+  skills: SkillInfo[];
+  agents: AgentInfo[];
+}
 
 export interface AuthState {
   serverUrl: string;

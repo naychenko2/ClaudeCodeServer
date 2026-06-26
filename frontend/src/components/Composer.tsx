@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
+import { SkillsDropdown } from './SkillsDropdown';
+import { AgentSelector } from './AgentSelector';
+import type { SkillInfo, AgentInfo } from '../types';
 
 export interface ComposerProps {
   onSend: (text: string, attachments: string[]) => void;
@@ -14,6 +17,10 @@ export interface ComposerProps {
   // Офлайн: показываем заглушку вместо полей, но НЕ размонтируем компонент —
   // иначе теряется набранный черновик при кратком пропадании сети
   offline?: boolean;
+  skills?: SkillInfo[];
+  agents?: AgentInfo[];
+  selectedAgent?: AgentInfo | null;
+  onAgentChange?: (agent: AgentInfo | null) => void;
 }
 
 type Mode = 'auto' | 'plan' | 'ask';
@@ -116,11 +123,19 @@ export function Composer({
   onRemoveAttachment,
   isMobile,
   offline,
+  skills = [],
+  agents = [],
+  selectedAgent = null,
+  onAgentChange,
 }: ComposerProps) {
   const [text, setText] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  // Autocomplete скиллов
+  const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
+  const [skillQuery, setSkillQuery] = useState('');
+  const skillWordStartRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
   const recCancelRef = useRef(false);
@@ -148,6 +163,57 @@ export function Composer({
     ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
 
   const hasText = text.trim().length > 0;
+
+  // Обновление состояния autocomplete при каждом изменении текста
+  const updateSkillDropdown = useCallback((newText: string, cursorPos: number) => {
+    if (skills.length === 0) { setShowSkillsDropdown(false); return; }
+    // Ищем слово под курсором: от курсора назад до пробела/переноса
+    let wordStart = cursorPos - 1;
+    while (wordStart >= 0 && newText[wordStart] !== ' ' && newText[wordStart] !== '\n') wordStart--;
+    wordStart++;
+    const word = newText.slice(wordStart, cursorPos);
+    if (word.startsWith('/')) {
+      skillWordStartRef.current = wordStart;
+      setSkillQuery(word.slice(1));
+      setShowSkillsDropdown(true);
+    } else {
+      setShowSkillsDropdown(false);
+    }
+  }, [skills.length]);
+
+  const handleSkillSelect = useCallback((skill: SkillInfo) => {
+    const wordStart = skillWordStartRef.current;
+    const before = text.slice(0, wordStart);
+    const after = text.slice(wordStart + 1 + skillQuery.length); // +1 за /
+    const inserted = '/' + skill.name + (skill.argumentHint ? ' ' : ' ');
+    const newText = before + inserted + after.trimStart();
+    setText(newText);
+    setShowSkillsDropdown(false);
+    setTimeout(() => {
+      const el = textareaRef.current;
+      if (el) {
+        const pos = (before + inserted).length;
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      }
+    }, 0);
+  }, [text, skillQuery]);
+
+  const handleSlashButton = useCallback(() => {
+    const el = textareaRef.current;
+    const pos = el ? (el.selectionStart ?? text.length) : text.length;
+    const before = text.slice(0, pos);
+    const after = text.slice(pos);
+    const needSpace = before.length > 0 && before[before.length - 1] !== ' ' && before[before.length - 1] !== '\n';
+    const inserted = (needSpace ? ' ' : '') + '/';
+    const newText = before + inserted + after;
+    setText(newText);
+    const newPos = pos + inserted.length;
+    updateSkillDropdown(newText, newPos);
+    setTimeout(() => {
+      if (el) { el.focus(); el.setSelectionRange(newPos, newPos); }
+    }, 0);
+  }, [text, updateSkillDropdown]);
 
   // Авторазмер textarea
   const autoResize = useCallback(() => {
@@ -214,6 +280,7 @@ export function Composer({
 
   // Стили контейнера — поле всегда активно (доступно для ввода и во время генерации)
   const containerStyle: React.CSSProperties = {
+    position: 'relative',
     background: C.bgWhite,
     border: `1px solid ${hasText ? C.accent : C.border}`,
     borderRadius: R.xxl,
@@ -254,6 +321,22 @@ export function Composer({
     </button>
   );
 
+  const slashButton = skills.length > 0 ? (
+    <button
+      onClick={handleSlashButton}
+      title="Выбрать скилл"
+      style={{
+        width: 32, height: 32, borderRadius: R.pill, border: 'none', background: 'none',
+        cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
+        justifyContent: 'center', flexShrink: 0,
+        fontFamily: FONT.mono, fontSize: 16, fontWeight: 600, lineHeight: 1,
+        paddingBottom: 1,
+      }}
+    >
+      /
+    </button>
+  ) : null;
+
   const inputArea = isListening ? (
     <div style={{ ...dotsStyle, gap: 10 }}>
       <span style={{ width: 9, height: 9, borderRadius: '50%', background: '#D9534F', animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
@@ -265,7 +348,10 @@ export function Composer({
       ref={textareaRef}
       className="cc-composer-input"
       value={text}
-      onChange={(e) => setText(e.target.value)}
+      onChange={(e) => {
+        setText(e.target.value);
+        updateSkillDropdown(e.target.value, e.target.selectionStart ?? e.target.value.length);
+      }}
       onKeyDown={handleKeyDown}
       onInput={autoResize}
       placeholder="Спросите Claude…"
@@ -442,8 +528,29 @@ export function Composer({
     );
   }
 
+  // AgentSelector кнопка — переиспользуется в обоих раскладках
+  const agentSelector = agents.length > 0 ? (
+    <AgentSelector
+      agents={agents}
+      selectedAgent={selectedAgent ?? null}
+      onSelect={onAgentChange ?? (() => {})}
+      isMobile={isMobile}
+    />
+  ) : null;
+
   return (
     <div style={containerStyle}>
+      {/* Dropdown скиллов (показывается над полем ввода при /query) */}
+      {showSkillsDropdown && skills.length > 0 && (
+        <SkillsDropdown
+          skills={skills}
+          query={skillQuery}
+          onSelect={handleSkillSelect}
+          onClose={() => setShowSkillsDropdown(false)}
+          anchorRef={textareaRef as React.RefObject<HTMLElement | null>}
+          isMobile={isMobile}
+        />
+      )}
       {/* Чипы вложений */}
       {attachments.length > 0 && (
         <div
@@ -505,7 +612,9 @@ export function Composer({
           <div style={{ display: 'flex' }}>{inputArea}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {attachButton}
+            {slashButton}
             {modeButton}
+            {agentSelector}
             <div style={{ flex: 1 }} />
             {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
           </div>
@@ -514,8 +623,10 @@ export function Composer({
         /* Десктоп: всё в одну строку */
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           {attachButton}
+          {slashButton}
           {inputArea}
           {modeButton}
+          {agentSelector}
           {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
         </div>
       )}

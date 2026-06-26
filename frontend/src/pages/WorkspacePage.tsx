@@ -1,23 +1,27 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { Project, Session } from '../types';
+import type { Project, Session, AgentInfo, SkillsData } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
 import { FileViewer } from '../components/FileViewer';
+import { KnowledgePanel } from '../components/KnowledgePanel';
+import { SkillsPanel } from '../components/SkillsPanel';
 import { ConnectionStatus } from '../components/ConnectionStatus';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
+import { api } from '../lib/api';
 import { C, FONT } from '../lib/design';
 import { PillSwitch } from '../components/Toolbar';
 import { BackButton } from '../components/ui';
 import { navPush, type NavSnapshot } from '../lib/nav';
+import { EditDialog } from '../features/projects/dialogs/EditDialog';
 
 interface Props {
   project: Project;
   onBack: () => void;
 }
 
-type LeftTab = 'sessions' | 'files';
+type LeftTab = 'sessions' | 'files' | 'knowledge';
 
 function useWindowWidth() {
   const [width, setWidth] = useState(window.innerWidth);
@@ -95,8 +99,10 @@ export function WorkspacePage({ project, onBack }: Props) {
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
   const [chatDockExpanded, setChatDockExpanded] = useState(() => loadWorkspaceState(project.id)?.chatDockExpanded ?? true);
   const [chatFlex, setChatFlex] = useState(1); // 1:1 = 50/50 по умолчанию
-  const [sessionCount, setSessionCount] = useState(0);
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
+  const [showSkillsModal, setShowSkillsModal] = useState(false);
+  const [editProjectOpen, setEditProjectOpen] = useState(false);
+  const [projectForEdit, setProjectForEdit] = useState(project);
   const handleWorkflowRunning = useCallback((active: boolean, sessionId: string) => {
     setWorkflowRunningFor(prev => {
       if (active) return sessionId;
@@ -105,6 +111,34 @@ export function WorkspacePage({ project, onBack }: Props) {
   }, []);
   const [chatHeight, setChatHeight] = useState(280);
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  const [indexedFileNames, setIndexedFileNames] = useState<Set<string>>(new Set());
+  const [indexingFiles, setIndexingFiles] = useState<Set<string>>(new Set());
+  const [skillsData, setSkillsData] = useState<SkillsData | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<AgentInfo | null>(() => {
+    try {
+      const raw = localStorage.getItem(`cc_agent_${project.id}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
+
+  const handleAgentChange = (agent: AgentInfo | null) => {
+    setSelectedAgent(agent);
+    if (agent) localStorage.setItem(`cc_agent_${project.id}`, JSON.stringify(agent));
+    else localStorage.removeItem(`cc_agent_${project.id}`);
+  };
+
+  useEffect(() => {
+    api.knowledge.getStatus(project.id).then(s => {
+      setIndexedFileNames(new Set(s.documents.map(d => {
+        const parts = d.name.split('/');
+        return parts[parts.length - 1];
+      })));
+    }).catch(() => {});
+  }, [project.id]);
+
+  useEffect(() => {
+    api.skills.list(project.id).then(setSkillsData).catch(() => {});
+  }, [project.id]);
   // мобайл: показываем либо sidebar, либо chat
   const [mobileView, setMobileView] = useState<'sidebar' | 'chat'>('sidebar');
 
@@ -293,10 +327,27 @@ export function WorkspacePage({ project, onBack }: Props) {
     if (isMobile) setMobileView('sidebar');
   };
 
+  const handleAddToKnowledge = useCallback(async (relativePath: string) => {
+    setIndexingFiles(prev => new Set([...prev, relativePath]));
+    try {
+      await api.knowledge.indexFile(project.id, relativePath);
+      const fileName = relativePath.split('/').pop() ?? relativePath;
+      setIndexedFileNames(prev => new Set([...prev, fileName]));
+    } catch {
+      // KnowledgePanel сразу показывает актуальный статус
+    } finally {
+      setIndexingFiles(prev => { const next = new Set(prev); next.delete(relativePath); return next; });
+    }
+  }, [project.id]);
+
   const TabSwitcher = (
     <PillSwitch<LeftTab>
       value={leftTab}
-      options={[{ value: 'sessions', label: 'Чаты' }, { value: 'files', label: 'Файлы' }]}
+      options={[
+        { value: 'sessions', label: 'Чаты' },
+        { value: 'files', label: 'Файлы' },
+        { value: 'knowledge', label: 'БЗ' },
+      ]}
       onChange={handleTabSwitch}
       fill
     />
@@ -308,17 +359,19 @@ export function WorkspacePage({ project, onBack }: Props) {
       {!isMobile && (
         <div style={{ padding: '16px 16px 14px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 15, padding: '0 2px' }}>
-            <div style={{ width: 28, height: 28, borderRadius: 8, background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <svg width="16" height="16" viewBox="0 0 512 512" fill="none">
-                <g stroke="#FFFFFF" strokeWidth="52" strokeLinecap="round" fill="none">
-                  <line x1="256" y1="130" x2="256" y2="382"/>
-                  <line x1="130" y1="256" x2="382" y2="256"/>
-                  <line x1="160" y1="160" x2="352" y2="352"/>
-                  <line x1="352" y1="160" x2="160" y2="352"/>
-                </g>
-              </svg>
+            <div onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, cursor: 'pointer' }}>
+              <div style={{ width: 28, height: 28, borderRadius: 8, background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <svg width="16" height="16" viewBox="0 0 512 512" fill="none">
+                  <g stroke="#FFFFFF" strokeWidth="52" strokeLinecap="round" fill="none">
+                    <line x1="256" y1="130" x2="256" y2="382"/>
+                    <line x1="130" y1="256" x2="382" y2="256"/>
+                    <line x1="160" y1="160" x2="352" y2="352"/>
+                    <line x1="352" y1="160" x2="160" y2="352"/>
+                  </g>
+                </svg>
+              </div>
+              <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, flex: 1, minWidth: 0 }}>Claude Home Server</span>
             </div>
-            <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, flex: 1, minWidth: 0 }}>Claude Home Server</span>
             {/* В режиме open — кнопка «закрепить» (📌) */}
             {sidebarMode === 'open' && (
               <button
@@ -347,20 +400,44 @@ export function WorkspacePage({ project, onBack }: Props) {
       )}
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {leftTab === 'sessions' ? (
-          <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onSessionsChanged={setSessionCount} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+          <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
+        ) : leftTab === 'files' ? (
+          <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} />
         ) : (
-          <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} />
+          <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} />
         )}
       </div>
-      {/* Project footer — клик возвращает к списку проектов */}
-      <div
-        onClick={onBack}
-        style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 11, background: C.bgInset, cursor: 'pointer', flexShrink: 0 }}
-      >
-        <ConnectionStatus variant="footer" title={project.name} subtitle={project.relativePath ?? project.rootPath} />
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A8F7E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M7 10l5-5 5 5M7 14l5 5 5-5" />
-        </svg>
+      {/* Project footer */}
+      <div style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 10, background: C.bgInset, flexShrink: 0 }}>
+        <div onClick={onBack} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', minWidth: 0, paddingRight: 4 }}>
+          <ConnectionStatus variant="footer" title={projectForEdit.name} subtitle={projectForEdit.relativePath ?? projectForEdit.rootPath} />
+        </div>
+        <button
+          onClick={() => setEditProjectOpen(true)}
+          title="Настройки проекта"
+          style={{ width: 28, height: 28, border: 'none', borderRadius: 7, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+        </button>
+        <button
+          onClick={() => setShowSkillsModal(true)}
+          title="Скиллы и агенты"
+          style={{ width: 28, height: 28, border: 'none', borderRadius: 7, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"/>
+            <path d="m14 7 3 3"/>
+            <path d="M5 6v4"/>
+            <path d="M19 14v4"/>
+            <path d="M10 2v2"/>
+            <path d="M7 8H3"/>
+            <path d="M21 16h-4"/>
+            <path d="M11 3H9"/>
+          </svg>
+        </button>
       </div>
     </div>
   );
@@ -377,7 +454,11 @@ export function WorkspacePage({ project, onBack }: Props) {
             </BackButton>
             <PillSwitch<LeftTab>
               value={leftTab}
-              options={[{ value: 'sessions', label: 'Чаты' }, { value: 'files', label: 'Файлы' }]}
+              options={[
+                { value: 'sessions', label: 'Чаты' },
+                { value: 'files', label: 'Файлы' },
+                { value: 'knowledge', label: 'БЗ' },
+              ]}
               onChange={handleTabSwitch}
               isMobile
             />
@@ -387,24 +468,48 @@ export function WorkspacePage({ project, onBack }: Props) {
         <div style={{ flex: 1, display: !openFile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {leftTab === 'sessions'
-              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onSessionsChanged={setSessionCount} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
-              : <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={handleOpenFileFromTree} />
+              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
+              : leftTab === 'files'
+              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} />
+              : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} />
             }
           </div>
-          <div
-            onClick={onBack}
-            style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 11, background: C.bgInset, cursor: 'pointer', flexShrink: 0 }}
-          >
-            <ConnectionStatus variant="footer" title={project.name} subtitle={project.relativePath ?? project.rootPath} />
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A8F7E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M7 10l5-5 5 5M7 14l5 5 5-5" />
-            </svg>
+          <div style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 10, background: C.bgInset, flexShrink: 0 }}>
+            <div onClick={onBack} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', minWidth: 0, paddingRight: 4 }}>
+              <ConnectionStatus variant="footer" title={projectForEdit.name} subtitle={projectForEdit.relativePath ?? projectForEdit.rootPath} />
+            </div>
+            <button
+              onClick={() => setEditProjectOpen(true)}
+              title="Настройки проекта"
+              style={{ width: 28, height: 28, border: 'none', borderRadius: 7, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+            </button>
+            <button
+              onClick={() => setShowSkillsModal(true)}
+              title="Скиллы и агенты"
+              style={{ width: 28, height: 28, border: 'none', borderRadius: 7, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"/>
+                <path d="m14 7 3 3"/>
+                <path d="M5 6v4"/>
+                <path d="M19 14v4"/>
+                <path d="M10 2v2"/>
+                <path d="M7 8H3"/>
+                <path d="M21 16h-4"/>
+                <path d="M11 3H9"/>
+              </svg>
+            </button>
           </div>
         </div>
         {/* Чат — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {activeSession
-            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} onWorkflowRunning={handleWorkflowRunning} isFirstSession={sessionCount <= 1} />
+            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} onWorkflowRunning={handleWorkflowRunning} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
             : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>Выберите или создайте чат</div>
           }
         </div>
@@ -413,6 +518,30 @@ export function WorkspacePage({ project, onBack }: Props) {
           <div style={{ flex: 1, overflow: 'hidden' }}>
             <FileViewer project={project} filePath={openFile} isMobile onClose={() => window.history.back()} />
           </div>
+        )}
+        {/* Модальное окно скиллов/агентов */}
+        {showSkillsModal && (
+          <div
+            style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+            onClick={e => { if (e.target === e.currentTarget) setShowSkillsModal(false); }}
+          >
+            <div style={{ width: '100%', maxWidth: 600, height: 'min(70vh, 600px)', background: '#FFFFFF', borderRadius: 20, boxShadow: '0 24px 60px rgba(23,19,15,0.40)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+                <span style={{ fontSize: 15, fontWeight: 700, color: C.textHeading, fontFamily: FONT.sans }}>Скиллы и агенты</span>
+                <button onClick={() => setShowSkillsModal(false)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 18, padding: '0 4px', borderRadius: 6 }}>✕</button>
+              </div>
+              <div style={{ flex: 1, overflow: 'hidden' }}>
+                <SkillsPanel projectId={project.id} />
+              </div>
+            </div>
+          </div>
+        )}
+        {editProjectOpen && (
+          <EditDialog
+            project={projectForEdit}
+            onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
+            onClose={() => setEditProjectOpen(false)}
+          />
         )}
       </div>
     );
@@ -442,8 +571,8 @@ export function WorkspacePage({ project, onBack }: Props) {
       {sidebarMode !== 'pinned' && (
         <div style={{
           position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10,
-          width: sidebarWidth,
-          transform: sidebarMode === 'open' ? 'translateX(0)' : `translateX(-${sidebarWidth}px)`,
+          width: 320,
+          transform: sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-320px)',
           transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
           boxShadow: sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
         }}>
@@ -489,7 +618,7 @@ export function WorkspacePage({ project, onBack }: Props) {
             {!openFile && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 {activeSession
-                  ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} isFirstSession={sessionCount <= 1} onOpenSidebar={openSidebar} />
+                  ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
                   : NoSessionWithBar}
               </div>
             )}
@@ -499,7 +628,7 @@ export function WorkspacePage({ project, onBack }: Props) {
               <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
                   {activeSession
-                    ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} isFirstSession={sessionCount <= 1} onOpenSidebar={openSidebar} />
+                    ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
                     : NoSessionWithBar}
                 </div>
                 <Splitter orientation="v" active={draggingSplitter === 'split'}
@@ -522,7 +651,7 @@ export function WorkspacePage({ project, onBack }: Props) {
                 )}
                 {activeSession ? (
                   <div style={{ flexShrink: 0, height: chatDockExpanded ? chatHeight : 56, overflow: 'hidden', transition: chatDockExpanded ? 'none' : 'height 0.2s ease' }}>
-                    <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} dockMode={chatDockExpanded ? 'expanded' : 'collapsed'} onToggleDock={() => setChatDockExpanded(p => !p)} onWorkflowRunning={handleWorkflowRunning} isFirstSession={sessionCount <= 1} onOpenSidebar={openSidebar} />
+                    <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} dockMode={chatDockExpanded ? 'expanded' : 'collapsed'} onToggleDock={() => setChatDockExpanded(p => !p)} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
                   </div>
                 ) : (
                   <div style={{ flexShrink: 0, height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8A8070', fontSize: 13, background: C.bgPanel }}>
@@ -534,6 +663,31 @@ export function WorkspacePage({ project, onBack }: Props) {
           </>
         );
       })()}
+
+      {/* Модальное окно скиллов/агентов */}
+      {showSkillsModal && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={e => { if (e.target === e.currentTarget) setShowSkillsModal(false); }}
+        >
+          <div style={{ width: '100%', maxWidth: 600, height: 'min(70vh, 600px)', background: '#FFFFFF', borderRadius: 20, boxShadow: '0 24px 60px rgba(23,19,15,0.40)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+              <span style={{ fontSize: 15, fontWeight: 700, color: C.textHeading, fontFamily: FONT.sans }}>Скиллы и агенты</span>
+              <button onClick={() => setShowSkillsModal(false)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 18, padding: '0 4px', borderRadius: 6 }}>✕</button>
+            </div>
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              <SkillsPanel projectId={project.id} />
+            </div>
+          </div>
+        </div>
+      )}
+      {editProjectOpen && (
+        <EditDialog
+          project={projectForEdit}
+          onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
+          onClose={() => setEditProjectOpen(false)}
+        />
+      )}
     </div>
   );
 }

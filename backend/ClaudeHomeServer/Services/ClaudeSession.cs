@@ -42,24 +42,24 @@ public class ClaudeSession : IAsyncDisposable
     private readonly ConcurrentDictionary<string, string?> _fileCache = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _debounce = new();
 
-    private readonly string? _difyDatasetId;
+    private readonly string? _rawSystemPrompt;
     private readonly string? _mcpConfigPath;
-    private readonly string? _sessionMcpConfigPath;
-    private readonly string? _systemPrompt;
     private readonly SkillsService? _skills;
+    private readonly WorkspaceKnowledgeStore? _wkStore;
+    // Кэш последнего отправленного системного промпта — передаём только при изменении
+    private string? _lastSentSystemPrompt;
 
     public ClaudeSession(Session info, string rootPath, Func<ServerMessage, Task> onMessage,
-        string? difyDatasetId = null, string? mcpConfigPath = null, string? systemPrompt = null,
-        SkillsService? skills = null)
+        string? mcpConfigPath = null, string? rawSystemPrompt = null,
+        SkillsService? skills = null, WorkspaceKnowledgeStore? workspaceStore = null)
     {
         Info = info;
         _rootPath = rootPath;
         _onMessage = onMessage;
-        _difyDatasetId = difyDatasetId;
         _mcpConfigPath = mcpConfigPath;
-        _systemPrompt = systemPrompt;
+        _rawSystemPrompt = rawSystemPrompt;
         _skills = skills;
-        _sessionMcpConfigPath = CreateSessionMcpConfig(mcpConfigPath, difyDatasetId);
+        _wkStore = workspaceStore;
     }
 
     private static string? CreateSessionMcpConfig(string? basePath, string? datasetId)
@@ -269,32 +269,59 @@ public class ClaudeSession : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(Info.Model))
             args.AddRange(["--model", Info.Model]);
 
-        var effectiveMcpConfig = _sessionMcpConfigPath ?? _mcpConfigPath;
+        // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)
+        var currentWk = _wkStore?.GetByPath(_rootPath);
+        var currentDatasetId = currentWk?.DifyDatasetId;
+        string? turnMcpPath = CreateSessionMcpConfig(_mcpConfigPath, currentDatasetId);
+        var effectiveMcpConfig = turnMcpPath ?? _mcpConfigPath;
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
             args.AddRange(["--mcp-config", effectiveMcpConfig]);
+
+        // Системный промпт: пересчитываем каждый ход — датасет мог появиться после создания сессии.
+        // Передаём через --append-system-prompt только при изменении (кэш _lastSentSystemPrompt).
+        {
+            var basePrompt = ProjectManager.BuildSystemPrompt(
+                _rawSystemPrompt, currentDatasetId != null, currentWk?.DocumentTags);
+
+            string? agentPrompt = null;
+            if (!string.IsNullOrEmpty(Info.AgentName) && _skills is not null)
+                agentPrompt = _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName);
+
+            var combinedPrompt = agentPrompt is not null
+                ? (string.IsNullOrWhiteSpace(basePrompt)
+                    ? agentPrompt
+                    : basePrompt + "\n\n---\n\n" + agentPrompt)
+                : basePrompt;
+
+            if (!string.IsNullOrWhiteSpace(combinedPrompt) && combinedPrompt != _lastSentSystemPrompt)
+            {
+                args.AddRange(["--append-system-prompt", combinedPrompt]);
+                _lastSentSystemPrompt = combinedPrompt;
+            }
+        }
 
         // claude.exe пишет/читает UTF-8. Без явной кодировки .NET берёт системную
         // OEM code page (напр. CP866 на русской Windows) → кракозябры в ответах.
         // Задаём UTF-8 без BOM (BOM сломал бы первое сообщение в stdin).
         var utf8NoBom = new System.Text.UTF8Encoding(false);
 
-        var process = new Process
+        var psi = new ProcessStartInfo
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = FindClaudeExecutable(),
-                Arguments = string.Join(" ", args),
-                WorkingDirectory = _rootPath,
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = utf8NoBom,
-                StandardErrorEncoding = utf8NoBom,
-                StandardInputEncoding = utf8NoBom,
-                CreateNoWindow = true
-            }
+            FileName = FindClaudeExecutable(),
+            WorkingDirectory = _rootPath,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = utf8NoBom,
+            StandardErrorEncoding = utf8NoBom,
+            StandardInputEncoding = utf8NoBom,
+            CreateNoWindow = true
         };
+        // ArgumentList экранирует каждый аргумент корректно (важно для многострочного системного промпта)
+        foreach (var a in args) psi.ArgumentList.Add(a);
+
+        var process = new Process { StartInfo = psi };
 
         process.Start();
         _currentProcess = process;
@@ -306,36 +333,6 @@ public class ClaudeSession : IAsyncDisposable
 
         // Читаем stderr асинхронно, иначе при переполнении буфера процесс зависнет
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
-
-        // Для новой сессии (не resume) — системный промпт проекта.
-        // Claude Code CLI stream-json принимает {"type":"system",...} до первого user-сообщения.
-        // null = проект создан до введения фичи → откат к дефолту; "" = пользователь очистил.
-        if (Info.ClaudeSessionId is null)
-        {
-            var basePrompt = _systemPrompt ?? ProjectManager.BuiltInSystemPrompt;
-
-            // Если выбран агент — инжектируем его системный промпт в дополнение к базовому
-            string? agentPrompt = null;
-            if (!string.IsNullOrEmpty(Info.AgentName) && _skills is not null)
-                agentPrompt = _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName);
-
-            var combinedPrompt = agentPrompt is not null
-                ? (string.IsNullOrWhiteSpace(basePrompt)
-                    ? agentPrompt
-                    : basePrompt + "\n\n---\n\n" + agentPrompt)
-                : basePrompt;
-
-            if (!string.IsNullOrWhiteSpace(combinedPrompt))
-            {
-                var sysMsg = JsonSerializer.Serialize(new
-                {
-                    type = "system",
-                    content = combinedPrompt,
-                });
-                await process.StandardInput.WriteLineAsync(sysMsg);
-                await process.StandardInput.FlushAsync();
-            }
-        }
 
         // stdin оставляем открытым — claude пишет control_response в него при permission-запросах
         var msg = JsonSerializer.Serialize(new
@@ -396,6 +393,7 @@ public class ClaudeSession : IAsyncDisposable
             catch { }
             process.Dispose();
             _currentProcess = null;
+            if (turnMcpPath != null) try { File.Delete(turnMcpPath); } catch { }
 
             if (Info.Status == SessionStatus.Active)
                 Info.Status = SessionStatus.Finished;
@@ -858,7 +856,5 @@ public class ClaudeSession : IAsyncDisposable
         _currentProcess?.Dispose();
         _cts.Dispose();
         _turnLock.Dispose();
-        if (_sessionMcpConfigPath != null)
-            try { File.Delete(_sessionMcpConfigPath); } catch { }
     }
 }

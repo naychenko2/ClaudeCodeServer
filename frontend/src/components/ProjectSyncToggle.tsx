@@ -28,7 +28,7 @@ export function ProjectSyncToggle({ projectId, online }: { projectId: string; on
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
       padding: '12px 14px', background: C.bgWhite, border: `1px solid ${C.border}`,
-      borderRadius: R.xl, marginBottom: 18,
+      borderRadius: R.xl,
     }}>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 14, fontWeight: 600, color: C.textHeading }}>Синхронизировать весь проект</div>

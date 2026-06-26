@@ -1,4 +1,4 @@
-import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile } from '../types';
+import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -55,10 +55,10 @@ export const api = {
 
   sessions: {
     list: (projectId: string) => request<Session[]>(`/projects/${projectId}/sessions`),
-    create: (projectId: string, mode = 'auto', resumeSessionId?: string, name?: string, model?: string) =>
+    create: (projectId: string, mode = 'auto', resumeSessionId?: string, name?: string, model?: string, agentName?: string) =>
       request<Session>(`/projects/${projectId}/sessions`, {
         method: 'POST',
-        body: JSON.stringify({ mode, resumeSessionId, name, model }),
+        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName }),
       }),
     update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {
@@ -138,11 +138,26 @@ export const api = {
       request<void>(`/projects/${projectId}/knowledge/documents/${documentId}`, { method: 'DELETE' }),
     deleteDataset: (projectId: string) =>
       request<void>(`/projects/${projectId}/knowledge`, { method: 'DELETE' }),
-    setDocumentTags: (projectId: string, documentName: string, tags: string[]) =>
+    setDocumentTags: (projectId: string, documentName: string, documentId: string, tags: string[]) =>
       request<void>(`/projects/${projectId}/knowledge/tags`, {
         method: 'PUT',
-        body: JSON.stringify({ documentName, tags }),
+        body: JSON.stringify({ documentName, documentId, tags }),
       }),
+  },
+
+  skills: {
+    list: (projectId: string) => request<SkillsData>(`/projects/${projectId}/skills`),
+    getSkill: (skillName: string) => request<{ content: string }>(`/skills/${skillName}`),
+    saveSkill: (skillName: string, content: string) =>
+      request<void>(`/skills/${skillName}`, { method: 'PUT', body: JSON.stringify({ content }) }),
+    createSkill: (name: string, content: string) =>
+      request<{ name: string }>('/skills', { method: 'POST', body: JSON.stringify({ name, content }) }),
+    getAgent: (projectId: string, agentName: string) =>
+      request<{ content: string }>(`/projects/${projectId}/agents/${agentName}`),
+    saveAgent: (projectId: string, agentName: string, content: string) =>
+      request<void>(`/projects/${projectId}/agents/${agentName}`, { method: 'PUT', body: JSON.stringify({ content }) }),
+    createAgent: (projectId: string, name: string, content: string) =>
+      request<{ name: string }>(`/projects/${projectId}/agents`, { method: 'POST', body: JSON.stringify({ name, content }) }),
   },
 
   workflow: {

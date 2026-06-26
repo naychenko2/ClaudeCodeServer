@@ -13,6 +13,7 @@ interface SessionState {
   isWaiting: boolean;
   isJoined: boolean;
   projectId?: string;
+  isHistoryLoading: boolean;
 }
 
 const _store = new Map<string, SessionState>();
@@ -20,7 +21,7 @@ const _listeners = new Map<string, Set<() => void>>();
 const _joining = new Map<string, Promise<void>>();
 
 function getState(sid: string): SessionState {
-  if (!_store.has(sid)) _store.set(sid, { items: [], isWaiting: false, isJoined: false });
+  if (!_store.has(sid)) _store.set(sid, { items: [], isWaiting: false, isJoined: false, isHistoryLoading: true });
   return _store.get(sid)!;
 }
 
@@ -275,12 +276,15 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
       setState(sid, prev => {
         // Сервер — источник истины: используем его данные если их больше.
         // Иначе оставляем живые сообщения от стриминга (race condition при активном ходе).
-        if (items.length <= prev.items.length) return prev;
-        return { ...prev, items };
+        if (items.length <= prev.items.length) return { ...prev, isHistoryLoading: false };
+        return { ...prev, items, isHistoryLoading: false };
       });
     } catch {
       // История недоступна — не блокируем работу
+      setState(sid, prev => ({ ...prev, isHistoryLoading: false }));
     }
+  } else {
+    setState(sid, prev => ({ ...prev, isHistoryLoading: false }));
   }
 
   // Присоединение к группе — фоном, не блокирует чтение истории.
@@ -329,7 +333,7 @@ export function useSession(sessionId: string | null, projectId?: string) {
     };
   }, [sessionId, projectId]);
 
-  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false };
+  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false };
 
   const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string) => {
     if (!sessionId) return;
@@ -452,5 +456,5 @@ export function useSession(sessionId: string | null, projectId?: string) {
     ));
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking };
 }

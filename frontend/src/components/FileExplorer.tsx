@@ -231,9 +231,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       setCreateInDir(st.createInDir);
       setSearch(st.search);
       setSearchResults(st.searchResults);
-      if (!st.dirCache.has('')) loadDir('');
+      // Всегда перезагружаем корень — кэш мог устареть пока дерево не было смонтировано
+      loadDir('');
       // на мобиле могли вернуться во вложенную папку — догрузим её содержимое
-      if (st.mobileDir && !st.dirCache.has(st.mobileDir)) loadDir(st.mobileDir);
+      if (st.mobileDir) loadDir(st.mobileDir);
     } else {
       setDirCache(new Map());
       setExpanded(new Set());

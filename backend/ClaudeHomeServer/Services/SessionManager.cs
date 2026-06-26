@@ -121,12 +121,10 @@ public class SessionManager
         var entry = new SessionEntry { Info = session, Accumulator = accumulator };
         _sessions[session.Id] = entry;
 
-        var wk = _workspaceStore.GetByPath(project.RootPath);
         var claudeSession = new ClaudeSession(session, project.RootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
-            wk?.DifyDatasetId, _mcpConfigPath,
-            ProjectManager.BuildSystemPrompt(project.SystemPrompt, wk?.DifyDatasetId != null, wk?.DocumentTags),
-            _skills);
+            _mcpConfigPath, project.SystemPrompt,
+            _skills, _workspaceStore);
         entry.Process = claudeSession;
 
         await claudeSession.StartAsync();
@@ -158,12 +156,10 @@ public class SessionManager
                 : [];
             var accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
             entry.Accumulator = accumulator;
-            var wkRestore = _workspaceStore.GetByPath(project.RootPath);
             var claudeSession = new ClaudeSession(entry.Info, project.RootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
-                wkRestore?.DifyDatasetId, _mcpConfigPath,
-                ProjectManager.BuildSystemPrompt(project.SystemPrompt, wkRestore?.DifyDatasetId != null, wkRestore?.DocumentTags),
-                _skills);
+                _mcpConfigPath, project.SystemPrompt,
+                _skills, _workspaceStore);
             entry.Process = claudeSession;
             await claudeSession.StartAsync();
         }

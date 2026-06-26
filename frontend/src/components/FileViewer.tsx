@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -66,6 +66,7 @@ interface FileContent {
   isBinary: boolean;
   isImage: boolean;
   isVideo?: boolean;
+  isAudio?: boolean;
   isDocument?: boolean;
   docKind?: DocKind;
   mimeType?: string;
@@ -201,6 +202,141 @@ function DiffView({ diff }: { diff: string }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
+  src: string; mimeType?: string; fileName: string; fileSizeMb: string | null;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  const toggle = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    playing ? a.pause() : a.play().catch(() => {});
+  };
+
+  const seek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const a = audioRef.current;
+    if (!a) return;
+    const t = Number(e.target.value);
+    a.currentTime = t;
+    setCurrentTime(t);
+  };
+
+  const skip = (delta: number) => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.currentTime = Math.max(0, Math.min(duration, a.currentTime + delta));
+  };
+
+  const fmt = (s: number) => {
+    if (!isFinite(s) || isNaN(s)) return '0:00';
+    const m = Math.floor(s / 60);
+    return `${m}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
+  };
+
+  const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  const skipBtnStyle: React.CSSProperties = {
+    background: 'none', border: 'none', cursor: 'pointer',
+    color: C.textSecondary, padding: '10px 8px',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+    fontSize: 10, fontFamily: FONT.mono, fontWeight: 600, lineHeight: 1,
+    minWidth: 44,
+  };
+
+  return (
+    <div style={{
+      background: C.bgPanel, borderRadius: 16, border: `1px solid ${C.border}`,
+      padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 16,
+      width: '100%', maxWidth: 440, boxShadow: '0 2px 12px rgba(60,50,35,0.06)',
+    }}>
+      <audio
+        ref={audioRef}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => { setPlaying(false); setCurrentTime(0); }}
+        onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime ?? 0)}
+        onLoadedMetadata={() => setDuration(audioRef.current?.duration ?? 0)}
+      >
+        <source src={src} type={mimeType} />
+      </audio>
+
+      {/* Иконка + имя файла */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: 10, background: C.accent,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+          </svg>
+        </div>
+        <span style={{ fontFamily: FONT.mono, fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+          {fileName}
+        </span>
+      </div>
+
+      {/* Слайдер прогресса */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <input
+          type="range"
+          className="audio-seek"
+          min={0}
+          max={duration || 100}
+          step={0.1}
+          value={currentTime}
+          onChange={seek}
+          style={{ '--seek-pct': `${pct}%` } as React.CSSProperties}
+        />
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontFamily: FONT.mono, color: C.textMuted }}>
+          <span>{fmt(currentTime)}</span>
+          <span>{fmt(duration)}</span>
+        </div>
+      </div>
+
+      {/* Управление */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+        <button onClick={() => skip(-10)} style={skipBtnStyle} title="−10 сек">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 .49-3.36"/>
+          </svg>
+          −10
+        </button>
+
+        <button
+          onClick={toggle}
+          style={{
+            width: 60, height: 60, borderRadius: '50%', border: 'none',
+            background: C.accent, color: '#FFF', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 4px 14px rgba(217,119,87,0.40)', flexShrink: 0,
+          }}
+        >
+          {playing
+            ? <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+            : <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" style={{ marginLeft: 3 }}><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          }
+        </button>
+
+        <button onClick={() => skip(10)} style={skipBtnStyle} title="+10 сек">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-.49-3.36"/>
+          </svg>
+          +10
+        </button>
+      </div>
+
+      {/* Метаданные */}
+      <div style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono, textAlign: 'center' }}>
+        {(mimeType?.split('/')[1] ?? fileName.split('.').pop() ?? '').toUpperCase()}
+        {fileSizeMb && ` · ${fileSizeMb} МБ`}
+      </div>
     </div>
   );
 }
@@ -559,6 +695,51 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
               </div>
             )}
 
+            {fileContent?.isAudio && (
+              isMobile
+                ? (
+                  <div style={{ display: 'flex', justifyContent: 'center', padding: 20 }}>
+                    <AudioFilePlayer
+                      src={streamUrl(project.id, filePath)}
+                      mimeType={fileContent.mimeType}
+                      fileName={fileName}
+                      fileSizeMb={fileSizeMb}
+                    />
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 24 }}>
+                    <div style={{
+                      background: C.bgPanel, borderRadius: 14, border: `1px solid ${C.border}`,
+                      padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 12,
+                      width: '100%', maxWidth: 440, boxShadow: '0 2px 12px rgba(60,50,35,0.06)',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{
+                          width: 40, height: 40, borderRadius: 10, background: C.accent,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                        }}>
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
+                          </svg>
+                        </div>
+                        <span style={{ fontFamily: FONT.mono, fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                          {fileName}
+                        </span>
+                      </div>
+                      <div style={{ borderRadius: 8, overflow: 'hidden' }}>
+                        <audio controls style={{ width: '100%', height: 40, outline: 'none', display: 'block' }}>
+                          <source src={streamUrl(project.id, filePath)} type={fileContent.mimeType} />
+                        </audio>
+                      </div>
+                      <div style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono, display: 'flex', gap: 6 }}>
+                        <span>{(fileContent.mimeType?.split('/')[1] ?? fileName.split('.').pop() ?? '').toUpperCase()}</span>
+                        {fileSizeMb && <><span style={{ opacity: 0.4 }}>·</span><span>{fileSizeMb} МБ</span></>}
+                      </div>
+                    </div>
+                  </div>
+                )
+            )}
+
             {/* Документы: PDF / Word / Excel — клиентский рендеринг */}
             {fileContent?.isDocument && (
               fileContent.base64 && fileContent.docKind
@@ -570,7 +751,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
                   />
             )}
 
-            {fileContent?.isBinary && !fileContent.isImage && !fileContent.isVideo && !fileContent.isDocument && (
+            {fileContent?.isBinary && !fileContent.isImage && !fileContent.isVideo && !fileContent.isAudio && !fileContent.isDocument && (
               <EmptyState
                 icon={<FileSvg />}
                 title="Нельзя показать"

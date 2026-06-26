@@ -22,8 +22,6 @@ interface Props {
   pendingMessage?: string;
   onPendingMessageSent?: () => void;
   onSessionUpdated?: (session: Session) => void;
-  dockMode?: 'expanded' | 'collapsed';
-  onToggleDock?: () => void;
   isMobile?: boolean;
   onBack?: () => void;
   onWorkflowRunning?: (active: boolean, sessionId: string) => void;
@@ -184,21 +182,18 @@ function WaitingIndicator({ planning }: { planning?: 'planning' | 'replanning' }
   );
 }
 
-// Общая шапка чата — одинаковая для полноэкранного режима и дока (split снизу).
-// onToggleDock задаётся только в доке — добавляет кнопку сворачивания.
 interface ChatHeaderBarProps {
   session: Session;
   project: Project;
   online: boolean;
   onOpenSettings: () => void;
-  onToggleDock?: () => void;
   isMobile?: boolean;
   onBack?: () => void;
   activeWorkflow?: { phasesDone: number; phasesTotal: number };
   onOpenSidebar?: () => void;
 }
 
-function ChatHeaderBar({ session, project, online, onOpenSettings, onToggleDock, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -246,11 +241,6 @@ function ChatHeaderBar({ session, project, online, onOpenSettings, onToggleDock,
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
-        </ToolbarIconButton>
-      )}
-      {onToggleDock && (
-        <ToolbarIconButton onClick={onToggleDock} title="Свернуть чат" isMobile={isMobile}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M6 9l6 6 6-6"/></svg>
         </ToolbarIconButton>
       )}
     </Toolbar>
@@ -502,7 +492,7 @@ function AttachPicker({ projectId, selected, onToggle, onClose }: AttachPickerPr
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, dockMode, onToggleDock, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
   const online = useOnline();
 
@@ -545,7 +535,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
-  const [miniText, setMiniText] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Плавающий composer переменной высоты — измеряем, чтобы лента упиралась ровно под него
@@ -572,7 +561,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [online, dockMode]);
+  }, [online]);
 
   // Единая точка проверки позиции скролла — вызывается из onScroll, ResizeObserver и эффектов
   const syncScrollState = useCallback(() => {
@@ -612,15 +601,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       setShowScrollDown(true);
     }
   }, [items]);
-
-  // При раскрытии дока — моментально проматываем в конец и возобновляем прилипание
-  useEffect(() => {
-    if (dockMode === 'expanded') {
-      atBottomRef.current = true;
-      setShowScrollDown(false);
-      bottomRef.current?.scrollIntoView({ behavior: 'instant' });
-    }
-  }, [dockMode]);
 
   // Автоотправка первого сообщения сразу после присоединения к сессии
   useEffect(() => {
@@ -937,121 +917,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return result;
   };
 
-  // Dock: свёрнутая полоска
-  if (dockMode === 'collapsed') {
-    // Свежий ответ Claude (а не эхо запроса пользователя) — для превью в свёрнутом доке
-    const lastAnswer = (() => {
-      for (let i = items.length - 1; i >= 0; i--) {
-        if (items[i].kind === 'text') return (items[i] as Extract<ChatItem, { kind: 'text' }>).text;
-      }
-      return '';
-    })();
-
-    const handleMiniSend = () => {
-      if (!miniText.trim() || isWaiting || !online) return;
-      atBottomRef.current = true;
-      send(miniText, [], mode);
-      setMiniText('');
-    };
-
-    return (
-      <Toolbar noBorder style={{ height: 56, gap: 10 }}>
-        <div style={{ width: 28, height: 28, borderRadius: '50%', background: C.accent, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ width: 10, height: 10, borderRadius: '50%', background: C.bgMain }} />
-        </div>
-        <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: isWaiting ? C.textMuted : C.textSecondary, fontStyle: isWaiting ? 'italic' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {isWaiting ? 'Claude печатает…' : (lastAnswer || session.name || 'Новый чат')}
-        </span>
-        <input
-          value={miniText}
-          onChange={e => setMiniText(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleMiniSend(); } }}
-          placeholder={online ? 'Ответить…' : 'Офлайн'}
-          disabled={!online}
-          style={{ width: 180, padding: '6px 10px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, background: C.bgMain, outline: 'none', fontFamily: 'inherit', color: C.textHeading }}
-        />
-        <button
-          onClick={handleMiniSend}
-          disabled={!miniText.trim() || isWaiting || !online}
-          style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: miniText.trim() && !isWaiting && online ? 'pointer' : 'default', background: miniText.trim() && !isWaiting && online ? C.accent : C.divider, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5" strokeLinecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-        </button>
-        <ToolbarIconButton onClick={onToggleDock} title="Развернуть чат">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M18 15l-6-6-6 6"/></svg>
-        </ToolbarIconButton>
-      </Toolbar>
-    );
-  }
-
-  // Dock: развёрнутая панель
-  if (dockMode === 'expanded') {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgMain, position: 'relative' }}>
-        <ChatHeaderBar
-          session={session}
-          project={project}
-          online={online}
-          onOpenSettings={() => setShowEdit(true)}
-          onToggleDock={onToggleDock}
-          activeWorkflow={activeWorkflowInfo ?? undefined}
-          onOpenSidebar={onOpenSidebar}
-        />
-
-        {/* Сообщения (нижний отступ = высота плавающего composer) */}
-        <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 12, paddingLeft: 16, paddingRight: 16, paddingBottom: composerH + 8 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <FalPricingContext.Provider value={falPricing}><ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider></FalPricingContext.Provider>
-            {online && showWaiting && (
-              <WaitingIndicator planning={planningKind} />
-            )}
-            <div ref={bottomRef} />
-          </div>
-        </div>
-
-        {/* Composer — плавающий над доком, контент виден под ним */}
-        <div ref={composerWrapRef} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '0 16px 12px', pointerEvents: 'none' }}>
-          <div style={{ width: '100%', pointerEvents: 'auto', borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
-            <Composer
-              offline={!online}
-              onSend={handleSend}
-              onStop={interrupt}
-              onAttach={() => setShowAttachPicker(true)}
-              isGenerating={isWaiting}
-              mode={mode}
-              onModeChange={setMode}
-              attachments={attachedFiles}
-              onRemoveAttachment={path => onAttachedFilesChange(attachedFiles.filter(p => p !== path))}
-              skills={skills}
-              agents={agents}
-              selectedAgent={selectedAgent}
-              onAgentChange={onAgentChange}
-            />
-          </div>
-        </div>
-
-        {showAttachPicker && (
-          <AttachPicker
-            projectId={project.id}
-            selected={attachedFiles}
-            onToggle={path => onAttachedFilesChange(
-              attachedFiles.includes(path) ? attachedFiles.filter(p => p !== path) : [...attachedFiles, path]
-            )}
-            onClose={() => setShowAttachPicker(false)}
-          />
-        )}
-
-        {showEdit && (
-          <EditSessionDialog
-            session={session}
-            onSaved={s => onSessionUpdated?.(s)}
-            onClose={() => setShowEdit(false)}
-          />
-        )}
-      </div>
-    );
-  }
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', background: C.bgMain }}>
       <ChatHeaderBar
@@ -1164,7 +1029,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           </div>
         )}
 
-        <ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider>
+        <FalPricingContext.Provider value={falPricing}><ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider></FalPricingContext.Provider>
 
         {online && showWaiting && (
           <WaitingIndicator planning={planningKind} />

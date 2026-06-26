@@ -97,7 +97,6 @@ export function WorkspacePage({ project, onBack }: Props) {
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
   const [openFile, setOpenFile] = useState<string | null>(() => loadWorkspaceState(project.id)?.openFile ?? null);
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
-  const [chatDockExpanded, setChatDockExpanded] = useState(() => loadWorkspaceState(project.id)?.chatDockExpanded ?? true);
   const [chatFlex, setChatFlex] = useState(1); // 1:1 = 50/50 по умолчанию
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
   const [showSkillsModal, setShowSkillsModal] = useState(false);
@@ -109,7 +108,6 @@ export function WorkspacePage({ project, onBack }: Props) {
       return prev === sessionId ? null : prev;
     });
   }, []);
-  const [chatHeight, setChatHeight] = useState(280);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const [indexedFileNames, setIndexedFileNames] = useState<Set<string>>(new Set());
   const [indexingFiles, setIndexingFiles] = useState<Set<string>>(new Set());
@@ -170,7 +168,7 @@ export function WorkspacePage({ project, onBack }: Props) {
   }, [sidebarMode]);
 
   // Какой сплиттер сейчас тащим — для подсветки на всём протяжении drag (даже если курсор соскользнул)
-  const [draggingSplitter, setDraggingSplitter] = useState<null | 'sidebar' | 'split' | 'vertical'>(null);
+  const [draggingSplitter, setDraggingSplitter] = useState<null | 'sidebar' | 'split'>(null);
   useEffect(() => {
     if (!draggingSplitter) return;
     const up = () => setDraggingSplitter(null);
@@ -208,7 +206,6 @@ export function WorkspacePage({ project, onBack }: Props) {
     if (!autoSelect) {
       // явный выбор — закрываем файл, показываем чат во весь экран
       setOpenFile(null);
-      setFileFullscreen(false);
     }
   };
 
@@ -218,8 +215,8 @@ export function WorkspacePage({ project, onBack }: Props) {
 
   // Запоминаем состояние окна (активный чат/файл, панели) для проекта
   useEffect(() => {
-    saveWorkspaceState(project.id, { activeSession, openFile, fileFullscreen, leftTab, chatDockExpanded });
-  }, [project.id, activeSession, openFile, fileFullscreen, leftTab, chatDockExpanded]);
+    saveWorkspaceState(project.id, { activeSession, openFile, fileFullscreen, leftTab });
+  }, [project.id, activeSession, openFile, fileFullscreen, leftTab]);
 
   // Членство в project-группе на всё время открытия проекта (для статусов и watcher'а файлов).
   // Владелец — WorkspacePage (не SessionList, который размонтируется при переходе на «Файлы»).
@@ -258,28 +255,21 @@ export function WorkspacePage({ project, onBack }: Props) {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  // из дерева файлов → всегда fullscreen
+  // из дерева файлов → всегда полноэкранный режим
   const handleOpenFileFromTree = (filePath: string) => {
     setOpenFile(filePath);
     setFileFullscreen(true);
-    // Состояние «свернуть/развернуть» чат не трогаем — уважаем последний выбор пользователя
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
-  // из чата → split-режим (на планшете/мобайле — fullscreen)
+  // из чата → split на десктопе, fullscreen на планшете/мобайле
   const handleOpenFileFromChat = (filePath: string) => {
     setOpenFile(filePath);
-    if (isTablet) {
-      setFileFullscreen(true);
-    } else {
-      setFileFullscreen(false);
-    }
+    setFileFullscreen(isMobile || isTablet);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
-  const handleEnterFullscreen = () => {
-    setFileFullscreen(true);
-  };
+  const handleEnterFullscreen = () => setFileFullscreen(true);
 
   const handleSplitterMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -301,26 +291,6 @@ export function WorkspacePage({ project, onBack }: Props) {
       document.body.style.userSelect = '';
     };
     document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  };
-
-  const handleVerticalSplitterMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startHeight = chatHeight;
-    const onMove = (ev: MouseEvent) => {
-      const delta = startY - ev.clientY;
-      setChatHeight(Math.max(120, Math.min(window.innerHeight - 200, startHeight + delta)));
-    };
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
@@ -627,7 +597,7 @@ export function WorkspacePage({ project, onBack }: Props) {
               </div>
             )}
 
-            {/* Файл открыт, split только на десктопе: [Chat] | [splitter] | [FileViewer] */}
+            {/* Split: файл из чата, только на десктопе */}
             {openFile && !fileFullscreen && !isTablet && (
               <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
@@ -643,25 +613,10 @@ export function WorkspacePage({ project, onBack }: Props) {
               </div>
             )}
 
-            {/* Fullscreen: на десктопе — по флагу, на планшете — всегда */}
+            {/* Fullscreen: файл из дерева или планшет */}
             {openFile && (fileFullscreen || isTablet) && (
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                <div style={{ flex: 1, overflow: 'hidden', minHeight: 100 }}>
-                  <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} isFullscreen onToggleFullscreen={isTablet ? undefined : () => setFileFullscreen(false)} onOpenSidebar={openSidebar} />
-                </div>
-                {chatDockExpanded && (
-                  <Splitter orientation="h" active={draggingSplitter === 'vertical'}
-                    onMouseDown={e => { setDraggingSplitter('vertical'); handleVerticalSplitterMouseDown(e); }} />
-                )}
-                {activeSession ? (
-                  <div style={{ flexShrink: 0, height: chatDockExpanded ? chatHeight : 56, overflow: 'hidden', transition: chatDockExpanded ? 'none' : 'height 0.2s ease' }}>
-                    <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} dockMode={chatDockExpanded ? 'expanded' : 'collapsed'} onToggleDock={() => setChatDockExpanded(p => !p)} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
-                  </div>
-                ) : (
-                  <div style={{ flexShrink: 0, height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8A8070', fontSize: 13, background: C.bgPanel }}>
-                    Выберите или создайте чат
-                  </div>
-                )}
+              <div style={{ flex: 1, overflow: 'hidden' }}>
+                <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} onOpenSidebar={openSidebar} />
               </div>
             )}
           </>

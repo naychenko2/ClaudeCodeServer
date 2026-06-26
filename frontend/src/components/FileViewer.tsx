@@ -27,7 +27,8 @@ import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
-import { DocumentViewer, type DocKind } from './DocumentViewer';
+import { DocumentViewer } from './DocumentViewer';
+import { OfficeViewer } from './OfficeViewer';
 import { base64ToBytes } from '../lib/binary';
 import { C, FONT, MODAL_W } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from './Toolbar';
@@ -55,7 +56,6 @@ interface Props {
   project: Project;
   filePath: string;
   onClose: () => void;
-  isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
   isMobile?: boolean;
   onOpenSidebar?: () => void;
@@ -68,7 +68,7 @@ interface FileContent {
   isVideo?: boolean;
   isAudio?: boolean;
   isDocument?: boolean;
-  docKind?: DocKind;
+  docKind?: string;
   mimeType?: string;
   base64?: string;
   fileSize?: number;
@@ -109,24 +109,10 @@ const ExpandIcon = () => (
   </svg>
 );
 
-const SplitViewIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="3" width="18" height="18" rx="2"/>
-    <line x1="12" y1="3" x2="12" y2="21"/>
-  </svg>
-);
-
 const CloseIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
     <line x1="18" y1="6" x2="6" y2="18"/>
     <line x1="6" y1="6" x2="18" y2="18"/>
-  </svg>
-);
-
-const EditIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
   </svg>
 );
 
@@ -341,7 +327,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
   );
 }
 
-export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleFullscreen, isMobile, onOpenSidebar }: Props) {
+export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isMobile, onOpenSidebar }: Props) {
   const online = useOnline();
   const [fileContent, setFileContent] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(true);
@@ -502,8 +488,8 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
             </svg>
           </ToolbarIconButton>
         )}
-        {/* Кнопка назад — только в обычном режиме */}
-        {!isFullscreen && (
+        {/* Кнопка назад — только на мобиле */}
+        {isMobile && (
           <BackButton onClick={handleClose} title="К списку файлов" style={{ height: 32 }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: C.textSecondary }}>Файлы</span>
           </BackButton>
@@ -539,14 +525,9 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
                   ? <ToolbarIconButton isMobile={isMobile} onClick={handleRevert} title="Откатить"><RevertIcon /></ToolbarIconButton>
                   : <button onClick={handleRevert} style={tbBtnGhost}>Откатить</button>
               )}
-              {/* На мобиле редактирование — через плавающий FAB (см. ниже); в fullscreen — иконка, иначе — текст */}
-              {!isMobile && (isFullscreen ? (
-                <ToolbarIconButton onClick={() => { setEditing(true); setTab('file'); }} title="Редактировать">
-                  <EditIcon />
-                </ToolbarIconButton>
-              ) : (
+              {!isMobile && (
                 <button onClick={() => { setEditing(true); setTab('file'); }} style={tbBtnPrimary}>Править</button>
-              ))}
+              )}
             </>
           )}
           {!editing && fileContent?.isBinary && null}
@@ -597,17 +578,6 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
             </ToolbarIconButton>
           )}
 
-          {/* Кнопка expand / split-view */}
-          {onToggleFullscreen && !editing && (
-            <ToolbarIconButton
-              isMobile={isMobile}
-              onClick={onToggleFullscreen}
-              title={isFullscreen ? 'Режим разделения' : 'Развернуть на весь экран'}
-            >
-              {isFullscreen ? <SplitViewIcon /> : <ExpandIcon />}
-            </ToolbarIconButton>
-          )}
-
           {/* Корзина */}
           {online && !editing && (
             <ToolbarIconButton isMobile={isMobile} onClick={() => setDeleteConfirm(true)} title="Удалить">
@@ -615,9 +585,15 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
             </ToolbarIconButton>
           )}
 
-          {/* Закрыть — только в split-режиме на десктопе (рядом с кнопкой «‹ Файлы»);
-              в fullscreen закрывать нечем — там кнопка split view или системная кнопка назад. */}
-          {!isMobile && !isFullscreen && (
+          {/* Развернуть на весь экран — только в split-режиме */}
+          {!isMobile && onToggleFullscreen && !editing && (
+            <ToolbarIconButton isMobile={isMobile} onClick={onToggleFullscreen} title="На весь экран">
+              <ExpandIcon />
+            </ToolbarIconButton>
+          )}
+
+          {/* Закрыть — десктоп */}
+          {!isMobile && (
             <ToolbarIconButton isMobile={isMobile} onClick={handleClose} title="Закрыть">
               <CloseIcon />
             </ToolbarIconButton>
@@ -740,15 +716,20 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
                 )
             )}
 
-            {/* Документы: PDF / Word / Excel — клиентский рендеринг */}
-            {fileContent?.isDocument && (
-              fileContent.base64 && fileContent.docKind
-                ? <DocumentViewer docKind={fileContent.docKind} base64={fileContent.base64} />
+            {/* PDF — клиентский рендеринг через pdf.js */}
+            {fileContent?.isDocument && fileContent.docKind === 'pdf' && (
+              fileContent.base64
+                ? <DocumentViewer base64={fileContent.base64} />
                 : <EmptyState
                     icon={<FileSvg />}
                     title="Документ слишком большой"
                     subtitle={`${fileName}${fileSizeMb ? ` — ${fileSizeMb} МБ` : ''}. Просмотр недоступен для файлов больше 25 МБ.`}
                   />
+            )}
+
+            {/* Office-файлы (docx/xlsx/pptx) — через OnlyOffice Document Server */}
+            {fileContent?.isDocument && fileContent.docKind !== 'pdf' && (
+              <OfficeViewer projectId={project.id} filePath={filePath} />
             )}
 
             {fileContent?.isBinary && !fileContent.isImage && !fileContent.isVideo && !fileContent.isAudio && !fileContent.isDocument && (
@@ -795,7 +776,7 @@ export function FileViewer({ project, filePath, onClose, isFullscreen, onToggleF
       </div>
 
       {/* Плавающая кнопка редактирования на мобиле (MA4) */}
-      {isMobile && online && !editing && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && (
+      {isMobile && online && !editing && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && (
         <button
           onClick={() => { setEditing(true); setTab('file'); }}
           title="Редактировать"

@@ -1,13 +1,7 @@
 import { Suspense, lazy } from 'react';
 import { C } from '../lib/design';
 
-// Тяжёлые библиотеки (pdf.js / docx-preview / SheetJS) — отдельными чанками,
-// грузятся только при открытии соответствующего документа
 const PdfViewer = lazy(() => import('./PdfViewer'));
-const DocxViewer = lazy(() => import('./DocxViewer'));
-const XlsxViewer = lazy(() => import('./XlsxViewer'));
-
-export type DocKind = 'pdf' | 'docx' | 'xlsx';
 
 const Fallback = () => (
   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: 40 }}>
@@ -16,12 +10,10 @@ const Fallback = () => (
   </div>
 );
 
-export function DocumentViewer({ docKind, base64 }: { docKind: DocKind; base64: string }) {
+export function DocumentViewer({ base64 }: { base64: string }) {
   return (
     <Suspense fallback={<Fallback />}>
-      {docKind === 'pdf' && <PdfViewer base64={base64} />}
-      {docKind === 'docx' && <DocxViewer base64={base64} />}
-      {docKind === 'xlsx' && <XlsxViewer base64={base64} />}
+      <PdfViewer base64={base64} />
     </Suspense>
   );
 }

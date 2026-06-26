@@ -47,3 +47,4 @@ Thumbs.db
 !frontend/public/pwa-*.png
 !frontend/public/maskable-icon-*.png
 !frontend/public/apple-touch-icon-*.png
+onlyoffice/local.json

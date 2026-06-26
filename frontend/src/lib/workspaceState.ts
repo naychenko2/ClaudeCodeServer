@@ -8,7 +8,6 @@ export interface WorkspaceUIState {
   openFile: string | null;
   fileFullscreen: boolean;
   leftTab: 'sessions' | 'files' | 'knowledge';
-  chatDockExpanded: boolean;
 }
 
 const key = (projectId: string) => `ws:${projectId}`;

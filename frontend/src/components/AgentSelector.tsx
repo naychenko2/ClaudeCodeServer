@@ -29,7 +29,7 @@ export function AgentSelector({ agents, selectedAgent, onSelect, isMobile }: Pro
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   // На мобиле dropdown позиционируется через fixed с вычисленными координатами
-  const [fixedPos, setFixedPos] = useState<{ bottom: number; left: number; right: number } | null>(null);
+  const [fixedPos, setFixedPos] = useState<{ bottom: number; top: number; left: number; right: number } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -46,6 +46,7 @@ export function AgentSelector({ agents, selectedAgent, onSelect, isMobile }: Pro
     const rect = rootRef.current.getBoundingClientRect();
     setFixedPos({
       bottom: window.innerHeight - rect.top + 6,
+      top: 16,
       left: 16,
       right: 16,
     });
@@ -59,9 +60,9 @@ export function AgentSelector({ agents, selectedAgent, onSelect, isMobile }: Pro
     ? {
         position: 'fixed',
         bottom: fixedPos.bottom,
+        top: fixedPos.top,
         left: fixedPos.left,
         right: fixedPos.right,
-        maxHeight: fixedPos.bottom - 16,
         overflowY: 'auto',
         background: C.bgWhite,
         border: `1px solid ${C.border}`,

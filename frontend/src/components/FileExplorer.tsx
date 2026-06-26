@@ -2,6 +2,23 @@ import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, typ
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
+
+const KB_TEXT_EXT = new Set([
+  '.txt', '.md', '.markdown', '.cs', '.ts', '.tsx', '.js', '.jsx',
+  '.py', '.json', '.yaml', '.yml', '.xml', '.html', '.htm',
+  '.css', '.scss', '.toml', '.ini', '.sh', '.bash', '.ps1',
+  '.go', '.rs', '.java', '.kt', '.rb', '.php', '.swift',
+  '.tf', '.hcl', '.sql', '.graphql', '.proto',
+]);
+const KB_FILE_EXT = new Set(['.pdf', '.docx', '.xlsx', '.xls', '.pptx', '.csv', '.epub']);
+
+function isKnowledgeIndexable(filename: string): boolean {
+  const dot = filename.lastIndexOf('.');
+  const ext = dot > 0 ? filename.slice(dot).toLowerCase() : '';
+  // нет расширения (Makefile, LICENSE) или дотфайл (.gitignore)
+  if (ext === '' || ext === filename.toLowerCase()) return true;
+  return KB_TEXT_EXT.has(ext) || KB_FILE_EXT.has(ext);
+}
 import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
@@ -163,7 +180,7 @@ function FilesRootEmptyState() {
   );
 }
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, onAddToKnowledge, indexedFileNames, onAttachToChat }: Props) {
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, onAddToKnowledge, indexedFileNames, indexingFiles, onAttachToChat }: Props) {
   const online = useOnline();
   const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
@@ -184,6 +201,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const [newFileName, setNewFileName] = useState('');
   const [createInDir, setCreateInDir] = useState(() => initial?.createInDir ?? '');
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeNorm = normPath(activeFilePath);
@@ -326,10 +344,13 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     if (!fileList || fileList.length === 0) return;
     const dir = isMobile ? mobileDir : createInDir;
     setUploading(true);
+    setUploadError(null);
     try {
       await Promise.all(Array.from(fileList).map(f => api.files.upload(project.id, f, dir)));
       await invalidateDir(dir);
       if (dir && !isMobile) setExpanded(prev => new Set(prev).add(dir));
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : 'Ошибка загрузки');
     } finally {
       setUploading(false);
       if (uploadInputRef.current) uploadInputRef.current.value = '';
@@ -467,9 +488,19 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           ) : null
         )}
         {/* Кнопка «добавить в БЗ» — только для файлов не в БЗ.
-            Десктоп: появляется при hover. Мобила: всегда видна (hover недоступен). */}
+            Десктоп: появляется при hover. Мобила: всегда видна (hover недоступен).
+            Пока файл индексируется — спиннер вместо кнопки.
+            Неподдерживаемый тип — иконка с крестиком (disabled). */}
         {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && (
-          isMobile || hoveredPath === entry.path ? (
+          indexingFiles?.has(entry.path) ? (
+            <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <style>{`@keyframes kb-spin{to{transform:rotate(360deg)}} .kb-spin{transform-origin:center;animation:kb-spin 0.8s linear infinite}`}</style>
+                <circle className="kb-spin" cx="12" cy="12" r="9" strokeDasharray="40 20" />
+              </svg>
+            </span>
+          ) : !isKnowledgeIndexable(entry.name) ? null
+          : isMobile || hoveredPath === entry.path ? (
             <button
               onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
               title="Добавить в базу знаний"
@@ -552,26 +583,29 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
               Новый файл
             </div>
-            <input
-              ref={uploadInputRef}
-              type="file"
-              multiple
-              style={{ display: 'none' }}
-              onChange={e => handleUploadFiles(e.target.files)}
-            />
-            <div
-              onClick={() => !uploading && uploadInputRef.current?.click()}
+            <label
               title="Загрузить файлы"
               style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, height: 36, paddingInline: 12, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: uploading ? C.textMuted : C.accent, fontSize: 12.5, fontWeight: 600, cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1, flexShrink: 0 }}
             >
+              <input
+                ref={uploadInputRef}
+                type="file"
+                multiple
+                disabled={uploading}
+                style={{ display: 'none' }}
+                onChange={e => handleUploadFiles(e.target.files)}
+              />
               {uploading ? (
                 <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid #DACDB9', borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} />
               ) : (
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
               )}
               Загрузить
-            </div>
+            </label>
           </div>
+        )}
+        {uploadError && (
+          <div style={{ marginTop: 6, fontSize: 12, color: '#B4452F', fontFamily: FONT.sans, paddingLeft: 2 }}>{uploadError}</div>
         )}
         {/* Хинт целевой папки — только десктоп, когда есть куда */}
         {online && !isMobile && (

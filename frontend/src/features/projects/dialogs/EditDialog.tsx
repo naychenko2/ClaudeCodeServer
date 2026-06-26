@@ -18,7 +18,6 @@ export function EditDialog({ project, onSuccess, onClose }: Props) {
   const online = useOnline();
   const [view, setView] = useState<View>('main');
   const [name, setName] = useState(project.name);
-  const [path, setPath] = useState(project.rootPath);
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [draftPrompt, setDraftPrompt] = useState('');
   const builtinPrompt = project.builtInSystemPrompt ?? '';
@@ -29,7 +28,6 @@ export function EditDialog({ project, onSuccess, onClose }: Props) {
     try {
       const updated = await api.projects.update(project.id, {
         name: name.trim(),
-        rootPath: path.trim(),
         systemPrompt,
       });
       onSuccess(updated);
@@ -119,7 +117,21 @@ export function EditDialog({ project, onSuccess, onClose }: Props) {
     >
       {error && <div style={{ color: C.danger, fontSize: 13 }}>{error}</div>}
       <TextField value={name} onChange={setName} placeholder="Название" />
-      <TextField value={path} onChange={setPath} placeholder="Путь к папке" mono />
+      <div style={{
+        padding: '9px 13px', background: C.bgPanel,
+        border: `1px solid ${C.border}`, borderRadius: R.xl,
+        display: 'flex', flexDirection: 'column', gap: 2,
+      }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Путь
+        </div>
+        <div style={{
+          fontFamily: 'JetBrains Mono, monospace', fontSize: 12.5,
+          color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }} title={project.rootPath}>
+          {project.rootPath}
+        </div>
+      </div>
       <hr style={{ border: 'none', borderTop: `1px solid ${C.border}`, margin: 0 }} />
       <div style={{
         display: 'flex', alignItems: 'center', gap: 12,

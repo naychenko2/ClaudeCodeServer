@@ -56,13 +56,17 @@ public class KnowledgeService
     public static bool IsKnowledgeIndexable(string relativePath)
     {
         var ext = Path.GetExtension(relativePath).ToLowerInvariant();
-        return TextExtensions.Contains(ext) || FileExtensions.Contains(ext);
+        var name = Path.GetFileName(relativePath).ToLowerInvariant();
+        // ext=="" → Makefile, LICENSE; ext==name → .gitignore, .env (дотфайлы)
+        var isText = ext == "" || ext == name || TextExtensions.Contains(ext);
+        return isText || FileExtensions.Contains(ext);
     }
 
     public static bool IsTextIndexable(string relativePath)
     {
         var ext = Path.GetExtension(relativePath).ToLowerInvariant();
-        return TextExtensions.Contains(ext);
+        var name = Path.GetFileName(relativePath).ToLowerInvariant();
+        return ext == "" || ext == name || TextExtensions.Contains(ext);
     }
 
     private readonly IHttpClientFactory _httpClientFactory;

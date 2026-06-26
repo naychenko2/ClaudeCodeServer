@@ -9,10 +9,11 @@ public class ProjectManager
 {
     // Встроенная часть системного промпта — всегда добавляется, пользователь не редактирует
     public const string BuiltInSystemPrompt =
-        "Когда ты используешь MCP-инструменты fal-ai для генерации изображений или видео, всегда вызывай get_pricing(endpoint_id) сразу после получения результата задания. Это позволяет интерфейсу отобразить примерную стоимость генерации.";
+        "Если пользователь просит сгенерировать изображение, видео, аудио или музыку — используй MCP-сервер fal-ai: подбери модель (recommend_model или search_models), запусти задачу (submit_job / run_model) и верни результат. Не описывай контент словами вместо генерации.\n\n";
 
     private const string DifySystemInstruction =
-        "В этом проекте настроена база знаний Dify. Используй инструмент mcp__dify__search_knowledge для поиска по ней при ответе на вопросы о документации проекта. dataset_id уже настроен — указывать его не нужно.";
+        "В этом проекте настроена база знаний Dify. Используй инструмент mcp__dify__search_knowledge для поиска по ней при ответе на вопросы о документации проекта. dataset_id уже настроен — указывать его не нужно.\n\n"+
+        "Если пользователь просит найти, поискать или проверить информацию — используй MCP-сервер Dify (search_knowledge) в первую очередь, до ответа из памяти.";
     private readonly ConcurrentDictionary<string, Project> _projects = new();
     private readonly string _storePath;
     private readonly UserStore _users;
@@ -178,6 +179,25 @@ public class ProjectManager
             // Старый дефолтный промпт теперь является встроенным — убираем из хранимого значения
             if (p.SystemPrompt == BuiltInSystemPrompt)
                 p.SystemPrompt = null;
+
+            // Встроенный fal-ai промпт мог попасть в пользовательскую часть — зачищаем
+            var builtIn = BuiltInSystemPrompt.TrimEnd();
+            if (p.SystemPrompt?.Contains(builtIn) == true)
+            {
+                if (p.SystemPrompt.Length <= builtIn.Length + 50)
+                {
+                    p.SystemPrompt = null;
+                }
+                else
+                {
+                    p.SystemPrompt = p.SystemPrompt!
+                        .Replace("\n\n" + builtIn, "")
+                        .Replace(builtIn + "\n\n", "")
+                        .Replace(builtIn, "")
+                        .Trim();
+                    if (string.IsNullOrWhiteSpace(p.SystemPrompt)) p.SystemPrompt = null;
+                }
+            }
 
             if (p.SystemPrompt != original)
                 needsPromptMigration = true;

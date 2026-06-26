@@ -309,7 +309,7 @@ export function Composer({
       onClick={onAttach}
       title="Прикрепить файл"
       style={{
-        width: 32, height: 32, borderRadius: R.pill, border: 'none', background: 'none',
+        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: 'none',
         cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
         justifyContent: 'center', flexShrink: 0,
       }}
@@ -326,7 +326,7 @@ export function Composer({
       onClick={handleSlashButton}
       title="Выбрать скилл"
       style={{
-        width: 32, height: 32, borderRadius: R.pill, border: 'none', background: 'none',
+        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: 'none',
         cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
         justifyContent: 'center', flexShrink: 0,
         fontFamily: FONT.mono, fontSize: 16, fontWeight: 600, lineHeight: 1,

@@ -3,6 +3,7 @@ import type { Project, AuthState } from './types'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { WorkspacePage } from './pages/WorkspacePage'
+import { UpdatePrompt } from './components/UpdatePrompt'
 import { initConnectivity } from './lib/offline'
 import { useOnline } from './hooks/useOnline'
 import { runOfflineSnapshot, syncProjectFiles } from './lib/sync'
@@ -164,9 +165,17 @@ export default function App() {
     setAuth(null)
   }
 
-  if (authChecking) return <div style={{ minHeight: '100vh', background: '#F4F0E8' }} />
-  if (!auth) return <LoginPage onConnect={setAuth} />
-  // onBack ведёт через историю — едино с кнопкой «назад» браузера
-  if (project) return <WorkspacePage project={project} onBack={() => window.history.back()} />
-  return <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} />
+  return (
+    <>
+      <UpdatePrompt />
+      {authChecking
+        ? <div style={{ minHeight: '100vh', background: '#F4F0E8' }} />
+        : !auth
+          ? <LoginPage onConnect={setAuth} />
+          : project
+            ? <WorkspacePage project={project} onBack={() => window.history.back()} />
+            : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} />
+      }
+    </>
+  )
 }

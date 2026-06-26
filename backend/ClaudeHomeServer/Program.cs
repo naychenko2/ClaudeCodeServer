@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.Negotiate;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.StaticFiles;
 
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
@@ -154,11 +155,33 @@ var distPath = Directory.Exists(wwwrootPath) ? wwwrootPath : devDistPath;
 if (Directory.Exists(distPath))
 {
     var fp = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(distPath);
+
+    // index.html и SW-файлы — no-store: браузер всегда берёт свежую версию с сервера.
+    // /assets/** — immutable: хэши в именах гарантируют уникальность, кэшируем «вечно».
+    Action<StaticFileResponseContext> setCacheHeaders = ctx =>
+    {
+        var name = ctx.File.Name;
+        var headers = ctx.Context.Response.Headers;
+        if (name.Equals("index.html", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("sw.js", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("registerSW.js", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(".webmanifest", StringComparison.OrdinalIgnoreCase))
+        {
+            headers.CacheControl = "no-store, no-cache, must-revalidate";
+            headers.Pragma = "no-cache";
+            headers.Expires = "0";
+        }
+        else if (ctx.Context.Request.Path.StartsWithSegments("/assets"))
+        {
+            headers.CacheControl = "public, max-age=31536000, immutable";
+        }
+    };
+
     app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fp });
-    app.UseStaticFiles(new StaticFileOptions { FileProvider = fp });
+    app.UseStaticFiles(new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });
     // /_api/* — Office/SharePoint-запросы; возвращаем 404 вместо SPA, иначе Word показывает «Нет доступа»
     app.Map("/_api", api => api.Run(ctx => { ctx.Response.StatusCode = 404; return Task.CompletedTask; }));
-    app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp });
+    app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });
 }
 
 app.MapControllers();

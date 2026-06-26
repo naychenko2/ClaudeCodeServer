@@ -1,0 +1,22 @@
+{
+  "name": "mcp-dify",
+  "version": "1.0.0",
+  "description": "MCP-сервер для Dify Knowledge Base API",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "~5.8.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

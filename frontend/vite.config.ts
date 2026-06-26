@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       devOptions: { enabled: true },
       // .mjs включён в precache — иначе pdf.worker.min.mjs выпадает и PDF не работает офлайн
       workbox: {

@@ -438,7 +438,6 @@ export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged }
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
-  const [deletingDataset, setDeletingDataset] = useState(false);
   const [tagEditDoc, setTagEditDoc] = useState<DifyDocument | null>(null);
 
   const loadStatus = useCallback(async (silent = false) => {
@@ -505,18 +504,6 @@ export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged }
     }
   };
 
-  const handleDeleteDataset = async () => {
-    if (!confirm('Удалить всю базу знаний проекта? Это действие необратимо.')) return;
-    setDeletingDataset(true);
-    try {
-      await api.knowledge.deleteDataset(project.id);
-      setStatus({ datasetId: null, documents: [], total: 0 });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка удаления базы знаний');
-    } finally {
-      setDeletingDataset(false);
-    }
-  };
 
   const handleSaveTags = async (tags: string[]) => {
     if (!tagEditDoc) return;
@@ -631,25 +618,6 @@ export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged }
         )}
       </div>
 
-      {/* Кнопка удаления датасета */}
-      {status?.datasetId && (
-        <div style={{ padding: '10px 12px', borderTop: `1px solid ${C.border}`, flexShrink: 0 }}>
-          <button
-            onClick={handleDeleteDataset}
-            disabled={deletingDataset}
-            style={{
-              width: '100%', padding: '7px 12px',
-              border: `1px solid ${C.accent}30`,
-              borderRadius: 8, fontSize: 12, fontWeight: 500,
-              color: C.accent, background: 'transparent',
-              cursor: deletingDataset ? 'not-allowed' : 'pointer',
-              opacity: deletingDataset ? 0.5 : 1,
-            }}
-          >
-            {deletingDataset ? 'Удаление…' : 'Удалить базу знаний'}
-          </button>
-        </div>
-      )}
 
       {/* Диалог тегов */}
       {tagEditDoc && (

@@ -11,7 +11,7 @@ certs/
 domain/
 
 # Собранный фронтенд внутри backend (копируется при публикации)
-backend/ClaudeCodeServer/wwwroot/assets/
+backend/ClaudeHomeServer/wwwroot/assets/
 backend/wwwroot/
 
 # Node / Frontend
@@ -21,6 +21,13 @@ frontend/dev-dist/
 
 # Playwright MCP
 .playwright-mcp/
+
+# MCP конфиги с ключами
+.mcp.json
+
+# mcp-dify
+mcp-dify/node_modules/
+mcp-dify/dist/
 
 # Среда
 .env

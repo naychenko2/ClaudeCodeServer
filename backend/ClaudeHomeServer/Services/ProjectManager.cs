@@ -9,11 +9,8 @@ public class ProjectManager
 {
     // Встроенная часть системного промпта — всегда добавляется, пользователь не редактирует
     public const string BuiltInSystemPrompt =
-        "Если пользователь просит сгенерировать изображение, видео, аудио или музыку — используй MCP-сервер fal-ai: подбери модель (recommend_model или search_models), запусти задачу (submit_job / run_model) и верни результат. Не описывай контент словами вместо генерации.\n\n";
+        "Если пользователь просит сгенерировать, нарисовать, создать или изобразить что-либо визуальное (изображение, картинку, рисунок, арт, фото, иллюстрацию), видео, аудио или музыку — используй MCP-сервер fal-ai: подбери модель (recommend_model или search_models), запусти задачу (submit_job / run_model) и верни результат. Никогда не рисуй ASCII-арт вместо настоящей генерации.\n\n";
 
-    private const string DifySystemInstruction =
-        "В этом проекте настроена база знаний Dify. Используй инструмент mcp__dify__search_knowledge для поиска по ней при ответе на вопросы о документации проекта. dataset_id уже настроен — указывать его не нужно.\n\n"+
-        "Если пользователь просит найти, поискать или проверить информацию — используй MCP-сервер Dify (search_knowledge) в первую очередь, до ответа из памяти.";
     private readonly ConcurrentDictionary<string, Project> _projects = new();
     private readonly string _storePath;
     private readonly UserStore _users;
@@ -90,7 +87,9 @@ public class ProjectManager
         {
             var combined = string.Join("\n\n", parts);
             if (!combined.Contains("mcp__dify__search_knowledge"))
-                parts.Add(DifySystemInstruction);
+                parts.Add(
+                    "В этом проекте настроена база знаний Dify. Используй инструмент mcp__dify__search_knowledge для поиска по ней при ответе на вопросы о документации проекта. dataset_id уже настроен — указывать его не нужно.\n\n" +
+                    "Если пользователь просит найти, поискать или проверить информацию — используй MCP-сервер Dify (search_knowledge) в первую очередь, до ответа из памяти.");
 
             var tagInstruction = BuildTagInstruction(documentTags);
             if (!string.IsNullOrEmpty(tagInstruction))
@@ -168,12 +167,7 @@ public class ProjectManager
             // Убираем Dify-инструкцию из хранимого промпта (теперь добавляется динамически)
             if (p.SystemPrompt?.Contains("mcp__dify__search_knowledge") == true)
             {
-                p.SystemPrompt = p.SystemPrompt!
-                    .Replace("\n\n" + DifySystemInstruction, "")
-                    .Replace(DifySystemInstruction + "\n\n", "")
-                    .Replace(DifySystemInstruction, "")
-                    .Trim();
-                if (string.IsNullOrWhiteSpace(p.SystemPrompt)) p.SystemPrompt = null;
+                p.SystemPrompt = null;
             }
 
             // Старый дефолтный промпт теперь является встроенным — убираем из хранимого значения
@@ -190,7 +184,7 @@ public class ProjectManager
                 }
                 else
                 {
-                    p.SystemPrompt = p.SystemPrompt!
+                    p.SystemPrompt = p.SystemPrompt
                         .Replace("\n\n" + builtIn, "")
                         .Replace(builtIn + "\n\n", "")
                         .Replace(builtIn, "")

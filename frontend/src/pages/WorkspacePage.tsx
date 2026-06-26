@@ -114,6 +114,10 @@ export function WorkspacePage({ project, onBack }: Props) {
   const [indexedFileNames, setIndexedFileNames] = useState<Set<string>>(new Set());
   const [indexingFiles, setIndexingFiles] = useState<Set<string>>(new Set());
   const [skillsData, setSkillsData] = useState<SkillsData | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
+  const handleAttachToChat = useCallback((path: string) => {
+    setAttachedFiles(prev => prev.includes(path) ? prev : [...prev, path]);
+  }, []);
   const [selectedAgent, setSelectedAgent] = useState<AgentInfo | null>(() => {
     try {
       const raw = localStorage.getItem(`cc_agent_${project.id}`);
@@ -402,7 +406,7 @@ export function WorkspacePage({ project, onBack }: Props) {
         {leftTab === 'sessions' ? (
           <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
         ) : leftTab === 'files' ? (
-          <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} />
+          <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={handleAttachToChat} />
         ) : (
           <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} />
         )}
@@ -470,7 +474,7 @@ export function WorkspacePage({ project, onBack }: Props) {
             {leftTab === 'sessions'
               ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
               : leftTab === 'files'
-              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} />
+              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={handleAttachToChat} />
               : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} />
             }
           </div>
@@ -509,7 +513,7 @@ export function WorkspacePage({ project, onBack }: Props) {
         {/* Чат — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {activeSession
-            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} onWorkflowRunning={handleWorkflowRunning} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
+            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} onWorkflowRunning={handleWorkflowRunning} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
             : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>Выберите или создайте чат</div>
           }
         </div>
@@ -618,7 +622,7 @@ export function WorkspacePage({ project, onBack }: Props) {
             {!openFile && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 {activeSession
-                  ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
+                  ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
                   : NoSessionWithBar}
               </div>
             )}
@@ -628,7 +632,7 @@ export function WorkspacePage({ project, onBack }: Props) {
               <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
                   {activeSession
-                    ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
+                    ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
                     : NoSessionWithBar}
                 </div>
                 <Splitter orientation="v" active={draggingSplitter === 'split'}
@@ -651,7 +655,7 @@ export function WorkspacePage({ project, onBack }: Props) {
                 )}
                 {activeSession ? (
                   <div style={{ flexShrink: 0, height: chatDockExpanded ? chatHeight : 56, overflow: 'hidden', transition: chatDockExpanded ? 'none' : 'height 0.2s ease' }}>
-                    <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} dockMode={chatDockExpanded ? 'expanded' : 'collapsed'} onToggleDock={() => setChatDockExpanded(p => !p)} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
+                    <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} dockMode={chatDockExpanded ? 'expanded' : 'collapsed'} onToggleDock={() => setChatDockExpanded(p => !p)} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
                   </div>
                 ) : (
                   <div style={{ flexShrink: 0, height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8A8070', fontSize: 13, background: C.bgPanel }}>

@@ -16,6 +16,8 @@ interface Props {
   isMobile?: boolean;
   onAddToKnowledge?: (relativePath: string) => void;
   indexedFileNames?: Set<string>;
+  indexingFiles?: Set<string>;
+  onAttachToChat?: (path: string) => void;
 }
 
 // Персистентное состояние дерева на уровне модуля — переживает размонтирование
@@ -161,7 +163,7 @@ function FilesRootEmptyState() {
   );
 }
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, onAddToKnowledge, indexedFileNames }: Props) {
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, onAddToKnowledge, indexedFileNames, onAttachToChat }: Props) {
   const online = useOnline();
   const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
@@ -448,6 +450,21 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         </span>
         {entry.isModified && (
           <span style={{ fontSize: 9, fontWeight: 700, color: '#C2693B', background: '#FBEBE0', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
+        )}
+        {/* Кнопка «добавить в чат» — только для файлов.
+            Десктоп: появляется при hover. Мобила: всегда видна. */}
+        {!entry.isDirectory && onAttachToChat && (
+          isMobile || hoveredPath === entry.path ? (
+            <button
+              onClick={e => { e.stopPropagation(); onAttachToChat(entry.path); }}
+              title="Добавить в чат"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.accent }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+            </button>
+          ) : null
         )}
         {/* Кнопка «добавить в БЗ» — только для файлов не в БЗ.
             Десктоп: появляется при hover. Мобила: всегда видна (hover недоступен). */}

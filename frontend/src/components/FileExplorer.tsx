@@ -476,7 +476,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {/* Кнопка «добавить в чат» — только для файлов.
             Десктоп: появляется при hover. Мобила: всегда видна. */}
         {!entry.isDirectory && onAttachToChat && (
-          isMobile || hoveredPath === entry.path ? (
+          hoveredPath === entry.path ? (
             <button
               onClick={e => { e.stopPropagation(); onAttachToChat(entry.path); }}
               title="Добавить в чат"
@@ -507,13 +507,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               title="Добавить в базу знаний"
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
-                {/* крупный плюс в верхней трети */}
-                <path d="M12 1v7M8.5 4.5h7" strokeWidth="2.5"/>
-                {/* бочка в нижних двух третях */}
-                <ellipse cx="12" cy="11" rx="9" ry="3" strokeWidth="1.8"/>
-                <path d="M21 17.5c0 1.66-4 3-9 3s-9-1.34-9-3" strokeWidth="1.8"/>
-                <path d="M3 11v9c0 1.66 4 3 9 3s9-1.34 9-3V11" strokeWidth="1.8"/>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+                <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
               </svg>
             </button>
           ) : null
@@ -558,7 +554,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       {/* Search */}
       <div style={{ padding: '4px 12px 10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
             <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
             </span>

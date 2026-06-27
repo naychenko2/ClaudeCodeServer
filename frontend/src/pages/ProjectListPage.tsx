@@ -166,7 +166,7 @@ export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
         </div>{/* конец зафиксированной шапки */}
 
         {/* Прокручиваемая область */}
-        <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 14 }}>
+        <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 14, paddingRight: 6 }}>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
           {filtered.map((p, index) => (

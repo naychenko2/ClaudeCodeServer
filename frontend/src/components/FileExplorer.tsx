@@ -252,6 +252,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const [renameValue, setRenameValue] = useState('');
   const renameCancelledRef = useRef(false);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  // Модальный диалог переименования — для мобилы/планшета (клавиатура не сбивает blur)
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const renameModalInputRef = useRef<HTMLInputElement>(null);
 
   // === Context menu state ===
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -420,13 +423,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   };
 
   // === Rename handlers ===
+
+  // Фокус и выделение имени без расширения для inline-редактирования (десктоп)
   useEffect(() => {
-    if (!renamingPath) return;
+    if (!renamingPath || showRenameModal) return;
     const raf = requestAnimationFrame(() => {
       const input = renameInputRef.current;
       if (!input) return;
       input.focus();
-      // выделяем только имя без расширения (для файлов)
       const dotIdx = renameValue.lastIndexOf('.');
       const end = dotIdx > 0 ? dotIdx : renameValue.length;
       input.setSelectionRange(0, end);
@@ -434,11 +438,28 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     return () => cancelAnimationFrame(raf);
   }, [renamingPath]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Фокус и выделение имени без расширения для модального диалога (мобила/планшет)
+  useEffect(() => {
+    if (!showRenameModal) return;
+    const raf = requestAnimationFrame(() => {
+      const input = renameModalInputRef.current;
+      if (!input) return;
+      input.focus();
+      const dotIdx = renameValue.lastIndexOf('.');
+      const end = dotIdx > 0 ? dotIdx : renameValue.length;
+      input.setSelectionRange(0, end);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [showRenameModal]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const startRename = useCallback((entry: FileEntry) => {
     setContextMenu(null);
     setRenamingPath(entry.path);
     setRenameValue(entry.name);
-  }, []);
+    // На мобиле и планшете — модальный диалог, т.к. виртуальная клавиатура
+    // вызывает blur на inline-input и сразу прерывает редактирование
+    if (isMobile || alwaysShowIcons) setShowRenameModal(true);
+  }, [isMobile, alwaysShowIcons]);
 
   const commitRename = useCallback(async () => {
     if (!renamingPath || !renameValue.trim()) {
@@ -466,9 +487,16 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const cancelRename = useCallback(() => {
     renameCancelledRef.current = true;
+    setShowRenameModal(false);
     setRenamingPath(null);
     setRenameValue('');
   }, []);
+
+  // Для модального диалога: закрываем модал до async-части commitRename
+  const commitRenameModal = useCallback(async () => {
+    setShowRenameModal(false);
+    await commitRename();
+  }, [commitRename]);
 
   // === Context menu handlers ===
   useEffect(() => {
@@ -688,7 +716,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           }}>{em!.label}</span>
         )}
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, paddingTop: isMobile ? 3 : 0 }}>
-          {isRenaming ? (
+          {/* Inline-редактирование только на десктопе; мобила/планшет → Modal */}
+          {isRenaming && !isMobile && !alwaysShowIcons ? (
             <input
               ref={renameInputRef}
               value={renameValue}
@@ -1012,6 +1041,50 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           flatTree.map(({ entry, depth }) => renderFileRow(entry, depth))
         )}
       </div>
+
+      {/* === Модальный диалог переименования (мобила/планшет) === */}
+      {showRenameModal && renamingPath && (() => {
+        const [, oldName] = splitPath(renamingPath);
+        const isDir = dirCache.get(splitPath(renamingPath)[0])?.find(e => e.path === renamingPath)?.isDirectory ?? false;
+        return (
+          <Modal
+            width={MODAL_W.form}
+            onClose={cancelRename}
+            title={isDir ? 'Переименовать папку' : 'Переименовать файл'}
+            subtitle={<span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{oldName}</span>}
+            footer={
+              <ModalActions
+                confirmLabel="Переименовать"
+                onConfirm={commitRenameModal}
+                confirmDisabled={!renameValue.trim() || renameValue.trim() === oldName}
+                onCancel={cancelRename}
+              />
+            }
+          >
+            <input
+              ref={renameModalInputRef}
+              value={renameValue}
+              onChange={e => setRenameValue(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') commitRenameModal();
+                if (e.key === 'Escape') cancelRename();
+              }}
+              style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 14,
+                color: '#39332B',
+                background: '#FFFFFF',
+                border: `1.5px solid ${C.accent}`,
+                borderRadius: 6,
+                padding: '10px 12px',
+                outline: 'none',
+                width: '100%',
+                boxSizing: 'border-box',
+              }}
+            />
+          </Modal>
+        );
+      })()}
 
       {/* === Диалог создания файла === */}
       {showCreateFile && (

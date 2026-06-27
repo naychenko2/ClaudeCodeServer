@@ -577,14 +577,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 </svg>
               </button>
               {/* Знания — неактивна */}
-              <button onClick={onOpenKnowledge} title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted, position: 'relative' }}>
+              <button onClick={onOpenKnowledge} title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
                   <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
                 </svg>
-                {indexedFileNames && indexedFileNames.size > 0 && (
-                  <span style={{ position: 'absolute', top: 2, right: 2, width: 7, height: 7, borderRadius: '50%', background: C.accent, border: `1.5px solid ${C.bgPanel}` }} />
-                )}
               </button>
             </div>
           )}

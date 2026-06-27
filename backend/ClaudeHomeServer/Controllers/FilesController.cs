@@ -275,6 +275,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
             var downloadUrl = $"{backendUrl}/api/projects/{projectId}/files/office-download" +
                               $"?path={Uri.EscapeDataString(path)}&token={Uri.EscapeDataString(token)}";
+            var callbackUrl = $"{backendUrl}/api/projects/{projectId}/files/office-callback" +
+                              $"?path={Uri.EscapeDataString(path)}&token={Uri.EscapeDataString(token)}";
 
             return Ok(new {
                 serverUrl,
@@ -285,8 +287,9 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                     url = downloadUrl,
                 },
                 editorConfig = new {
-                    mode = "view",
+                    mode = "edit",
                     lang = "ru",
+                    callbackUrl,
                     customization = new {
                         uiTheme = "theme-claude-home",
                         anonymous = new { request = false },
@@ -315,6 +318,50 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     private static string? _downloadTokenCache;
+
+    // Вызывается OnlyOffice DS после сохранения документа пользователем.
+    // status=2: документ готов, url — временная ссылка на изменённый файл.
+    // status=6: принудительное сохранение (forceSave).
+    [HttpPost("office-callback")]
+    [AllowAnonymous]
+    public async Task<IActionResult> OfficeCallback(
+        string projectId,
+        [FromQuery] string path,
+        [FromQuery] string token,
+        [FromServices] IHttpClientFactory httpClientFactory,
+        CancellationToken ct)
+    {
+        var expected = GetDownloadToken();
+        if (string.IsNullOrEmpty(token) || token != expected)
+            return Unauthorized();
+
+        OOCallbackPayload? payload;
+        try
+        {
+            payload = await System.Text.Json.JsonSerializer.DeserializeAsync<OOCallbackPayload>(
+                Request.Body,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true },
+                ct);
+        }
+        catch { return Ok(new { error = 1, message = "bad json" }); }
+
+        if (payload?.Status is 2 or 6 && payload.Url != null)
+        {
+            try
+            {
+                var root = GetRoot(projectId);
+                var client = httpClientFactory.CreateClient("proxy");
+                var bytes = await client.GetByteArrayAsync(payload.Url, ct);
+                files.WriteFileBytes(root, path, bytes);
+            }
+            catch (Exception ex)
+            {
+                return Ok(new { error = 1, message = ex.Message });
+            }
+        }
+
+        return Ok(new { error = 0 });
+    }
 
     [HttpPost("save-from-url")]
     [RequestSizeLimit(200 * 1024 * 1024)] // 200 МБ для видео
@@ -346,3 +393,4 @@ public record SaveContentRequest(string Content);
 public record PathRequest(string Path);
 public record RenameRequest(string OldPath, string NewPath);
 public record SaveFromUrlRequest(string Url, string Path);
+public record OOCallbackPayload(int Status, string? Url, string? Key);

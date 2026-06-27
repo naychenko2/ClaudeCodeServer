@@ -288,7 +288,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                     mode = "view",
                     lang = "ru",
                     customization = new {
-                        uiTheme = "theme-light",
+                        uiTheme = "theme-claude-home",
                         anonymous = new { request = false },
                         compactToolbar = true,
                         help = false,

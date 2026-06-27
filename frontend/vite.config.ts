@@ -11,8 +11,9 @@ export default defineConfig({
       // .mjs включён в precache — иначе pdf.worker.min.mjs выпадает и PDF не работает офлайн
       workbox: {
         globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,webmanifest}'],
-        // /api/* не должен перехватываться SW — иначе /api/proxy открывается как SPA
-        navigateFallbackDenylist: [/^\/api\//],
+        // /api/* и OnlyOffice-пути не должны перехватываться SW.
+        // OO использует версионированные пути /X.Y.Z-hash/... и статику /web-apps/, /sdkjs/ и т.д.
+        navigateFallbackDenylist: [/^\/api\//, /^\/\d/, /^\/web-apps\//, /^\/sdkjs\//, /^\/doceditor\//, /^\/doc\//, /^\/coauthoring\//, /^\/cache\//],
       },
       manifest: {
         name: 'Claude Home Server',

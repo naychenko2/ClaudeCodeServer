@@ -1,4 +1,5 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
+using System.Net;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using ClaudeHomeServer.Hubs;
@@ -8,6 +9,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.Negotiate;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.StaticFiles;
+using Yarp.ReverseProxy.Forwarder;
 
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
@@ -36,6 +38,7 @@ builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");
+builder.Services.AddHttpForwarder();
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
 builder.Services.Configure<DifyOptions>(builder.Configuration.GetSection(DifyOptions.Section));
@@ -148,6 +151,33 @@ app.Use(async (ctx, next) =>
     }
     await next(ctx);
 });
+
+// OnlyOffice DS добавляет версионный префикс к URL ресурсов И Socket.IO WebSocket:
+// /9.4.0-hash/web-apps/... и /9.4.0-hash/doc/.../c/?transport=websocket
+// IHttpForwarder поддерживает WebSocket upgrade нативно — в отличие от HttpClient.
+{
+    var dsBase = builder.Configuration
+        .GetSection("ReverseProxy:Clusters:onlyoffice:Destinations:default")
+        .GetValue<string>("Address") ?? "http://localhost:8090";
+    var ooInvoker = new HttpMessageInvoker(new SocketsHttpHandler
+    {
+        UseProxy = false,
+        AllowAutoRedirect = false,
+        AutomaticDecompression = DecompressionMethods.None,
+        UseCookies = false,
+    });
+    app.Use(async (ctx, next) =>
+    {
+        var path = ctx.Request.Path.Value ?? "";
+        if (path.Length > 1 && char.IsDigit(path[1]))
+        {
+            var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
+            await forwarder.SendAsync(ctx, dsBase, ooInvoker, ForwarderRequestConfig.Empty, HttpTransformer.Default);
+            return;
+        }
+        await next();
+    });
+}
 
 // Раздача фронтенда: wwwroot/ рядом с exe (prod) или ../../frontend/dist (dev)
 var wwwrootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");

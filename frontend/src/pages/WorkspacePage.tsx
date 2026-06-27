@@ -152,7 +152,7 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
   const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth < 768;
-  const isTablet = windowWidth >= 768 && windowWidth < 1100;
+  const isTablet = windowWidth >= 768 && windowWidth < 1200;
   // Ширина сайдбара — перетаскиваемая, сохраняется между сессиями
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const v = localStorage.getItem('cc_sidebar_width');

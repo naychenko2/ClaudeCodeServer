@@ -476,6 +476,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
     borderRadius: 8, padding: '5px 13px', cursor: 'pointer', fontSize: 13, fontWeight: 600,
   };
 
+  const isOfficeFile = !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind !== 'pdf';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative' }}>
       {/* Шапка */}
@@ -619,7 +621,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       )}
 
       {/* Содержимое */}
-      <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, overflow: isOfficeFile ? 'hidden' : 'auto', padding: isOfficeFile ? 0 : 16, display: 'flex', flexDirection: 'column' }}>
         {loading && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 14 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', border: `3px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.8s linear infinite' }} />

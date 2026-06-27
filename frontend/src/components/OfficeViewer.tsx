@@ -127,5 +127,5 @@ export function OfficeViewer({ projectId, filePath }: Props) {
     );
   }
 
-  return <div ref={wrapperRef} style={{ width: '100%', height: '100%', minHeight: 400 }} />;
+  return <div ref={wrapperRef} style={{ width: '100%', height: '100%' }} />;
 }

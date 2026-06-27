@@ -284,7 +284,19 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                     title = fileName,
                     url = downloadUrl,
                 },
-                editorConfig = new { mode = "view", lang = "ru" },
+                editorConfig = new {
+                    mode = "view",
+                    lang = "ru",
+                    customization = new {
+                        uiTheme = "theme-light",
+                        anonymous = new { request = false },
+                        compactToolbar = true,
+                        help = false,
+                        chat = false,
+                        integrationMode = "embed",
+                        toolbarHideFileName = true,
+                    },
+                },
             });
         }
         catch (KeyNotFoundException) { return NotFound(); }

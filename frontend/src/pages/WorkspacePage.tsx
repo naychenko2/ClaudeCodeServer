@@ -155,16 +155,7 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
   // мобайл: показываем либо sidebar, либо chat
   const [mobileView, setMobileView] = useState<'sidebar' | 'chat'>('sidebar');
 
-  // При открытии проекта на мобиле — сразу переходим в чат, если был активный
-  useEffect(() => {
-    const ws = loadWorkspaceState(project.id);
-    if (ws?.activeSession && window.innerWidth < 768) {
-      setMobileView('chat');
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
-
-  const windowWidth = useWindowWidth();
+const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth < 768;
   const isTablet = windowWidth >= 768 && windowWidth < 1200;
@@ -538,7 +529,7 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
         {/* Чат — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {activeSession
-            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => setMobileView('sidebar')} onWorkflowRunning={handleWorkflowRunning} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
+            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} onWorkflowRunning={handleWorkflowRunning} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
             : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>Выберите или создайте чат</div>
           }
         </div>

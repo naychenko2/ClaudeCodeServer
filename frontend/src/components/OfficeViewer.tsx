@@ -22,7 +22,7 @@ declare global {
         elementId: string,
         config: {
           document: OfficeConfig['document'];
-          editorConfig: OfficeConfig['editorConfig'];
+          editorConfig: OfficeConfig['editorConfig'] & { customization?: { logo?: { visible?: boolean } } };
           documentType?: string;
           height?: string;
           width?: string;
@@ -215,7 +215,7 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
 
       editorRef.current = new window.DocsAPI.DocEditor(containerId, {
         document: cfg.document,
-        editorConfig: cfg.editorConfig,
+        editorConfig: { ...cfg.editorConfig, customization: { logo: { visible: false } } },
         documentType: docType,
         height: '100%',
         width: '100%',
@@ -233,15 +233,13 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
         let idoc: Document | null = null;
         try { idoc = iframe?.contentDocument ?? null; } catch { clearInterval(themeInterval); return; }
         if (!idoc?.body || !idoc.head) return;
-        // Ждём пока OO установит класс темы на body
-        if (!idoc.body.classList.contains('theme-claude-home')) return;
         // Уже инжектировали — не дублируем
         if (idoc.querySelector('style[data-claude-home]')) { clearInterval(themeInterval); return; }
         clearInterval(themeInterval);
         const css = Object.entries(CLAUDE_HOME_THEME.colors).map(([k, v]) => `--${k}:${v}`).join(';');
         const style = idoc.createElement('style');
         style.setAttribute('data-claude-home', '1');
-        style.textContent = `.theme-claude-home{${css}} section.logo,div.logo-light{display:none!important}`;
+        style.textContent = `.theme-claude-home{${css}} #header-logo{display:none!important}`;
         idoc.head.appendChild(style);
       }, 300);
       setTimeout(() => { clearInterval(themeInterval); callReady(); }, 30000);

@@ -15,7 +15,6 @@ const KB_FILE_EXT = new Set(['.pdf', '.docx', '.xlsx', '.xls', '.pptx', '.csv', 
 function isKnowledgeIndexable(filename: string): boolean {
   const dot = filename.lastIndexOf('.');
   const ext = dot > 0 ? filename.slice(dot).toLowerCase() : '';
-  // нет расширения (Makefile, LICENSE) или дотфайл (.gitignore)
   if (ext === '' || ext === filename.toLowerCase()) return true;
   return KB_TEXT_EXT.has(ext) || KB_FILE_EXT.has(ext);
 }
@@ -59,6 +58,13 @@ export function getExplorerCreateInDir(projectId: string): string {
 
 const normPath = (p?: string | null) => (p ?? '').replace(/\\/g, '/');
 
+// Возвращает [parentDir, name] из пути
+const splitPath = (p: string): [string, string] => {
+  const norm = normPath(p);
+  const i = norm.lastIndexOf('/');
+  return i < 0 ? ['', norm] : [norm.slice(0, i), norm.slice(i + 1)];
+};
+
 const EXT_META: Record<string, { bg: string; fg: string; label: string }> = {
   ts:   { bg: '#E6EEF5', fg: '#3E7CA6', label: 'ts' },
   tsx:  { bg: '#E6EEF5', fg: '#3E7CA6', label: 'tsx' },
@@ -89,7 +95,6 @@ function FolderIcon() {
   );
 }
 
-// Шеврон-вправо — намёк «войти в папку» (мобильная навигация).
 function ChevronRight() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
@@ -98,9 +103,6 @@ function ChevronRight() {
   );
 }
 
-// Иконка облака — маркер/тоггл синхронизации.
-// direct — залит акцентом (помечен сам); inherited — залит светлым акцентом (через папку/проект);
-// idle — контур (можно включить).
 function CloudIcon({ variant }: { variant: 'direct' | 'inherited' | 'idle' }) {
   const color = variant === 'direct' ? '#D97757' : variant === 'inherited' ? '#D7A78D' : '#B0A697';
   const fill = variant === 'direct' ? '#D97757' : variant === 'inherited' ? '#EAC6B2' : 'none';
@@ -111,7 +113,6 @@ function CloudIcon({ variant }: { variant: 'direct' | 'inherited' | 'idle' }) {
   );
 }
 
-// Спиннер — состояние «синхронизируется» (идёт докачка содержимого). Контрастный, чтобы был заметен.
 function SyncSpinner() {
   return (
     <span style={{ display: 'flex', width: 16, height: 16, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -182,6 +183,45 @@ function FilesRootEmptyState() {
   );
 }
 
+// Иконка карандаша для переименования
+function RenameIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+    </svg>
+  );
+}
+
+// Иконка корзины для удаления
+function TrashIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6"/>
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+      <path d="M10 11v6M14 11v6"/>
+      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+    </svg>
+  );
+}
+
+// Иконка папки с плюсом
+function FolderPlusIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      <line x1="12" y1="11" x2="12" y2="17"/>
+      <line x1="9" y1="14" x2="15" y2="14"/>
+    </svg>
+  );
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  entry: FileEntry;
+}
+
 export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, indexedFileNames, indexingFiles, onAttachToChat, onOpenKnowledge }: Props) {
   const online = useOnline();
   const marks = useSyncMarks(project.id);
@@ -196,7 +236,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const [search, setSearch] = useState(() => initial?.search ?? '');
   const [searchResults, setSearchResults] = useState<FileEntry[] | null>(() => initial?.searchResults ?? null);
-  // Поиск идёт только по живому серверу (не кэшируется): офлайн/сбой → сообщение вместо краша
   const [searchError, setSearchError] = useState<string | null>(null);
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const [showCreateFile, setShowCreateFile] = useState(false);
@@ -208,12 +247,34 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeNorm = normPath(activeFilePath);
 
+  // === Rename state ===
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const renameCancelledRef = useRef(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  // === Context menu state ===
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
+  // === Delete confirm state ===
+  const [deleteConfirm, setDeleteConfirm] = useState<FileEntry | null>(null);
+
+  // === Create directory state ===
+  const [showCreateDir, setShowCreateDir] = useState(false);
+  const [newDirName, setNewDirName] = useState('');
+
+  // === Drag & drop state ===
+  const [dragPath, setDragPath] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  // === Long press для мобилы ===
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const loadDir = useCallback(async (path: string) => {
     if (inFlight.current.has(path)) return;
     inFlight.current.add(path);
     setLoadingDirs(prev => new Set(prev).add(path));
     try {
-      // Офлайн-промах кэша не должен ронять загрузку — папка просто не раскроется
       const entries = await api.files.list(project.id, path).catch(() => null);
       if (entries) setDirCache(prev => new Map(prev).set(path, entries));
     } finally {
@@ -222,10 +283,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     }
   }, [project.id]);
 
-  // Метки синхронизации + набор уже скачанных файлов — в общий стор (для маркеров/спиннеров)
   useEffect(() => { loadSyncMarks(project.id); loadDownloadedSet(project.id); }, [project.id]);
 
-  // Watcher: при изменении файлов проекта перезагружаем затронутые ЗАГРУЖЕННЫЕ папки (дерево живое)
   useEffect(() => {
     return onFilesChanged(({ projectId, paths }) => {
       if (projectId !== project.id) return;
@@ -239,7 +298,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     });
   }, [project.id, loadDir]);
 
-  // Переключение проекта: восстанавливаем сохранённое состояние либо грузим корень заново
   const mountedProjectRef = useRef<string | null>(null);
   useEffect(() => {
     if (mountedProjectRef.current === project.id) return;
@@ -253,9 +311,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       setCreateInDir(st.createInDir);
       setSearch(st.search);
       setSearchResults(st.searchResults);
-      // Всегда перезагружаем корень — кэш мог устареть пока дерево не было смонтировано
       loadDir('');
-      // на мобиле могли вернуться во вложенную папку — догрузим её содержимое
       if (st.mobileDir) loadDir(st.mobileDir);
     } else {
       setDirCache(new Map());
@@ -268,7 +324,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     }
   }, [project.id, loadDir]);
 
-  // Сохраняем состояние дерева в модульный стор при любом изменении
   useEffect(() => {
     _explorerStore.set(project.id, {
       dirCache, expanded, mobileDir, search, searchResults, createInDir,
@@ -276,7 +331,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     });
   }, [project.id, dirCache, expanded, mobileDir, search, searchResults, createInDir]);
 
-  // Восстанавливаем позицию прокрутки после монтирования (дерево уже отрисовано из кэша)
   useLayoutEffect(() => {
     const st = _explorerStore.get(project.id);
     if (scrollRef.current && st) scrollRef.current.scrollTop = st.scrollTop;
@@ -304,7 +358,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     }
   };
 
-  // Мобильная навигация: вход в папку (содержимое уже в кэше — иначе грузим)
   const enterMobileDir = async (path: string) => {
     setMobileDir(path);
     setCreateInDir(path);
@@ -319,14 +372,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       setSearchResults(results);
       setSearchError(null);
     } catch (e) {
-      // Поиск по живому серверу: офлайн/сбой не должен ронять промис в консоль
       setSearchResults([]);
       setSearchError(e instanceof OfflineError ? 'Поиск недоступен офлайн' : 'Не удалось выполнить поиск');
     }
   };
 
-  // Переключение синхронизации файла/папки. Маркеры (direct + inherited у вложенных)
-  // обновляются мгновенно через общий стор; содержимое докачивается фоном.
   const handleToggleSync = useCallback((entry: FileEntry, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!online) return;
@@ -338,6 +388,16 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     await api.files.createFile(project.id, path);
     setShowCreateFile(false);
     setNewFileName('');
+    await invalidateDir(createInDir);
+    if (createInDir) setExpanded(prev => new Set(prev).add(createInDir));
+  };
+
+  const handleCreateDir = async () => {
+    if (!newDirName.trim()) return;
+    const path = createInDir ? `${createInDir}/${newDirName.trim()}` : newDirName.trim();
+    await api.files.mkdir(project.id, path);
+    setShowCreateDir(false);
+    setNewDirName('');
     await invalidateDir(createInDir);
     if (createInDir) setExpanded(prev => new Set(prev).add(createInDir));
   };
@@ -359,6 +419,158 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     }
   };
 
+  // === Rename handlers ===
+  useEffect(() => {
+    if (!renamingPath) return;
+    const raf = requestAnimationFrame(() => {
+      const input = renameInputRef.current;
+      if (!input) return;
+      input.focus();
+      // выделяем только имя без расширения (для файлов)
+      const dotIdx = renameValue.lastIndexOf('.');
+      const end = dotIdx > 0 ? dotIdx : renameValue.length;
+      input.setSelectionRange(0, end);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [renamingPath]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startRename = useCallback((entry: FileEntry) => {
+    setContextMenu(null);
+    setRenamingPath(entry.path);
+    setRenameValue(entry.name);
+  }, []);
+
+  const commitRename = useCallback(async () => {
+    if (!renamingPath || !renameValue.trim()) {
+      setRenamingPath(null);
+      setRenameValue('');
+      return;
+    }
+    const [parentDir, oldName] = splitPath(renamingPath);
+    const newName = renameValue.trim();
+    if (newName === oldName) {
+      setRenamingPath(null);
+      setRenameValue('');
+      return;
+    }
+    const newPath = parentDir ? `${parentDir}/${newName}` : newName;
+    try {
+      await api.files.rename(project.id, renamingPath, newPath);
+      setRenamingPath(null);
+      setRenameValue('');
+      await invalidateDir(parentDir);
+    } catch {
+      // оставляем режим редактирования при ошибке
+    }
+  }, [renamingPath, renameValue, project.id, invalidateDir]);
+
+  const cancelRename = useCallback(() => {
+    renameCancelledRef.current = true;
+    setRenamingPath(null);
+    setRenameValue('');
+  }, []);
+
+  // === Context menu handlers ===
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    // небольшая задержка — иначе правый клик, открывающий меню, сразу его закроет
+    const timer = setTimeout(() => document.addEventListener('mousedown', close), 0);
+    return () => { clearTimeout(timer); document.removeEventListener('mousedown', close); };
+  }, [contextMenu]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, entry });
+  }, []);
+
+  // === Delete handler ===
+  const handleDelete = useCallback(async (entry: FileEntry) => {
+    const [parentDir] = splitPath(entry.path);
+    try {
+      await api.files.delete(project.id, entry.path);
+      setDeleteConfirm(null);
+      await invalidateDir(parentDir);
+    } catch {
+      setDeleteConfirm(null);
+    }
+  }, [project.id, invalidateDir]);
+
+  // === Drag & Drop handlers ===
+  const isDropForbidden = useCallback((from: string, to: string) => {
+    if (from === to) return true;
+    if (normPath(to).startsWith(normPath(from) + '/')) return true;
+    // нельзя бросить в ту же папку где уже лежит
+    const [sourceParent] = splitPath(from);
+    if (sourceParent === normPath(to)) return true;
+    return false;
+  }, []);
+
+  const handleDragStart = useCallback((e: React.DragEvent, entry: FileEntry) => {
+    setDragPath(entry.path);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', entry.path);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, entry: FileEntry) => {
+    if (!entry.isDirectory || !dragPath) return;
+    if (isDropForbidden(dragPath, entry.path)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDropTarget(entry.path);
+  }, [dragPath, isDropForbidden]);
+
+  const handleDragLeave = useCallback((e: React.DragEvent, entry: FileEntry) => {
+    if (entry.path !== dropTarget) return;
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDropTarget(null);
+    }
+  }, [dropTarget]);
+
+  const handleDrop = useCallback(async (e: React.DragEvent, targetEntry: FileEntry) => {
+    e.preventDefault();
+    setDropTarget(null);
+    const dp = dragPath;
+    setDragPath(null);
+    if (!dp || !targetEntry.isDirectory) return;
+    if (isDropForbidden(dp, targetEntry.path)) return;
+
+    const [sourceParent, sourceName] = splitPath(dp);
+    const targetPath = `${normPath(targetEntry.path)}/${sourceName}`;
+
+    try {
+      await api.files.rename(project.id, dp, targetPath);
+      await Promise.all([
+        invalidateDir(sourceParent),
+        invalidateDir(targetEntry.path),
+      ]);
+    } catch {
+      // тихо игнорируем ошибку перемещения
+    }
+  }, [dragPath, project.id, invalidateDir, isDropForbidden]);
+
+  const handleDragEnd = useCallback(() => {
+    setDragPath(null);
+    setDropTarget(null);
+  }, []);
+
+  // === Long press (mobile) ===
+  const handleTouchStart = useCallback((entry: FileEntry) => {
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    longPressTimer.current = setTimeout(() => {
+      longPressTimer.current = null;
+      setContextMenu({ x: 0, y: 0, entry });
+    }, 500);
+  }, []);
+
+  const handleTouchCancel = useCallback(() => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }, []);
+
   const flatTree = useMemo((): TreeNode[] => {
     const walk = (path: string, depth: number): TreeNode[] => {
       const entries = dirCache.get(path) ?? [];
@@ -376,8 +588,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const rootLoading = !dirCache.has('') && loadingDirs.has('');
 
-  // === Мобильная навигация «по папкам» ===
-  // Содержимое текущей папки: сначала директории, затем файлы (по имени)
   const mobileEntries = useMemo((): FileEntry[] => {
     const entries = dirCache.get(mobileDir);
     if (!entries) return [];
@@ -387,7 +597,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     });
   }, [dirCache, mobileDir]);
 
-  // Сегменты хлебных крошек: [{ label, path }] от корня до текущей папки
   const breadcrumbs = useMemo(() => {
     const crumbs: { label: string; path: string }[] = [{ label: 'Файлы', path: '' }];
     if (mobileDir) {
@@ -403,38 +612,64 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const mobileDirLoading = !dirCache.has(mobileDir) && loadingDirs.has(mobileDir);
 
-  // mobileNav: папочная навигация (вход в папку вместо toggle, шеврон-вправо, без отступа-depth)
   const renderFileRow = (entry: FileEntry, depth: number, showPath = false, mobileNav = false) => {
-    // Папка-родитель — показываем в результатах поиска, чтобы различать одноимённые файлы (MA5)
     const parentDir = showPath ? normPath(entry.path).split('/').slice(0, -1).join('/') : '';
     const isExpanded = expanded.has(entry.path);
     const isLoading = loadingDirs.has(entry.path);
     const em = entry.isDirectory ? null : getExtMeta(entry.name);
     const isActive = !entry.isDirectory && activeNorm !== '' && normPath(entry.path) === activeNorm;
-    // Состояние синхронизации — из общего стора (не из устаревшего entry.synced листинга)
     const sstate = computeSyncState(marks, entry.path);
-    // Файл помечен, но содержимое ещё не скачано → спиннер; папка в активной докачке → спиннер
     const pending = !entry.isDirectory && !!sstate && !isDownloaded(project.id, entry.path);
     const folderSyncing = entry.isDirectory && isSyncing(project.id, entry.path);
+    const isDropTgt = dropTarget === entry.path;
+    const isDragging = dragPath === entry.path;
+    const isRenaming = renamingPath === entry.path;
+
+    const handleRowClick = () => {
+      if (isRenaming) return;
+      entry.isDirectory
+        ? (mobileNav ? enterMobileDir(entry.path) : handleToggleDir(entry))
+        : onOpenFile(entry.path);
+    };
+
     return (
       <div
         key={entry.path}
-        onClick={() => entry.isDirectory ? (mobileNav ? enterMobileDir(entry.path) : handleToggleDir(entry)) : onOpenFile(entry.path)}
+        draggable={!isMobile && !isRenaming}
+        onClick={handleRowClick}
+        onDoubleClick={!isMobile && !entry.isDirectory ? e => { e.stopPropagation(); startRename(entry); } : undefined}
+        onContextMenu={e => handleContextMenu(e, entry)}
         onMouseEnter={() => setHoveredPath(entry.path)}
         onMouseLeave={() => setHoveredPath(null)}
+        onDragStart={!isMobile ? e => handleDragStart(e, entry) : undefined}
+        onDragOver={!isMobile && entry.isDirectory ? e => handleDragOver(e, entry) : undefined}
+        onDragLeave={!isMobile && entry.isDirectory ? e => handleDragLeave(e, entry) : undefined}
+        onDrop={!isMobile && entry.isDirectory ? e => handleDrop(e, entry) : undefined}
+        onDragEnd={!isMobile ? handleDragEnd : undefined}
+        onTouchStart={isMobile ? () => handleTouchStart(entry) : undefined}
+        onTouchEnd={isMobile ? handleTouchCancel : undefined}
+        onTouchMove={isMobile ? handleTouchCancel : undefined}
         style={{
           display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 6,
           paddingLeft: 8 + depth * 16, paddingRight: 8,
           paddingTop: 6, paddingBottom: 6,
-          borderRadius: 8, cursor: 'pointer',
-          // во всю ширину панели: длинное имя усекается ellipsis, маркеры (M/облако) всегда видны
+          borderRadius: 8, cursor: isDragging ? 'grabbing' : 'pointer',
           width: '100%', boxSizing: 'border-box',
-          background: isActive ? '#F1DDD1' : hoveredPath === entry.path ? '#E8E1D4' : (sstate || folderSyncing) ? '#F4ECE3' : 'transparent',
-          boxShadow: isActive ? 'inset 2px 0 0 #D97757' : 'none',
-          transition: 'background 0.1s',
+          opacity: isDragging ? 0.4 : 1,
+          background: isDropTgt
+            ? '#F1DDD1'
+            : isActive ? '#F1DDD1'
+            : hoveredPath === entry.path ? '#E8E1D4'
+            : (sstate || folderSyncing) ? '#F4ECE3'
+            : 'transparent',
+          boxShadow: isDropTgt
+            ? `inset 0 0 0 2px ${C.accent}`
+            : isActive ? 'inset 2px 0 0 #D97757'
+            : 'none',
+          transition: 'background 0.1s, box-shadow 0.1s',
         }}
       >
-        {/* toggle-стрелка дерева — только десктоп/планшет; в мобильной навигации её нет */}
+        {/* toggle-стрелка дерева — только десктоп/планшет */}
         {!mobileNav && (
           <span style={{ width: 12, flexShrink: 0, textAlign: 'center', userSelect: 'none', color: '#9A8F7E', fontSize: 9, lineHeight: 1 }}>
             {entry.isDirectory ? (isLoading ? '·' : (isExpanded ? '▾' : '▸')) : ''}
@@ -453,17 +688,47 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           }}>{em!.label}</span>
         )}
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, paddingTop: isMobile ? 3 : 0 }}>
-          <span title={entry.name} style={{
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 13,
-            fontWeight: entry.isDirectory ? 700 : 500,
-            color: (!entry.isDirectory && indexedFileNames?.has(entry.name))
-              ? '#3F7A4F'
-              : '#39332B',
-            ...(isMobile
-              ? { whiteSpace: 'normal', wordBreak: 'break-all', lineHeight: 1.35 }
-              : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
-          }}>{entry.name}</span>
+          {isRenaming ? (
+            <input
+              ref={renameInputRef}
+              value={renameValue}
+              onChange={e => setRenameValue(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.stopPropagation(); commitRename(); }
+                if (e.key === 'Escape') { e.stopPropagation(); cancelRename(); }
+              }}
+              onBlur={() => {
+                if (renameCancelledRef.current) { renameCancelledRef.current = false; return; }
+                commitRename();
+              }}
+              onClick={e => e.stopPropagation()}
+              style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 13,
+                fontWeight: entry.isDirectory ? 700 : 500,
+                color: '#39332B',
+                background: C.bgWhite,
+                border: `1.5px solid ${C.accent}`,
+                borderRadius: 4,
+                padding: '1px 4px',
+                outline: 'none',
+                width: '100%',
+                boxSizing: 'border-box',
+              }}
+            />
+          ) : (
+            <span title={entry.name} style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 13,
+              fontWeight: entry.isDirectory ? 700 : 500,
+              color: (!entry.isDirectory && indexedFileNames?.has(entry.name))
+                ? '#3F7A4F'
+                : '#39332B',
+              ...(isMobile
+                ? { whiteSpace: 'normal', wordBreak: 'break-all', lineHeight: 1.35 }
+                : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
+            }}>{entry.name}</span>
+          )}
           {parentDir && (
             <span title={normPath(entry.path)} style={{
               fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: '#9A8F7E',
@@ -474,8 +739,26 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {entry.isModified && (
           <span style={{ fontSize: 9, fontWeight: 700, color: '#C2693B', background: '#FBEBE0', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
         )}
-        {/* Кнопка «добавить в чат» — только для файлов.
-            Десктоп: появляется при hover. Мобила: всегда видна. */}
+        {/* Hover-иконки: переименовать + удалить — только десктоп при hover */}
+        {online && !isRenaming && !isMobile && hoveredPath === entry.path && (
+          <>
+            <button
+              onClick={e => { e.stopPropagation(); startRename(entry); }}
+              title="Переименовать (F2)"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.textMuted }}
+            >
+              <RenameIcon />
+            </button>
+            <button
+              onClick={e => { e.stopPropagation(); setDeleteConfirm(entry); }}
+              title="Удалить"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#C85A3F' }}
+            >
+              <TrashIcon />
+            </button>
+          </>
+        )}
+        {/* Кнопка «добавить в чат» */}
         {!entry.isDirectory && onAttachToChat && (
           hoveredPath === entry.path ? (
             <button
@@ -489,10 +772,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             </button>
           ) : null
         )}
-        {/* Кнопка «добавить в БЗ» — только для файлов не в БЗ.
-            Десктоп: появляется при hover. Мобила: всегда видна (hover недоступен).
-            Пока файл индексируется — спиннер вместо кнопки.
-            Неподдерживаемый тип — иконка с крестиком (disabled). */}
+        {/* Кнопка «добавить в БЗ» */}
         {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && (
           indexingFiles?.has(entry.path) ? (
             <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}>
@@ -518,15 +798,12 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {/* Маркер/тоггл синхронизации */}
         {(() => {
           const btnStyle: React.CSSProperties = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', flexShrink: 0 };
-          // Идёт докачка: файл ещё не скачан или папка активно синхронизируется → спиннер.
-          // direct (можно управлять) — кликом отменяем; inherited — статичный индикатор.
           if (pending || folderSyncing) {
             if (online && sstate === 'direct') {
               return <button onClick={e => handleToggleSync(entry, e)} title="Отменить синхронизацию" style={btnStyle}><SyncSpinner /></button>;
             }
             return <span style={{ ...btnStyle, cursor: 'default' }} title="Загружается…"><SyncSpinner /></span>;
           }
-          // Синхронизирован (содержимое скачано)
           if (sstate === 'inherited') {
             return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизируется (через папку/проект)"><CloudIcon variant="inherited" /></span>;
           }
@@ -544,11 +821,32 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           }
           return null;
         })()}
-        {/* Намёк «войти в папку» — только в мобильной навигации */}
+        {/* Намёк «войти в папку» — только мобильная навигация */}
         {mobileNav && entry.isDirectory && <ChevronRight />}
       </div>
     );
   };
+
+  // Пункт контекстного меню — единый стиль
+  const menuItem = (label: string, onClick: () => void, danger = false) => (
+    <button
+      key={label}
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', width: '100%',
+        padding: isMobile ? '14px 20px' : '8px 12px',
+        background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
+        fontFamily: FONT.sans, fontSize: isMobile ? 15 : 13,
+        color: danger ? '#C85A3F' : C.textPrimary,
+        borderRadius: isMobile ? 0 : 6,
+        gap: 8,
+      }}
+      onMouseEnter={e => { if (!isMobile) (e.currentTarget as HTMLButtonElement).style.background = C.bgInset; }}
+      onMouseLeave={e => { if (!isMobile) (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
+    >
+      {label}
+    </button>
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -571,13 +869,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           </div>
           {onOpenKnowledge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
-              {/* Файлы — активна */}
               <button title="Файлы" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bgMain, color: C.accent, boxShadow: TB.pillThumbShadow }}>
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                 </svg>
               </button>
-              {/* Знания — неактивна */}
               <button onClick={onOpenKnowledge} title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
@@ -590,6 +886,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
         {online && (
           <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
+            {/* Новый файл */}
             <div
               onClick={() => {
                 if (isMobile) setCreateInDir(mobileDir);
@@ -600,9 +897,21 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
               Новый файл
             </div>
+            {/* Новая папка */}
+            <div
+              onClick={() => {
+                if (isMobile) setCreateInDir(mobileDir);
+                setShowCreateDir(true);
+              }}
+              title="Новая папка"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, cursor: 'pointer', flexShrink: 0 }}
+            >
+              <FolderPlusIcon />
+            </div>
+            {/* Загрузить */}
             <label
               title="Загрузить файлы"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, height: 36, paddingInline: 12, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: uploading ? C.textMuted : C.accent, fontSize: 12.5, fontWeight: 600, cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1, flexShrink: 0 }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: uploading ? C.textMuted : C.accent, cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1, flexShrink: 0 }}
             >
               <input
                 ref={uploadInputRef}
@@ -617,14 +926,13 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               ) : (
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
               )}
-              Загрузить
             </label>
           </div>
         )}
         {uploadError && (
           <div style={{ marginTop: 6, fontSize: 12, color: '#B4452F', fontFamily: FONT.sans, paddingLeft: 2 }}>{uploadError}</div>
         )}
-        {/* Хинт целевой папки — только десктоп, когда есть куда */}
+        {/* Хинт целевой папки — только десктоп */}
         {online && !isMobile && (
           <div style={{ marginTop: 5, fontSize: 11.5, color: C.textMuted, fontFamily: FONT.mono, paddingLeft: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
@@ -639,7 +947,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           display: 'flex', alignItems: 'center', gap: 2,
           padding: '0 10px 8px',
           overflowX: 'auto', whiteSpace: 'nowrap',
-          // прячем горизонтальный скроллбар, прокрутка остаётся (тач)
           scrollbarWidth: 'none',
         }}>
           {breadcrumbs.map((crumb, i) => {
@@ -668,10 +975,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         </div>
       )}
 
-      {/* Tree (десктоп) / список папки (мобила) / результаты поиска */}
+      {/* Tree / список папки / результаты поиска */}
       <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflow: 'auto', padding: '0 4px 12px' }}>
         {searchResults !== null ? (
-          // Поиск (общий режим для всех форм-факторов)
           searchResults.length === 0 ? (
             <EmptyState
               icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>}
@@ -682,7 +988,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             searchResults.map(entry => renderFileRow(entry, 0, true))
           )
         ) : isMobile ? (
-          // Мобильная навигация «по папкам»: содержимое текущей папки
           mobileDirLoading ? (
             <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
           ) : mobileEntries.length === 0 ? (
@@ -705,7 +1010,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         )}
       </div>
 
-      {/* Диалог создания файла */}
+      {/* === Диалог создания файла === */}
       {showCreateFile && (
         <Modal
           width={MODAL_W.form}
@@ -735,6 +1040,138 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           />
         </Modal>
       )}
+
+      {/* === Диалог создания папки === */}
+      {showCreateDir && (
+        <Modal
+          width={MODAL_W.form}
+          onClose={() => setShowCreateDir(false)}
+          title="Новая папка"
+          subtitle={
+            createInDir
+              ? <>В папке <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{createInDir}/</span></>
+              : 'В корне проекта'
+          }
+          footer={
+            <ModalActions
+              confirmLabel="Создать"
+              onConfirm={handleCreateDir}
+              confirmDisabled={!newDirName.trim()}
+              onCancel={() => { setShowCreateDir(false); setNewDirName(''); }}
+            />
+          }
+        >
+          <TextField
+            value={newDirName}
+            onChange={setNewDirName}
+            placeholder="my-folder"
+            mono
+            autoFocus
+            onEnter={handleCreateDir}
+          />
+        </Modal>
+      )}
+
+      {/* === Диалог подтверждения удаления === */}
+      {deleteConfirm && (
+        <Modal
+          width={MODAL_W.form}
+          onClose={() => setDeleteConfirm(null)}
+          title={deleteConfirm.isDirectory ? 'Удалить папку' : 'Удалить файл'}
+          subtitle={
+            <>
+              <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{deleteConfirm.name}</span>
+              {deleteConfirm.isDirectory && <span style={{ color: '#C85A3F' }}> со всем содержимым</span>}
+            </>
+          }
+          footer={
+            <ModalActions
+              confirmLabel="Удалить"
+              confirmVariant="danger"
+              onConfirm={() => handleDelete(deleteConfirm)}
+              onCancel={() => setDeleteConfirm(null)}
+            />
+          }
+        >
+          <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans }}>
+            Это действие необратимо.
+          </div>
+        </Modal>
+      )}
+
+      {/* === Контекстное меню === */}
+      {contextMenu && (() => {
+        const { entry } = contextMenu;
+        const [entryParentDir] = splitPath(entry.path);
+
+        const openCreateFile = () => {
+          setContextMenu(null);
+          setCreateInDir(entry.isDirectory ? entry.path : entryParentDir);
+          setShowCreateFile(true);
+        };
+        const openCreateDir = () => {
+          setContextMenu(null);
+          setCreateInDir(entry.isDirectory ? entry.path : entryParentDir);
+          setShowCreateDir(true);
+        };
+
+        // Мобила — bottom sheet
+        if (isMobile) {
+          return (
+            <>
+              <div
+                onClick={() => setContextMenu(null)}
+                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1000 }}
+              />
+              <div style={{
+                position: 'fixed', bottom: 0, left: 0, right: 0,
+                background: C.bgPanel,
+                borderRadius: '16px 16px 0 0',
+                paddingBottom: 24,
+                zIndex: 1001,
+                boxShadow: '0 -4px 32px rgba(0,0,0,0.12)',
+              }}>
+                {/* Ручка */}
+                <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px' }}>
+                  <div style={{ width: 36, height: 4, borderRadius: 2, background: C.border }} />
+                </div>
+                <div style={{ padding: '4px 20px 12px', fontFamily: FONT.mono, fontSize: 13, fontWeight: 700, color: C.textPrimary, borderBottom: `1px solid ${C.border}` }}>
+                  {entry.name}
+                </div>
+                {online && menuItem('Переименовать', () => startRename(entry))}
+                {online && menuItem('Создать файл здесь', openCreateFile)}
+                {online && menuItem('Создать папку здесь', openCreateDir)}
+                {online && <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />}
+                {online && menuItem('Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
+              </div>
+            </>
+          );
+        }
+
+        // Десктоп — popup
+        return (
+          <div
+            style={{
+              position: 'fixed',
+              top: contextMenu.y,
+              left: contextMenu.x,
+              zIndex: 1000,
+              background: C.bgWhite,
+              border: `1px solid ${C.border}`,
+              borderRadius: R.lg,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+              padding: 4,
+              minWidth: 180,
+            }}
+          >
+            {online && menuItem('✏ Переименовать', () => startRename(entry))}
+            {online && menuItem('📄 Создать файл здесь', openCreateFile)}
+            {online && menuItem('📁 Создать папку здесь', openCreateDir)}
+            {online && <div style={{ height: 1, background: C.border, margin: '4px 0' }} />}
+            {online && menuItem('🗑 Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
+          </div>
+        );
+      })()}
     </div>
   );
 }

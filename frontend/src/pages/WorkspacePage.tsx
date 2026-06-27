@@ -331,20 +331,6 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
     />
   );
 
-  const FileSubTabSwitcher = (fill: boolean, mobile?: boolean) => (
-    <div style={{ padding: mobile ? '8px 14px' : '10px 14px 8px', flexShrink: 0 }}>
-      <PillSwitch<FileSubTab>
-        value={fileSubTab}
-        options={[
-          { value: 'files', label: 'Файлы' },
-          { value: 'knowledge', label: 'Знания' },
-        ]}
-        onChange={setFileSubTab}
-        fill={fill}
-        isMobile={mobile}
-      />
-    </div>
-  );
 
   const Sidebar = (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel, flexShrink: 0, height: '100%' }}>
@@ -395,15 +381,12 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
         {leftTab === 'sessions' ? (
           <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
         ) : (
-          <>
-            {FileSubTabSwitcher(true)}
-            <div style={{ flex: 1, overflow: 'hidden' }}>
-              {fileSubTab === 'files'
-                ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={handleAttachToChat} />
-                : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} />
-              }
-            </div>
-          </>
+          <div style={{ flex: 1, overflow: 'hidden' }}>
+            {fileSubTab === 'files'
+              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={handleAttachToChat} onOpenKnowledge={() => setFileSubTab('knowledge')} />
+              : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
+            }
+          </div>
         )}
       </div>
       {/* Project footer */}
@@ -468,15 +451,12 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
             {leftTab === 'sessions'
               ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
               : (
-                <>
-                  {FileSubTabSwitcher(true, true)}
-                  <div style={{ flex: 1, overflow: 'hidden' }}>
-                    {fileSubTab === 'files'
-                      ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={handleAttachToChat} />
-                      : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} />
-                    }
-                  </div>
-                </>
+                <div style={{ flex: 1, overflow: 'hidden' }}>
+                  {fileSubTab === 'files'
+                    ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={handleAttachToChat} onOpenKnowledge={() => setFileSubTab('knowledge')} />
+                    : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
+                  }
+                </div>
               )
             }
           </div>

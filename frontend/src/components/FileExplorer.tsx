@@ -35,6 +35,7 @@ interface Props {
   indexedFileNames?: Set<string>;
   indexingFiles?: Set<string>;
   onAttachToChat?: (path: string) => void;
+  onOpenKnowledge?: () => void;
 }
 
 // Персистентное состояние дерева на уровне модуля — переживает размонтирование
@@ -180,7 +181,7 @@ function FilesRootEmptyState() {
   );
 }
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, onAddToKnowledge, indexedFileNames, indexingFiles, onAttachToChat }: Props) {
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, onAddToKnowledge, indexedFileNames, indexingFiles, onAttachToChat, onOpenKnowledge }: Props) {
   const online = useOnline();
   const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
@@ -556,18 +557,33 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Search */}
       <div style={{ padding: '4px 12px 10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
-          <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-          </span>
-          <input
-            placeholder="Поиск…"
-            value={search}
-            onChange={e => handleSearch(e.target.value)}
-            style={{ flex: 1, border: 'none', background: 'none', fontSize: 13, fontFamily: FONT.mono, color: C.textHeading, outline: 'none' }}
-          />
-          {search && (
-            <button onClick={() => handleSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 13, padding: 0 }}>✕</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
+            <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+            </span>
+            <input
+              placeholder="Поиск…"
+              value={search}
+              onChange={e => handleSearch(e.target.value)}
+              style={{ flex: 1, border: 'none', background: 'none', fontSize: 13, fontFamily: FONT.mono, color: C.textHeading, outline: 'none' }}
+            />
+            {search && (
+              <button onClick={() => handleSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 13, padding: 0 }}>✕</button>
+            )}
+          </div>
+          {onOpenKnowledge && (
+            <button
+              onClick={onOpenKnowledge}
+              title="База знаний"
+              style={{ width: 36, height: 36, flexShrink: 0, border: `1px solid ${C.border}`, borderRadius: R.lg, background: C.bgWhite, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3F7A4F' }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+                <ellipse cx="12" cy="7" rx="9" ry="3" strokeWidth="1.8"/>
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" strokeWidth="1.8"/>
+                <path d="M3 7v10c0 1.66 4 3 9 3s9-1.34 9-3V7" strokeWidth="1.8"/>
+              </svg>
+            </button>
           )}
         </div>
 

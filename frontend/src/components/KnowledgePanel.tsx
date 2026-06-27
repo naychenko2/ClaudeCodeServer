@@ -8,6 +8,7 @@ interface Props {
   project: Project;
   isMobile?: boolean;
   onDocumentsChanged?: (fileNames: Set<string>) => void;
+  onBack?: () => void;
 }
 
 interface KnowledgeStatus {
@@ -432,7 +433,7 @@ function KnowledgeTip({ icon, title, text }: { icon: ReactNode; title: string; t
 
 // --- Главный компонент ---
 
-export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged }: Props) {
+export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged, onBack }: Props) {
   const [status, setStatus] = useState<KnowledgeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -526,21 +527,42 @@ export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Шапка */}
-      <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, marginBottom: status?.datasetId ? 3 : 0 }}>
-          База знаний проекта
-        </div>
-        {status?.datasetId ? (
-          <div style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            ID: {status.datasetId}
-          </div>
-        ) : (
-          !error && (
-            <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.4, marginTop: 2 }}>
-              Добавьте файл через файловый менеджер
-            </div>
-          )
+      <div style={{ padding: '8px 12px', borderBottom: `1px solid ${C.border}`, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+        {onBack && (
+          <button
+            onClick={onBack}
+            title="К файлам"
+            style={{ width: 28, height: 28, flexShrink: 0, border: 'none', borderRadius: 7, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 18l-6-6 6-6"/>
+            </svg>
+          </button>
         )}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: '#3F7A4F', display: 'flex', flexShrink: 0 }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+              <ellipse cx="12" cy="7" rx="9" ry="3" strokeWidth="1.8"/>
+              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" strokeWidth="1.8"/>
+              <path d="M3 7v10c0 1.66 4 3 9 3s9-1.34 9-3V7" strokeWidth="1.8"/>
+            </svg>
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary }}>
+              Знания
+            </div>
+            {status?.datasetId && (
+              <div style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                ID: {status.datasetId}
+              </div>
+            )}
+            {!status?.datasetId && !error && (
+              <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.4 }}>
+                Добавьте файл через файловый менеджер
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Ошибка */}

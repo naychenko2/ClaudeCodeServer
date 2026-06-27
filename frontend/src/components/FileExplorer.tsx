@@ -35,6 +35,7 @@ interface Props {
   indexedFileNames?: Set<string>;
   indexingFiles?: Set<string>;
   onAttachToChat?: (path: string) => void;
+  onRemoveFromKnowledge?: (relativePath: string) => void;
   onOpenKnowledge?: () => void;
 }
 
@@ -205,6 +206,96 @@ function TrashIcon() {
   );
 }
 
+// Иконка книги с минусом — «удалить из знаний» (в строке файла, 15×15)
+function BookMinusIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+      <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+      <line x1="14" y1="10" x2="22" y2="10"/>
+    </svg>
+  );
+}
+
+// Иконки для контекстного меню — 16×16, currentColor, Lucide-style
+function MI_Attach() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+    </svg>
+  );
+}
+function MI_BookPlus() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+      <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+      <line x1="18" y1="7" x2="18" y2="13"/>
+      <line x1="15" y1="10" x2="21" y2="10"/>
+    </svg>
+  );
+}
+function MI_BookMinus() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+      <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+      <line x1="14" y1="10" x2="22" y2="10"/>
+    </svg>
+  );
+}
+function MI_Cloud() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+    </svg>
+  );
+}
+function MI_Rename() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+    </svg>
+  );
+}
+function MI_Move() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12h14M13 6l6 6-6 6"/>
+    </svg>
+  );
+}
+function MI_FilePlus() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+      <polyline points="14 2 14 8 20 8"/>
+      <line x1="12" y1="12" x2="12" y2="18"/>
+      <line x1="9" y1="15" x2="15" y2="15"/>
+    </svg>
+  );
+}
+function MI_FolderPlus() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      <line x1="12" y1="11" x2="12" y2="17"/>
+      <line x1="9" y1="14" x2="15" y2="14"/>
+    </svg>
+  );
+}
+function MI_Trash() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6"/>
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+      <path d="M10 11v6M14 11v6"/>
+      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+    </svg>
+  );
+}
+
 // Иконка папки с плюсом
 function FolderPlusIcon() {
   return (
@@ -222,7 +313,7 @@ interface ContextMenuState {
   entry: FileEntry;
 }
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, indexedFileNames, indexingFiles, onAttachToChat, onOpenKnowledge }: Props) {
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, onAttachToChat, onOpenKnowledge }: Props) {
   const online = useOnline();
   const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
@@ -272,6 +363,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   // === Long press для мобилы ===
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // === Move modal state ===
+  const [showMoveModal, setShowMoveModal] = useState(false);
+  const [movingEntry, setMovingEntry] = useState<FileEntry | null>(null);
 
   const loadDir = useCallback(async (path: string) => {
     if (inFlight.current.has(path)) return;
@@ -438,18 +533,24 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     return () => cancelAnimationFrame(raf);
   }, [renamingPath]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Фокус и выделение имени без расширения для модального диалога (мобила/планшет)
+  // Фокус и выделение имени без расширения для модального диалога (мобила/планшет).
+  // Задержка 280мс на тач-устройствах — клавиатура выезжает ПОСЛЕ того, как модал
+  // уже отрисован, иначе viewport-сдвиг от клавиатуры вызывает мигание.
   useEffect(() => {
     if (!showRenameModal) return;
-    const raf = requestAnimationFrame(() => {
-      const input = renameModalInputRef.current;
-      if (!input) return;
-      input.focus();
-      const dotIdx = renameValue.lastIndexOf('.');
-      const end = dotIdx > 0 ? dotIdx : renameValue.length;
-      input.setSelectionRange(0, end);
-    });
-    return () => cancelAnimationFrame(raf);
+    const delay = (isMobile || alwaysShowIcons) ? 280 : 0;
+    let raf = 0;
+    const timer = setTimeout(() => {
+      raf = requestAnimationFrame(() => {
+        const input = renameModalInputRef.current;
+        if (!input) return;
+        input.focus();
+        const dotIdx = renameValue.lastIndexOf('.');
+        const end = dotIdx > 0 ? dotIdx : renameValue.length;
+        input.setSelectionRange(0, end);
+      });
+    }, delay);
+    return () => { clearTimeout(timer); cancelAnimationFrame(raf); };
   }, [showRenameModal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const startRename = useCallback((entry: FileEntry) => {
@@ -583,6 +684,31 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     setDropTarget(null);
   }, []);
 
+  // === Move handler ===
+  const handleMove = useCallback(async (entry: FileEntry, targetDir: string) => {
+    const targetPath = targetDir ? `${normPath(targetDir)}/${entry.name}` : entry.name;
+    const [sourceParent] = splitPath(entry.path);
+    try {
+      await api.files.rename(project.id, entry.path, targetPath);
+      setShowMoveModal(false);
+      setMovingEntry(null);
+      await Promise.all([invalidateDir(sourceParent), invalidateDir(targetDir)]);
+    } catch {
+      // тихо игнорируем
+    }
+  }, [project.id, invalidateDir]);
+
+  // Все загруженные папки (для диалога перемещения)
+  const allDirs = useMemo(() => {
+    const dirs: Array<{ path: string; label: string }> = [{ path: '', label: '/ (корень проекта)' }];
+    for (const [, entries] of dirCache) {
+      for (const e of entries) {
+        if (e.isDirectory) dirs.push({ path: e.path, label: e.path });
+      }
+    }
+    return dirs.sort((a, b) => a.path.localeCompare(b.path));
+  }, [dirCache]);
+
   // === Long press (mobile) ===
   const handleTouchStart = useCallback((entry: FileEntry) => {
     if (longPressTimer.current) clearTimeout(longPressTimer.current);
@@ -663,20 +789,24 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     return (
       <div
         key={entry.path}
-        draggable={!isMobile && !isRenaming}
+        draggable={!isMobile && !alwaysShowIcons && !isRenaming}
         onClick={handleRowClick}
         onDoubleClick={!isMobile && !entry.isDirectory ? e => { e.stopPropagation(); startRename(entry); } : undefined}
         onContextMenu={e => handleContextMenu(e, entry)}
         onMouseEnter={() => setHoveredPath(entry.path)}
         onMouseLeave={() => setHoveredPath(null)}
-        onDragStart={!isMobile ? e => handleDragStart(e, entry) : undefined}
-        onDragOver={!isMobile && entry.isDirectory ? e => handleDragOver(e, entry) : undefined}
-        onDragLeave={!isMobile && entry.isDirectory ? e => handleDragLeave(e, entry) : undefined}
-        onDrop={!isMobile && entry.isDirectory ? e => handleDrop(e, entry) : undefined}
-        onDragEnd={!isMobile ? handleDragEnd : undefined}
+        onDragStart={!isMobile && !alwaysShowIcons ? e => handleDragStart(e, entry) : undefined}
+        onDragOver={!isMobile && !alwaysShowIcons && entry.isDirectory ? e => handleDragOver(e, entry) : undefined}
+        onDragLeave={!isMobile && !alwaysShowIcons && entry.isDirectory ? e => handleDragLeave(e, entry) : undefined}
+        onDrop={!isMobile && !alwaysShowIcons && entry.isDirectory ? e => handleDrop(e, entry) : undefined}
+        onDragEnd={!isMobile && !alwaysShowIcons ? handleDragEnd : undefined}
         onTouchStart={isMobile || alwaysShowIcons ? () => handleTouchStart(entry) : undefined}
-        onTouchEnd={isMobile || alwaysShowIcons ? handleTouchCancel : undefined}
+        onTouchEnd={isMobile || alwaysShowIcons ? (e) => {
+          if (!longPressTimer.current) e.preventDefault();
+          handleTouchCancel();
+        } : undefined}
         onTouchMove={isMobile || alwaysShowIcons ? handleTouchCancel : undefined}
+        onTouchCancel={isMobile || alwaysShowIcons ? handleTouchCancel : undefined}
         style={{
           display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 6,
           paddingLeft: 8 + depth * 16, paddingRight: 8,
@@ -801,9 +931,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             </button>
           ) : null
         )}
-        {/* Кнопка «добавить в БЗ» — спиннер при индексации всегда, иначе десктоп hover;
-            мобила/планшет — через long-press меню */}
-        {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && (
+        {/* Иконка знаний: спиннер при индексации; при hover — добавить или удалить */}
+        {!entry.isDirectory && (
           indexingFiles?.has(entry.path) ? (
             <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -811,19 +940,32 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 <circle className="kb-spin" cx="12" cy="12" r="9" strokeDasharray="40 20" />
               </svg>
             </span>
-          ) : !isKnowledgeIndexable(entry.name) ? null
-          : !isMobile && !alwaysShowIcons && hoveredPath === entry.path ? (
-            <button
-              onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
-              title="Добавить в базу знаний"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
-                <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
-              </svg>
-            </button>
-          ) : null
+          ) : indexedFileNames?.has(entry.name) ? (
+            // Уже в знаниях — показать «удалить» при hover (только десктоп)
+            !isMobile && !alwaysShowIcons && hoveredPath === entry.path && onRemoveFromKnowledge ? (
+              <button
+                onClick={e => { e.stopPropagation(); onRemoveFromKnowledge(entry.path); }}
+                title="Удалить из знаний"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#C85A3F' }}
+              >
+                <BookMinusIcon />
+              </button>
+            ) : null
+          ) : (
+            // Не в знаниях — показать «добавить» при hover (только десктоп)
+            onAddToKnowledge && isKnowledgeIndexable(entry.name) && !isMobile && !alwaysShowIcons && hoveredPath === entry.path ? (
+              <button
+                onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
+                title="Добавить в базу знаний"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+                  <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+                </svg>
+              </button>
+            ) : null
+          )
         )}
         {/* Маркер/тоггл синхронизации */}
         {(() => {
@@ -860,7 +1002,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   // Пункт контекстного меню — единый стиль.
   // onPointerDown + stopPropagation: предотвращает всплытие mousedown до document-listener
   // (который закрыл бы меню до срабатывания click).
-  const menuItem = (label: string, action: () => void, danger = false) => (
+  const menuItem = (icon: ReactNode, label: string, action: () => void, danger = false) => (
     <button
       key={label}
       onPointerDown={e => { e.stopPropagation(); action(); }}
@@ -871,11 +1013,12 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         fontFamily: FONT.sans, fontSize: isMobile || alwaysShowIcons ? 15 : 13,
         color: danger ? '#C85A3F' : C.textPrimary,
         borderRadius: isMobile || alwaysShowIcons ? 0 : 6,
-        gap: 8,
+        gap: 10,
       }}
       onMouseEnter={e => { if (!isMobile && !alwaysShowIcons) (e.currentTarget as HTMLButtonElement).style.background = C.bgInset; }}
       onMouseLeave={e => { if (!isMobile && !alwaysShowIcons) (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
     >
+      <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0, opacity: 0.8 }}>{icon}</span>
       {label}
     </button>
   );
@@ -1175,6 +1318,49 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         </Modal>
       )}
 
+      {/* === Диалог перемещения === */}
+      {showMoveModal && movingEntry && (() => {
+        const [movingParent] = splitPath(movingEntry.path);
+        const available = allDirs.filter(d => {
+          if (d.path === movingParent) return false; // уже здесь
+          if (movingEntry.isDirectory && (d.path === movingEntry.path || normPath(d.path).startsWith(normPath(movingEntry.path) + '/'))) return false;
+          return true;
+        });
+        return (
+          <Modal
+            width={MODAL_W.form}
+            onClose={() => { setShowMoveModal(false); setMovingEntry(null); }}
+            title={`Переместить: ${movingEntry.name}`}
+            subtitle={available.length === 0 ? 'Нет доступных папок — откройте нужные папки в дереве' : 'Выберите целевую папку'}
+          >
+            <div style={{ maxHeight: 320, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 2, margin: '0 -4px' }}>
+              {available.length === 0 ? (
+                <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans, padding: '8px 4px' }}>
+                  Раскройте папки в проводнике, чтобы они появились здесь.
+                </div>
+              ) : available.map(d => (
+                <button
+                  key={d.path}
+                  onPointerDown={e => { e.stopPropagation(); handleMove(movingEntry, d.path); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '9px 8px', background: 'none', border: 'none',
+                    cursor: 'pointer', borderRadius: R.md, textAlign: 'left',
+                    fontFamily: FONT.mono, fontSize: 12.5, color: C.textPrimary,
+                    width: '100%',
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = C.bgInset; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
+                >
+                  <span style={{ flexShrink: 0, display: 'flex' }}><FolderIcon /></span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.label}</span>
+                </button>
+              ))}
+            </div>
+          </Modal>
+        );
+      })()}
+
       {/* === Контекстное меню === */}
       {contextMenu && (() => {
         const { entry } = contextMenu;
@@ -1201,7 +1387,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           return (
             <>
               <div
-                onClick={() => setContextMenu(null)}
+                onPointerDown={e => { e.stopPropagation(); setContextMenu(null); }}
                 style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1000 }}
               />
               <div style={{
@@ -1219,15 +1405,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 <div style={{ padding: '4px 20px 12px', fontFamily: FONT.mono, fontSize: 13, fontWeight: 700, color: C.textPrimary, borderBottom: `1px solid ${C.border}` }}>
                   {entry.name}
                 </div>
-                {!entry.isDirectory && onAttachToChat && menuItem('Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
-                {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem('Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
-                {canToggleOffline && menuItem(offlineLabel, doToggleOffline)}
+                {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
+                {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
+                {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.name) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
+                {canToggleOffline && menuItem(<MI_Cloud />, offlineLabel, doToggleOffline)}
                 <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />
-                {online && menuItem('Переименовать', () => startRename(entry))}
-                {online && menuItem('Создать файл здесь', openCreateFile)}
-                {online && menuItem('Создать папку здесь', openCreateDir)}
+                {online && menuItem(<MI_Rename />, 'Переименовать', () => startRename(entry))}
+                {online && menuItem(<MI_Move />, 'Переместить в...', () => { setContextMenu(null); setMovingEntry(entry); setShowMoveModal(true); })}
+                {online && menuItem(<MI_FilePlus />, 'Создать файл здесь', openCreateFile)}
+                {online && menuItem(<MI_FolderPlus />, 'Создать папку здесь', openCreateDir)}
                 {online && <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />}
-                {online && menuItem('Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
+                {online && menuItem(<MI_Trash />, 'Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
               </div>
             </>
           );
@@ -1249,15 +1437,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               minWidth: 190,
             }}
           >
-            {!entry.isDirectory && onAttachToChat && menuItem('📎 Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
-            {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem('📖 Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
-            {canToggleOffline && menuItem(sstate === 'direct' ? '☁ Убрать из офлайна' : '☁ Сохранить офлайн', doToggleOffline)}
+            {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
+            {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
+            {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.name) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
+            {canToggleOffline && menuItem(<MI_Cloud />, sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн', doToggleOffline)}
             <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
-            {online && menuItem('✏ Переименовать', () => startRename(entry))}
-            {online && menuItem('📄 Создать файл здесь', openCreateFile)}
-            {online && menuItem('📁 Создать папку здесь', openCreateDir)}
+            {online && menuItem(<MI_Rename />, 'Переименовать', () => startRename(entry))}
+            {online && menuItem(<MI_Move />, 'Переместить в...', () => { setContextMenu(null); setMovingEntry(entry); setShowMoveModal(true); })}
+            {online && menuItem(<MI_FilePlus />, 'Создать файл здесь', openCreateFile)}
+            {online && menuItem(<MI_FolderPlus />, 'Создать папку здесь', openCreateDir)}
             <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
-            {online && menuItem('🗑 Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
+            {online && menuItem(<MI_Trash />, 'Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
           </div>
         );
       })()}

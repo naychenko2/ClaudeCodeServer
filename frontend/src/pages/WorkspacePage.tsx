@@ -115,6 +115,7 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
   }, []);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const [indexedFileNames, setIndexedFileNames] = useState<Set<string>>(new Set());
+  const [knowledgeDocMap, setKnowledgeDocMap] = useState<Map<string, string>>(new Map()); // filename → docId
   const [indexingFiles, setIndexingFiles] = useState<Set<string>>(new Set());
   const [skillsData, setSkillsData] = useState<SkillsData | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
@@ -136,10 +137,15 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
 
   useEffect(() => {
     api.knowledge.getStatus(project.id).then(s => {
-      setIndexedFileNames(new Set(s.documents.map(d => {
-        const parts = d.name.split('/');
-        return parts[parts.length - 1];
-      })));
+      const names = new Set<string>();
+      const docMap = new Map<string, string>();
+      for (const d of s.documents) {
+        const fname = d.name.split('/').pop() ?? d.name;
+        names.add(fname);
+        docMap.set(fname, d.id);
+      }
+      setIndexedFileNames(names);
+      setKnowledgeDocMap(docMap);
     }).catch(() => {});
   }, [project.id]);
 
@@ -309,15 +315,29 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
   const handleAddToKnowledge = useCallback(async (relativePath: string) => {
     setIndexingFiles(prev => new Set([...prev, relativePath]));
     try {
-      await api.knowledge.indexFile(project.id, relativePath);
+      const result = await api.knowledge.indexFile(project.id, relativePath);
       const fileName = relativePath.split('/').pop() ?? relativePath;
       setIndexedFileNames(prev => new Set([...prev, fileName]));
+      setKnowledgeDocMap(prev => new Map(prev).set(fileName, result.document.id));
     } catch {
       // KnowledgePanel сразу показывает актуальный статус
     } finally {
       setIndexingFiles(prev => { const next = new Set(prev); next.delete(relativePath); return next; });
     }
   }, [project.id]);
+
+  const handleRemoveFromKnowledge = useCallback(async (relativePath: string) => {
+    const fileName = relativePath.split('/').pop() ?? relativePath;
+    const docId = knowledgeDocMap.get(fileName);
+    if (!docId) return;
+    try {
+      await api.knowledge.deleteDocument(project.id, docId);
+      setIndexedFileNames(prev => { const n = new Set(prev); n.delete(fileName); return n; });
+      setKnowledgeDocMap(prev => { const n = new Map(prev); n.delete(fileName); return n; });
+    } catch {
+      // игнорируем
+    }
+  }, [project.id, knowledgeDocMap]);
 
   const TabSwitcher = (
     <PillSwitch<LeftTab>
@@ -383,8 +403,8 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
-              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
-              : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
+              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
+              : <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
             }
           </div>
         )}
@@ -453,8 +473,8 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'
-                    ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
-                    : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
+                    ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
+                    : <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
                   }
                 </div>
               )

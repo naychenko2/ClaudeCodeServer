@@ -7,6 +7,7 @@ import { C, R, SHADOW, FONT, TB } from '../lib/design';
 interface Props {
   project: Project;
   isMobile?: boolean;
+  alwaysShowIcons?: boolean;
   onDocumentsChanged?: (fileNames: Set<string>) => void;
   onBack?: () => void;
 }
@@ -302,17 +303,18 @@ function TagsDialog({ doc, existingTags, onClose, onSave }: TagsDialogProps) {
 
 // --- Строка документа ---
 
-function DocumentRow({ doc, deleting, retrying, isMobile, onDelete, onRetry, onEditTags }: {
+function DocumentRow({ doc, deleting, retrying, isMobile, alwaysShowIcons, onDelete, onRetry, onEditTags }: {
   doc: DifyDocument;
   deleting: boolean;
   retrying: boolean;
   isMobile: boolean;
+  alwaysShowIcons?: boolean;
   onDelete: () => void;
   onRetry?: () => void;
   onEditTags: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
-  const showActions = isMobile || hovered;
+  const showActions = isMobile || alwaysShowIcons || hovered;
   const displayName = doc.name.includes('/') ? doc.name.split('/').pop()! : doc.name;
   const isError = doc.indexingStatus === 'error';
   const hasTags = doc.tags && doc.tags.length > 0;
@@ -433,7 +435,7 @@ function KnowledgeTip({ icon, title, text }: { icon: ReactNode; title: string; t
 
 // --- Главный компонент ---
 
-export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged, onBack }: Props) {
+export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = false, onDocumentsChanged, onBack }: Props) {
   const [status, setStatus] = useState<KnowledgeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -622,6 +624,7 @@ export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged, 
               deleting={deletingId === doc.id}
               retrying={retryingId === doc.id}
               isMobile={isMobile}
+              alwaysShowIcons={alwaysShowIcons}
               onDelete={() => handleDeleteDocument(doc.id)}
               onRetry={doc.name.includes('/') ? () => handleRetryDocument(doc) : undefined}
               onEditTags={() => setTagEditDoc(doc)}

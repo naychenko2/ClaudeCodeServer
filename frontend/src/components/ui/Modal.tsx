@@ -84,7 +84,7 @@ export function Modal({
       <div
         className="cc-overlay"
         style={{ ...overlayBase, alignItems: 'flex-end' }}
-        onClick={(e) => { if (closeOnBackdrop && e.target === e.currentTarget) onClose(); }}
+        onPointerDown={(e) => { if (closeOnBackdrop && e.target === e.currentTarget) onClose(); }}
       >
         <div
           className="cc-sheet-card"
@@ -130,7 +130,7 @@ export function Modal({
     <div
       className="cc-overlay"
       style={{ ...overlayBase, alignItems: 'center', padding: 16 }}
-      onClick={(e) => { if (closeOnBackdrop && e.target === e.currentTarget) onClose(); }}
+      onPointerDown={(e) => { if (closeOnBackdrop && e.target === e.currentTarget) onClose(); }}
     >
       <div
         className="cc-modal-card"

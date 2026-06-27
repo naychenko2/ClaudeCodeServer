@@ -492,6 +492,42 @@ function AttachPicker({ projectId, selected, onToggle, onClose }: AttachPickerPr
   );
 }
 
+// Блок группы инструментов: во время стриминга — раскрыт плоско; после завершения —
+// N≤5 остаётся раскрытым, N>5 автоматически сворачивается. Кнопка заголовка переключает.
+function ToolGroupBlock({ isGroupDone, toolCount, children }: {
+  isGroupDone: boolean;
+  toolCount: number;
+  children: React.ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  useEffect(() => {
+    if (isGroupDone && toolCount > 5) setExpanded(false);
+  }, [isGroupDone, toolCount]);
+
+  return (
+    <div style={{ borderTop: `1px solid ${C.bgInset}`, borderBottom: `1px solid ${C.bgInset}` }}>
+      {isGroupDone && (
+        <button
+          onClick={() => setExpanded(v => !v)}
+          style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: 6,
+            padding: '5px 14px', border: 'none', background: 'transparent',
+            cursor: 'pointer', textAlign: 'left',
+          }}
+        >
+          <span style={{ fontSize: 11.5, color: C.textMuted, flex: 1, fontFamily: FONT.sans }}>
+            {toolCount} {toolWord(toolCount)}
+          </span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            {expanded ? <path d="M18 15l-6-6-6 6"/> : <path d="M6 9l6 6 6-6"/>}
+          </svg>
+        </button>
+      )}
+      {(!isGroupDone || expanded) && children}
+    </div>
+  );
+}
+
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
   const online = useOnline();
@@ -848,8 +884,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         // Один контур: инструменты и изменения файлов — компактными строками (в т.ч. одиночные).
         // Для agent-вызовов с детьми сразу рисуем детей inline под родителем — иначе при параллельных
         // агентах все их инструменты сливаются в один безымянный блок после шапки.
+        const toolCount = slice.filter(([it]) => it.kind === 'tool_use').length;
+        let isGroupDone = false;
+        for (let k = i; k < items.length; k++) {
+          if (items[k].kind === 'user_message') break;
+          if (items[k].kind === 'result') { isGroupDone = true; break; }
+        }
         pushNode(
-          <div key={`grp-${start}`} style={{ borderTop: `1px solid ${C.bgInset}`, borderBottom: `1px solid ${C.bgInset}` }}>
+          <ToolGroupBlock key={`grp-${start}`} isGroupDone={isGroupDone} toolCount={toolCount}>
             {slice.map(([it, idx], gi) => {
               const inlineChildren = it.kind === 'tool_use'
                 ? (childrenByParentId.get(it.id) ?? []).filter(c => !suppressedByWorkflow.has(c.id))
@@ -871,7 +913,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
                 </Fragment>
               );
             })}
-          </div>,
+          </ToolGroupBlock>,
           start
         );
         prevNodeWasBlock = true;

@@ -78,8 +78,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
     <div
       style={{
         minHeight: '100vh', background: C.bgMain,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '24px 20px', boxSizing: 'border-box', fontFamily: FONT.sans,
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+        paddingTop: 'max(80px, 38vh)', paddingLeft: 20, paddingRight: 20, paddingBottom: 24,
+        boxSizing: 'border-box', fontFamily: FONT.sans,
       }}
     >
       <div style={{ width: '100%', maxWidth: 440 }}>

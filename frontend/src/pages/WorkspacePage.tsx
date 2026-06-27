@@ -155,6 +155,15 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
   // мобайл: показываем либо sidebar, либо chat
   const [mobileView, setMobileView] = useState<'sidebar' | 'chat'>('sidebar');
 
+  // При открытии проекта на мобиле — сразу переходим в чат, если был активный
+  useEffect(() => {
+    const ws = loadWorkspaceState(project.id);
+    if (ws?.activeSession && window.innerWidth < 768) {
+      setMobileView('chat');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+
   const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth < 768;
@@ -339,17 +348,6 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
     }
   }, [project.id, knowledgeDocMap]);
 
-  const TabSwitcher = (
-    <PillSwitch<LeftTab>
-      value={leftTab}
-      options={[
-        { value: 'sessions', label: 'Чаты' },
-        { value: 'files', label: 'Файлы' },
-      ]}
-      onChange={handleTabSwitch}
-      fill
-    />
-  );
 
 
   const Sidebar = (
@@ -357,7 +355,7 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
       {/* Планшет/десктоп: логотип + tabs в одном header блоке */}
       {!isMobile && (
         <div style={{ padding: '16px 16px 14px', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 15, padding: '0 2px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, padding: '0 2px' }}>
             <div onClick={onGoToProjects} style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, cursor: 'pointer' }}>
               <div style={{ width: 28, height: 28, borderRadius: 8, background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                 <svg width="16" height="16" viewBox="0 0 512 512" fill="none">
@@ -394,7 +392,32 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
               </svg>
             </button>
           </div>
-          {TabSwitcher}
+          {/* Строка проекта: имя + кнопка настроек */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 13, padding: '0 2px' }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.accent, flexShrink: 0 }} />
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: C.textSecondary, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {projectForEdit.name}
+            </span>
+            <button
+              onClick={() => setEditProjectOpen(true)}
+              title="Настройки проекта"
+              style={{ width: 22, height: 22, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+            </button>
+          </div>
+          <PillSwitch<LeftTab>
+            value={leftTab}
+            options={[
+              { value: 'sessions', label: 'Чаты' },
+              { value: 'files', label: 'Файлы' },
+            ]}
+            onChange={handleTabSwitch}
+            fill
+          />
         </div>
       )}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>

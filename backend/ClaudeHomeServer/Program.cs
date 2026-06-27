@@ -166,11 +166,32 @@ app.Use(async (ctx, next) =>
         AutomaticDecompression = DecompressionMethods.None,
         UseCookies = false,
     });
+
+    // no-op SW: заменяем проблемный OO Service Worker нейтральным,
+    // который очищает все кеши и не перехватывает запросы.
+    // Иначе после первого визита SW кешируется в браузере и начинает
+    // перехватывать Analytics.js с ошибкой net::ERR_FAILED.
+    const string noOpSw =
+        "self.addEventListener('install',e=>e.waitUntil(self.skipWaiting()));" +
+        "self.addEventListener('activate',e=>e.waitUntil(" +
+        "caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).then(()=>self.clients.claim())" +
+        "));";
+
     app.Use(async (ctx, next) =>
     {
         var path = ctx.Request.Path.Value ?? "";
         if (path.Length > 1 && char.IsDigit(path[1]))
         {
+            // Service Worker OO заменяем no-op-ом — избегаем cacheFirst-ошибок в браузере
+            if (path.EndsWith("/document_editor_service_worker.js", StringComparison.OrdinalIgnoreCase))
+            {
+                ctx.Response.ContentType = "application/javascript; charset=utf-8";
+                ctx.Response.Headers["Service-Worker-Allowed"] = "/";
+                ctx.Response.Headers["Cache-Control"] = "no-store";
+                await ctx.Response.WriteAsync(noOpSw);
+                return;
+            }
+
             var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
             await forwarder.SendAsync(ctx, dsBase, ooInvoker, ForwarderRequestConfig.Empty, HttpTransformer.Default);
             return;

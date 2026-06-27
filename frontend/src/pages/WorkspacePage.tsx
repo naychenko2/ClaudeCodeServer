@@ -21,7 +21,8 @@ interface Props {
   onGoToProjects: () => void;
 }
 
-type LeftTab = 'sessions' | 'files' | 'knowledge';
+type LeftTab = 'sessions' | 'files';
+type FileSubTab = 'files' | 'knowledge';
 
 function useWindowWidth() {
   const [width, setWidth] = useState(window.innerWidth);
@@ -92,7 +93,11 @@ function Splitter({ orientation, active, onMouseDown }: {
 
 export function WorkspacePage({ project, onGoToProjects }: Props) {
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
-  const [leftTab, setLeftTab] = useState<LeftTab>(() => loadWorkspaceState(project.id)?.leftTab ?? 'sessions');
+  const [leftTab, setLeftTab] = useState<LeftTab>(() => {
+    const saved = loadWorkspaceState(project.id)?.leftTab;
+    return saved === 'sessions' || saved === 'files' ? saved : 'sessions';
+  });
+  const [fileSubTab, setFileSubTab] = useState<FileSubTab>(() => loadWorkspaceState(project.id)?.fileSubTab ?? 'files');
   const [activeSession, setActiveSession] = useState<Session | null>(() => loadWorkspaceState(project.id)?.activeSession ?? null);
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
   const [openFile, setOpenFile] = useState<string | null>(() => loadWorkspaceState(project.id)?.openFile ?? null);
@@ -215,8 +220,8 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
 
   // Запоминаем состояние окна (активный чат/файл, панели) для проекта
   useEffect(() => {
-    saveWorkspaceState(project.id, { activeSession, openFile, fileFullscreen, leftTab });
-  }, [project.id, activeSession, openFile, fileFullscreen, leftTab]);
+    saveWorkspaceState(project.id, { activeSession, openFile, fileFullscreen, leftTab, fileSubTab });
+  }, [project.id, activeSession, openFile, fileFullscreen, leftTab, fileSubTab]);
 
   // Членство в project-группе на всё время открытия проекта (для статусов и watcher'а файлов).
   // Владелец — WorkspacePage (не SessionList, который размонтируется при переходе на «Файлы»).
@@ -320,11 +325,25 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
       options={[
         { value: 'sessions', label: 'Чаты' },
         { value: 'files', label: 'Файлы' },
-        { value: 'knowledge', label: 'БЗ' },
       ]}
       onChange={handleTabSwitch}
       fill
     />
+  );
+
+  const FileSubTabSwitcher = (fill: boolean, mobile?: boolean) => (
+    <div style={{ padding: mobile ? '8px 14px' : '10px 14px 8px', flexShrink: 0 }}>
+      <PillSwitch<FileSubTab>
+        value={fileSubTab}
+        options={[
+          { value: 'files', label: 'Файлы' },
+          { value: 'knowledge', label: 'Знания' },
+        ]}
+        onChange={setFileSubTab}
+        fill={fill}
+        isMobile={mobile}
+      />
+    </div>
   );
 
   const Sidebar = (
@@ -372,13 +391,19 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
           {TabSwitcher}
         </div>
       )}
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {leftTab === 'sessions' ? (
           <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
-        ) : leftTab === 'files' ? (
-          <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={handleAttachToChat} />
         ) : (
-          <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} />
+          <>
+            {FileSubTabSwitcher(true)}
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              {fileSubTab === 'files'
+                ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={handleAttachToChat} />
+                : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} />
+              }
+            </div>
+          </>
         )}
       </div>
       {/* Project footer */}
@@ -431,7 +456,6 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
               options={[
                 { value: 'sessions', label: 'Чаты' },
                 { value: 'files', label: 'Файлы' },
-                { value: 'knowledge', label: 'БЗ' },
               ]}
               onChange={handleTabSwitch}
               isMobile
@@ -440,12 +464,20 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
         )}
         {/* Sidebar — ВСЕГДА в DOM: FileExplorer не теряет текущий путь при смене вида */}
         <div style={{ flex: 1, display: !openFile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
-          <div style={{ flex: 1, overflow: 'hidden' }}>
+          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
               ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
-              : leftTab === 'files'
-              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={handleAttachToChat} />
-              : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} />
+              : (
+                <>
+                  {FileSubTabSwitcher(true, true)}
+                  <div style={{ flex: 1, overflow: 'hidden' }}>
+                    {fileSubTab === 'files'
+                      ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={handleAttachToChat} />
+                      : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} />
+                    }
+                  </div>
+                </>
+              )
             }
           </div>
           <div style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 10, background: C.bgInset, flexShrink: 0 }}>

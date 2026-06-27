@@ -7,7 +7,8 @@ export interface WorkspaceUIState {
   activeSession: Session | null;
   openFile: string | null;
   fileFullscreen: boolean;
-  leftTab: 'sessions' | 'files' | 'knowledge';
+  leftTab: 'sessions' | 'files';
+  fileSubTab?: 'files' | 'knowledge';
 }
 
 const key = (projectId: string) => `ws:${projectId}`;

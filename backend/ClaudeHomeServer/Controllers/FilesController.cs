@@ -400,6 +400,22 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
+    // Возвращает Unix-время последней записи файла (мс) — для polling после OO-сохранения.
+    [HttpGet("office-version")]
+    public IActionResult OfficeVersion(string projectId, [FromQuery] string path)
+    {
+        try
+        {
+            var root = GetRoot(projectId);
+            var safePath = FileService.SafeJoinPublic(root, path);
+            if (!System.IO.File.Exists(safePath))
+                return NotFound();
+            var ms = new DateTimeOffset(System.IO.File.GetLastWriteTimeUtc(safePath)).ToUnixTimeMilliseconds();
+            return Ok(new { ms });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
     [HttpPost("save-from-url")]
     [RequestSizeLimit(200 * 1024 * 1024)] // 200 МБ для видео
     public async Task<IActionResult> SaveFromUrl(

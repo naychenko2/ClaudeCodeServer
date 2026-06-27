@@ -107,6 +107,8 @@ export const api = {
       }),
     officeDiscard: (projectId: string, path: string) =>
       request<void>(`/projects/${projectId}/files/office-discard?path=${encodeURIComponent(path)}`, { method: 'POST' }),
+    getOfficeVersion: (projectId: string, path: string) =>
+      request<{ ms: number }>(`/projects/${projectId}/files/office-version?path=${encodeURIComponent(path)}`),
     upload: async (projectId: string, file: File, targetPath = ''): Promise<void> => {
       const token = typeof localStorage !== 'undefined'
         ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))

@@ -29,6 +29,10 @@ frontend/dev-dist/
 mcp-dify/node_modules/
 mcp-dify/dist/
 
+# mcp/tasks-server
+mcp/tasks-server/node_modules/
+mcp/tasks-server/dist/
+
 # Среда
 .env
 .env.local

@@ -225,7 +225,7 @@ export function OfficeViewer({ projectId, filePath }: Props) {
         const css = Object.entries(CLAUDE_HOME_THEME.colors).map(([k, v]) => `--${k}:${v}`).join(';');
         const style = idoc.createElement('style');
         style.setAttribute('data-claude-home', '1');
-        style.textContent = `.theme-claude-home{${css}}`;
+        style.textContent = `.theme-claude-home{${css}} section.logo,div.logo-light{display:none!important}`;
         idoc.head.appendChild(style);
       }, 300);
       setTimeout(() => clearInterval(themeInterval), 30000);

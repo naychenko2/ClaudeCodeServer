@@ -123,6 +123,21 @@ const RevertIcon = () => (
   </svg>
 );
 
+const SaveIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+    <polyline points="17 21 17 13 7 13 7 21"/>
+    <polyline points="7 3 7 8 15 8"/>
+  </svg>
+);
+
+const DiscardIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 7v6h6"/>
+    <path d="M3 13C5.333 7.333 11.6 4 18 7a9 9 0 0 1 3 2"/>
+  </svg>
+);
+
 const CloudGlyph = ({ filled }: { filled?: boolean }) => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
@@ -337,6 +352,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const [editing, setEditing] = useState(false);
   const [officeMode, setOfficeMode] = useState<'view' | 'edit'>('view');
   const [officeSwitching, setOfficeSwitching] = useState(false);
+  const [officeDiscardConfirm, setOfficeDiscardConfirm] = useState(false);
+  const [officeCacheKey, setOfficeCacheKey] = useState<string | undefined>();
   const [editContent, setEditContent] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [unsavedConfirm, setUnsavedConfirm] = useState(false);
@@ -356,6 +373,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
     setTab('file');
     setOfficeMode('view');
     setOfficeSwitching(false);
+    setOfficeDiscardConfirm(false);
+    setOfficeCacheKey(undefined);
     setLoading(true);
     setLoadError(false);
     setFileContent(null);
@@ -536,7 +555,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             // Кнопка «Редактировать»
             <button
               title="Редактировать"
-              onClick={() => { setOfficeSwitching(true); setOfficeMode('edit'); }}
+              onClick={() => { setOfficeCacheKey(undefined); setOfficeSwitching(true); setOfficeMode('edit'); }}
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid #E0D7C8', background: '#EDE7DC', color: '#39332B', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.7 }}>
@@ -545,17 +564,59 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
               </svg>
               {!isMobile && <span>Редактировать</span>}
             </button>
+          ) : officeDiscardConfirm ? (
+            // Подтверждение отмены изменений
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              {!isMobile && <span style={{ fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', padding: '0 4px' }}>Отменить изменения?</span>}
+              <button
+                title="Откатить изменения"
+                onClick={async () => {
+                  setOfficeDiscardConfirm(false);
+                  setOfficeSwitching(true);
+                  try { await api.files.officeDiscard(project.id, filePath); } catch {}
+                  setOfficeMode('view');
+                }}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid rgba(180,60,40,0.3)', background: '#FEF0ED', color: '#B43C28', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                <DiscardIcon />
+                {!isMobile && <span>Откатить</span>}
+              </button>
+              <button
+                title="Нет, продолжить редактирование"
+                onClick={() => setOfficeDiscardConfirm(false)}
+                style={{ display: 'flex', alignItems: 'center', padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid #E0D7C8', background: '#EDE7DC', color: '#39332B', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                {!isMobile ? 'Нет' : '✕'}
+              </button>
+            </div>
           ) : (
-            // Кнопка «Редактирование • ×»
-            <button
-              title="Выйти из редактирования"
-              onClick={() => { setOfficeSwitching(true); setOfficeMode('view'); }}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.12)', background: '#D97757', color: '#FFFFFF', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
-            >
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'rgba(255,255,255,0.85)', flexShrink: 0 }} />
-              {!isMobile && <span>Редактирование</span>}
-              <span style={{ fontSize: 14, lineHeight: 1, opacity: 0.85 }}>×</span>
-            </button>
+            // Кнопки редактирования: [Отмена] [Сохранить]
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button
+                title="Отменить изменения"
+                onClick={isMobile
+                  ? async () => {
+                      if (!window.confirm('Отменить изменения? Несохранённые правки будут потеряны.')) return;
+                      setOfficeSwitching(true);
+                      try { await api.files.officeDiscard(project.id, filePath); } catch {}
+                      setOfficeMode('view');
+                    }
+                  : () => setOfficeDiscardConfirm(true)
+                }
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid #E0D7C8', background: '#EDE7DC', color: '#39332B', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                <DiscardIcon />
+                {!isMobile && <span>Отмена</span>}
+              </button>
+              <button
+                title="Сохранить"
+                onClick={() => { setOfficeCacheKey(String(Date.now())); setOfficeSwitching(true); setOfficeMode('view'); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.08)', background: '#D97757', color: '#FFFFFF', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                <SaveIcon />
+                {!isMobile && <span>Сохранить</span>}
+              </button>
+            </div>
           )
         )}
 
@@ -774,10 +835,11 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             {fileContent?.isDocument && fileContent.docKind !== 'pdf' && (
               <div style={{ position: 'relative', width: '100%', height: '100%' }}>
                 <OfficeViewer
-                  key={`${filePath}-${officeMode}`}
+                  key={`${filePath}-${officeMode}-${officeCacheKey ?? ''}`}
                   projectId={project.id}
                   filePath={filePath}
                   mode={officeMode}
+                  cacheKey={officeCacheKey}
                   onReady={() => setOfficeSwitching(false)}
                 />
                 {/* Оверлей загрузки при переключении режима */}

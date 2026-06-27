@@ -254,12 +254,13 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
     // Возвращает конфиг для DocsAPI.DocEditor: URL сервера DS и параметры документа.
     [HttpGet("office-config")]
-    public IActionResult OfficeConfig(string projectId, [FromQuery] string path, [FromQuery] string mode = "view")
+    public IActionResult OfficeConfig(string projectId, [FromQuery] string path, [FromQuery] string mode = "view", [FromQuery] string? cacheKey = null)
     {
         try
         {
             var root = GetRoot(projectId);
-            var size = files.GetFileSize(root, path);
+            var safePath = FileService.SafeJoinPublic(root, path);
+            var modTime = System.IO.File.GetLastWriteTimeUtc(safePath).Ticks;
             var fileName = Path.GetFileName(path);
             var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
 
@@ -267,11 +268,20 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             var backendUrl = config["OnlyOffice:BackendUrl"] ?? "http://host.docker.internal:5000";
             var token = GetDownloadToken();
 
-            // Ключ документа: хэш пути + размер файла (DS кеширует по ключу)
+            // Ключ документа: хэш пути + время изменения (DS кеширует по ключу).
+            // cacheKey позволяет сбросить кеш OO после сохранения через callback.
+            var keyInput = cacheKey != null
+                ? $"{projectId}/{path}/{modTime}/{cacheKey}"
+                : $"{projectId}/{path}/{modTime}";
             var key = Convert.ToHexString(
                 System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.UTF8.GetBytes($"{projectId}/{path}/{size}")))
+                    System.Text.Encoding.UTF8.GetBytes(keyInput)))
                 [..20];
+
+            var docKey = $"{key}-{mode}";
+            // Запоминаем edit-ключ текущей сессии для возможного office-discard
+            if (mode == "edit")
+                _activeEditKeys[$"{projectId}/{path}"] = docKey;
 
             var downloadUrl = $"{backendUrl}/api/projects/{projectId}/files/office-download" +
                               $"?path={Uri.EscapeDataString(path)}&token={Uri.EscapeDataString(token)}";
@@ -284,7 +294,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 serverUrl,
                 document = new {
                     fileType = ext,
-                    key = $"{key}-{mode}", // разные ключи для view/edit — DS не путает кеши
+                    key = docKey,
                     title = fileName,
                     url = downloadUrl,
                 },
@@ -320,6 +330,10 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     private static string? _downloadTokenCache;
+    // Активные edit-ключи: "{projectId}/{path}" → docKey
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _activeEditKeys = new();
+    // Ключи для игнорирования в callback (пользователь нажал «Отмена»)
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _discardedKeys = new();
 
     // Вызывается OnlyOffice DS после сохранения документа пользователем.
     // status=2: документ готов, url — временная ссылка на изменённый файл.
@@ -347,6 +361,10 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         }
         catch { return Ok(new { error = 1, message = "bad json" }); }
 
+        // Пользователь нажал «Отмена» — пропускаем сохранение
+        if (payload?.Key != null && _discardedKeys.TryRemove(payload.Key, out _))
+            return Ok(new { error = 0 });
+
         if (payload?.Status is 2 or 6 && payload.Url != null)
         {
             try
@@ -363,6 +381,23 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         }
 
         return Ok(new { error = 0 });
+    }
+
+    // Вызывается фронтом при нажатии «Отмена» в режиме редактирования OO.
+    // Помечает edit-ключ как «выбросить» и откатывает файл через git.
+    [HttpPost("office-discard")]
+    public IActionResult OfficeDiscard(string projectId, [FromQuery] string path)
+    {
+        try
+        {
+            var root = GetRoot(projectId);
+            if (_activeEditKeys.TryRemove($"{projectId}/{path}", out var editKey))
+                _discardedKeys.TryAdd(editKey, 0);
+            files.RevertFile(root, path); // false → не git-репо, игнорируем
+            return Ok();
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
     [HttpPost("save-from-url")]

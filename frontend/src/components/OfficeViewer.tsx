@@ -11,6 +11,7 @@ interface Props {
   projectId: string;
   filePath: string;
   mode?: 'view' | 'edit';
+  cacheKey?: string;
   onReady?: () => void;
 }
 
@@ -145,7 +146,7 @@ const CLAUDE_HOME_THEME = {
 
 let ooIdCounter = 0;
 
-export function OfficeViewer({ projectId, filePath, mode = 'view', onReady }: Props) {
+export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onReady }: Props) {
   // React управляет только этим wrapper-div.
   // Div для OO создаём через нативный DOM — React о нём не знает
   // и не пытается делать removeChild на дочерних элементах которые OO добавил.
@@ -174,8 +175,9 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', onReady }: Pr
 
       let cfg: OfficeConfig;
       try {
+        const cacheParam = cacheKey ? `&cacheKey=${encodeURIComponent(cacheKey)}` : '';
         const res = await fetch(
-          `/api/projects/${encodeURIComponent(projectId)}/files/office-config?path=${encodeURIComponent(filePath)}&mode=${mode}`,
+          `/api/projects/${encodeURIComponent(projectId)}/files/office-config?path=${encodeURIComponent(filePath)}&mode=${mode}${cacheParam}`,
           { headers }
         );
         if (!res.ok) throw new Error(`config ${res.status}`);

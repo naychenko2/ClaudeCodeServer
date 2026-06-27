@@ -828,22 +828,24 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     );
   };
 
-  // Пункт контекстного меню — единый стиль
-  const menuItem = (label: string, onClick: () => void, danger = false) => (
+  // Пункт контекстного меню — единый стиль.
+  // onPointerDown + stopPropagation: предотвращает всплытие mousedown до document-listener
+  // (который закрыл бы меню до срабатывания click).
+  const menuItem = (label: string, action: () => void, danger = false) => (
     <button
       key={label}
-      onClick={onClick}
+      onPointerDown={e => { e.stopPropagation(); action(); }}
       style={{
         display: 'flex', alignItems: 'center', width: '100%',
-        padding: isMobile ? '14px 20px' : '8px 12px',
+        padding: isMobile || alwaysShowIcons ? '14px 20px' : '8px 12px',
         background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
-        fontFamily: FONT.sans, fontSize: isMobile ? 15 : 13,
+        fontFamily: FONT.sans, fontSize: isMobile || alwaysShowIcons ? 15 : 13,
         color: danger ? '#C85A3F' : C.textPrimary,
-        borderRadius: isMobile ? 0 : 6,
+        borderRadius: isMobile || alwaysShowIcons ? 0 : 6,
         gap: 8,
       }}
-      onMouseEnter={e => { if (!isMobile) (e.currentTarget as HTMLButtonElement).style.background = C.bgInset; }}
-      onMouseLeave={e => { if (!isMobile) (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
+      onMouseEnter={e => { if (!isMobile && !alwaysShowIcons) (e.currentTarget as HTMLButtonElement).style.background = C.bgInset; }}
+      onMouseLeave={e => { if (!isMobile && !alwaysShowIcons) (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
     >
       {label}
     </button>

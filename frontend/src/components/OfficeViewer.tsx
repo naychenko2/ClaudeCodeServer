@@ -215,7 +215,7 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
 
       editorRef.current = new window.DocsAPI.DocEditor(containerId, {
         document: cfg.document,
-        editorConfig: { ...cfg.editorConfig, customization: { logo: { visible: false } } },
+        editorConfig: { ...cfg.editorConfig, customization: { ...(cfg.editorConfig as any).customization, logo: { visible: false } } },
         documentType: docType,
         height: '100%',
         width: '100%',

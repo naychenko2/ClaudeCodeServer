@@ -646,9 +646,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         onDragLeave={!isMobile && entry.isDirectory ? e => handleDragLeave(e, entry) : undefined}
         onDrop={!isMobile && entry.isDirectory ? e => handleDrop(e, entry) : undefined}
         onDragEnd={!isMobile ? handleDragEnd : undefined}
-        onTouchStart={isMobile ? () => handleTouchStart(entry) : undefined}
-        onTouchEnd={isMobile ? handleTouchCancel : undefined}
-        onTouchMove={isMobile ? handleTouchCancel : undefined}
+        onTouchStart={isMobile || alwaysShowIcons ? () => handleTouchStart(entry) : undefined}
+        onTouchEnd={isMobile || alwaysShowIcons ? handleTouchCancel : undefined}
+        onTouchMove={isMobile || alwaysShowIcons ? handleTouchCancel : undefined}
         style={{
           display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 6,
           paddingLeft: 8 + depth * 16, paddingRight: 8,
@@ -758,8 +758,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             </button>
           </>
         )}
-        {/* Кнопка «добавить в чат» */}
-        {!entry.isDirectory && onAttachToChat && (
+        {/* Кнопка «добавить в чат» — десктоп hover; мобила/планшет — через long-press меню */}
+        {!entry.isDirectory && onAttachToChat && !isMobile && !alwaysShowIcons && (
           hoveredPath === entry.path ? (
             <button
               onClick={e => { e.stopPropagation(); onAttachToChat(entry.path); }}
@@ -772,7 +772,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             </button>
           ) : null
         )}
-        {/* Кнопка «добавить в БЗ» */}
+        {/* Кнопка «добавить в БЗ» — спиннер при индексации всегда, иначе десктоп hover;
+            мобила/планшет — через long-press меню */}
         {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && (
           indexingFiles?.has(entry.path) ? (
             <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}>
@@ -782,7 +783,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               </svg>
             </span>
           ) : !isKnowledgeIndexable(entry.name) ? null
-          : isMobile || alwaysShowIcons || hoveredPath === entry.path ? (
+          : !isMobile && !alwaysShowIcons && hoveredPath === entry.path ? (
             <button
               onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
               title="Добавить в базу знаний"
@@ -1138,6 +1139,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 <div style={{ padding: '4px 20px 12px', fontFamily: FONT.mono, fontSize: 13, fontWeight: 700, color: C.textPrimary, borderBottom: `1px solid ${C.border}` }}>
                   {entry.name}
                 </div>
+                {!entry.isDirectory && onAttachToChat && menuItem('Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
+                {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem('Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
+                {(!entry.isDirectory && (onAttachToChat || onAddToKnowledge)) && <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />}
                 {online && menuItem('Переименовать', () => startRename(entry))}
                 {online && menuItem('Создать файл здесь', openCreateFile)}
                 {online && menuItem('Создать папку здесь', openCreateDir)}
@@ -1164,6 +1168,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               minWidth: 180,
             }}
           >
+            {!entry.isDirectory && onAttachToChat && menuItem('📎 Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
+            {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem('📖 Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
+            {!entry.isDirectory && (onAttachToChat || onAddToKnowledge) && <div style={{ height: 1, background: C.border, margin: '4px 0' }} />}
             {online && menuItem('✏ Переименовать', () => startRename(entry))}
             {online && menuItem('📄 Создать файл здесь', openCreateFile)}
             {online && menuItem('📁 Создать папку здесь', openCreateDir)}

@@ -383,7 +383,7 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
-              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={handleAttachToChat} onOpenKnowledge={() => setFileSubTab('knowledge')} />
+              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={activeSession ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
               : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
             }
           </div>
@@ -453,7 +453,7 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'
-                    ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={handleAttachToChat} onOpenKnowledge={() => setFileSubTab('knowledge')} />
+                    ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={activeSession ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
                     : <KnowledgePanel project={project} isMobile={isMobile} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
                   }
                 </div>

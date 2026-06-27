@@ -424,12 +424,13 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _forceSavePending[docKey] = tcs;
 
-        var ooUrl = config["OnlyOffice:ServerUrl"] ?? "http://localhost:8090";
+        // Вызов CommandService через внутренний адрес OO DS, а не через публичный URL (YARP+TLS)
+        var ooInternalUrl = config["ReverseProxy:Clusters:onlyoffice:Destinations:default:Address"] ?? "http://localhost:8090";
         try
         {
             var client = httpClientFactory.CreateClient();
             var payload = System.Text.Json.JsonSerializer.Serialize(new { c = "forcesave", key = docKey });
-            await client.PostAsync($"{ooUrl}/coauthoring/CommandService.ashx",
+            await client.PostAsync($"{ooInternalUrl}/coauthoring/CommandService.ashx",
                 new StringContent(payload, System.Text.Encoding.UTF8, "application/json"), ct);
         }
         catch { /* Command API недоступен — ждём таймаут */ }

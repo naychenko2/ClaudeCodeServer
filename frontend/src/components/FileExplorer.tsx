@@ -23,7 +23,7 @@ import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
-import { C, R, FONT, MODAL_W } from '../lib/design';
+import { C, R, FONT, MODAL_W, TB } from '../lib/design';
 import { Modal, ModalActions, TextField } from './ui';
 
 interface Props {
@@ -573,17 +573,24 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             )}
           </div>
           {onOpenKnowledge && (
-            <button
-              onClick={onOpenKnowledge}
-              title="База знаний"
-              style={{ width: 36, height: 36, flexShrink: 0, border: `1px solid ${C.border}`, borderRadius: R.lg, background: C.bgWhite, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3F7A4F' }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
-                <ellipse cx="12" cy="7" rx="9" ry="3" strokeWidth="1.8"/>
-                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" strokeWidth="1.8"/>
-                <path d="M3 7v10c0 1.66 4 3 9 3s9-1.34 9-3V7" strokeWidth="1.8"/>
-              </svg>
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
+              {/* Файлы — активна */}
+              <button title="Файлы" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bgMain, color: C.accent, boxShadow: TB.pillThumbShadow }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+              </button>
+              {/* Знания — неактивна */}
+              <button onClick={onOpenKnowledge} title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted, position: 'relative' }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+                  <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+                </svg>
+                {indexedFileNames && indexedFileNames.size > 0 && (
+                  <span style={{ position: 'absolute', top: 2, right: 2, width: 7, height: 7, borderRadius: '50%', background: C.accent, border: `1.5px solid ${C.bgPanel}` }} />
+                )}
+              </button>
+            </div>
           )}
         </div>
 

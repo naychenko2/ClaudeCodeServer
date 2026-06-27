@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import type { Project } from '../types';
 import type { DifyDocument } from '../lib/api';
 import { api } from '../lib/api';
-import { C, R, SHADOW, FONT } from '../lib/design';
+import { C, R, SHADOW, FONT, TB } from '../lib/design';
 
 interface Props {
   project: Project;
@@ -526,41 +526,31 @@ export function KnowledgePanel({ project, isMobile = false, onDocumentsChanged, 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Шапка */}
-      <div style={{ padding: '8px 12px', borderBottom: `1px solid ${C.border}`, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-        {onBack && (
-          <button
-            onClick={onBack}
-            title="К файлам"
-            style={{ width: 28, height: 28, flexShrink: 0, border: 'none', borderRadius: 7, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted }}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 18l-6-6 6-6"/>
-            </svg>
-          </button>
-        )}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ color: '#3F7A4F', display: 'flex', flexShrink: 0 }}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
-              <ellipse cx="12" cy="7" rx="9" ry="3" strokeWidth="1.8"/>
-              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" strokeWidth="1.8"/>
-              <path d="M3 7v10c0 1.66 4 3 9 3s9-1.34 9-3V7" strokeWidth="1.8"/>
-            </svg>
-          </span>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary }}>
-              Знания
-            </div>
-            {status?.datasetId && (
-              <div style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                ID: {status.datasetId}
-              </div>
-            )}
-            {!status?.datasetId && !error && (
-              <div style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.4 }}>
-                Добавьте файл через файловый менеджер
-              </div>
-            )}
+      {/* Шапка — icon-toggle (зеркало строки поиска FileExplorer) */}
+      <div style={{ padding: '4px 12px 10px', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {/* Поиск-placeholder для визуального единства с режимом Файлы */}
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36, opacity: 0.55, pointerEvents: 'none' as const }}>
+            <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+            </span>
+            <span style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.mono }}>Поиск…</span>
+          </div>
+          {/* icon-toggle: Знания активна */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
+            {/* Файлы — неактивна, возврат */}
+            <button onClick={onBack} title="Файлы" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: onBack ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+            </button>
+            {/* Знания — активна */}
+            <button title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bgMain, color: C.accent, boxShadow: TB.pillThumbShadow }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+                <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+              </svg>
+            </button>
           </div>
         </div>
       </div>

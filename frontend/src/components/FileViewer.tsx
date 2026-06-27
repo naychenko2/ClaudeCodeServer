@@ -453,6 +453,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       setFileContent(r);
       setEditContent(r.content ?? '');
       setDiff(null);
+      setTab('file');
       setActionError(null);
     } catch (e) {
       setActionError(mutationErrorText(e, 'Не удалось откатить файл'));
@@ -538,8 +539,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
           </span>
         )}
 
-        {/* Pill-переключатель Файл / Diff — скрыт для Office-файлов */}
-        {!isOfficeFile && (
+        {/* Pill-переключатель Файл / Diff — скрыт для Office-файлов и когда нет диффа */}
+        {!isOfficeFile && !!diff && (
           <PillSwitch<ViewTab>
             value={tab}
             options={[{ value: 'file', label: 'Файл' }, { value: 'diff', label: 'Diff' }]}

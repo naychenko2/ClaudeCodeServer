@@ -442,6 +442,9 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [tagEditDoc, setTagEditDoc] = useState<DifyDocument | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [notification, setNotification] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
+  const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadStatus = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -508,14 +511,26 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
   };
 
 
+  const showNotification = (message: string, type: 'error' | 'success') => {
+    if (notifTimerRef.current) clearTimeout(notifTimerRef.current);
+    setNotification({ message, type });
+    notifTimerRef.current = setTimeout(() => setNotification(null), 5000);
+  };
+
   const handleSaveTags = async (tags: string[]) => {
     if (!tagEditDoc) return;
-    await api.knowledge.setDocumentTags(project.id, tagEditDoc.name, tagEditDoc.id, tags);
-    // Оптимистичное обновление локального состояния
-    setStatus(prev => prev ? {
-      ...prev,
-      documents: prev.documents.map(d => d.id === tagEditDoc.id ? { ...d, tags } : d),
-    } : prev);
+    try {
+      await api.knowledge.setDocumentTags(project.id, tagEditDoc.name, tagEditDoc.id, tags);
+      setStatus(prev => prev ? {
+        ...prev,
+        documents: prev.documents.map(d => d.id === tagEditDoc.id ? { ...d, tags } : d),
+      } : prev);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Ошибка сохранения тегов';
+      console.error('[KnowledgePanel] setDocumentTags failed:', e);
+      showNotification(msg, 'error');
+      throw e; // пробрасываем — диалог тоже покажет ошибку
+    }
   };
 
   if (loading) {
@@ -531,12 +546,28 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
       {/* Шапка — icon-toggle (зеркало строки поиска FileExplorer) */}
       <div style={{ padding: '4px 12px 10px', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {/* Поиск-placeholder для визуального единства с режимом Файлы */}
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36, opacity: 0.55, pointerEvents: 'none' as const }}>
+          {/* Поиск по знаниям */}
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
             <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
             </span>
-            <span style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.mono }}>Поиск…</span>
+            <input
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Поиск по знаниям…"
+              style={{
+                flex: 1, border: 'none', outline: 'none', background: 'transparent',
+                fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans,
+              }}
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', marginLeft: 4 }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            )}
           </div>
           {/* icon-toggle: Знания активна */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
@@ -567,70 +598,137 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
         </div>
       )}
 
+      {/* Уведомление об ошибке/успехе операции с тегами */}
+      {notification && (
+        <div style={{
+          margin: '0 12px 8px',
+          padding: '8px 12px',
+          borderRadius: R.lg,
+          fontSize: 12,
+          background: notification.type === 'error' ? `${C.accent}15` : '#4CAF5015',
+          color: notification.type === 'error' ? C.accent : '#2E7D32',
+          border: `1px solid ${notification.type === 'error' ? `${C.accent}40` : '#4CAF5040'}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+          flexShrink: 0,
+        }}>
+          <span>{notification.message}</span>
+          <button
+            onClick={() => setNotification(null)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex', flexShrink: 0 }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      )}
+
       {/* Список документов */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
-        {!error && (!status?.datasetId || status.documents.length === 0) ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 16 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-              <div style={{ width: 48, height: 48, borderRadius: 14, background: C.bgInset, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <DatabaseIcon size={24} />
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>Нет документов</div>
-                <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
-                  Добавьте файл через<br />файловый менеджер
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {/* Шапка раздела — видна когда есть документы или идёт поиск */}
+        {!error && status?.datasetId && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '8px 14px 6px',
+            borderBottom: `1px solid ${C.border}`,
+            marginBottom: 2,
+          }}>
+            <div style={{ color: '#3F7A4F', display: 'flex', flexShrink: 0 }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+                <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+              </svg>
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#3F7A4F', flex: 1 }}>
+              База знаний
+            </span>
+            <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono }}>
+              {searchQuery.trim()
+                ? `${status.documents.filter(d => (d.name.includes('/') ? d.name.split('/').pop()! : d.name).toLowerCase().includes(searchQuery.toLowerCase())).length} из ${status.total}`
+                : `${status.total} ${status.total === 1 ? 'документ' : status.total < 5 ? 'документа' : 'документов'}`
+              }
+            </span>
+          </div>
+        )}
+
+        <div style={{ padding: '4px 0' }}>
+          {!error && (!status?.datasetId || status.documents.length === 0) ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 16 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 48, height: 48, borderRadius: 14, background: C.bgInset, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <DatabaseIcon size={24} />
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>Нет документов</div>
+                  <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
+                    Добавьте файл через<br />файловый менеджер
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Подсказки о базе знаний */}
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
-              <KnowledgeTip
-                icon={
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
-                  </svg>
-                }
-                title="Что такое база знаний"
-                text="Большие документы — книги, статьи — Claude обрабатывает медленно: ему нужно прочитать их целиком. В базе знаний документы индексируются заранее, поэтому Claude ищет по ним быстро, не читая каждый раз с начала."
-              />
-              <KnowledgeTip
-                icon={
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
-                    <line x1="9" y1="5" x2="9" y2="8" strokeWidth="2.5"/><line x1="6.5" y1="6.5" x2="11.5" y2="6.5" strokeWidth="2.5"/>
-                  </svg>
-                }
-                title="Как добавить документ"
-                text="В файловом менеджере нажмите иконку базы данных рядом с нужным файлом — он появится здесь и будет проиндексирован."
-              />
-              <KnowledgeTip
-                icon={
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-                    <line x1="7" y1="7" x2="7.01" y2="7"/>
-                  </svg>
-                }
-                title="Зачем нужны теги"
-                text="Теги позволяют обращаться к базе знаний выборочно: когда Claude ищет информацию, можно ограничить поиск только документами с нужными тегами — это сокращает объём обработки и повышает точность ответа."
-              />
+              {/* Подсказки о базе знаний */}
+              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
+                <KnowledgeTip
+                  icon={
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+                    </svg>
+                  }
+                  title="Что такое база знаний"
+                  text="Большие документы — книги, статьи — Claude обрабатывает медленно: ему нужно прочитать их целиком. В базе знаний документы индексируются заранее, поэтому Claude ищет по ним быстро, не читая каждый раз с начала."
+                />
+                <KnowledgeTip
+                  icon={
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                      <line x1="9" y1="5" x2="9" y2="8" strokeWidth="2.5"/><line x1="6.5" y1="6.5" x2="11.5" y2="6.5" strokeWidth="2.5"/>
+                    </svg>
+                  }
+                  title="Как добавить документ"
+                  text="В файловом менеджере нажмите иконку базы данных рядом с нужным файлом — он появится здесь и будет проиндексирован."
+                />
+                <KnowledgeTip
+                  icon={
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+                      <line x1="7" y1="7" x2="7.01" y2="7"/>
+                    </svg>
+                  }
+                  title="Зачем нужны теги"
+                  text="Теги позволяют обращаться к базе знаний выборочно: когда Claude ищет информацию, можно ограничить поиск только документами с нужными тегами — это сокращает объём обработки и повышает точность ответа."
+                />
+              </div>
             </div>
-          </div>
-        ) : (
-          status?.documents.map(doc => (
-            <DocumentRow
-              key={doc.id}
-              doc={doc}
-              deleting={deletingId === doc.id}
-              retrying={retryingId === doc.id}
-              isMobile={isMobile}
-              alwaysShowIcons={alwaysShowIcons}
-              onDelete={() => handleDeleteDocument(doc.id)}
-              onRetry={doc.name.includes('/') ? () => handleRetryDocument(doc) : undefined}
-              onEditTags={() => setTagEditDoc(doc)}
-            />
-          ))
-        )}
+          ) : (() => {
+            const q = searchQuery.trim().toLowerCase();
+            const filtered = q
+              ? (status?.documents ?? []).filter(doc => {
+                  const name = doc.name.includes('/') ? doc.name.split('/').pop()! : doc.name;
+                  return name.toLowerCase().includes(q);
+                })
+              : (status?.documents ?? []);
+
+            if (filtered.length === 0 && q) {
+              return (
+                <div style={{ padding: '24px 16px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 13, color: C.textMuted }}>Ничего не найдено по запросу «{searchQuery}»</div>
+                </div>
+              );
+            }
+
+            return filtered.map(doc => (
+              <DocumentRow
+                key={doc.id}
+                doc={doc}
+                deleting={deletingId === doc.id}
+                retrying={retryingId === doc.id}
+                isMobile={isMobile}
+                alwaysShowIcons={alwaysShowIcons}
+                onDelete={() => handleDeleteDocument(doc.id)}
+                onRetry={doc.name.includes('/') ? () => handleRetryDocument(doc) : undefined}
+                onEditTags={() => setTagEditDoc(doc)}
+              />
+            ));
+          })()}
+        </div>
       </div>
 
 

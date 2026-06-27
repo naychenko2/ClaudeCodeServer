@@ -112,8 +112,11 @@ function TagsDialog({ doc, existingTags, onClose, onSave }: TagsDialogProps) {
   const handleSave = async () => {
     setSaving(true);
     setError(null);
+    // Фиксируем тег из поля ввода если не был добавлен через Enter
+    const pending = input.trim().toLowerCase();
+    const finalTags = pending && !tags.includes(pending) ? [...tags, pending] : tags;
     try {
-      await onSave(tags);
+      await onSave(finalTags);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка сохранения');

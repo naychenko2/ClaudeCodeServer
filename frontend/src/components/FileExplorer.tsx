@@ -31,6 +31,7 @@ interface Props {
   onOpenFile: (path: string) => void;
   activeFilePath?: string | null;
   isMobile?: boolean;
+  alwaysShowIcons?: boolean;
   onAddToKnowledge?: (relativePath: string) => void;
   indexedFileNames?: Set<string>;
   indexingFiles?: Set<string>;
@@ -181,7 +182,7 @@ function FilesRootEmptyState() {
   );
 }
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, onAddToKnowledge, indexedFileNames, indexingFiles, onAttachToChat, onOpenKnowledge }: Props) {
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, indexedFileNames, indexingFiles, onAttachToChat, onOpenKnowledge }: Props) {
   const online = useOnline();
   const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
@@ -501,7 +502,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               </svg>
             </span>
           ) : !isKnowledgeIndexable(entry.name) ? null
-          : isMobile || hoveredPath === entry.path ? (
+          : isMobile || alwaysShowIcons || hoveredPath === entry.path ? (
             <button
               onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
               title="Добавить в базу знаний"
@@ -533,7 +534,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             if (sstate === 'direct') {
               return <button onClick={e => handleToggleSync(entry, e)} title="Отключить синхронизацию" style={btnStyle}><CloudIcon variant="direct" /></button>;
             }
-            if (isMobile || hoveredPath === entry.path) {
+            if (isMobile || alwaysShowIcons || hoveredPath === entry.path) {
               return <button onClick={e => handleToggleSync(entry, e)} title="Синхронизировать для офлайна" style={btnStyle}><CloudIcon variant="idle" /></button>;
             }
             return null;

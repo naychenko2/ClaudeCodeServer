@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -33,6 +33,10 @@ import { base64ToBytes } from '../lib/binary';
 import { C, FONT, MODAL_W } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from './Toolbar';
 import { BackButton, Modal, ModalActions, Button, useIsMobileModal } from './ui';
+
+const CodeEditor = lazy(() =>
+  import('./CodeEditor').then(m => ({ default: m.CodeEditor }))
+);
 
 SyntaxHighlighter.registerLanguage('tsx', tsx);
 SyntaxHighlighter.registerLanguage('typescript', typescript);
@@ -500,6 +504,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   };
 
   const isOfficeFile = !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind !== 'pdf';
+  const isCodeEditing = editing && tab === 'file' && !fileContent?.isBinary && !fileContent?.isImage;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative' }}>
@@ -723,7 +728,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       )}
 
       {/* Содержимое */}
-      <div style={{ flex: 1, overflow: isOfficeFile ? 'hidden' : 'auto', padding: isOfficeFile ? 0 : 16, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing) ? 0 : 16, display: 'flex', flexDirection: 'column' }}>
         {loading && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 14 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', border: `3px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.8s linear infinite' }} />
@@ -868,8 +873,21 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
 
             {!fileContent?.isBinary && !fileContent?.isImage && (
               editing
-                ? <textarea value={editContent} onChange={e => setEditContent(e.target.value)}
-                    style={{ width: '100%', flex: 1, border: 'none', outline: 'none', resize: 'none', fontFamily: FONT.mono, fontSize: 13, lineHeight: 1.6, boxSizing: 'border-box', background: 'transparent' }} />
+                ? (
+                  <Suspense fallback={
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 10, color: C.textMuted, fontSize: 13 }}>
+                      <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2.5px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.7s linear infinite' }} />
+                      Загрузка редактора…
+                    </div>
+                  }>
+                    <CodeEditor
+                      key={filePath}
+                      value={editContent}
+                      onChange={setEditContent}
+                      filePath={filePath}
+                    />
+                  </Suspense>
+                )
                 : isMarkdown
                   ? <MarkdownViewer content={content} />
                   : <SyntaxHighlighter

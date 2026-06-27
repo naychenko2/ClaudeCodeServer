@@ -358,9 +358,6 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const [officeSwitching, setOfficeSwitching] = useState(false);
   const [officeDiscardConfirm, setOfficeDiscardConfirm] = useState(false);
   const [officeCacheKey, setOfficeCacheKey] = useState<string | undefined>();
-  // true пока ждём callback OO после «Сохранить» — OfficeViewer в view не монтируется
-  const [officeSaveWaiting, setOfficeSaveWaiting] = useState(false);
-  const [officeSaveOriginalMs, setOfficeSaveOriginalMs] = useState<number | null>(null);
   const [editContent, setEditContent] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [unsavedConfirm, setUnsavedConfirm] = useState(false);
@@ -382,8 +379,6 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
     setOfficeSwitching(false);
     setOfficeDiscardConfirm(false);
     setOfficeCacheKey(undefined);
-    setOfficeSaveWaiting(false);
-    setOfficeSaveOriginalMs(null);
     setLoading(true);
     setLoadError(false);
     setFileContent(null);
@@ -413,31 +408,6 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       api.files.getDiff(project.id, filePath).then(r => setDiff(r.diff)).catch(() => {});
     });
   }, [project.id, filePath, editing]);
-
-  // Polling после «Сохранить»: ждём пока OO callback запишет файл на диск
-  useEffect(() => {
-    if (!officeSaveWaiting || officeSaveOriginalMs === null) return;
-    const deadline = Date.now() + 15000;
-    const id = setInterval(async () => {
-      try {
-        const v = await api.files.getOfficeVersion(project.id, filePath);
-        if (v.ms !== officeSaveOriginalMs || Date.now() > deadline) {
-          clearInterval(id);
-          setOfficeSaveWaiting(false);
-          setOfficeSaveOriginalMs(null);
-          setOfficeCacheKey(String(Date.now()));
-        }
-      } catch {
-        if (Date.now() > deadline) {
-          clearInterval(id);
-          setOfficeSaveWaiting(false);
-          setOfficeSaveOriginalMs(null);
-          setOfficeCacheKey(String(Date.now()));
-        }
-      }
-    }, 500);
-    return () => clearInterval(id);
-  }, [officeSaveWaiting, officeSaveOriginalMs, project.id, filePath]);
 
   const handleToggleSync = () => {
     toggleSyncMark(project.id, {
@@ -646,14 +616,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
               <button
                 title="Сохранить"
                 onClick={async () => {
-                  let originalMs: number | null = null;
-                  try {
-                    const ver = await api.files.getOfficeVersion(project.id, filePath);
-                    originalMs = ver.ms;
-                  } catch { /* без версии — polling найдёт изменение по таймауту */ }
-                  setOfficeSaveOriginalMs(originalMs);
-                  setOfficeSaveWaiting(true);
                   setOfficeSwitching(true);
+                  await api.files.officeForceSave(project.id, filePath).catch(() => {});
+                  setOfficeCacheKey(String(Date.now()));
                   setOfficeMode('view');
                 }}
                 style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.08)', background: '#D97757', color: '#FFFFFF', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
@@ -896,19 +861,15 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             {/* Office-файлы (docx/xlsx/pptx) — через OnlyOffice Document Server */}
             {fileContent?.isDocument && fileContent.docKind !== 'pdf' && (
               <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-                {/* Не монтируем view OfficeViewer пока ждём OO callback после «Сохранить» */}
-                {!officeSaveWaiting && (
-                  <OfficeViewer
-                    key={`${filePath}-${officeMode}-${officeCacheKey ?? ''}`}
-                    projectId={project.id}
-                    filePath={filePath}
-                    mode={officeMode}
-                    cacheKey={officeCacheKey}
-                    onReady={() => setOfficeSwitching(false)}
-                  />
-                )}
-                {/* Оверлей загрузки при переключении режима */}
-                {(officeSwitching || officeSaveWaiting) && (
+                <OfficeViewer
+                  key={`${filePath}-${officeMode}-${officeCacheKey ?? ''}`}
+                  projectId={project.id}
+                  filePath={filePath}
+                  mode={officeMode}
+                  cacheKey={officeCacheKey}
+                  onReady={() => setOfficeSwitching(false)}
+                />
+                {officeSwitching && (
                   <div style={{ position: 'absolute', inset: 0, background: 'rgba(244,240,232,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
                     <span style={{ width: 32, height: 32, borderRadius: '50%', border: '3px solid #E0D7C8', borderTopColor: '#D97757', animation: 'spin 0.7s linear infinite' }} />
                   </div>

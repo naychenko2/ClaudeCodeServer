@@ -334,6 +334,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _activeEditKeys = new();
     // Ключи для игнорирования в callback (пользователь нажал «Отмена»)
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _discardedKeys = new();
+    // TCS для ожидания forceSave callback: docKey → TCS
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<bool>> _forceSavePending = new();
 
     // Вызывается OnlyOffice DS после сохранения документа пользователем.
     // status=2: документ готов, url — временная ссылка на изменённый файл.
@@ -373,9 +375,15 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 var client = httpClientFactory.CreateClient("proxy");
                 var bytes = await client.GetByteArrayAsync(payload.Url, ct);
                 files.WriteFileBytes(root, path, bytes);
+
+                // Разблокируем ожидающий office-force-save запрос
+                if (payload.Key != null && _forceSavePending.TryRemove(payload.Key, out var tcs))
+                    tcs.TrySetResult(true);
             }
             catch (Exception ex)
             {
+                if (payload.Key != null && _forceSavePending.TryRemove(payload.Key, out var tcs))
+                    tcs.TrySetException(new Exception(ex.Message));
                 return Ok(new { error = 1, message = ex.Message });
             }
         }
@@ -398,6 +406,48 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
+    }
+
+    // Принудительно сохраняет документ через OO Command API и ждёт callback.
+    // Вызывается фронтом при нажатии «Сохранить» — быстрее чем ждать savetimeoutdelay (5 с).
+    [HttpPost("office-force-save")]
+    public async Task<IActionResult> OfficeForceSave(
+        string projectId,
+        [FromQuery] string path,
+        [FromServices] IHttpClientFactory httpClientFactory,
+        CancellationToken ct)
+    {
+        var fileKey = $"{projectId}/{path}";
+        if (!_activeEditKeys.TryGetValue(fileKey, out var docKey))
+            return Ok(new { ok = false, reason = "no-session" });
+
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _forceSavePending[docKey] = tcs;
+
+        var ooUrl = config["OnlyOffice:ServerUrl"] ?? "http://localhost:8090";
+        try
+        {
+            var client = httpClientFactory.CreateClient();
+            var payload = System.Text.Json.JsonSerializer.Serialize(new { c = "forcesave", key = docKey });
+            await client.PostAsync($"{ooUrl}/coauthoring/CommandService.ashx",
+                new StringContent(payload, System.Text.Encoding.UTF8, "application/json"), ct);
+        }
+        catch { /* Command API недоступен — ждём таймаут */ }
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        linked.CancelAfter(TimeSpan.FromSeconds(10));
+        linked.Token.Register(() => tcs.TrySetCanceled());
+
+        try
+        {
+            await tcs.Task;
+            return Ok(new { ok = true });
+        }
+        catch (OperationCanceledException)
+        {
+            _forceSavePending.TryRemove(docKey, out _);
+            return Ok(new { ok = false, reason = "timeout" });
+        }
     }
 
     // Возвращает Unix-время последней записи файла (мс) — для polling после OO-сохранения.

@@ -109,6 +109,8 @@ export const api = {
       request<void>(`/projects/${projectId}/files/office-discard?path=${encodeURIComponent(path)}`, { method: 'POST' }),
     getOfficeVersion: (projectId: string, path: string) =>
       request<{ ms: number }>(`/projects/${projectId}/files/office-version?path=${encodeURIComponent(path)}`),
+    officeForceSave: (projectId: string, path: string) =>
+      request<{ ok: boolean; reason?: string }>(`/projects/${projectId}/files/office-force-save?path=${encodeURIComponent(path)}`, { method: 'POST' }),
     upload: async (projectId: string, file: File, targetPath = ''): Promise<void> => {
       const token = typeof localStorage !== 'undefined'
         ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))

@@ -1116,8 +1116,13 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           setShowCreateDir(true);
         };
 
+        const sstate = computeSyncState(marks, entry.path);
+        const offlineLabel = sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн';
+        const canToggleOffline = online && sstate !== 'inherited';
+        const doToggleOffline = () => { setContextMenu(null); toggleSyncMark(project.id, entry); };
+
         // Мобила — bottom sheet
-        if (isMobile) {
+        if (isMobile || alwaysShowIcons) {
           return (
             <>
               <div
@@ -1141,7 +1146,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 </div>
                 {!entry.isDirectory && onAttachToChat && menuItem('Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
                 {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem('Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
-                {(!entry.isDirectory && (onAttachToChat || onAddToKnowledge)) && <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />}
+                {canToggleOffline && menuItem(offlineLabel, doToggleOffline)}
+                <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />
                 {online && menuItem('Переименовать', () => startRename(entry))}
                 {online && menuItem('Создать файл здесь', openCreateFile)}
                 {online && menuItem('Создать папку здесь', openCreateDir)}
@@ -1165,16 +1171,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               borderRadius: R.lg,
               boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
               padding: 4,
-              minWidth: 180,
+              minWidth: 190,
             }}
           >
             {!entry.isDirectory && onAttachToChat && menuItem('📎 Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
             {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem('📖 Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
-            {!entry.isDirectory && (onAttachToChat || onAddToKnowledge) && <div style={{ height: 1, background: C.border, margin: '4px 0' }} />}
+            {canToggleOffline && menuItem(sstate === 'direct' ? '☁ Убрать из офлайна' : '☁ Сохранить офлайн', doToggleOffline)}
+            <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
             {online && menuItem('✏ Переименовать', () => startRename(entry))}
             {online && menuItem('📄 Создать файл здесь', openCreateFile)}
             {online && menuItem('📁 Создать папку здесь', openCreateDir)}
-            {online && <div style={{ height: 1, background: C.border, margin: '4px 0' }} />}
+            <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
             {online && menuItem('🗑 Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
           </div>
         );

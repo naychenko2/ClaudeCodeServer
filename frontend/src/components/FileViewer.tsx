@@ -729,7 +729,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
 
             {/* Office-файлы (docx/xlsx/pptx) — через OnlyOffice Document Server */}
             {fileContent?.isDocument && fileContent.docKind !== 'pdf' && (
-              <OfficeViewer projectId={project.id} filePath={filePath} />
+              <OfficeViewer key={filePath} projectId={project.id} filePath={filePath} />
             )}
 
             {fileContent?.isBinary && !fileContent.isImage && !fileContent.isVideo && !fileContent.isAudio && !fileContent.isDocument && (

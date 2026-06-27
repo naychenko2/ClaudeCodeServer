@@ -35,13 +35,26 @@ const DOC_TYPES: Record<string, string> = {
   pptx: 'slide', ppt: 'slide',
 };
 
+let ooIdCounter = 0;
+
 export function OfficeViewer({ projectId, filePath }: Props) {
-  const containerId = useRef(`oo-${Math.random().toString(36).slice(2)}`);
+  // React управляет только этим wrapper-div.
+  // Div для OO создаём через нативный DOM — React о нём не знает
+  // и не пытается делать removeChild на дочерних элементах которые OO добавил.
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<{ destroyEditor: () => void } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    const containerId = `oo-${++ooIdCounter}`;
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+
+    const container = document.createElement('div');
+    container.id = containerId;
+    container.style.cssText = 'width:100%;height:100%';
+    wrapper.appendChild(container);
 
     async function init() {
       setError(null);
@@ -64,9 +77,8 @@ export function OfficeViewer({ projectId, filePath }: Props) {
         return;
       }
 
-      // Загружаем JS API OnlyOffice DS, если ещё не загружен
-      const apiScript = `${cfg.serverUrl}/web-apps/apps/api/documents/api.js`;
       if (!window.DocsAPI) {
+        const apiScript = `${cfg.serverUrl}/web-apps/apps/api/documents/api.js`;
         await new Promise<void>((resolve, reject) => {
           const s = document.createElement('script');
           s.src = apiScript;
@@ -81,7 +93,7 @@ export function OfficeViewer({ projectId, filePath }: Props) {
       const ext = cfg.document.fileType;
       const docType = DOC_TYPES[ext] ?? 'word';
 
-      editorRef.current = new window.DocsAPI.DocEditor(containerId.current, {
+      editorRef.current = new window.DocsAPI.DocEditor(containerId, {
         document: cfg.document,
         editorConfig: cfg.editorConfig,
         documentType: docType,
@@ -94,8 +106,16 @@ export function OfficeViewer({ projectId, filePath }: Props) {
 
     return () => {
       cancelled = true;
-      editorRef.current?.destroyEditor();
-      editorRef.current = null;
+      // destroyEditor в try/catch — он может бросить если OO уже внутри что-то сломалось
+      if (editorRef.current) {
+        try { editorRef.current.destroyEditor(); } catch { /* игнорируем */ }
+        editorRef.current = null;
+      }
+      // Убираем OO-div через тот же нативный DOM которым добавляли —
+      // React ничего не знает об этом div и не конфликтует.
+      if (wrapper.contains(container)) {
+        wrapper.removeChild(container);
+      }
     };
   }, [projectId, filePath]);
 
@@ -107,5 +127,5 @@ export function OfficeViewer({ projectId, filePath }: Props) {
     );
   }
 
-  return <div id={containerId.current} style={{ width: '100%', height: '100%', minHeight: 400 }} />;
+  return <div ref={wrapperRef} style={{ width: '100%', height: '100%', minHeight: 400 }} />;
 }

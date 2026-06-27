@@ -149,6 +149,11 @@ export default function App() {
     navPush({ screen: 'project', project: p, view: 'sidebar', file: null })
     setProject(p)
   }
+  const goToProjects = () => {
+    localStorage.removeItem(OPEN_PROJECT_KEY)
+    navReplace({ screen: 'projects' })
+    setProject(null)
+  }
   const logout = () => {
     localStorage.removeItem('cc_token')
     localStorage.removeItem('cc_username')
@@ -173,7 +178,7 @@ export default function App() {
         : !auth
           ? <LoginPage onConnect={setAuth} />
           : project
-            ? <WorkspacePage project={project} onBack={() => window.history.back()} />
+            ? <WorkspacePage project={project} onGoToProjects={goToProjects} />
             : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} />
       }
     </>

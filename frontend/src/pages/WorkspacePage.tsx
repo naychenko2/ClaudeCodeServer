@@ -18,7 +18,7 @@ import { EditDialog } from '../features/projects/dialogs/EditDialog';
 
 interface Props {
   project: Project;
-  onBack: () => void;
+  onGoToProjects: () => void;
 }
 
 type LeftTab = 'sessions' | 'files' | 'knowledge';
@@ -90,7 +90,7 @@ function Splitter({ orientation, active, onMouseDown }: {
   );
 }
 
-export function WorkspacePage({ project, onBack }: Props) {
+export function WorkspacePage({ project, onGoToProjects }: Props) {
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => loadWorkspaceState(project.id)?.leftTab ?? 'sessions');
   const [activeSession, setActiveSession] = useState<Session | null>(() => loadWorkspaceState(project.id)?.activeSession ?? null);
@@ -333,7 +333,7 @@ export function WorkspacePage({ project, onBack }: Props) {
       {!isMobile && (
         <div style={{ padding: '16px 16px 14px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 15, padding: '0 2px' }}>
-            <div onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, cursor: 'pointer' }}>
+            <div onClick={onGoToProjects} style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, cursor: 'pointer' }}>
               <div style={{ width: 28, height: 28, borderRadius: 8, background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                 <svg width="16" height="16" viewBox="0 0 512 512" fill="none">
                   <g stroke="#FFFFFF" strokeWidth="52" strokeLinecap="round" fill="none">
@@ -383,7 +383,7 @@ export function WorkspacePage({ project, onBack }: Props) {
       </div>
       {/* Project footer */}
       <div style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 10, background: C.bgInset, flexShrink: 0 }}>
-        <div onClick={onBack} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', minWidth: 0, paddingRight: 4 }}>
+        <div onClick={onGoToProjects} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', minWidth: 0, paddingRight: 4 }}>
           <ConnectionStatus variant="footer" title={projectForEdit.name} subtitle={projectForEdit.relativePath ?? projectForEdit.rootPath} />
         </div>
         <button
@@ -423,7 +423,7 @@ export function WorkspacePage({ project, onBack }: Props) {
             самодостаточная шапка ChatHeaderBar с кнопкой «назад»; у файла — шапка FileViewer */}
         {!openFile && mobileView === 'sidebar' && (
           <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.border}`, background: C.bgPanel, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-            <BackButton onClick={onBack} title={project.name} style={{ flex: 1, minHeight: 40 }}>
+            <BackButton onClick={onGoToProjects} title={project.name} style={{ flex: 1, minHeight: 40 }}>
               <span style={{ fontWeight: 700, fontSize: 15, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</span>
             </BackButton>
             <PillSwitch<LeftTab>
@@ -449,7 +449,7 @@ export function WorkspacePage({ project, onBack }: Props) {
             }
           </div>
           <div style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 10, background: C.bgInset, flexShrink: 0 }}>
-            <div onClick={onBack} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', minWidth: 0, paddingRight: 4 }}>
+            <div onClick={onGoToProjects} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', minWidth: 0, paddingRight: 4 }}>
               <ConnectionStatus variant="footer" title={projectForEdit.name} subtitle={projectForEdit.relativePath ?? projectForEdit.rootPath} />
             </div>
             <button

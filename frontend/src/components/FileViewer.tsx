@@ -335,6 +335,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const [diff, setDiff] = useState<string | null>(null);
   const [tab, setTab] = useState<ViewTab>('file');
   const [editing, setEditing] = useState(false);
+  const [officeMode, setOfficeMode] = useState<'view' | 'edit'>('view');
+  const [officeSwitching, setOfficeSwitching] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [unsavedConfirm, setUnsavedConfirm] = useState(false);
@@ -352,6 +354,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   useEffect(() => {
     setEditing(false);
     setTab('file');
+    setOfficeMode('view');
+    setOfficeSwitching(false);
     setLoading(true);
     setLoadError(false);
     setFileContent(null);
@@ -510,13 +514,50 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
           </span>
         )}
 
-        {/* Pill-переключатель Файл / Diff */}
-        <PillSwitch<ViewTab>
-          value={tab}
-          options={[{ value: 'file', label: 'Файл' }, { value: 'diff', label: 'Diff' }]}
-          onChange={setTab}
-          isMobile={isMobile}
-        />
+        {/* Pill-переключатель Файл / Diff — скрыт для Office-файлов */}
+        {!isOfficeFile && (
+          <PillSwitch<ViewTab>
+            value={tab}
+            options={[{ value: 'file', label: 'Файл' }, { value: 'diff', label: 'Diff' }]}
+            onChange={setTab}
+            isMobile={isMobile}
+          />
+        )}
+
+        {/* Переключатель режима просмотра/редактирования для Office-файлов */}
+        {isOfficeFile && (
+          officeSwitching ? (
+            // Загрузка
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid #E0D7C8', background: '#E0D7C8', color: 'rgba(57,51,43,0.4)', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
+              <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(57,51,43,0.2)', borderTopColor: 'rgba(57,51,43,0.4)', animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
+              {!isMobile && <span>Открываю…</span>}
+            </div>
+          ) : officeMode === 'view' ? (
+            // Кнопка «Редактировать»
+            <button
+              title="Редактировать"
+              onClick={() => { setOfficeSwitching(true); setOfficeMode('edit'); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid #E0D7C8', background: '#EDE7DC', color: '#39332B', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.7 }}>
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+              {!isMobile && <span>Редактировать</span>}
+            </button>
+          ) : (
+            // Кнопка «Редактирование • ×»
+            <button
+              title="Выйти из редактирования"
+              onClick={() => { setOfficeSwitching(true); setOfficeMode('view'); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.12)', background: '#D97757', color: '#FFFFFF', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'rgba(255,255,255,0.85)', flexShrink: 0 }} />
+              {!isMobile && <span>Редактирование</span>}
+              <span style={{ fontSize: 14, lineHeight: 1, opacity: 0.85 }}>×</span>
+            </button>
+          )
+        )}
 
         {/* Кнопки действий */}
         <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
@@ -731,7 +772,21 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
 
             {/* Office-файлы (docx/xlsx/pptx) — через OnlyOffice Document Server */}
             {fileContent?.isDocument && fileContent.docKind !== 'pdf' && (
-              <OfficeViewer key={filePath} projectId={project.id} filePath={filePath} />
+              <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+                <OfficeViewer
+                  key={`${filePath}-${officeMode}`}
+                  projectId={project.id}
+                  filePath={filePath}
+                  mode={officeMode}
+                  onReady={() => setOfficeSwitching(false)}
+                />
+                {/* Оверлей загрузки при переключении режима */}
+                {officeSwitching && (
+                  <div style={{ position: 'absolute', inset: 0, background: 'rgba(244,240,232,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
+                    <span style={{ width: 32, height: 32, borderRadius: '50%', border: '3px solid #E0D7C8', borderTopColor: '#D97757', animation: 'spin 0.7s linear infinite' }} />
+                  </div>
+                )}
+              </div>
             )}
 
             {fileContent?.isBinary && !fileContent.isImage && !fileContent.isVideo && !fileContent.isAudio && !fileContent.isDocument && (

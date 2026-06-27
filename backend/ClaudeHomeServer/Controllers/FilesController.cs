@@ -254,7 +254,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
     // Возвращает конфиг для DocsAPI.DocEditor: URL сервера DS и параметры документа.
     [HttpGet("office-config")]
-    public IActionResult OfficeConfig(string projectId, [FromQuery] string path)
+    public IActionResult OfficeConfig(string projectId, [FromQuery] string path, [FromQuery] string mode = "view")
     {
         try
         {
@@ -275,19 +275,21 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
             var downloadUrl = $"{backendUrl}/api/projects/{projectId}/files/office-download" +
                               $"?path={Uri.EscapeDataString(path)}&token={Uri.EscapeDataString(token)}";
-            var callbackUrl = $"{backendUrl}/api/projects/{projectId}/files/office-callback" +
-                              $"?path={Uri.EscapeDataString(path)}&token={Uri.EscapeDataString(token)}";
+            var callbackUrl = mode == "edit"
+                ? $"{backendUrl}/api/projects/{projectId}/files/office-callback" +
+                  $"?path={Uri.EscapeDataString(path)}&token={Uri.EscapeDataString(token)}"
+                : (string?)null;
 
             return Ok(new {
                 serverUrl,
                 document = new {
                     fileType = ext,
-                    key,
+                    key = $"{key}-{mode}", // разные ключи для view/edit — DS не путает кеши
                     title = fileName,
                     url = downloadUrl,
                 },
                 editorConfig = new {
-                    mode = "edit",
+                    mode,
                     lang = "ru",
                     callbackUrl,
                     customization = new {

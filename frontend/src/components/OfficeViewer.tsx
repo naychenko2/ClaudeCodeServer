@@ -10,6 +10,8 @@ interface OfficeConfig {
 interface Props {
   projectId: string;
   filePath: string;
+  mode?: 'view' | 'edit';
+  onReady?: () => void;
 }
 
 declare global {
@@ -143,7 +145,7 @@ const CLAUDE_HOME_THEME = {
 
 let ooIdCounter = 0;
 
-export function OfficeViewer({ projectId, filePath }: Props) {
+export function OfficeViewer({ projectId, filePath, mode = 'view', onReady }: Props) {
   // React управляет только этим wrapper-div.
   // Div для OO создаём через нативный DOM — React о нём не знает
   // и не пытается делать removeChild на дочерних элементах которые OO добавил.
@@ -173,7 +175,7 @@ export function OfficeViewer({ projectId, filePath }: Props) {
       let cfg: OfficeConfig;
       try {
         const res = await fetch(
-          `/api/projects/${encodeURIComponent(projectId)}/files/office-config?path=${encodeURIComponent(filePath)}`,
+          `/api/projects/${encodeURIComponent(projectId)}/files/office-config?path=${encodeURIComponent(filePath)}&mode=${mode}`,
           { headers }
         );
         if (!res.ok) throw new Error(`config ${res.status}`);
@@ -202,20 +204,32 @@ export function OfficeViewer({ projectId, filePath }: Props) {
       const ext = cfg.document.fileType;
       const docType = DOC_TYPES[ext] ?? 'word';
 
+      let readyCalled = false;
+      const callReady = () => {
+        if (readyCalled || cancelled) return;
+        readyCalled = true;
+        onReady?.();
+      };
+
       editorRef.current = new window.DocsAPI.DocEditor(containerId, {
         document: cfg.document,
         editorConfig: cfg.editorConfig,
         documentType: docType,
         height: '100%',
         width: '100%',
+        events: {
+          // onDocumentReady — основной триггер (работает в любом режиме, не зависит от origin)
+          onDocumentReady: callReady,
+        },
       });
 
-      // Polling: ждём пока OO создаст iframe и body получит класс темы, затем инжектируем наш CSS.
-      // Прямая инъекция <style> надёжнее чем Themes.setTheme (у setTheme race condition при init).
+      // Polling: пробуем инжектировать CSS темы (работает только на том же origin).
+      // Если cross-origin (dev-режим), просто тихо выходим. onReady уже обработан через события выше.
       const themeInterval = setInterval(() => {
         if (cancelled) { clearInterval(themeInterval); return; }
         const iframe = document.querySelector<HTMLIFrameElement>('iframe');
-        const idoc = iframe?.contentDocument;
+        let idoc: Document | null = null;
+        try { idoc = iframe?.contentDocument ?? null; } catch { clearInterval(themeInterval); return; }
         if (!idoc?.body || !idoc.head) return;
         // Ждём пока OO установит класс темы на body
         if (!idoc.body.classList.contains('theme-claude-home')) return;
@@ -228,7 +242,7 @@ export function OfficeViewer({ projectId, filePath }: Props) {
         style.textContent = `.theme-claude-home{${css}} section.logo,div.logo-light{display:none!important}`;
         idoc.head.appendChild(style);
       }, 300);
-      setTimeout(() => clearInterval(themeInterval), 30000);
+      setTimeout(() => { clearInterval(themeInterval); callReady(); }, 30000);
     }
 
     init();

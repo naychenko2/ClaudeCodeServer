@@ -717,8 +717,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // items.length > 0: не показывать спиннер на пустом чате до первого сообщения.
   const showWaiting =
     items.length > 0
-    && (isWaiting || session.status === 'working' || session.status === 'starting'
-      || items.some(it => it.kind === 'tool_use' && it.result === undefined))
+    && (isWaiting || session.status === 'working' || session.status === 'starting')
     && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review' || it.kind === 'ask_question') && !it.resolved);
 
   // Номера версий plan_review: счётчик с последнего user_message включительно (1, 2, …).

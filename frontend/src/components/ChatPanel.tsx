@@ -32,7 +32,7 @@ interface Props {
   onAgentChange?: (agent: AgentInfo | null) => void;
   attachedFiles: string[];
   onAttachedFilesChange: (files: string[]) => void;
-  onResume?: () => void;
+  onResume?: (message?: string) => void;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -1079,31 +1079,39 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         )}
 
         {/* Баннер прерванной сессии — в конце ленты, после истории */}
-        {session.status === 'orphaned' && !isHistoryLoading && (
-          <div style={{
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-            padding: '20px 16px', marginTop: 8,
-            background: C.bgPanel, borderRadius: 12,
-            border: `1px solid ${C.border}`,
-          }}>
-            <span style={{ fontSize: 13, color: C.textSecondary, textAlign: 'center' }}>
-              Чат был прерван при перезапуске сервера. История сохранена.
-            </span>
-            {onResume && (
-              <button
-                onClick={onResume}
-                style={{
-                  padding: '8px 20px', borderRadius: 10, fontSize: 13, fontWeight: 600,
-                  background: C.accent, border: 'none', cursor: 'pointer', color: C.onAccent,
-                }}
-                onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}
-                onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
-              >
-                Возобновить
-              </button>
-            )}
-          </div>
-        )}
+        {session.status === 'orphaned' && !isHistoryLoading && (() => {
+          const hasPending = items.some(it =>
+            (it.kind === 'ask_question' || it.kind === 'permission_request' || it.kind === 'plan_review')
+            && !it.resolved
+          );
+          return (
+            <div style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+              padding: '20px 16px', marginTop: 8,
+              background: C.bgPanel, borderRadius: 12,
+              border: `1px solid ${C.border}`,
+            }}>
+              <span style={{ fontSize: 13, color: C.textSecondary, textAlign: 'center' }}>
+                {hasPending
+                  ? 'Чат ожидал вашего ответа. После возобновления ответьте на незакрытый запрос.'
+                  : 'Чат был прерван при перезапуске сервера. Claude продолжит с того же места.'}
+              </span>
+              {onResume && (
+                <button
+                  onClick={() => onResume(hasPending ? undefined : 'Продолжи')}
+                  style={{
+                    padding: '8px 20px', borderRadius: 10, fontSize: 13, fontWeight: 600,
+                    background: C.accent, border: 'none', cursor: 'pointer', color: C.onAccent,
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}
+                  onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
+                >
+                  Возобновить
+                </button>
+              )}
+            </div>
+          );
+        })()}
 
         <div ref={bottomRef} />
       </div></div>

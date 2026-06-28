@@ -224,12 +224,12 @@ const windowWidth = useWindowWidth();
     setActiveSession(prev => (prev?.id === updated.id ? updated : prev));
   };
 
-  const handleResume = useCallback(async () => {
+  const handleResume = useCallback(async (message?: string) => {
     if (!activeSession || activeSession.status !== 'orphaned') return;
     try {
       const s = await api.sessions.create(project.id, activeSession.mode, activeSession.claudeSessionId ?? undefined, undefined, activeSession.model ?? undefined, activeSession.agentName ?? undefined);
       await api.sessions.delete(project.id, activeSession.id);
-      handleSelectSession(s, 'Продолжи');
+      handleSelectSession(s, message);
     } catch { /* офлайн или сбой — ничего не меняем */ }
   }, [activeSession, project.id]);
 

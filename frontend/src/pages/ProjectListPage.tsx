@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
-import type { Project, AuthState } from '../types';
+import { useEffect, useState } from 'react';
+import type { Project, Session, AuthState } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
@@ -29,11 +29,12 @@ interface Props {
 export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
   const online = useOnline();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [activeSessions, setActiveSessions] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'offline' | 'error'>('loading');
   const [retryKey, setRetryKey] = useState(0);
-  const [copiedProjects, setCopiedProjects] = useState(false);
+
   const [showUserMgmt, setShowUserMgmt] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
 
@@ -41,18 +42,24 @@ export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
   const username = auth?.username ?? '';
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';
 
-  const handleCopyProjects = useCallback(() => {
-    const url = `${window.location.origin}/projects/`;
-    navigator.clipboard.writeText(url).then(() => {
-      setCopiedProjects(true);
-      setTimeout(() => setCopiedProjects(false), 1500);
-    });
-  }, []);
 
   useEffect(() => {
     setLoadState('loading');
     api.projects.list()
-      .then(list => { setProjects(list); setLoadState('ok'); })
+      .then(async list => {
+        setProjects(list);
+        setLoadState('ok');
+        // Параллельно проверяем активные сессии
+        const ACTIVE = new Set(['starting', 'working', 'active', 'waiting']);
+        const results = await Promise.allSettled(list.map(p => api.sessions.list(p.id)));
+        const ids = new Set<string>();
+        results.forEach((r, i) => {
+          if (r.status === 'fulfilled' && (r.value as Session[]).some((s: Session) => ACTIVE.has(s.status))) {
+            ids.add(list[i].id);
+          }
+        });
+        setActiveSessions(ids);
+      })
       .catch(e => setLoadState(e instanceof OfflineError ? 'offline' : 'error'));
   // При возврате в онлайн или ручном retry — перезагружаем список
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -62,6 +69,12 @@ export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
     p.name.toLowerCase().includes(search.toLowerCase()) ||
     p.rootPath.toLowerCase().includes(search.toLowerCase())
   );
+
+  // Сортировка: активные сверху, внутри каждой группы — по дате обновления
+  const activeProjects = filtered.filter(p => activeSessions.has(p.id))
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  const otherProjects = filtered.filter(p => !activeSessions.has(p.id))
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
   const closeDialog = () => setActiveDialog(null);
 
@@ -169,12 +182,43 @@ export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
         <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 14, paddingRight: 6 }}>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-          {filtered.map((p, index) => (
+          {/* Секция: активные проекты */}
+          {activeProjects.length > 0 && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 2px 2px' }}>
+                <span className="pc-pulse" style={{ width: 7, height: 7, borderRadius: '50%', background: C.accent, flexShrink: 0 }} />
+                <style>{`@keyframes pc-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.5;transform:scale(1.15)}} .pc-pulse{animation:pc-pulse 1.5s ease-in-out infinite}`}</style>
+                <span style={{ fontSize: 11, fontWeight: 700, color: C.accent, letterSpacing: '0.06em', textTransform: 'uppercase', fontFamily: FONT.sans }}>Активные</span>
+              </div>
+              {activeProjects.map((p, index) => (
+                <ProjectCard
+                  key={p.id}
+                  project={p}
+                  index={index}
+                  online={online}
+                  hasActiveSession
+                  onOpen={onOpen}
+                  onEdit={(p, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: p }); }}
+                  onDelete={p => setActiveDialog({ type: 'delete', project: p })}
+                />
+              ))}
+              {otherProjects.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 2px 2px' }}>
+                  <div style={{ flex: 1, height: 1, background: C.border }} />
+                  <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, letterSpacing: '0.05em', textTransform: 'uppercase', fontFamily: FONT.sans, flexShrink: 0 }}>Остальные</span>
+                  <div style={{ flex: 1, height: 1, background: C.border }} />
+                </div>
+              )}
+            </>
+          )}
+          {/* Секция: остальные проекты */}
+          {otherProjects.map((p, index) => (
             <ProjectCard
               key={p.id}
               project={p}
-              index={index}
+              index={index + activeProjects.length}
               online={online}
+              hasActiveSession={false}
               onOpen={onOpen}
               onEdit={(p, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: p }); }}
               onDelete={p => setActiveDialog({ type: 'delete', project: p })}
@@ -213,31 +257,6 @@ export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
           </div>
         )}
 
-        {online && (
-          <div style={{ marginTop: 20, padding: '12px 14px', background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xl }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, letterSpacing: '0.06em', marginBottom: 8 }}>
-              ПАПКА ДЛЯ ЛОКАЛЬНОЙ РАБОТЫ
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '7px 10px' }}>
-              <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {`${window.location.origin}/projects/`}
-              </span>
-              <button
-                onClick={handleCopyProjects}
-                title="Скопировать URL"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: copiedProjects ? '#3F7A4F' : C.textMuted, flexShrink: 0 }}
-              >
-                {copiedProjects
-                  ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                  : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                }
-              </button>
-            </div>
-            <div style={{ marginTop: 7, fontSize: 11.5, color: C.textMuted, lineHeight: 1.5 }}>
-              Подключите как сетевой диск — все проекты будут доступны как папки. Войти как <span style={{ fontFamily: FONT.mono }}>username:password</span>.
-            </div>
-          </div>
-        )}
 
         </div>{/* конец прокручиваемой области */}
       </div>

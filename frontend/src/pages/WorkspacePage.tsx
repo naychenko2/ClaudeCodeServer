@@ -6,7 +6,6 @@ import { ChatPanel } from '../components/ChatPanel';
 import { FileViewer } from '../components/FileViewer';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { SkillsPanel } from '../components/SkillsPanel';
-import { ConnectionStatus } from '../components/ConnectionStatus';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
 import { api } from '../lib/api';
@@ -385,8 +384,8 @@ const windowWidth = useWindowWidth();
           </div>
           {/* Строка проекта: имя + кнопка настроек */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 13, padding: '0 2px' }}>
-            <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.accent, flexShrink: 0 }} />
-            <span style={{ fontSize: 12.5, fontWeight: 600, color: C.textSecondary, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.accent, flexShrink: 0 }} />
+            <span style={{ fontSize: 13, fontWeight: 500, color: C.textPrimary, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {projectForEdit.name}
             </span>
             <button
@@ -397,6 +396,22 @@ const windowWidth = useWindowWidth();
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3"/>
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+            </button>
+            <button
+              onClick={() => setShowSkillsModal(true)}
+              title="Скиллы и агенты"
+              style={{ width: 22, height: 22, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"/>
+                <path d="m14 7 3 3"/>
+                <path d="M5 6v4"/>
+                <path d="M19 14v4"/>
+                <path d="M10 2v2"/>
+                <path d="M7 8H3"/>
+                <path d="M21 16h-4"/>
+                <path d="M11 3H9"/>
               </svg>
             </button>
           </div>
@@ -423,38 +438,6 @@ const windowWidth = useWindowWidth();
           </div>
         )}
       </div>
-      {/* Project footer */}
-      <div style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 10, background: C.bgInset, flexShrink: 0 }}>
-        <div onClick={onGoToProjects} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', minWidth: 0, paddingRight: 4 }}>
-          <ConnectionStatus variant="footer" title={projectForEdit.name} subtitle={projectForEdit.relativePath ?? projectForEdit.rootPath} />
-        </div>
-        <button
-          onClick={() => setEditProjectOpen(true)}
-          title="Настройки проекта"
-          style={{ width: 28, height: 28, border: 'none', borderRadius: 7, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-          </svg>
-        </button>
-        <button
-          onClick={() => setShowSkillsModal(true)}
-          title="Скиллы и агенты"
-          style={{ width: 28, height: 28, border: 'none', borderRadius: 7, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"/>
-            <path d="m14 7 3 3"/>
-            <path d="M5 6v4"/>
-            <path d="M19 14v4"/>
-            <path d="M10 2v2"/>
-            <path d="M7 8H3"/>
-            <path d="M21 16h-4"/>
-            <path d="M11 3H9"/>
-          </svg>
-        </button>
-      </div>
     </div>
   );
 
@@ -477,6 +460,22 @@ const windowWidth = useWindowWidth();
               onChange={handleTabSwitch}
               isMobile
             />
+            <button
+              onClick={() => setShowSkillsModal(true)}
+              title="Скиллы и агенты"
+              style={{ width: 34, height: 34, border: 'none', borderRadius: 9, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"/>
+                <path d="m14 7 3 3"/>
+                <path d="M5 6v4"/>
+                <path d="M19 14v4"/>
+                <path d="M10 2v2"/>
+                <path d="M7 8H3"/>
+                <path d="M21 16h-4"/>
+                <path d="M11 3H9"/>
+              </svg>
+            </button>
           </div>
         )}
         {/* Sidebar — ВСЕГДА в DOM: FileExplorer не теряет текущий путь при смене вида */}
@@ -493,37 +492,6 @@ const windowWidth = useWindowWidth();
                 </div>
               )
             }
-          </div>
-          <div style={{ padding: '11px 14px', borderTop: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 10, background: C.bgInset, flexShrink: 0 }}>
-            <div onClick={onGoToProjects} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', minWidth: 0, paddingRight: 4 }}>
-              <ConnectionStatus variant="footer" title={projectForEdit.name} subtitle={projectForEdit.relativePath ?? projectForEdit.rootPath} />
-            </div>
-            <button
-              onClick={() => setEditProjectOpen(true)}
-              title="Настройки проекта"
-              style={{ width: 28, height: 28, border: 'none', borderRadius: 7, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
-            </button>
-            <button
-              onClick={() => setShowSkillsModal(true)}
-              title="Скиллы и агенты"
-              style={{ width: 28, height: 28, border: 'none', borderRadius: 7, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"/>
-                <path d="m14 7 3 3"/>
-                <path d="M5 6v4"/>
-                <path d="M19 14v4"/>
-                <path d="M10 2v2"/>
-                <path d="M7 8H3"/>
-                <path d="M21 16h-4"/>
-                <path d="M11 3H9"/>
-              </svg>
-            </button>
           </div>
         </div>
         {/* Чат — ВСЕГДА в DOM */}

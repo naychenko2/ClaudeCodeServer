@@ -685,7 +685,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       const it = items[i];
       if (it.kind !== 'tool_use') continue;
       const wf = it as ToolUseItem;
-      if (wf.name.toLowerCase() !== 'workflow' || wf.workflowDone === true) continue;
+      if (wf.name.toLowerCase() !== 'workflow' || wf.workflowDone === true || wf.result !== undefined) continue;
       const meta = parseWorkflowMeta(wf.input);
       const phases = meta?.phases ?? [];
       if (phases.length === 0) return { phasesDone: 0, phasesTotal: 0 };
@@ -718,7 +718,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     items.length > 0
     && (isWaiting || session.status === 'working' || session.status === 'starting'
       || items.some(it => it.kind === 'tool_use' && it.result === undefined))
-    && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review') && !it.resolved);
+    && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review' || it.kind === 'ask_question') && !it.resolved);
 
   // Номера версий plan_review: счётчик с последнего user_message включительно (1, 2, …).
   // Также помечаем, был ли в текущем ходе отклонённый план — тогда показываем бейдж даже для v1.
@@ -786,6 +786,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onOpenFile={onOpenFile}
       onRevert={path => api.files.revert(project.id, path)}
       onRetry={handleRetry}
+      onInterrupt={interrupt}
     />
   );
 
@@ -2334,10 +2335,11 @@ function ChoiceMarker({ multi, selected }: { multi: boolean; selected: boolean }
   );
 }
 
-function AskQuestionView({ item, online, onAnswer }: {
+function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
   item: Extract<ChatItem, { kind: 'ask_question' }>;
   online: boolean;
   onAnswer: (toolUseId: string, answerText: string) => void;
+  onInterrupt?: () => void;
 }) {
   const questions = (() => {
     const q = (item.input as { questions?: unknown } | null)?.questions;
@@ -2485,6 +2487,12 @@ function AskQuestionView({ item, online, onAnswer }: {
   const secBtn = (label: string, onClick: () => void): React.ReactNode => (
     <button onClick={onClick} style={{ flex: 1, minHeight: 44, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textHeading, borderRadius: 9, padding: '9px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>{label}</button>
   );
+  const interruptBtn = (): React.ReactNode => onInterrupt ? (
+    <button onClick={onInterrupt}
+      style={{ minHeight: 44, background: 'none', border: `1px solid ${C.border}`, color: C.textMuted, borderRadius: 9, padding: '9px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
+      Прервать
+    </button>
+  ) : null;
   const answerBtn = (full: boolean): React.ReactNode => (
     <button onClick={submit} disabled={!allAnswered}
       style={{ flex: full ? undefined : 1, width: full ? '100%' : undefined, minHeight: 44, background: C.accent, color: C.onAccent, borderRadius: 9, padding: '9px 16px', border: 'none', cursor: allAnswered ? 'pointer' : 'default', fontSize: 13, fontWeight: 600, opacity: allAnswered ? 1 : 0.5 }}>Ответить</button>
@@ -2541,9 +2549,13 @@ function AskQuestionView({ item, online, onAnswer }: {
             : activeTab < questions.length - 1
               ? secBtn('Далее ›', () => setActiveTab(t => t + 1))
               : answerBtn(false)}
+          {interruptBtn()}
         </div>
       ) : (
-        answerBtn(true)
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}>{answerBtn(true)}</div>
+          {interruptBtn()}
+        </div>
       )}
     </div>
   );
@@ -2840,9 +2852,10 @@ interface ItemProps {
   onOpenFile: (path: string) => void;
   onRevert: (path: string) => void;
   onRetry: () => void;
+  onInterrupt: () => void;
 }
 
-function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchToAuto, onOpenFile, onRevert, onRetry }: ItemProps) {
+function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchToAuto, onOpenFile, onRevert, onRetry, onInterrupt }: ItemProps) {
   const project = useContext(ChatProjectContext);
   switch (item.kind) {
     case 'user_message':
@@ -2963,7 +2976,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
       return item.name === 'TodoWrite' ? <TodoPlanView input={item.input} /> : <ToolUseView item={item} online={online} />;
 
     case 'ask_question':
-      return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} />;
+      return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} onInterrupt={onInterrupt} />;
 
     case 'plan_review':
       return <PlanReviewView item={item} online={online} onRespond={onRespondPlan} version={planVersion} showBadge={planShowBadge} showSwitch={planShowSwitch} onSwitchToAuto={onSwitchToAuto} />;

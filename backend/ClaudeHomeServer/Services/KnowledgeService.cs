@@ -153,21 +153,46 @@ public class KnowledgeService
         return new DifyDocumentInfo(body.Document.Id, body.Document.Name, body.Document.IndexingStatus);
     }
 
+    private static string GetMimeType(string fileName)
+    {
+        var ext = Path.GetExtension(fileName).ToLowerInvariant();
+        return ext switch
+        {
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".xls"  => "application/vnd.ms-excel",
+            ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ".pdf"  => "application/pdf",
+            ".csv"  => "text/csv",
+            ".epub" => "application/epub+zip",
+            _       => "application/octet-stream",
+        };
+    }
+
     public async Task<DifyDocumentInfo> IndexFileByBytesAsync(
         string datasetId, string fileName, byte[] content, List<string>? tags = null)
     {
         var client = CreateClient();
         using var form = new MultipartFormDataContent();
-        form.Add(new ByteArrayContent(content), "file", fileName);
+
+        var fileContent = new ByteArrayContent(content);
+        fileContent.Headers.ContentType =
+            new System.Net.Http.Headers.MediaTypeHeaderValue(GetMimeType(fileName));
+        form.Add(fileContent, "file", Path.GetFileName(fileName));
+
         form.Add(new StringContent(System.Text.Json.JsonSerializer.Serialize(new
         {
             indexing_technique = _cfg.IndexingTechnique,
             process_rule = new { mode = "automatic" },
-            doc_metadata = new { tags = (tags ?? []).ToArray() },
         })), "data");
 
         var resp = await client.PostAsync($"datasets/{datasetId}/document/create_by_file", form);
-        resp.EnsureSuccessStatusCode();
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadAsStringAsync();
+            throw new HttpRequestException(
+                $"Dify вернул {(int)resp.StatusCode}: {errBody}");
+        }
 
         var body = await resp.Content.ReadFromJsonAsync<DifyDocumentCreateResponse>()
             ?? throw new InvalidOperationException("Пустой ответ от Dify при загрузке файла");

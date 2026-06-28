@@ -140,6 +140,11 @@ export const api = {
         `/projects/${projectId}/knowledge/index`,
         { method: 'POST', body: JSON.stringify({ relativePath }) }
       ),
+    indexFolder: (projectId: string, relativePath: string) =>
+      request<{ indexed: number; skipped: number; documents: DifyDocument[] }>(
+        `/projects/${projectId}/knowledge/index-folder`,
+        { method: 'POST', body: JSON.stringify({ relativePath }) }
+      ),
     deleteDocument: (projectId: string, documentId: string) =>
       request<void>(`/projects/${projectId}/knowledge/documents/${documentId}`, { method: 'DELETE' }),
     deleteDataset: (projectId: string) =>

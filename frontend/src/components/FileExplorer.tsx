@@ -32,8 +32,10 @@ interface Props {
   isMobile?: boolean;
   alwaysShowIcons?: boolean;
   onAddToKnowledge?: (relativePath: string) => void;
+  onAddFolderToKnowledge?: (relativePath: string) => void;
   indexedFileNames?: Set<string>;
   indexingFiles?: Set<string>;
+  indexingFolders?: Set<string>;
   onAttachToChat?: (path: string) => void;
   onRemoveFromKnowledge?: (relativePath: string) => void;
   onOpenKnowledge?: () => void;
@@ -127,7 +129,7 @@ interface TreeNode {
   depth: number;
 }
 
-function FilesTip({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
+function FilesTip({ icon, title, text, extra }: { icon: ReactNode; title: string; text: string; extra?: ReactNode }) {
   return (
     <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
       <div style={{
@@ -137,15 +139,23 @@ function FilesTip({ icon, title, text }: { icon: ReactNode; title: string; text:
       }}>
         {icon}
       </div>
-      <div>
+      <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, marginBottom: 2 }}>{title}</div>
         <div style={{ fontSize: 11.5, color: C.textMuted, lineHeight: 1.55 }}>{text}</div>
+        {extra}
       </div>
     </div>
   );
 }
 
-function FilesRootEmptyState() {
+function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const webdavUrl = `${window.location.origin}/projects/`;
+  const handleCopyWebdav = () => {
+    navigator.clipboard.writeText(webdavUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 16 }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
@@ -158,6 +168,19 @@ function FilesRootEmptyState() {
           <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>Проект пуст</div>
           <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>Здесь пока нет файлов</div>
         </div>
+        {onCreateFile && (
+          <button
+            onClick={onCreateFile}
+            style={{
+              background: C.accent, color: '#fff', border: 'none', borderRadius: R.lg,
+              padding: '9px 20px', fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            Создать первый файл
+          </button>
+        )}
       </div>
 
       <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
@@ -178,6 +201,29 @@ function FilesRootEmptyState() {
           }
           title="Офлайн-доступ"
           text="Нажмите иконку облачка рядом с файлом или папкой — они сохранятся для просмотра без интернета. Помеченные файлы доступны в приложении даже при отсутствии соединения."
+        />
+        <FilesTip
+          icon={
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/>
+              <line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
+            </svg>
+          }
+          title="Удалённый доступ к папке"
+          text="Подключите как сетевой диск — все файлы будут доступны прямо в проводнике."
+          extra={
+            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '5px 8px' }}>
+              <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 11, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {webdavUrl}
+              </span>
+              <button onClick={handleCopyWebdav} title="Скопировать URL" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: copied ? '#3F7A4F' : C.textMuted, flexShrink: 0 }}>
+                {copied
+                  ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                }
+              </button>
+            </div>
+          }
         />
       </div>
     </div>
@@ -266,25 +312,6 @@ function MI_Move() {
     </svg>
   );
 }
-function MI_FilePlus() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-      <polyline points="14 2 14 8 20 8"/>
-      <line x1="12" y1="12" x2="12" y2="18"/>
-      <line x1="9" y1="15" x2="15" y2="15"/>
-    </svg>
-  );
-}
-function MI_FolderPlus() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-      <line x1="12" y1="11" x2="12" y2="17"/>
-      <line x1="9" y1="14" x2="15" y2="14"/>
-    </svg>
-  );
-}
 function MI_Trash() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -313,7 +340,7 @@ interface ContextMenuState {
   entry: FileEntry;
 }
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, onAttachToChat, onOpenKnowledge }: Props) {
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenKnowledge }: Props) {
   const online = useOnline();
   const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
@@ -363,6 +390,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   // === Long press для мобилы ===
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pressingPath, setPressingPath] = useState<string | null>(null);
+
+  // === Flash-highlight для новосозданного файла ===
+  const [newlyCreatedPath, setNewlyCreatedPath] = useState<string | null>(null);
 
   // === Move modal state ===
   const [showMoveModal, setShowMoveModal] = useState(false);
@@ -488,6 +519,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     setNewFileName('');
     await invalidateDir(createInDir);
     if (createInDir) setExpanded(prev => new Set(prev).add(createInDir));
+    setNewlyCreatedPath(normPath(path));
+    setTimeout(() => setNewlyCreatedPath(null), 1500);
   };
 
   const handleCreateDir = async () => {
@@ -712,8 +745,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   // === Long press (mobile) ===
   const handleTouchStart = useCallback((entry: FileEntry) => {
     if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    setPressingPath(entry.path);
     longPressTimer.current = setTimeout(() => {
       longPressTimer.current = null;
+      if (navigator.vibrate) navigator.vibrate(10);
+      setPressingPath(null);
       setContextMenu({ x: 0, y: 0, entry });
     }, 500);
   }, []);
@@ -723,6 +759,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       clearTimeout(longPressTimer.current);
       longPressTimer.current = null;
     }
+    setPressingPath(null);
   }, []);
 
   const flatTree = useMemo((): TreeNode[] => {
@@ -810,21 +847,25 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         style={{
           display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 6,
           paddingLeft: 8 + depth * 16, paddingRight: 8,
-          paddingTop: 6, paddingBottom: 6,
+          paddingTop: isMobile || alwaysShowIcons ? 10 : 6,
+          paddingBottom: isMobile || alwaysShowIcons ? 10 : 6,
+          minHeight: isMobile || alwaysShowIcons ? 44 : undefined,
           borderRadius: 8, cursor: isDragging ? 'grabbing' : 'pointer',
           width: '100%', boxSizing: 'border-box',
-          opacity: isDragging ? 0.4 : 1,
+          opacity: isDragging ? 0.4 : pressingPath === entry.path ? 0.6 : 1,
+          transform: pressingPath === entry.path ? 'scale(0.98)' : 'none',
           background: isDropTgt
             ? '#F1DDD1'
             : isActive ? '#F1DDD1'
             : hoveredPath === entry.path ? '#E8E1D4'
+            : normPath(entry.path) === newlyCreatedPath ? 'rgba(217,119,87,0.13)'
             : (sstate || folderSyncing) ? '#F4ECE3'
             : 'transparent',
           boxShadow: isDropTgt
             ? `inset 0 0 0 2px ${C.accent}`
             : isActive ? 'inset 2px 0 0 #D97757'
             : 'none',
-          transition: 'background 0.1s, box-shadow 0.1s',
+          transition: 'background 0.1s, box-shadow 0.1s, opacity 0.1s, transform 0.1s',
         }}
       >
         {/* toggle-стрелка дерева — только десктоп/планшет */}
@@ -898,6 +939,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {entry.isModified && (
           <span style={{ fontSize: 9, fontWeight: 700, color: '#C2693B', background: '#FBEBE0', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
         )}
+        {entry.isNew && (
+          <span style={{ fontSize: 9, fontWeight: 700, color: '#3F7A4F', background: '#E2F0E6', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>+</span>
+        )}
         {/* Hover-иконки: переименовать + удалить — только десктоп при hover */}
         {online && !isRenaming && !isMobile && hoveredPath === entry.path && (
           <>
@@ -941,7 +985,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               </svg>
             </span>
           ) : indexedFileNames?.has(entry.name) ? (
-            // Уже в знаниях — показать «удалить» при hover (только десктоп)
             !isMobile && !alwaysShowIcons && hoveredPath === entry.path && onRemoveFromKnowledge ? (
               <button
                 onClick={e => { e.stopPropagation(); onRemoveFromKnowledge(entry.path); }}
@@ -950,7 +993,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               >
                 <BookMinusIcon />
               </button>
-            ) : null
+            ) : (
+              <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+                  <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+                </svg>
+              </span>
+            )
           ) : (
             // Не в знаниях — показать «добавить» при hover (только десктоп)
             onAddToKnowledge && isKnowledgeIndexable(entry.name) && !isMobile && !alwaysShowIcons && hoveredPath === entry.path ? (
@@ -1166,7 +1216,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           mobileDirLoading ? (
             <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
           ) : mobileEntries.length === 0 ? (
-            mobileDir === '' ? <FilesRootEmptyState /> : (
+            mobileDir === '' ? <FilesRootEmptyState onCreateFile={online ? () => { setCreateInDir(mobileDir); setShowCreateFile(true); } : undefined} /> : (
               <EmptyState
                 icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
                 title="Папка пуста"
@@ -1179,7 +1229,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         ) : rootLoading ? (
           <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
         ) : flatTree.length === 0 ? (
-          <FilesRootEmptyState />
+          <FilesRootEmptyState onCreateFile={online ? () => { setCreateInDir(''); setShowCreateFile(true); } : undefined} />
         ) : (
           flatTree.map(({ entry, depth }) => renderFileRow(entry, depth))
         )}
@@ -1364,19 +1414,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       {/* === Контекстное меню === */}
       {contextMenu && (() => {
         const { entry } = contextMenu;
-        const [entryParentDir] = splitPath(entry.path);
-
-        const openCreateFile = () => {
-          setContextMenu(null);
-          setCreateInDir(entry.isDirectory ? entry.path : entryParentDir);
-          setShowCreateFile(true);
-        };
-        const openCreateDir = () => {
-          setContextMenu(null);
-          setCreateInDir(entry.isDirectory ? entry.path : entryParentDir);
-          setShowCreateDir(true);
-        };
-
         const sstate = computeSyncState(marks, entry.path);
         const offlineLabel = sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн';
         const canToggleOffline = online && sstate !== 'inherited';
@@ -1408,12 +1445,12 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
                 {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
                 {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.name) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
+                {entry.isDirectory && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
+                {entry.isDirectory && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
                 {canToggleOffline && menuItem(<MI_Cloud />, offlineLabel, doToggleOffline)}
                 <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />
                 {online && menuItem(<MI_Rename />, 'Переименовать', () => startRename(entry))}
                 {online && menuItem(<MI_Move />, 'Переместить в...', () => { setContextMenu(null); setMovingEntry(entry); setShowMoveModal(true); })}
-                {online && menuItem(<MI_FilePlus />, 'Создать файл здесь', openCreateFile)}
-                {online && menuItem(<MI_FolderPlus />, 'Создать папку здесь', openCreateDir)}
                 {online && <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />}
                 {online && menuItem(<MI_Trash />, 'Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
               </div>
@@ -1440,12 +1477,12 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
             {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
             {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.name) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
+            {entry.isDirectory && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
+            {entry.isDirectory && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
             {canToggleOffline && menuItem(<MI_Cloud />, sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн', doToggleOffline)}
             <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
             {online && menuItem(<MI_Rename />, 'Переименовать', () => startRename(entry))}
             {online && menuItem(<MI_Move />, 'Переместить в...', () => { setContextMenu(null); setMovingEntry(entry); setShowMoveModal(true); })}
-            {online && menuItem(<MI_FilePlus />, 'Создать файл здесь', openCreateFile)}
-            {online && menuItem(<MI_FolderPlus />, 'Создать папку здесь', openCreateDir)}
             <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
             {online && menuItem(<MI_Trash />, 'Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
           </div>

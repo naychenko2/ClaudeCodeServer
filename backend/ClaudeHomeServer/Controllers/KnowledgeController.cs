@@ -139,6 +139,65 @@ public class KnowledgeController(
         return NoContent();
     }
 
+    // POST /api/projects/{id}/knowledge/index-folder — рекурсивно индексировать папку
+    [HttpPost("index-folder")]
+    public async Task<IActionResult> IndexFolder(string projectId, [FromBody] IndexFileRequest req)
+    {
+        var p = GetOwnedProject(projectId);
+        if (p is null) return NotFound();
+
+        IEnumerable<FileEntry> allFiles;
+        try
+        {
+            allFiles = files.Tree(p.RootPath, req.RelativePath, p.ShowHiddenFiles);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return NotFound(new { error = "Папка не найдена" });
+        }
+
+        var indexable = allFiles
+            .Where(f => !f.IsDirectory && KnowledgeService.IsKnowledgeIndexable(f.Path))
+            .ToList();
+
+        if (indexable.Count == 0)
+            return Ok(new { indexed = 0, skipped = 0, documents = Array.Empty<object>() });
+
+        var datasetId = await knowledge.EnsureDatasetAsync(p, Username);
+        var wk = workspaceStore.GetByPath(p.RootPath);
+
+        var indexed = new List<object>();
+        int skipped = 0;
+
+        foreach (var file in indexable)
+        {
+            var docName = file.Path;
+            var existingTags = wk?.DocumentTags?.TryGetValue(docName, out var t) == true ? t : null;
+            try
+            {
+                DifyDocumentInfo doc;
+                if (KnowledgeService.IsTextIndexable(file.Path))
+                {
+                    var content = files.ReadFile(p.RootPath, file.Path);
+                    doc = await knowledge.IndexFileByTextAsync(datasetId, docName, content, existingTags);
+                }
+                else
+                {
+                    var bytes = files.ReadFileBytes(p.RootPath, file.Path);
+                    doc = await knowledge.IndexFileByBytesAsync(datasetId, docName, bytes, existingTags);
+                }
+                var docTags = wk?.DocumentTags?.TryGetValue(docName, out var dt) == true ? dt : new List<string>();
+                indexed.Add(new { id = doc.Id, name = doc.Name, indexingStatus = doc.IndexingStatus, tags = docTags });
+            }
+            catch
+            {
+                skipped++;
+            }
+        }
+
+        return Ok(new { indexed = indexed.Count, skipped, documents = indexed });
+    }
+
     // DELETE /api/projects/{id}/knowledge/documents/{documentId}
     [HttpDelete("documents/{documentId}")]
     public async Task<IActionResult> DeleteDocument(string projectId, string documentId)

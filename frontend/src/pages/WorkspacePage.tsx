@@ -116,6 +116,7 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
   const [indexedFileNames, setIndexedFileNames] = useState<Set<string>>(new Set());
   const [knowledgeDocMap, setKnowledgeDocMap] = useState<Map<string, string>>(new Map()); // filename → docId
   const [indexingFiles, setIndexingFiles] = useState<Set<string>>(new Set());
+  const [indexingFolders, setIndexingFolders] = useState<Set<string>>(new Set());
   const [skillsData, setSkillsData] = useState<SkillsData | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const handleAttachToChat = useCallback((path: string) => {
@@ -325,6 +326,34 @@ const windowWidth = useWindowWidth();
     }
   }, [project.id]);
 
+  const handleAddFolderToKnowledge = useCallback(async (relativePath: string) => {
+    setIndexingFolders(prev => new Set([...prev, relativePath]));
+    try {
+      const result = await api.knowledge.indexFolder(project.id, relativePath);
+      setIndexedFileNames(prev => {
+        const next = new Set(prev);
+        for (const doc of result.documents) {
+          const fname = (doc as { name: string }).name.split('/').pop() ?? (doc as { name: string }).name;
+          next.add(fname);
+        }
+        return next;
+      });
+      setKnowledgeDocMap(prev => {
+        const next = new Map(prev);
+        for (const doc of result.documents) {
+          const d = doc as { id: string; name: string };
+          const fname = d.name.split('/').pop() ?? d.name;
+          next.set(fname, d.id);
+        }
+        return next;
+      });
+    } catch {
+      // ignore — Dify может быть не настроен
+    } finally {
+      setIndexingFolders(prev => { const next = new Set(prev); next.delete(relativePath); return next; });
+    }
+  }, [project.id]);
+
   const handleRemoveFromKnowledge = useCallback(async (relativePath: string) => {
     const fileName = relativePath.split('/').pop() ?? relativePath;
     const docId = knowledgeDocMap.get(fileName);
@@ -432,7 +461,7 @@ const windowWidth = useWindowWidth();
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
-              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
+              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
               : <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
             }
           </div>
@@ -486,7 +515,7 @@ const windowWidth = useWindowWidth();
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'
-                    ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
+                    ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
                     : <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
                   }
                 </div>

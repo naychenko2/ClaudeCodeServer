@@ -60,7 +60,14 @@ public class SessionManager
             if (list is null) return;
             foreach (var session in list)
             {
-                session.Status = SessionStatus.Finished;
+                // Процесс умер при рестарте — "живые" статусы переводим в orphaned
+                session.Status = session.Status switch
+                {
+                    SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting
+                        => SessionStatus.Orphaned,
+                    SessionStatus.Active => SessionStatus.Finished,
+                    _ => session.Status,
+                };
                 _sessions[session.Id] = new SessionEntry { Info = session };
             }
         }

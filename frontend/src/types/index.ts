@@ -21,7 +21,7 @@ export interface Session {
   projectId: string;
   claudeSessionId?: string;
   mode: 'auto' | 'plan' | 'ask';
-  status: 'starting' | 'working' | 'active' | 'waiting' | 'finished' | 'error';
+  status: 'starting' | 'working' | 'active' | 'waiting' | 'orphaned' | 'finished' | 'error';
   lastMessage?: string;
   messageCount: number;
   createdAt: string;
@@ -38,6 +38,7 @@ export interface FileEntry {
   size?: number;
   modified: string;
   isModified: boolean;
+  isNew?: boolean;
   // Состояние синхронизации для офлайна: помечен сам / по наследству от папки / нет
   synced?: 'direct' | 'inherited' | null;
 }

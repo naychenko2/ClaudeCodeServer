@@ -32,6 +32,7 @@ interface Props {
   onAgentChange?: (agent: AgentInfo | null) => void;
   attachedFiles: string[];
   onAttachedFilesChange: (files: string[]) => void;
+  onResume?: () => void;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -528,7 +529,7 @@ function ToolGroupBlock({ isGroupDone, toolCount, children }: {
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
   const online = useOnline();
 
@@ -972,6 +973,31 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         activeWorkflow={activeWorkflowInfo ?? undefined}
         onOpenSidebar={onOpenSidebar}
       />
+
+      {/* Баннер для прерванной при рестарте сессии */}
+      {session.status === 'orphaned' && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '8px 16px', background: C.bgPanel,
+          borderBottom: `1px solid ${C.border}`,
+          fontSize: 12, color: C.textSecondary,
+        }}>
+          <span style={{ flex: 1 }}>Чат был прерван при перезапуске сервера. История сохранена.</span>
+          {onResume && (
+            <button
+              onClick={onResume}
+              style={{
+                padding: '4px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+                background: C.accentLight, border: `1px solid ${C.accent}`, cursor: 'pointer', color: C.accent,
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = C.accent; e.currentTarget.style.color = C.onAccent; }}
+              onMouseLeave={e => { e.currentTarget.style.background = C.accentLight; e.currentTarget.style.color = C.accent; }}
+            >
+              Возобновить
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
       <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

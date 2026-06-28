@@ -1,6 +1,6 @@
 ﻿namespace ClaudeHomeServer.Models;
 
-public enum SessionStatus { Starting, Working, Active, Waiting, Finished, Error }
+public enum SessionStatus { Starting, Working, Active, Waiting, Orphaned, Finished, Error }
 public enum ClaudeMode { Auto, Plan, Ask }
 
 public class Session

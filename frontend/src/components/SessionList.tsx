@@ -36,6 +36,15 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     return s;
   };
 
+  const handleResume = async (orphaned: Session) => {
+    try {
+      const s = await api.sessions.create(project.id, orphaned.mode, orphaned.claudeSessionId ?? undefined, undefined, orphaned.model ?? undefined, orphaned.agentName ?? undefined);
+      await api.sessions.delete(project.id, orphaned.id);
+      setSessions(prev => [s, ...prev.filter(x => x.id !== orphaned.id)]);
+      onSelect(s);
+    } catch { /* офлайн или сбой — ничего не меняем */ }
+  };
+
   // Загрузка и поллинг сессий
   useEffect(() => {
     initializedRef.current = false;
@@ -202,7 +211,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                 <span style={{ fontSize: 13.5, fontWeight: isActive ? 700 : 600, color: C.textHeading, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {s.name ?? `Чат #${index + 1}`}
                 </span>
-                {(s.status === 'starting' || s.status === 'working' || s.status === 'finished' || s.status === 'error') && (
+                {(s.status === 'starting' || s.status === 'working' || s.status === 'finished' || s.status === 'error' || s.status === 'orphaned') && (
                   <StatusBadge status={s.status} />
                 )}
                 {workflowRunningFor === s.id && (
@@ -224,7 +233,43 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               )}
             </div>
             <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 6 }}>
-              {online && (<>
+              {online && s.status === 'orphaned' ? (
+                <>
+                <button
+                  onClick={e => { e.stopPropagation(); handleResume(s); }}
+                  title="Возобновить чат"
+                  style={{
+                    background: C.accentLight, border: `1px solid ${C.accent}`, cursor: 'pointer',
+                    color: C.accent, padding: '3px 8px', flexShrink: 0,
+                    borderRadius: R.sm, fontSize: 11, fontWeight: 600,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = C.accent; e.currentTarget.style.color = C.onAccent; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = C.accentLight; e.currentTarget.style.color = C.accent; }}
+                >
+                  Возобновить
+                </button>
+                <button
+                  onClick={e => { e.stopPropagation(); setDeleteTarget(s); }}
+                  title="Удалить чат"
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: C.textMuted, padding: 0, flexShrink: 0,
+                    width: 24, height: 24, borderRadius: R.sm,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.color = C.danger; e.currentTarget.style.background = C.dangerBg; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.background = 'none'; }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6l-1 14H6L5 6" />
+                    <path d="M10 11v6M14 11v6" />
+                    <path d="M9 6V4h6v2" />
+                  </svg>
+                </button>
+                </>
+              ) : online && (<>
               <button
                 onClick={e => { e.stopPropagation(); setEditTarget(s); }}
                 title="Настройки чата"

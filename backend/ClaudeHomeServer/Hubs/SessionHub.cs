@@ -2,6 +2,7 @@
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http.Connections.Features;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Hubs;
@@ -11,11 +12,20 @@ public class SessionHub : Hub
 {
     private readonly SessionManager _sessions;
     private readonly FileWatcherService _watcher;
+    private readonly ConnectionDiagnostics _diag;
 
-    public SessionHub(SessionManager sessions, FileWatcherService watcher)
+    public SessionHub(SessionManager sessions, FileWatcherService watcher, ConnectionDiagnostics diag)
     {
         _sessions = sessions;
         _watcher = watcher;
+        _diag = diag;
+    }
+
+    public override Task OnConnectedAsync()
+    {
+        var transport = Context.Features.Get<IHttpTransportFeature>()?.TransportType.ToString() ?? "unknown";
+        _diag.RecordConnect(Context.ConnectionId, transport, Context.UserIdentifier ?? Context.User?.Identity?.Name);
+        return base.OnConnectedAsync();
     }
 
     public async Task JoinSession(string sessionId)
@@ -56,6 +66,7 @@ public class SessionHub : Hub
     public override Task OnDisconnectedAsync(Exception? exception)
     {
         _watcher.RemoveConnection(Context.ConnectionId);
+        _diag.RecordDisconnect(Context.ConnectionId, exception);
         return base.OnDisconnectedAsync(exception);
     }
 

@@ -39,6 +39,7 @@ builder.Services.AddSingleton<FileService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();
 builder.Services.AddSingleton<FileWatcherService>();
+builder.Services.AddSingleton<ConnectionDiagnostics>();
 builder.Services.AddSingleton<ChatHistoryService>();
 builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
 builder.Services.AddSingleton<SessionManager>();

@@ -1,6 +1,6 @@
 ﻿namespace ClaudeHomeServer.Services;
 
-public record FileEntry(string Name, string Path, bool IsDirectory, long? Size, DateTime Modified, bool IsModified, string? Synced = null);
+public record FileEntry(string Name, string Path, bool IsDirectory, long? Size, DateTime Modified, bool IsModified, string? Synced = null, bool IsNew = false);
 
 public class FileService
 {
@@ -33,7 +33,7 @@ public class FileService
         var dir = SafeJoin(rootPath, relativePath);
         if (!Directory.Exists(dir)) throw new DirectoryNotFoundException();
 
-        var modified = GetModifiedFiles(rootPath);
+        var (modified, newFiles) = GetGitStatus(rootPath);
         var entries = new List<FileEntry>();
 
         foreach (var d in Directory.GetDirectories(dir).OrderBy(x => x))
@@ -51,7 +51,7 @@ public class FileService
             if (!showHidden && info.Name.StartsWith('.')) continue;
             var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
             entries.Add(new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
-                modified.Contains(rel)));
+                modified.Contains(rel), IsNew: newFiles.Contains(rel)));
         }
 
         return entries;
@@ -59,7 +59,7 @@ public class FileService
 
     public IEnumerable<FileEntry> Search(string rootPath, string query)
     {
-        var modified = GetModifiedFiles(rootPath);
+        var (modified, newFiles) = GetGitStatus(rootPath);
         return Directory.EnumerateFiles(rootPath, "*", SearchOption.AllDirectories)
             .Where(f => Path.GetFileName(f).Contains(query, StringComparison.OrdinalIgnoreCase))
             .Take(100)
@@ -68,7 +68,7 @@ public class FileService
                 var info = new FileInfo(f);
                 var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
                 return new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
-                    modified.Contains(rel));
+                    modified.Contains(rel), IsNew: newFiles.Contains(rel));
             });
     }
 
@@ -79,7 +79,7 @@ public class FileService
         var start = SafeJoin(rootPath, relativePath);
         if (!Directory.Exists(start)) throw new DirectoryNotFoundException();
 
-        var modified = GetModifiedFiles(rootPath);
+        var (modified, newFiles) = GetGitStatus(rootPath);
         var result = new List<FileEntry>();
 
         void Walk(string dir)
@@ -104,7 +104,7 @@ public class FileService
                 if (!showHidden && info.Name.StartsWith('.')) continue;
                 var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
                 result.Add(new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
-                    modified.Contains(rel)));
+                    modified.Contains(rel), IsNew: newFiles.Contains(rel)));
             }
         }
 
@@ -228,25 +228,34 @@ public class FileService
 
     public string? GetDiff(string rootPath, string relativePath)
     {
-        // Пробуем git diff
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("git", $"diff HEAD -- \"{relativePath}\"")
-            {
-                WorkingDirectory = rootPath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false
-            };
-            using var proc = System.Diagnostics.Process.Start(psi)!;
-            var output = proc.StandardOutput.ReadToEnd();
-            proc.WaitForExit(3000);
+            // diff рабочего дерева vs HEAD (покрывает изменённые отслеживаемые файлы)
+            var output = GitRun(rootPath, $"diff HEAD -- \"{relativePath}\"");
+            // Если пусто — файл может быть новым в индексе (git add, но ещё не commit)
+            if (string.IsNullOrWhiteSpace(output))
+                output = GitRun(rootPath, $"diff --cached -- \"{relativePath}\"");
             return string.IsNullOrWhiteSpace(output) ? null : output;
         }
         catch
         {
             return null;
         }
+    }
+
+    private static string GitRun(string rootPath, string args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git", args)
+        {
+            WorkingDirectory = rootPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        var output = proc.StandardOutput.ReadToEnd();
+        proc.WaitForExit(3000);
+        return output;
     }
 
     public bool RevertFile(string rootPath, string relativePath)
@@ -267,20 +276,21 @@ public class FileService
         catch { return false; }
     }
 
-    private record ModifiedCache(HashSet<string> Files, long ExpiresAt);
-    private static readonly Dictionary<string, ModifiedCache> _modifiedCache = new();
+    private record GitStatusCache(HashSet<string> Modified, HashSet<string> New, long ExpiresAt);
+    private static readonly Dictionary<string, GitStatusCache> _statusCache = new();
     private static readonly Lock _cacheLock = new();
 
-    private static HashSet<string> GetModifiedFiles(string rootPath)
+    private static (HashSet<string> modified, HashSet<string> @new) GetGitStatus(string rootPath)
     {
         var now = System.Diagnostics.Stopwatch.GetTimestamp();
         lock (_cacheLock)
         {
-            if (_modifiedCache.TryGetValue(rootPath, out var cached) && cached.ExpiresAt > now)
-                return cached.Files;
+            if (_statusCache.TryGetValue(rootPath, out var cached) && cached.ExpiresAt > now)
+                return (cached.Modified, cached.New);
         }
 
-        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var modified = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var @new = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
             var psi = new System.Diagnostics.ProcessStartInfo("git", "status --porcelain")
@@ -294,11 +304,16 @@ public class FileService
             while ((line = proc.StandardOutput.ReadLine()) != null)
             {
                 if (line.Length < 4) continue;
+                if (line[0] == '!' && line[1] == '!') continue; // ignored
                 var path = line[3..];
                 // для переименований: "R  old -> new" берём новый путь
                 var arrowIdx = path.IndexOf(" -> ", StringComparison.Ordinal);
                 if (arrowIdx >= 0) path = path[(arrowIdx + 4)..];
-                result.Add(path.Trim().Replace('\\', '/'));
+                var normalizedPath = path.Trim().Replace('\\', '/');
+                if (line[0] == '?' && line[1] == '?')
+                    @new.Add(normalizedPath);
+                else
+                    modified.Add(normalizedPath);
             }
             proc.WaitForExit(3000);
         }
@@ -307,8 +322,8 @@ public class FileService
         var ttl = System.Diagnostics.Stopwatch.Frequency * 5; // 5 секунд
         lock (_cacheLock)
         {
-            _modifiedCache[rootPath] = new ModifiedCache(result, now + ttl);
+            _statusCache[rootPath] = new GitStatusCache(modified, @new, now + ttl);
         }
-        return result;
+        return (modified, @new);
     }
 }

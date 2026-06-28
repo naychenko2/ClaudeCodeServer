@@ -41,8 +41,8 @@ mcp/tasks-server/dist/
 # Локальный override-конфиг (машинно-специфичные пути/секреты), у каждого свой
 backend/ClaudeHomeServer/appsettings.Local.json
 
-# IDE
-backend/.idea/
+# IDE / JetBrains Rider (.idea игнорим; .run/ с шареными run-конфигами — коммитим)
+.idea/
 
 # OS
 Thumbs.db

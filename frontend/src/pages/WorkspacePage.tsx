@@ -229,7 +229,7 @@ const windowWidth = useWindowWidth();
     try {
       const s = await api.sessions.create(project.id, activeSession.mode, activeSession.claudeSessionId ?? undefined, undefined, activeSession.model ?? undefined, activeSession.agentName ?? undefined);
       await api.sessions.delete(project.id, activeSession.id);
-      handleSelectSession(s);
+      handleSelectSession(s, 'Продолжи');
     } catch { /* офлайн или сбой — ничего не меняем */ }
   }, [activeSession, project.id]);
 

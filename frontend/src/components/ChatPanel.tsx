@@ -974,31 +974,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         onOpenSidebar={onOpenSidebar}
       />
 
-      {/* Баннер для прерванной при рестарте сессии */}
-      {session.status === 'orphaned' && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 10,
-          padding: '8px 16px', background: C.bgPanel,
-          borderBottom: `1px solid ${C.border}`,
-          fontSize: 12, color: C.textSecondary,
-        }}>
-          <span style={{ flex: 1 }}>Чат был прерван при перезапуске сервера. История сохранена.</span>
-          {onResume && (
-            <button
-              onClick={onResume}
-              style={{
-                padding: '4px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-                background: C.accentLight, border: `1px solid ${C.accent}`, cursor: 'pointer', color: C.accent,
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = C.accent; e.currentTarget.style.color = C.onAccent; }}
-              onMouseLeave={e => { e.currentTarget.style.background = C.accentLight; e.currentTarget.style.color = C.accent; }}
-            >
-              Возобновить
-            </button>
-          )}
-        </div>
-      )}
-
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
       <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {/* Спиннер загрузки истории */}
@@ -1103,6 +1078,34 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         {online && showWaiting && (
           <WaitingIndicator planning={planningKind} />
         )}
+
+        {/* Баннер прерванной сессии — в конце ленты, после истории */}
+        {session.status === 'orphaned' && !isHistoryLoading && (
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+            padding: '20px 16px', marginTop: 8,
+            background: C.bgPanel, borderRadius: 12,
+            border: `1px solid ${C.border}`,
+          }}>
+            <span style={{ fontSize: 13, color: C.textSecondary, textAlign: 'center' }}>
+              Чат был прерван при перезапуске сервера. История сохранена.
+            </span>
+            {onResume && (
+              <button
+                onClick={onResume}
+                style={{
+                  padding: '8px 20px', borderRadius: 10, fontSize: 13, fontWeight: 600,
+                  background: C.accent, border: 'none', cursor: 'pointer', color: C.onAccent,
+                }}
+                onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}
+                onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
+              >
+                Возобновить
+              </button>
+            )}
+          </div>
+        )}
+
         <div ref={bottomRef} />
       </div></div>
 

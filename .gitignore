@@ -38,6 +38,9 @@ mcp/tasks-server/dist/
 .env.local
 *.env
 
+# Локальный override-конфиг (машинно-специфичные пути/секреты), у каждого свой
+backend/ClaudeHomeServer/appsettings.Local.json
+
 # IDE
 backend/.idea/
 

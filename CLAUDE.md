@@ -134,6 +134,18 @@ DELETE              /api/projects/{id}/files          ?path=
 | `designer` | дизайн-система и стили |
 | `dotnet-builder` | сборка и починка .NET |
 
+## Конфигурация
+
+Машинно-специфичные значения (локальные пути `DefaultProjectsPath`/`McpConfigPath`,
+секреты, локальные URL) **не правим в отслеживаемых `appsettings*.json`** — там лежат
+общие дефолты. Свои значения кладём в `backend/ClaudeHomeServer/appsettings.Local.json`
+(в `.gitignore`, не коммитится, у каждого свой). Образец —
+`appsettings.Local.example.json`: скопировать в `appsettings.Local.json` и вписать своё.
+
+Порядок загрузки (последний переопределяет): `appsettings.json` →
+`appsettings.{Environment}.json` → `appsettings.Local.json`. Подключается в
+[Program.cs](backend/ClaudeHomeServer/Program.cs) сразу после `CreateBuilder`.
+
 ## Соглашения
 
 - Хранилище проектов: `data/projects.json` рядом с executable

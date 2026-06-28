@@ -15,6 +15,12 @@ JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Локальные машинно-специфичные переопределения (пути, URL, секреты).
+// Файл вне git (.gitignore), у каждого свой. Грузится последним — переопределяет
+// appsettings.json и appsettings.{Environment}.json. Необязателен: нет файла — берутся
+// дефолты из git (важно, чтобы у брата ничего не отъехало).
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
         o.JsonSerializerOptions.Converters.Add(

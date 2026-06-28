@@ -225,7 +225,7 @@ function ensureHandler() {
         // Синхронизируем isWaiting по статусу — работает для всех открытых вкладок/браузеров
         if (msg.status === 'working' || msg.status === 'waiting') {
           setState(sid, prev => ({ ...prev, isWaiting: true }));
-        } else if (msg.status === 'active' || msg.status === 'error' || msg.status === 'finished') {
+        } else if (msg.status === 'active' || msg.status === 'error' || msg.status === 'finished' || msg.status === 'orphaned') {
           setState(sid, prev => ({ ...prev, isWaiting: false }));
         }
         // При переходе в active — перезагружаем историю:

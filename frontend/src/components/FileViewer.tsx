@@ -506,6 +506,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
 
   const isOfficeFile = !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind !== 'pdf';
   const isCodeEditing = editing && tab === 'file' && !fileContent?.isBinary && !fileContent?.isImage;
+  const isPdfViewing = !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind === 'pdf';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative' }}>
@@ -751,7 +752,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       )}
 
       {/* Содержимое */}
-      <div style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing) ? 0 : 16, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing) ? 0 : 16, display: 'flex', flexDirection: 'column' }}>
         {loading && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 14 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', border: `3px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.8s linear infinite' }} />

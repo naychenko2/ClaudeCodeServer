@@ -25,7 +25,8 @@ export default function PdfViewer({ base64 }: { base64: string }) {
   const [containerWidth, setContainerWidth] = useState<number>();
   const [scale, setScale] = useState(1);
   const [error, setError] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState<'minus' | 'pct' | 'plus' | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const pinchRef = useRef<{ startDist: number; startScale: number } | null>(null);
   const scaleRef = useRef(scale);
 
@@ -33,7 +34,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
 
   // Базовая ширина под контейнер
   useEffect(() => {
-    const el = wrapRef.current;
+    const el = scrollRef.current;
     if (!el) return;
     const update = () => setContainerWidth(el.clientWidth - 32);
     const ro = new ResizeObserver(update);
@@ -42,9 +43,9 @@ export default function PdfViewer({ base64 }: { base64: string }) {
     return () => ro.disconnect();
   }, []);
 
-  // Pinch-to-zoom (touch)
+  // Pinch-to-zoom — слушаем на scroll-контейнере
   useEffect(() => {
-    const el = wrapRef.current;
+    const el = scrollRef.current;
     if (!el) return;
 
     const dist = (t: TouchList) => Math.hypot(
@@ -53,8 +54,10 @@ export default function PdfViewer({ base64 }: { base64: string }) {
     );
 
     const onStart = (e: TouchEvent) => {
-      if (e.touches.length === 2)
+      if (e.touches.length === 2) {
+        e.preventDefault();
         pinchRef.current = { startDist: dist(e.touches), startScale: scaleRef.current };
+      }
     };
 
     const onMove = (e: TouchEvent) => {
@@ -78,7 +81,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
 
   // Ctrl+колесо (десктоп)
   useEffect(() => {
-    const el = wrapRef.current;
+    const el = scrollRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
@@ -91,89 +94,125 @@ export default function PdfViewer({ base64 }: { base64: string }) {
 
   const baseWidth = containerWidth ? Math.min(containerWidth, MAX_PAGE_WIDTH) : undefined;
   const pageWidth = baseWidth ? Math.round(baseWidth * scale) : undefined;
+  const modified = scale !== 1;
 
-  const btnStyle: React.CSSProperties = {
+  const btnBase: React.CSSProperties = {
     border: 'none', background: 'none', cursor: 'pointer',
     width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    borderRadius: 6, color: C.textSecondary, padding: 0, flexShrink: 0,
+    borderRadius: 6, padding: 0, flexShrink: 0,
+    transition: 'background 120ms ease-out, color 120ms ease-out',
   };
 
   return (
-    <div ref={wrapRef} style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
 
-      {/* Панель масштаба — sticky, появляется после загрузки */}
-      {numPages > 0 && (
+      {/* Скролл-контейнер страниц — touch-action: pan-y блокирует системный пинч-зум */}
+      <div
+        ref={scrollRef}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          padding: '16px 16px 80px',
+          touchAction: 'pan-y',
+        }}
+      >
+        {error ? (
+          <div style={{ color: '#8A8070', fontSize: 13, padding: 40 }}>Не удалось отобразить PDF</div>
+        ) : (
+          <Document
+            file={file}
+            onLoadSuccess={({ numPages }) => setNumPages(numPages)}
+            onLoadError={() => setError(true)}
+            loading={<Spinner label="Загружаю PDF…" />}
+            error={<div style={{ color: '#8A8070', fontSize: 13, padding: 40 }}>Не удалось отобразить PDF</div>}
+          >
+            {Array.from({ length: numPages }, (_, i) => (
+              <div key={i} style={{ margin: '0 0 16px', boxShadow: '0 2px 12px rgba(42,37,31,0.12)', borderRadius: 4, overflow: 'hidden' }}>
+                <Page pageNumber={i + 1} width={pageWidth} loading="" />
+              </div>
+            ))}
+          </Document>
+        )}
+      </div>
+
+      {/* Плавающий контрол масштаба — снизу справа */}
+      {numPages > 0 && !error && (
         <div style={{
-          position: 'sticky', top: 0, zIndex: 10,
-          width: '100%', display: 'flex', justifyContent: 'center',
-          padding: '6px 0',
-          background: 'rgba(244,240,232,0.92)',
-          backdropFilter: 'blur(6px)',
-          borderBottom: `1px solid ${C.border}`,
-          marginBottom: 12,
+          position: 'absolute',
+          bottom: 20,
+          right: 20,
+          zIndex: 20,
+          display: 'flex',
+          alignItems: 'center',
+          height: 40,
+          background: 'rgba(251,248,242,0.94)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          border: '1px solid rgba(224,215,200,0.6)',
+          borderRadius: 10,
+          boxShadow: '0 4px 16px rgba(42,37,31,0.18)',
+          padding: '0 6px',
+          gap: 2,
         }}>
-          <div style={{
-            display: 'flex', alignItems: 'center',
-            background: C.bgCard, border: `1px solid ${C.border}`,
-            borderRadius: 8, padding: '2px 4px',
-            boxShadow: '0 1px 6px rgba(42,37,31,0.08)',
-          }}>
-            {/* Уменьшить */}
-            <button
-              style={btnStyle}
-              title="Уменьшить (−25%)"
-              onClick={() => setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <line x1="5" y1="12" x2="19" y2="12"/>
-              </svg>
-            </button>
+          {/* Уменьшить */}
+          <button
+            title="Уменьшить (−25%)"
+            onClick={() => setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))}
+            onMouseEnter={() => setHover('minus')}
+            onMouseLeave={() => setHover(null)}
+            style={{
+              ...btnBase,
+              background: hover === 'minus' ? 'rgba(232,225,212,0.5)' : 'none',
+              color: hover === 'minus' ? C.textPrimary : C.textSecondary,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </button>
 
-            {/* Процент — клик сбрасывает в 100% */}
-            <button
-              title="Сбросить масштаб"
-              onClick={() => setScale(1)}
-              style={{
-                ...btnStyle,
-                minWidth: 54, width: 'auto', padding: '0 4px',
-                fontSize: 12, fontFamily: FONT.mono, fontWeight: 600,
-                color: scale !== 1 ? C.accent : C.textSecondary,
-              }}
-            >
-              {Math.round(scale * 100)}%
-            </button>
+          {/* Процент — клик сбрасывает в 100% */}
+          <button
+            title="Сбросить масштаб"
+            onClick={() => setScale(1)}
+            onMouseEnter={() => setHover('pct')}
+            onMouseLeave={() => setHover(null)}
+            style={{
+              ...btnBase,
+              width: 'auto',
+              minWidth: 44,
+              padding: '0 6px',
+              fontSize: 12,
+              fontFamily: FONT.mono,
+              fontWeight: 600,
+              color: modified ? C.accent : hover === 'pct' ? C.textPrimary : C.textSecondary,
+              background: hover === 'pct' ? 'rgba(232,225,212,0.5)' : 'none',
+            }}
+          >
+            {Math.round(scale * 100)}%
+          </button>
 
-            {/* Увеличить */}
-            <button
-              style={btnStyle}
-              title="Увеличить (+25%)"
-              onClick={() => setScale(s => Math.min(4, +(s + 0.25).toFixed(2)))}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                <line x1="12" y1="5" x2="12" y2="19"/>
-                <line x1="5" y1="12" x2="19" y2="12"/>
-              </svg>
-            </button>
-          </div>
+          {/* Увеличить */}
+          <button
+            title="Увеличить (+25%)"
+            onClick={() => setScale(s => Math.min(4, +(s + 0.25).toFixed(2)))}
+            onMouseEnter={() => setHover('plus')}
+            onMouseLeave={() => setHover(null)}
+            style={{
+              ...btnBase,
+              background: hover === 'plus' ? 'rgba(232,225,212,0.5)' : 'none',
+              color: hover === 'plus' ? C.textPrimary : C.textSecondary,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </button>
         </div>
-      )}
-
-      {error ? (
-        <div style={{ color: '#8A8070', fontSize: 13, padding: 40 }}>Не удалось отобразить PDF</div>
-      ) : (
-        <Document
-          file={file}
-          onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-          onLoadError={() => setError(true)}
-          loading={<Spinner label="Загружаю PDF…" />}
-          error={<div style={{ color: '#8A8070', fontSize: 13, padding: 40 }}>Не удалось отобразить PDF</div>}
-        >
-          {Array.from({ length: numPages }, (_, i) => (
-            <div key={i} style={{ margin: '0 0 16px', boxShadow: '0 2px 12px rgba(42,37,31,0.12)', borderRadius: 4, overflow: 'hidden' }}>
-              <Page pageNumber={i + 1} width={pageWidth} loading="" />
-            </div>
-          ))}
-        </Document>
       )}
     </div>
   );

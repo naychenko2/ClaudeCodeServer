@@ -9,14 +9,6 @@ const TILE_COLORS: [string, string][] = [
   ['#F2E6F0', '#8E4A82'],
 ];
 
-function sessionsLabel(n: number): string {
-  const m10 = n % 10, m100 = n % 100;
-  let w = 'чатов';
-  if (m10 === 1 && m100 !== 11) w = 'чат';
-  else if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) w = 'чата';
-  return `${n} ${w}`;
-}
-
 const cardIconBtn: CSSProperties = {
   width: 26, height: 26, borderRadius: R.sm, display: 'flex', alignItems: 'center', justifyContent: 'center',
   color: C.textMuted, background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0,
@@ -26,12 +18,13 @@ interface Props {
   project: Project;
   index: number;
   online: boolean;
+  hasActiveSession?: boolean;
   onOpen: (p: Project) => void;
   onEdit: (p: Project, e: MouseEvent) => void;
   onDelete: (p: Project) => void;
 }
 
-export function ProjectCard({ project: p, index, online, onOpen, onEdit, onDelete }: Props) {
+export function ProjectCard({ project: p, index, online, hasActiveSession, onOpen, onEdit, onDelete }: Props) {
   const [tileBg, tileFg] = TILE_COLORS[index % TILE_COLORS.length];
   const letter = p.name.charAt(0).toUpperCase() || '?';
 
@@ -45,24 +38,45 @@ export function ProjectCard({ project: p, index, online, onOpen, onEdit, onDelet
         cursor: 'pointer', boxShadow: SHADOW.card,
       }}
     >
-      <div style={{
-        width: 50, height: 50, borderRadius: R.xxl, background: tileBg, color: tileFg,
-        fontFamily: FONT.serif, fontSize: 22, fontWeight: 600,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-      }}>
-        {letter}
+      <div style={{ position: 'relative', flexShrink: 0 }}>
+        {hasActiveSession && (
+          <>
+            <style>{`@keyframes pc-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.5;transform:scale(1.15)}} .pc-pulse{animation:pc-pulse 1.5s ease-in-out infinite}`}</style>
+            <span className="pc-pulse" style={{ position: 'absolute', top: 1, right: 1, width: 9, height: 9, borderRadius: '50%', background: C.accent, border: '2px solid #F4F0E8', zIndex: 1 }} />
+          </>
+        )}
+        <div style={{
+          width: 50, height: 50, borderRadius: R.xxl, background: tileBg, color: tileFg,
+          fontFamily: FONT.serif, fontSize: 22, fontWeight: 600,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {letter}
+        </div>
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {p.name}
         </div>
-        <div style={{ fontSize: 12, color: C.textSecondary, display: 'flex', alignItems: 'center', gap: 7 }}>
-          <span>{sessionsLabel(p.sessionCount ?? 0)}</span>
-          <span style={{ color: C.border }}>·</span>
-          <span style={{ color: C.textMuted }}>
-            {new Date(p.updatedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
-          </span>
+        {/* Статистика */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>
+          {/* Чаты */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3, color: C.textSecondary }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span>{p.sessionCount ?? 0}</span>
+          </div>
+          {/* Дата */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3, color: C.textMuted }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+              <line x1="16" y1="2" x2="16" y2="6"/>
+              <line x1="8" y1="2" x2="8" y2="6"/>
+              <line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+            <span>{new Date(p.updatedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}</span>
+          </div>
         </div>
       </div>
 

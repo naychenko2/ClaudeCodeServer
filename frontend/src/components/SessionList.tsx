@@ -194,16 +194,16 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             )}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                {s.status === 'active' && (
+                {(s.status === 'active') && (
                   <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.success, flexShrink: 0 }} />
                 )}
-                {s.status === 'waiting' && (
-                  <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.warning, flexShrink: 0 }} />
+                {s.status === 'finished' && (
+                  <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.textMuted, flexShrink: 0 }} />
                 )}
                 <span style={{ fontSize: 13.5, fontWeight: isActive ? 700 : 600, color: C.textHeading, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {s.name ?? `Чат #${index + 1}`}
                 </span>
-                {(s.status === 'starting' || s.status === 'working' || s.status === 'finished' || s.status === 'error' || s.status === 'orphaned') && (
+                {(s.status === 'starting' || s.status === 'working' || s.status === 'waiting' || s.status === 'error' || s.status === 'orphaned') && (
                   <StatusBadge status={s.status} />
                 )}
                 {workflowRunningFor === s.id && (

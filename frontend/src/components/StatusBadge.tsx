@@ -3,13 +3,13 @@ import { C } from '../lib/design'
 type SessionStatus = 'starting' | 'working' | 'active' | 'waiting' | 'orphaned' | 'finished' | 'error'
 
 const STATUS_CONFIG: Record<SessionStatus, { label: string; dot: string; text: string; bg: string }> = {
-  starting: { label: 'запуск',    dot: C.info,    text: C.info,        bg: C.infoBg },
-  working:  { label: 'работает',  dot: C.accent,  text: C.accent,      bg: C.warningBg },
-  active:   { label: 'активна',   dot: C.success, text: C.successText, bg: C.successBg },
-  waiting:  { label: 'ждёт ввода',dot: C.warning, text: C.warningText, bg: C.warningBg },
-  orphaned: { label: 'прервана',  dot: C.textMuted, text: C.textMuted, bg: C.bgPanel },
-  finished: { label: 'готово',    dot: C.textMuted, text: C.textMuted, bg: C.bgPanel },
-  error:    { label: 'ошибка',    dot: C.danger,  text: C.dangerText,  bg: C.dangerBg },
+  starting: { label: 'запуск',     dot: C.info,      text: C.info,        bg: C.infoBg    },
+  working:  { label: 'работает',   dot: C.accent,    text: C.accent,      bg: C.accentLight },
+  active:   { label: 'активна',    dot: C.success,   text: C.successText, bg: C.successBg },
+  waiting:  { label: 'ждёт ввода', dot: C.plan,      text: C.planText,    bg: C.planLight  },
+  orphaned: { label: 'прервана',   dot: C.warning,   text: C.warningText, bg: C.warningBg  },
+  finished: { label: 'готово',     dot: C.textMuted, text: C.textMuted,   bg: C.bgPanel    },
+  error:    { label: 'ошибка',     dot: C.danger,    text: C.dangerText,  bg: C.dangerBg   },
 }
 
 const PULSE_STATUSES = new Set(['starting', 'working'])

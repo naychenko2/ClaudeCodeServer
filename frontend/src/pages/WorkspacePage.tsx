@@ -106,6 +106,9 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
   const [showSkillsModal, setShowSkillsModal] = useState(false);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
+  const activeSessionRef = useRef<Session | null>(null);
+  activeSessionRef.current = activeSession;
+
   const handleWorkflowRunning = useCallback((active: boolean, sessionId: string) => {
     setWorkflowRunningFor(prev => {
       if (active) return sessionId;
@@ -244,7 +247,20 @@ const windowWidth = useWindowWidth();
     joinProject(project.id).catch(() => {});
     // onReconnected возвращает cleanup — иначе при смене проекта старый callback остаётся
     // навсегда и продолжает джойнить уже закрытый проект при каждом реконнекте
-    const unsub = onReconnected(() => joinProject(project.id).catch(() => {}));
+    const unsub = onReconnected(async () => {
+      joinProject(project.id).catch(() => {});
+      // Сервер не шлёт status_changed при рестарте — рефетчим статус активной сессии
+      // чтобы session.status в ChatPanel не застрял в 'working' после убийства процесса
+      const sess = activeSessionRef.current;
+      if (!sess) return;
+      try {
+        const sessions = await api.sessions.list(sess.projectId);
+        const fresh = sessions.find(s => s.id === sess.id);
+        if (fresh && fresh.status !== sess.status) {
+          setActiveSession(prev => prev?.id === fresh.id ? { ...prev, status: fresh.status } : prev);
+        }
+      } catch { /* офлайн — оставляем как есть */ }
+    });
     return () => { leaveProject(project.id).catch(() => {}); unsub(); };
   }, [project.id]);
 

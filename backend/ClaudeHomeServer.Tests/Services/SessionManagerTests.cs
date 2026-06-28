@@ -46,7 +46,9 @@ public class SessionManagerTests : IDisposable
         var hub = new Mock<IHubContext<SessionHub>>();
         hub.Setup(h => h.Clients).Returns(clients.Object);
 
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config);
+        var skills = new SkillsService();
+        var workspaceStore = new WorkspaceKnowledgeStore(config);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, skills, workspaceStore);
     }
 
     public void Dispose()

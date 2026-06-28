@@ -8,6 +8,21 @@ let connection: signalR.HubConnection | null = null;
 // прямых conn.onreconnected(), которые не имеют публичного off())
 const _reconnectedCallbacks = new Set<() => void>();
 
+// Дебаунс перехода в офлайн. Кратковременные разрывы WS (VPN/прокси/сеть рвут
+// канал, авто-реконнект поднимает за доли секунды) НЕ должны мигать индикатором.
+// Показываем «Офлайн» только если реконнект не удался за OFFLINE_DEBOUNCE_MS.
+let _offlineDebounce: ReturnType<typeof setTimeout> | null = null;
+const OFFLINE_DEBOUNCE_MS = 2_500;
+
+function scheduleOffline() {
+  if (_offlineDebounce !== null) return; // уже запланировано
+  _offlineDebounce = setTimeout(() => { _offlineDebounce = null; notifyOffline(); }, OFFLINE_DEBOUNCE_MS);
+}
+
+function cancelOffline() {
+  if (_offlineDebounce !== null) { clearTimeout(_offlineDebounce); _offlineDebounce = null; }
+}
+
 export function getConnection(): signalR.HubConnection {
   if (!connection) {
     connection = new signalR.HubConnectionBuilder()
@@ -16,16 +31,23 @@ export function getConnection(): signalR.HubConnection {
         accessTokenFactory: () => localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || '',
       })
       .withAutomaticReconnect({
-        // Переподключаемся бесконечно с экспоненциальным откатом, макс 30 сек
+        // Первая попытка — мгновенно (0мс): кратковременный блип чинится сразу,
+        // UI не успевает мигнуть. Дальше — экспоненциальный откат, макс 30 сек.
         nextRetryDelayInMilliseconds: ctx =>
-          Math.min(1000 * Math.pow(2, ctx.previousRetryCount), 30_000),
+          ctx.previousRetryCount === 0
+            ? 0
+            : Math.min(1000 * Math.pow(2, ctx.previousRetryCount - 1), 30_000),
       })
       .build();
-    // Состояние соединения двигает глобальный online/offline флаг
-    connection.onreconnecting(() => notifyOffline());
-    connection.onclose(() => notifyOffline());
-    // Единственный onreconnected-обработчик: notifyOnline + диспатч подписчикам
+    // Состояние соединения двигает глобальный online/offline флаг.
+    // В офлайн уходим с дебаунсом — кратковременный разрыв+реконнект не мигает.
+    connection.onreconnecting(() => scheduleOffline());
+    // onclose — соединение закрыто окончательно (реконнекты исчерпаны или явный
+    // stop); тут офлайн без дебаунса.
+    connection.onclose(() => { cancelOffline(); notifyOffline(); });
+    // Единственный onreconnected-обработчик: отменяем отложенный офлайн + online + диспатч
     connection.onreconnected(() => {
+      cancelOffline();
       notifyOnline();
       _reconnectedCallbacks.forEach(cb => { try { cb(); } catch { /* не даём одному упавшему обработчику блокировать остальных */ } });
     });

@@ -14,6 +14,9 @@ internal class TurnAccumulator
     private readonly Dictionary<string, StoredPlanReviewMessage> _pendingPlans = [];
     private readonly StringBuilder _textBuf = new();
     private readonly StringBuilder _thinkingBuf = new();
+    // Защищает _history/_currentTurn от гонки: стоимость fal.ai добавляется из фонового
+    // потока опроса billing-events, параллельно с пампом сообщений и GetAll() из HTTP-потоков.
+    private readonly object _lock = new();
 
     public TurnAccumulator(List<StoredMessage> history, string? saveKey = null)
     {
@@ -103,17 +106,35 @@ internal class TurnAccumulator
         await FlushAsync(svc);
     }
 
+    // Стоимость генерации fal.ai приходит асинхронно (вне хода) — добавляем в историю напрямую.
+    // Возвращает false, если запись с таким requestId уже есть (дедуп run_model + get_job_result).
+    public bool OnFalCost(string requestId, string? endpointId, double costUsd, double? outputUnits, double? unitPrice)
+    {
+        lock (_lock)
+        {
+            bool exists =
+                _history.Any(m => m is StoredFalCostMessage f && f.RequestId == requestId) ||
+                _currentTurn.Any(m => m is StoredFalCostMessage f && f.RequestId == requestId);
+            if (exists) return false;
+            _history.Add(new StoredFalCostMessage(requestId, endpointId, costUsd, outputUnits, unitPrice));
+            return true;
+        }
+    }
+
     public List<StoredMessage> GetAll()
     {
-        var result = new List<StoredMessage>(_history.Count + _currentTurn.Count + 2);
-        result.AddRange(_history);
-        result.AddRange(_currentTurn);
-        // Включаем буферизованный текст/думание (ещё не зафиксированный в _currentTurn)
-        if (_thinkingBuf.Length > 0)
-            result.Add(new StoredThinkingMessage(_thinkingBuf.ToString()));
-        if (_textBuf.Length > 0)
-            result.Add(new StoredTextMessage(_textBuf.ToString()));
-        return result;
+        lock (_lock)
+        {
+            var result = new List<StoredMessage>(_history.Count + _currentTurn.Count + 2);
+            result.AddRange(_history);
+            result.AddRange(_currentTurn);
+            // Включаем буферизованный текст/думание (ещё не зафиксированный в _currentTurn)
+            if (_thinkingBuf.Length > 0)
+                result.Add(new StoredThinkingMessage(_thinkingBuf.ToString()));
+            if (_textBuf.Length > 0)
+                result.Add(new StoredTextMessage(_textBuf.ToString()));
+            return result;
+        }
     }
 
     // Сохраняет снимок текущего состояния не закрывая ход.
@@ -141,12 +162,15 @@ internal class TurnAccumulator
 
     private async Task FlushAsync(ChatHistoryService svc)
     {
-        _history.AddRange(_currentTurn);
-        _currentTurn.Clear();
-        _pendingTools.Clear();
-        _pendingQuestions.Clear();
-        _pendingPlans.Clear();
+        lock (_lock)
+        {
+            _history.AddRange(_currentTurn);
+            _currentTurn.Clear();
+            _pendingTools.Clear();
+            _pendingQuestions.Clear();
+            _pendingPlans.Clear();
+        }
         if (_saveKey is not null)
-            await svc.SaveAsync(_saveKey, _history);
+            await svc.SaveAsync(_saveKey, GetAll());
     }
 }

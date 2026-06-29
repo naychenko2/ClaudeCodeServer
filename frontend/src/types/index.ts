@@ -80,6 +80,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'plan_review'; requestId: string; plan: string }
   | { type: 'file_changed'; path: string; added: number; removed: number }
   | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[] }
+  | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { type: 'error'; text: string }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }
   | { type: 'compact_boundary'; trigger: string; preTokens?: number }
@@ -109,6 +110,7 @@ export type ChatItem =
   | { kind: 'plan_review'; requestId: string; plan: string; resolved: boolean; approved?: boolean; feedback?: string }
   | { kind: 'file_changed'; path: string; added: number; removed: number }
   | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[] }
+  | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }
   | { kind: 'compact_boundary'; trigger: string; preTokens?: number }
   | { kind: 'truncated' }

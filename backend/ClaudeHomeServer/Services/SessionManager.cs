@@ -35,16 +35,20 @@ public class SessionManager
     private readonly string? _mcpConfigPath;
     private readonly SkillsService _skills;
     private readonly WorkspaceKnowledgeStore _workspaceStore;
+    private readonly FalCostService _falCost;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, SkillsService skills,
-        WorkspaceKnowledgeStore workspaceStore)
+        WorkspaceKnowledgeStore workspaceStore, FalCostService falCost)
     {
         _projects = projects;
         _hub = hub;
         _history = history;
         _skills = skills;
         _workspaceStore = workspaceStore;
+        _falCost = falCost;
+        // Найденную стоимость fal.ai публикуем в SignalR + историю
+        _falCost.OnCostResolved = PublishFalCostAsync;
 
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
@@ -314,6 +318,7 @@ public class SessionManager
                 case ToolResultMessage m:
                     acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);
                     await acc.SaveSnapshotAsync(_history); // промежуточное сохранение после каждого tool call
+                    TryTrackFalCost(sessionId, m.Content); // fire-and-forget: стоимость придёт позже
                     break;
                 case WorkflowProgressMessage m:
                     if (entry is not null)
@@ -366,6 +371,54 @@ public class SessionManager
             }
         }
 
+        await BroadcastAsync(sessionId, msg);
+    }
+
+    // Распознаёт результат генерации fal.ai (есть request_id + *_url на fal) и ставит
+    // его на отслеживание стоимости. Сам опрос billing-events — в фоне (FalCostService).
+    private void TryTrackFalCost(string sessionId, string content)
+    {
+        if (string.IsNullOrEmpty(content) || !_falCost.Enabled) return;
+        string? requestId;
+        try
+        {
+            using var doc = JsonDocument.Parse(content);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return;
+            if (!root.TryGetProperty("request_id", out var rid) || rid.ValueKind != JsonValueKind.String) return;
+
+            bool isFal = false;
+            foreach (var key in new[] { "response_url", "status_url", "cancel_url" })
+            {
+                if (root.TryGetProperty(key, out var u) && u.ValueKind == JsonValueKind.String)
+                {
+                    var s = u.GetString();
+                    if (s != null && (s.Contains("fal.run") || s.Contains("fal.ai"))) { isFal = true; break; }
+                }
+            }
+            if (!isFal) return;
+            requestId = rid.GetString();
+        }
+        catch { return; } // не JSON / не наш формат — это не fal-результат
+        if (!string.IsNullOrEmpty(requestId))
+            _falCost.Track(sessionId, requestId);
+    }
+
+    // Публикация найденной стоимости fal.ai: запись в историю (дедуп) + broadcast клиентам
+    public async Task PublishFalCostAsync(string sessionId, FalCostMessage msg)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        var added = entry.Accumulator?.OnFalCost(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice) ?? true;
+        if (!added) return; // дубликат — повторно не публикуем
+        try
+        {
+            if (entry.Accumulator is not null)
+                await entry.Accumulator.SaveSnapshotAsync(_history);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FalCost] Сохранение истории ({sessionId}) не удалось: {ex.Message}");
+        }
         await BroadcastAsync(sessionId, msg);
     }
 

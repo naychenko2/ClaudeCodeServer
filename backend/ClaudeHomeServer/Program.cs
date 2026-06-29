@@ -42,9 +42,11 @@ builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddSingleton<ConnectionDiagnostics>();
 builder.Services.AddSingleton<ChatHistoryService>();
 builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
+builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");
+builder.Services.AddHttpClient("fal");
 builder.Services.AddHttpForwarder();
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));

@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredPlanReviewMessage), "plan_review")]
 [JsonDerivedType(typeof(StoredFileChangedMessage), "file_changed")]
 [JsonDerivedType(typeof(StoredResultMessage), "result")]
+[JsonDerivedType(typeof(StoredFalCostMessage), "fal_cost")]
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
 public abstract class StoredMessage { }
 
@@ -60,6 +61,17 @@ public class StoredResultMessage(string subtype, long durationMs, int numTurns,
 public class StoredErrorMessage(string text) : StoredMessage
 {
     public string Text { get; init; } = text;
+}
+
+// Стоимость генерации fal.ai (фактически списанная), приходит вне хода — хранится отдельной записью
+public class StoredFalCostMessage(string requestId, string? endpointId, double costUsd,
+    double? outputUnits = null, double? unitPrice = null) : StoredMessage
+{
+    public string RequestId { get; init; } = requestId;
+    public string? EndpointId { get; init; } = endpointId;
+    public double CostUsd { get; init; } = costUsd;
+    public double? OutputUnits { get; init; } = outputUnits;
+    public double? UnitPrice { get; init; } = unitPrice;
 }
 
 // Result/IsError заполняются позже — при получении tool_result от Claude

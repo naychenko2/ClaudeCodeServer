@@ -197,27 +197,49 @@ interface CostStats {
   results: number;
 }
 
+// Накопительная стоимость генераций fal.ai (фактически списанная, приходит с backend).
+// byModel — разбивка по endpoint_id: число генераций и сумма.
+interface FalCostStats {
+  total: number;
+  count: number;
+  byModel: Map<string, { count: number; cost: number }>;
+}
+
 const fmtUsd = (c: number) => '$' + (c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2));
 const fmtTokens = (n: number) =>
   n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
 
-// Бейдж накопительной стоимости сессии в шапке. Клик раскрывает разбивку (аналог /cost).
-function CostBadge({ stats, isMobile }: { stats: CostStats; isMobile?: boolean }) {
+// Строка разбивки в выпадашке бейджа
+const badgeRowStyle: React.CSSProperties = {
+  display: 'flex', justifyContent: 'space-between', gap: 16,
+  fontFamily: FONT.mono, fontSize: 12, color: C.textSecondary, padding: '2px 0',
+};
+const badgeTitleStyle: React.CSSProperties = {
+  fontFamily: FONT.sans, fontSize: 13, fontWeight: 700, color: C.textHeading, marginBottom: 8,
+};
+function BadgeRow({ k, v }: { k: string; v: string }) {
+  return <div style={badgeRowStyle}><span style={{ color: C.textMuted }}>{k}</span><span style={{ fontWeight: 600 }}>{v}</span></div>;
+}
+
+// Общая оболочка бейджа стоимости: пилюля с подписью + суммой и выпадающая разбивка по клику.
+function BadgeShell({ label, amount, title, isMobile, children }: {
+  label: string; amount: string; title: string; isMobile?: boolean; children: React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
-  if (stats.cost <= 0) return null;
   return (
     <div style={{ position: 'relative', flexShrink: 0 }}>
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
-        title="Стоимость сессии — нажмите для разбивки"
+        title={title}
         style={{
-          display: 'flex', alignItems: 'center', gap: 5, padding: '3px 9px',
+          display: 'flex', alignItems: 'center', gap: 4, padding: '3px 9px',
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
           cursor: 'pointer', fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: '#B05C38',
         }}
       >
-        {fmtUsd(stats.cost)}
+        <span style={{ fontFamily: FONT.sans, fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</span>
+        {amount}
       </button>
       {open && (
         <>
@@ -227,26 +249,46 @@ function CostBadge({ stats, isMobile }: { stats: CostStats; isMobile?: boolean }
             minWidth: isMobile ? 200 : 240, padding: '12px 14px',
             background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, boxShadow: SHADOW.dropdown,
           }}>
-            <div style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 700, color: C.textHeading, marginBottom: 8 }}>
-              Стоимость сессии
-            </div>
-            {[
-              ['Всего', fmtUsd(stats.cost)],
-              ['Ходов', String(stats.turns || stats.results)],
-              ['Входные токены', fmtTokens(stats.input)],
-              ['Выходные токены', fmtTokens(stats.output)],
-              ['Кэш (чтение)', fmtTokens(stats.cacheRead)],
-              ['Кэш (запись)', fmtTokens(stats.cacheCreate)],
-            ].map(([k, v]) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, fontFamily: FONT.mono, fontSize: 12, color: C.textSecondary, padding: '2px 0' }}>
-                <span style={{ color: C.textMuted }}>{k}</span>
-                <span style={{ fontWeight: 600 }}>{v}</span>
-              </div>
-            ))}
+            {children}
           </div>
         </>
       )}
     </div>
+  );
+}
+
+// Бейдж стоимости Claude (токены/ходы). Клик раскрывает разбивку (аналог /cost).
+function CostBadge({ stats, isMobile }: { stats: CostStats; isMobile?: boolean }) {
+  if (stats.cost <= 0) return null;
+  return (
+    <BadgeShell label="Claude" amount={fmtUsd(stats.cost)} isMobile={isMobile}
+      title="Стоимость Claude — нажмите для разбивки">
+      <div style={badgeTitleStyle}>Стоимость Claude</div>
+      <BadgeRow k="Всего" v={fmtUsd(stats.cost)} />
+      <BadgeRow k="Ходов" v={String(stats.turns || stats.results)} />
+      <BadgeRow k="Входные токены" v={fmtTokens(stats.input)} />
+      <BadgeRow k="Выходные токены" v={fmtTokens(stats.output)} />
+      <BadgeRow k="Кэш (чтение)" v={fmtTokens(stats.cacheRead)} />
+      <BadgeRow k="Кэш (запись)" v={fmtTokens(stats.cacheCreate)} />
+    </BadgeShell>
+  );
+}
+
+// Бейдж трат на fal.ai (медиа). Отдельная от Claude цифра. Разбивка по моделям.
+function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boolean }) {
+  if (stats.total <= 0) return null;
+  return (
+    <BadgeShell label="fal.ai" amount={fmtUsd(stats.total)} isMobile={isMobile}
+      title="Траты на fal.ai (медиа) — нажмите для разбивки">
+      <div style={badgeTitleStyle}>Траты fal.ai · медиа</div>
+      <BadgeRow k="Всего" v={fmtUsd(stats.total)} />
+      <BadgeRow k="Генераций" v={String(stats.count)} />
+      {[...stats.byModel.entries()].map(([endpoint, m]) => (
+        <BadgeRow key={endpoint}
+          k={`${endpoint.split('/').pop()}${m.count > 1 ? ` ×${m.count}` : ''}`}
+          v={fmtUsd(m.cost)} />
+      ))}
+    </BadgeShell>
   );
 }
 
@@ -255,6 +297,7 @@ interface ChatHeaderBarProps {
   project: Project;
   online: boolean;
   cost: CostStats;
+  falCost: FalCostStats;
   onOpenSettings: () => void;
   isMobile?: boolean;
   onBack?: () => void;
@@ -262,7 +305,7 @@ interface ChatHeaderBarProps {
   onOpenSidebar?: () => void;
 }
 
-function ChatHeaderBar({ session, project, online, cost, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, cost, falCost, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -306,6 +349,7 @@ function ChatHeaderBar({ session, project, online, cost, onOpenSettings, isMobil
         </div>
       )}
       <CostBadge stats={cost} isMobile={isMobile} />
+      <FalCostBadge stats={falCost} isMobile={isMobile} />
       {online && (
         <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -321,10 +365,9 @@ function ChatHeaderBar({ session, project, online, cost, onOpenSettings, isMobil
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
 const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
 
-// Тариф fal-ai: за запрос или за секунду
-type FalPricingEntry = { type: 'per_request' | 'per_second'; price: number };
-// Контекст тарифов — строится из get_pricing результатов в ленте
-const FalPricingContext = createContext<Map<string, FalPricingEntry>>(new Map());
+// Контекст точной стоимости генераций fal.ai: requestId → списанная сумма (USD).
+// Наполняется из fal_cost-сообщений (backend опрашивает billing-events по request_id).
+const FalCostContext = createContext<Map<string, number>>(new Map());
 
 // Картинка из markdown: внешние URL (http/https/data) — напрямую; локальный путь файла
 // проекта (например, картинка, скачанная Claude) — грузим через API и показываем как data-URL.
@@ -610,33 +653,31 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       .catch(() => setHasCLAUDEmd(true)); // при ошибке не показываем баннер
   }, [project.id]);
 
-  // Строим кэш тарифов fal-ai из результатов get_pricing в ленте
-  const falPricing = useMemo(() => {
-    const map = new Map<string, FalPricingEntry>();
-    for (const item of items) {
-      if (item.kind !== 'tool_use' || !item.result || item.isError) continue;
-      if (!item.name.toLowerCase().includes('get_pricing')) continue;
-      try {
-        const r = JSON.parse(item.result);
-        const endpointId: string | undefined =
-          r.endpoint_id ?? r.endpointId ?? (item.input as Record<string, unknown>)?.endpoint_id as string;
-        if (!endpointId) continue;
-        // Разные форматы ответа fal-ai
-        const perSecond = r.price_per_second ?? r.cost_per_second ?? r.per_second_price;
-        const perRequest = r.price_per_request ?? r.cost_per_request ?? r.price_usd ?? r.cost_usd;
-        const billingType: string | undefined = r.billing_type ?? r.billing_strategy ?? r.cost_type;
-        if (perSecond != null) {
-          map.set(endpointId, { type: 'per_second', price: Number(perSecond) });
-        } else if (perRequest != null) {
-          map.set(endpointId, { type: 'per_request', price: Number(perRequest) });
-        } else if (billingType?.includes('second') && r.price != null) {
-          map.set(endpointId, { type: 'per_second', price: Number(r.price) });
-        } else if (r.price != null) {
-          map.set(endpointId, { type: 'per_request', price: Number(r.price) });
-        }
-      } catch { /* некорректный JSON — пропускаем */ }
-    }
+  // Точная стоимость генераций fal.ai: requestId → списанная сумма (для подписи под медиа).
+  // Источник — fal_cost-элементы ленты (backend опрашивает billing-events). Дедуп по requestId.
+  const falCostByRequest = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const it of items)
+      if (it.kind === 'fal_cost' && !map.has(it.requestId)) map.set(it.requestId, it.costUsd);
     return map;
+  }, [items]);
+
+  // Накопительная стоимость fal.ai по сессии: сумма, число генераций, разбивка по моделям.
+  const falCostStats = useMemo<FalCostStats>(() => {
+    const byModel = new Map<string, { count: number; cost: number }>();
+    let total = 0, count = 0;
+    const seen = new Set<string>();
+    for (const it of items) {
+      if (it.kind !== 'fal_cost' || seen.has(it.requestId)) continue;
+      seen.add(it.requestId);
+      total += it.costUsd;
+      count++;
+      const key = it.endpointId ?? 'unknown';
+      const m = byModel.get(key) ?? { count: 0, cost: 0 };
+      m.count++; m.cost += it.costUsd;
+      byModel.set(key, m);
+    }
+    return { total, count, byModel };
   }, [items]);
 
   const [mode, setMode] = useState<Mode>(session.mode);
@@ -1091,6 +1132,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         project={project}
         online={online}
         cost={costStats}
+        falCost={falCostStats}
         onOpenSettings={() => setShowEdit(true)}
         isMobile={isMobile}
         onBack={onBack}
@@ -1197,7 +1239,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           </div>
         )}
 
-        <FalPricingContext.Provider value={falPricing}><ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider></FalPricingContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}>{renderItems()}</ChatProjectContext.Provider></FalCostContext.Provider>
 
         {online && showWaiting && (
           <WaitingIndicator planning={planningKind} />
@@ -1595,11 +1637,12 @@ function extractMediaFromResult(result: string): MediaItem[] {
   }
 }
 
-// Извлекает метаданные генерации (модель, время, цену) из JSON-результата MCP-инструмента
-function extractMediaMeta(result: string): { model?: string; inferenceTime?: number; costUsd?: number } {
+// Извлекает метаданные генерации (модель, время) из JSON-результата MCP-инструмента.
+// Стоимость берётся отдельно — точная, с backend (см. FalCostContext).
+function extractMediaMeta(result: string): { model?: string; inferenceTime?: number } {
   try {
     const parsed = JSON.parse(result);
-    // Имя модели: endpoint_id → берём только короткое имя после последнего /
+    // Имя модели: endpoint_id → берём только короткое имя после последнего / (в результате fal обычно отсутствует)
     const endpointId: string | undefined = parsed?.endpoint_id;
     const model = endpointId ? endpointId.split('/').pop() : undefined;
     // Время генерации: ищем в нескольких местах
@@ -1610,17 +1653,9 @@ function extractMediaMeta(result: string): { model?: string; inferenceTime?: num
       parsed?.timings?.inference ??
       parsed?.metrics?.inference_time ??
       undefined;
-    // Стоимость (fal-ai обычно не возвращает её в ответе, но проверяем на всякий случай)
-    const costUsd: number | undefined =
-      parsed?.cost?.usd ??
-      parsed?.billing?.cost_usd ??
-      parsed?.usage?.cost ??
-      r?.cost?.usd ??
-      undefined;
     return {
       model: model || undefined,
       inferenceTime: inferenceTime ? Number(inferenceTime) : undefined,
-      costUsd: costUsd ? Number(costUsd) : undefined,
     };
   } catch {
     return {};
@@ -1636,6 +1671,7 @@ function MediaBlock({
   model,
   inferenceTime,
   costUsd,
+  costPending,
   online = true,
 }: {
   m: MediaItem;
@@ -1643,6 +1679,7 @@ function MediaBlock({
   model?: string;
   inferenceTime?: number;
   costUsd?: number;
+  costPending?: boolean;
   online?: boolean;
 }) {
   const project = useContext(ChatProjectContext);
@@ -1695,7 +1732,9 @@ function MediaBlock({
   if ((m.kind === 'video' || m.kind === 'audio') && m.duration) metaParts.push(`${m.duration.toFixed(1)}с`);
   if (inferenceTime) metaParts.push(`${inferenceTime.toFixed(1)}с`);
   if (model) metaParts.push(model);
-  if (costUsd) metaParts.push(costUsd < 0.01 ? `~$${costUsd.toFixed(4)}` : `~$${costUsd.toFixed(2)}`);
+  // Точная стоимость с backend (billing-events). Пока не пришла — «считается…».
+  if (costUsd) metaParts.push(costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`);
+  else if (costPending) metaParts.push('считается…');
 
   const btnBase: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -1950,22 +1989,19 @@ function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 
   const mediaMeta = hasResult && !item.isError ? extractMediaMeta(item.result!) : {};
   const hasMedia = media.length > 0;
 
-  // Расчёт стоимости генерации через тариф get_pricing × inference_time
-  const falPricing = useContext(FalPricingContext);
-  const estimatedCostUsd = useMemo(() => {
+  // Точная стоимость генерации fal.ai приходит с backend (billing-events по request_id).
+  // Сопоставляем по request_id, извлечённому из результата вызова.
+  const falCostByRequest = useContext(FalCostContext);
+  const falRequestId = useMemo(() => {
     if (!hasMedia || !hasResult || item.isError) return undefined;
-    if (mediaMeta.costUsd) return mediaMeta.costUsd; // уже есть в ответе
-    try {
-      const endpointId: string | undefined = JSON.parse(item.result!).endpoint_id;
-      if (!endpointId) return undefined;
-      const pricing = falPricing.get(endpointId);
-      if (!pricing) return undefined;
-      if (pricing.type === 'per_request') return pricing.price;
-      if (pricing.type === 'per_second' && mediaMeta.inferenceTime)
-        return pricing.price * mediaMeta.inferenceTime;
-    } catch { /* некорректный JSON */ }
-    return undefined;
-  }, [hasMedia, hasResult, item.isError, item.result, mediaMeta, falPricing]);
+    try { return JSON.parse(item.result!).request_id as string | undefined; }
+    catch { return undefined; }
+  }, [hasMedia, hasResult, item.isError, item.result]);
+  const falCostUsd = falRequestId ? falCostByRequest.get(falRequestId) : undefined;
+  // Генерация fal распознана, но стоимость ещё не подсчитана (биллинг приходит с задержкой)
+  const costPending = hasMedia && !!falRequestId && falCostUsd === undefined;
+  // Имя модели — из input вызова (в результате fal его нет)
+  const falModel = ((inp.endpoint_id as string | undefined) ?? mediaMeta.model)?.split('/').pop();
   // Медиа показываем сразу, без клика; текст/diff — за клик
   const hasBody = hasDiff || (hasResult && !hasMedia);
   // Консольные инструменты (Bash/shell) → тёмный «терминальный» вывод.
@@ -2001,7 +2037,7 @@ function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 
           {media.map((m, i) => {
             const filename = m.fileName ?? m.url.split('/').pop()?.split('?')[0] ?? m.kind;
             return (
-              <MediaBlock key={i} m={m} filename={filename} model={mediaMeta.model} inferenceTime={mediaMeta.inferenceTime} costUsd={estimatedCostUsd} online={online} />
+              <MediaBlock key={i} m={m} filename={filename} model={falModel} inferenceTime={mediaMeta.inferenceTime} costUsd={falCostUsd} costPending={costPending} online={online} />
             );
           })}
         </div>

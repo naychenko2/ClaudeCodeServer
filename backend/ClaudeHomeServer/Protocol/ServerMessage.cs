@@ -49,6 +49,11 @@ public record FileChangedMessage(string Path, int Added, int Removed)
 public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null)
     : ServerMessage("result");
 
+// Фактически списанная стоимость генерации fal.ai. Приходит асинхронно после tool_result:
+// сервер опрашивает fal.ai billing-events по request_id (см. FalCostService).
+public record FalCostMessage(string RequestId, string? EndpointId, double CostUsd, double? OutputUnits = null, double? UnitPrice = null)
+    : ServerMessage("fal_cost");
+
 // Ответ оборван по лимиту токенов (assistant stop_reason == max_tokens)
 public record TruncatedMessage() : ServerMessage("truncated");
 

@@ -181,6 +181,15 @@ function ensureHandler() {
           items: [...prev.items, { kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd, apiErrorStatus: msg.apiErrorStatus, permissionDenials: msg.permissionDenials }],
         }));
         break;
+      case 'fal_cost':
+        // Стоимость генерации fal.ai приходит асинхронно. Дедуп по requestId
+        // (run_model + get_job_result несут один id; возможен повтор из истории).
+        updateItems(sid, items =>
+          items.some(it => it.kind === 'fal_cost' && it.requestId === msg.requestId)
+            ? items
+            : [...items, { kind: 'fal_cost', requestId: msg.requestId, endpointId: msg.endpointId, costUsd: msg.costUsd, outputUnits: msg.outputUnits, unitPrice: msg.unitPrice }]
+        );
+        break;
       case 'truncated':
         updateItems(sid, items => [...items, { kind: 'truncated' }]);
         break;

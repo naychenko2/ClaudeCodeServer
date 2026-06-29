@@ -228,6 +228,7 @@ public class FileService
 
     public string? GetDiff(string rootPath, string relativePath)
     {
+        if (!IsGitRepo(rootPath)) return null;
         try
         {
             // diff рабочего дерева vs HEAD (покрывает изменённые отслеживаемые файлы)
@@ -260,6 +261,7 @@ public class FileService
 
     public bool RevertFile(string rootPath, string relativePath)
     {
+        if (!IsGitRepo(rootPath)) return false;
         // git checkout HEAD -- file
         try
         {
@@ -280,8 +282,36 @@ public class FileService
     private static readonly Dictionary<string, GitStatusCache> _statusCache = new();
     private static readonly Lock _cacheLock = new();
 
+    // Кеш признака «папка — git-репо». Меняется редко (git init), TTL длиннее статуса.
+    private record GitRepoCache(bool IsRepo, long ExpiresAt);
+    private static readonly Dictionary<string, GitRepoCache> _repoCache = new();
+
+    private static bool IsGitRepo(string rootPath)
+    {
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        lock (_cacheLock)
+        {
+            if (_repoCache.TryGetValue(rootPath, out var cached) && cached.ExpiresAt > now)
+                return cached.IsRepo;
+        }
+        // .git — папка (обычный репо) или файл-указатель (worktree/submodule)
+        var isRepo = Path.Exists(Path.Combine(rootPath, ".git"));
+        var ttl = System.Diagnostics.Stopwatch.Frequency * 60; // 60 секунд
+        lock (_cacheLock)
+        {
+            _repoCache[rootPath] = new GitRepoCache(isRepo, now + ttl);
+        }
+        return isRepo;
+    }
+
     private static (HashSet<string> modified, HashSet<string> @new) GetGitStatus(string rootPath)
     {
+        // Не git-репо — не спавним git (иначе на каждый листинг летит
+        // `fatal: not a git repository` в stderr и плодятся процессы)
+        if (!IsGitRepo(rootPath))
+            return (new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                    new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
         var now = System.Diagnostics.Stopwatch.GetTimestamp();
         lock (_cacheLock)
         {

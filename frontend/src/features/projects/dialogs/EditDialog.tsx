@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Project } from '../../../types';
+import type { Project, PermissionRule } from '../../../types';
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
 import { C, R } from '../../../lib/design';
@@ -12,7 +12,7 @@ interface Props {
   onClose: () => void;
 }
 
-type View = 'main' | 'prompt';
+type View = 'main' | 'prompt' | 'rules';
 
 export function EditDialog({ project, onSuccess, onClose }: Props) {
   const online = useOnline();
@@ -20,6 +20,7 @@ export function EditDialog({ project, onSuccess, onClose }: Props) {
   const [name, setName] = useState(project.name);
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
+  const [rules, setRules] = useState<PermissionRule[]>(project.permissionRules ?? []);
   const [draftPrompt, setDraftPrompt] = useState('');
   const builtinPrompt = project.builtInSystemPrompt ?? '';
   const [error, setError] = useState('');
@@ -31,6 +32,7 @@ export function EditDialog({ project, onSuccess, onClose }: Props) {
         name: name.trim(),
         systemPrompt,
         showHiddenFiles,
+        permissionRules: rules.filter(r => r.pattern.trim()).map(r => ({ pattern: r.pattern.trim(), action: r.action })),
       });
       onSuccess(updated);
     } catch (e: any) {
@@ -100,6 +102,66 @@ export function EditDialog({ project, onSuccess, onClose }: Props) {
             style={{ maxHeight: 320 }}
           />
         </div>
+      </Modal>
+    );
+  }
+
+  if (view === 'rules') {
+    const updateRule = (i: number, patch: Partial<PermissionRule>) =>
+      setRules(rs => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+    return (
+      <Modal
+        title="Правила разрешений"
+        width={560}
+        onClose={() => setView('main')}
+        footer={<ModalActions confirmLabel="Готово" onConfirm={() => setView('main')} onCancel={() => setView('main')} />}
+      >
+        <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.55 }}>
+          Авто-разрешения и запреты для запросов прав. Шаблон: <code>Инструмент</code> или <code>Инструмент(маска)</code> с <code>*</code>.
+          Запрет приоритетнее разрешения; без совпадения — спросит как обычно.
+          Примеры: <code>Bash(npm run *)</code>, <code>Edit</code>, <code>WebFetch</code>.
+        </div>
+        {rules.map((r, i) => (
+          <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              onClick={() => updateRule(i, { action: r.action === 'allow' ? 'deny' : 'allow' })}
+              style={{
+                flexShrink: 0, width: 92, padding: '7px 0', borderRadius: R.md, border: 'none', cursor: 'pointer',
+                fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit',
+                background: r.action === 'deny' ? C.dangerBg : C.accentLight,
+                color: r.action === 'deny' ? C.danger : C.accent,
+              }}
+            >
+              {r.action === 'deny' ? 'Запретить' : 'Разрешить'}
+            </button>
+            <input
+              value={r.pattern}
+              onChange={e => updateRule(i, { pattern: e.target.value })}
+              placeholder="Bash(npm run *)"
+              style={{
+                flex: 1, minWidth: 0, height: 34, padding: '0 10px', borderRadius: R.md,
+                border: `1px solid ${C.border}`, fontFamily: 'JetBrains Mono, monospace', fontSize: 12.5,
+                color: C.textPrimary, background: C.bgWhite, outline: 'none',
+              }}
+            />
+            <button
+              onClick={() => setRules(rs => rs.filter((_, j) => j !== i))}
+              title="Удалить"
+              style={{ flexShrink: 0, width: 30, height: 30, border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 14 }}
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+        <button
+          onClick={() => setRules(rs => [...rs, { pattern: '', action: 'allow' }])}
+          style={{
+            alignSelf: 'flex-start', padding: '7px 14px', borderRadius: R.md, cursor: 'pointer',
+            border: `1px dashed ${C.border}`, background: 'none', color: C.textSecondary, fontSize: 13, fontFamily: 'inherit',
+          }}
+        >
+          + Добавить правило
+        </button>
       </Modal>
     );
   }
@@ -189,6 +251,30 @@ export function EditDialog({ project, onSuccess, onClose }: Props) {
             background: '#fff', borderRadius: '50%',
             transition: 'left 0.15s',
           }} />
+        </button>
+      </div>
+      {/* Правила разрешений */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '11px 14px', background: C.bgWhite,
+        border: `1px solid ${C.border}`, borderRadius: R.xl,
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>
+            Правила разрешений
+          </div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>
+            {rules.length ? `${rules.length} ${rules.length === 1 ? 'правило' : 'правил'}` : 'Нет правил — спрашивать каждый раз'}
+          </div>
+        </div>
+        <button
+          onClick={() => setView('rules')}
+          style={{
+            flexShrink: 0, padding: '6px 14px', background: C.accent, color: '#fff',
+            border: 'none', borderRadius: R.xl, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
+          }}
+        >
+          Настроить
         </button>
       </div>
       <ProjectSyncToggle projectId={project.id} online={online} />

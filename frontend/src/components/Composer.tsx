@@ -2,6 +2,8 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { SkillsDropdown } from './SkillsDropdown';
 import { AgentSelector } from './AgentSelector';
+import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
+import { DangerModeConfirm } from './DangerModeConfirm';
 import type { SkillInfo, AgentInfo } from '../types';
 
 export interface ComposerProps {
@@ -9,10 +11,12 @@ export interface ComposerProps {
   onStop: () => void;
   onAttach: () => void;
   isGenerating: boolean;
-  mode: 'auto' | 'plan' | 'ask';
-  onModeChange: (mode: 'auto' | 'plan' | 'ask') => void;
+  mode: Mode;
+  onModeChange: (mode: Mode) => void;
   attachments: string[];
   onRemoveAttachment: (path: string) => void;
+  // Вставка/перетаскивание картинок (скриншоты) — File-объекты для загрузки и отправки
+  onAttachImages?: (files: File[]) => void;
   isMobile?: boolean;
   // Офлайн: показываем заглушку вместо полей, но НЕ размонтируем компонент —
   // иначе теряется набранный черновик при кратком пропадании сети
@@ -21,23 +25,6 @@ export interface ComposerProps {
   agents?: AgentInfo[];
   selectedAgent?: AgentInfo | null;
   onAgentChange?: (agent: AgentInfo | null) => void;
-}
-
-type Mode = 'auto' | 'plan' | 'ask';
-const MODE_META: Record<Mode, { label: string; desc: string }> = {
-  auto: { label: 'Авто', desc: 'Claude действует сам и применяет правки' },
-  plan: { label: 'План', desc: 'Сначала показывает план, ждёт подтверждения' },
-  ask: { label: 'Спросить', desc: 'Спрашивает разрешение на каждое действие' },
-};
-
-const MODES: Mode[] = ['auto', 'plan', 'ask'];
-
-// Штриховые иконки режимов (вместо цветных эмодзи) — монохромная иконографика эталона
-function ModeIcon({ mode }: { mode: Mode }) {
-  const p = { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
-  if (mode === 'auto') return <svg {...p}><path d="M13 3v7h6l-8 11v-7H5l8-11z" /></svg>;
-  if (mode === 'plan') return <svg {...p}><rect x="9" y="3" width="6" height="4" rx="1" /><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /><path d="M9 12h6M9 16h4" /></svg>;
-  return <svg {...p}><circle cx="12" cy="12" r="9" /><path d="M9.2 9.2a3 3 0 0 1 5.6 1c0 2-2.8 2.4-2.8 2.4" /><line x1="12" y1="17.2" x2="12.01" y2="17.2" /></svg>;
 }
 
 // Получить имя файла из пути
@@ -121,6 +108,7 @@ export function Composer({
   onModeChange,
   attachments,
   onRemoveAttachment,
+  onAttachImages,
   isMobile,
   offline,
   skills = [],
@@ -132,6 +120,9 @@ export function Composer({
   const [isListening, setIsListening] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
+  const [pendingMode, setPendingMode] = useState<Mode | null>(null);
   // Autocomplete скиллов
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
   const [skillQuery, setSkillQuery] = useState('');
@@ -237,6 +228,31 @@ export function Composer({
     }
   };
 
+  // Вставка картинки из буфера (скриншот) → отдаём File-объекты родителю на загрузку
+  const handlePaste = (e: React.ClipboardEvent) => {
+    if (!onAttachImages) return;
+    const files: File[] = [];
+    for (const item of Array.from(e.clipboardData.items)) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const f = item.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length) { e.preventDefault(); onAttachImages(files); }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    if (!onAttachImages) return;
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+    setDragOver(false);
+    if (files.length) { e.preventDefault(); onAttachImages(files); }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!onAttachImages) return;
+    if (Array.from(e.dataTransfer.types).includes('Files')) { e.preventDefault(); setDragOver(true); }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // На мобиле Enter переносит строку, отправка — только кнопкой (десктоп: Enter отправляет)
     if (e.key === 'Enter' && !e.shiftKey && !isMobile) {
@@ -282,10 +298,10 @@ export function Composer({
   const containerStyle: React.CSSProperties = {
     position: 'relative',
     background: C.bgWhite,
-    border: `1px solid ${hasText ? C.accent : C.border}`,
+    border: `1px solid ${dragOver || hasText ? C.accent : C.border}`,
     borderRadius: R.xxl,
     padding: isMobile ? '8px 10px' : '7px 8px',
-    boxShadow: hasText ? '0 3px 12px rgba(217,119,87,0.10)' : 'none',
+    boxShadow: dragOver ? '0 0 0 3px rgba(217,119,87,0.14)' : hasText ? '0 3px 12px rgba(217,119,87,0.10)' : 'none',
     display: 'flex',
     flexDirection: 'column',
     gap: 0,
@@ -354,6 +370,7 @@ export function Composer({
       }}
       onKeyDown={handleKeyDown}
       onInput={autoResize}
+      onPaste={handlePaste}
       placeholder="Спросите Claude…"
       rows={1}
       style={{
@@ -382,14 +399,16 @@ export function Composer({
         onClick={() => setModeMenuOpen(o => !o)}
         title="Режим работы"
         style={{
-          height: isMobile ? 32 : 28, padding: '0 10px', borderRadius: R.md, border: 'none',
-          background: modeMenuOpen ? C.bgSelected : C.accentLight, color: C.textSecondary,
+          height: isMobile ? 32 : 28, padding: isMobile ? '0 8px' : '0 10px', borderRadius: R.md, border: 'none',
+          background: modeMenuOpen ? C.bgSelected : C.accentLight,
+          color: mode === 'bypass' ? C.danger : C.textSecondary,
           fontSize: 12.5, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
-          display: 'flex', alignItems: 'center', gap: 6,
+          display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
         }}
       >
         <ModeIcon mode={mode} />
-        {MODE_META[mode].label}
+        {/* На мобилке только иконка — длинные названия распирают строку контролов; полные подписи есть в списке */}
+        {!isMobile && MODE_META[mode].label}
         <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
           style={{ opacity: 0.55, transform: modeMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
           <path d="M6 9l6 6 6-6" />
@@ -406,8 +425,9 @@ export function Composer({
         }}>
           {MODES.map(m => {
             const active = m === mode;
+            const danger = MODE_META[m].danger;
             return (
-              <button key={m} onClick={() => { onModeChange(m); setModeMenuOpen(false); }}
+              <button key={m} onClick={() => { setModeMenuOpen(false); if (isDangerMode(m) && m !== mode) setPendingMode(m); else onModeChange(m); }}
                 style={{
                   width: '100%', display: 'flex', alignItems: 'flex-start', gap: 9,
                   padding: isMobile ? '11px 11px' : '8px 9px',
@@ -417,9 +437,9 @@ export function Composer({
                 onMouseEnter={e => { if (!active) e.currentTarget.style.background = C.accentLight; }}
                 onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
               >
-                <span style={{ color: active ? C.accent : C.textMuted, display: 'flex', marginTop: 1, flexShrink: 0 }}><ModeIcon mode={m} /></span>
+                <span style={{ color: danger ? C.danger : active ? C.accent : C.textMuted, display: 'flex', marginTop: 1, flexShrink: 0 }}><ModeIcon mode={m} /></span>
                 <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading }}>{MODE_META[m].label}</span>
+                  <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: danger ? C.danger : C.textHeading }}>{MODE_META[m].label}{danger ? ' ⚠️' : ''}</span>
                   <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, marginTop: 1, lineHeight: 1.35 }}>{MODE_META[m].desc}</span>
                 </span>
                 {active && (
@@ -539,7 +559,7 @@ export function Composer({
   ) : null;
 
   return (
-    <div style={containerStyle}>
+    <div style={containerStyle} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={() => setDragOver(false)}>
       {/* Dropdown скиллов (показывается над полем ввода при /query) */}
       {showSkillsDropdown && skills.length > 0 && (
         <SkillsDropdown
@@ -629,6 +649,14 @@ export function Composer({
           {agentSelector}
           {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
         </div>
+      )}
+
+      {pendingMode && (
+        <DangerModeConfirm
+          mode={pendingMode}
+          onConfirm={() => { onModeChange(pendingMode); setPendingMode(null); }}
+          onCancel={() => setPendingMode(null)}
+        />
       )}
     </div>
   );

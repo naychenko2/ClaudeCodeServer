@@ -5,6 +5,9 @@ import { useSession } from '../hooks/useSession';
 import { useOnline } from '../hooks/useOnline';
 import { api, type WorkflowAgentInfo } from '../lib/api';
 import { modelLabel } from '../lib/models';
+import { effortLabel } from '../lib/effort';
+import { notify } from '../lib/notify';
+import { type Mode, MODE_META, ModeIcon } from '../lib/modes';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, FONT, R, MODAL_W, SHADOW } from '../lib/design';
@@ -55,7 +58,7 @@ function PlanIcon({ size = 13, color = 'currentColor', strokeWidth = 2 }: { size
 // Фаза работы режима «План» — выводится из ленты, mode и isWaiting (сервер фазу не присылает)
 type PlanPhase = 'review' | 'executing' | 'done' | 'replanning' | 'planning' | 'idle' | null;
 
-function derivePlanPhase(items: ChatItem[], mode: 'auto' | 'plan' | 'ask', isWaiting: boolean): PlanPhase {
+function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): PlanPhase {
   // «Текущий ход» — от последнего user_message
   let turnStart = -1;
   for (let i = items.length - 1; i >= 0; i--) {
@@ -183,10 +186,75 @@ function WaitingIndicator({ planning }: { planning?: 'planning' | 'replanning' }
   );
 }
 
+// Накопительная статистика стоимости/токенов по всем result-элементам ленты
+interface CostStats {
+  cost: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreate: number;
+  turns: number;
+  results: number;
+}
+
+const fmtUsd = (c: number) => '$' + (c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2));
+const fmtTokens = (n: number) =>
+  n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
+
+// Бейдж накопительной стоимости сессии в шапке. Клик раскрывает разбивку (аналог /cost).
+function CostBadge({ stats, isMobile }: { stats: CostStats; isMobile?: boolean }) {
+  const [open, setOpen] = useState(false);
+  if (stats.cost <= 0) return null;
+  return (
+    <div style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        title="Стоимость сессии — нажмите для разбивки"
+        style={{
+          display: 'flex', alignItems: 'center', gap: 5, padding: '3px 9px',
+          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+          cursor: 'pointer', fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: '#B05C38',
+        }}
+      >
+        {fmtUsd(stats.cost)}
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{
+            position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 41,
+            minWidth: isMobile ? 200 : 240, padding: '12px 14px',
+            background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, boxShadow: SHADOW.dropdown,
+          }}>
+            <div style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 700, color: C.textHeading, marginBottom: 8 }}>
+              Стоимость сессии
+            </div>
+            {[
+              ['Всего', fmtUsd(stats.cost)],
+              ['Ходов', String(stats.turns || stats.results)],
+              ['Входные токены', fmtTokens(stats.input)],
+              ['Выходные токены', fmtTokens(stats.output)],
+              ['Кэш (чтение)', fmtTokens(stats.cacheRead)],
+              ['Кэш (запись)', fmtTokens(stats.cacheCreate)],
+            ].map(([k, v]) => (
+              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, fontFamily: FONT.mono, fontSize: 12, color: C.textSecondary, padding: '2px 0' }}>
+                <span style={{ color: C.textMuted }}>{k}</span>
+                <span style={{ fontWeight: 600 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 interface ChatHeaderBarProps {
   session: Session;
   project: Project;
   online: boolean;
+  cost: CostStats;
   onOpenSettings: () => void;
   isMobile?: boolean;
   onBack?: () => void;
@@ -194,7 +262,7 @@ interface ChatHeaderBarProps {
   onOpenSidebar?: () => void;
 }
 
-function ChatHeaderBar({ session, project, online, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, cost, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -204,6 +272,7 @@ function ChatHeaderBar({ session, project, online, onOpenSettings, isMobile, onB
       <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
         {!isMobile && <span>{project.name} · </span>}{modelLabel(session.model)}
+        {session.effort && <span> · {effortLabel(session.effort)}</span>}
       </div>
     </div>
   );
@@ -236,6 +305,7 @@ function ChatHeaderBar({ session, project, online, onOpenSettings, isMobile, onB
           </span>
         </div>
       )}
+      <CostBadge stats={cost} isMobile={isMobile} />
       {online && (
         <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -569,7 +639,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return map;
   }, [items]);
 
-  const [mode, setMode] = useState<'auto' | 'plan' | 'ask'>(session.mode);
+  const [mode, setMode] = useState<Mode>(session.mode);
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -583,6 +653,41 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const [showScrollDown, setShowScrollDown] = useState(false);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => ({ id: project.id, rootPath: project.rootPath }), [project.id, project.rootPath]);
+
+  // Накопительная стоимость/токены сессии — сумма по всем result-элементам ленты.
+  // Источник правды — история (грузится с бэка), поэтому переживает перезагрузку.
+  const costStats = useMemo<CostStats>(() => {
+    const s: CostStats = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, turns: 0, results: 0 };
+    for (const it of items) {
+      if (it.kind !== 'result') continue;
+      s.results++;
+      if (typeof it.totalCostUsd === 'number') s.cost += it.totalCostUsd;
+      if (it.numTurns) s.turns += it.numTurns;
+      if (it.usage) {
+        s.input += it.usage.inputTokens;
+        s.output += it.usage.outputTokens;
+        s.cacheRead += it.usage.cacheReadTokens;
+        s.cacheCreate += it.usage.cacheCreationTokens;
+      }
+    }
+    return s;
+  }, [items]);
+
+  // Браузерные уведомления (только когда вкладка не в фокусе) — нужно решение / ход завершён
+  const prevWaitingRef = useRef(false);
+  useEffect(() => {
+    if (isWaiting && !prevWaitingRef.current)
+      notify('Нужно решение', `${session.name ?? 'Чат'} ждёт вашего ответа`);
+    prevWaitingRef.current = isWaiting;
+  }, [isWaiting, session.name]);
+
+  const resultCountRef = useRef<number | null>(null);
+  useEffect(() => {
+    const rc = items.reduce((acc, it) => acc + (it.kind === 'result' ? 1 : 0), 0);
+    if (resultCountRef.current !== null && rc > resultCountRef.current)
+      notify('Claude закончил', `${session.name ?? 'Чат'}: ход завершён`);
+    resultCountRef.current = rc;
+  }, [items, session.name]);
   const pendingRef = useRef<string | undefined>(pendingMessage);
   pendingRef.current = pendingMessage;
 
@@ -656,6 +761,25 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     atBottomRef.current = true; // своё сообщение — прыгаем вниз и снова прилипаем
     await send(text, paths, mode);
   };
+
+  // Загрузка вставленных/перетащенных картинок в проект → относительные пути в attachedFiles.
+  // Бэкенд по расширению отправит их claude как image-блоки base64.
+  const handleAttachImages = useCallback(async (files: File[]) => {
+    const dir = '.cc-attachments';
+    try { await api.files.mkdir(project.id, dir); } catch { /* папка уже есть */ }
+    const added: string[] = [];
+    for (const file of files) {
+      const extFromType = file.type === 'image/jpeg' ? '.jpg' : file.type === 'image/gif' ? '.gif'
+        : file.type === 'image/webp' ? '.webp' : '.png';
+      const ext = file.name.match(/\.[a-z0-9]+$/i)?.[0] ?? extFromType;
+      const unique = `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+      try {
+        await api.files.upload(project.id, new File([file], unique, { type: file.type }), dir);
+        added.push(`${dir}/${unique}`);
+      } catch { /* пропускаем неудачную загрузку */ }
+    }
+    if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
+  }, [project.id, attachedFiles, onAttachedFilesChange]);
 
   const handleHint = (hint: string) => {
     atBottomRef.current = true;
@@ -782,7 +906,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       planVersion={planVersions.get(i)?.version}
       planShowBadge={!!planVersions.get(i) && (planVersions.get(i)!.version > 1 || planVersions.get(i)!.hadRejected)}
       planShowSwitch={i === lastApprovedPlanIdx && mode === 'plan'}
-      onSwitchToAuto={() => setMode('auto')}
+      onSwitchMode={setMode}
       onOpenFile={onOpenFile}
       onRevert={path => api.files.revert(project.id, path)}
       onRetry={handleRetry}
@@ -966,6 +1090,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         session={session}
         project={project}
         online={online}
+        cost={costStats}
         onOpenSettings={() => setShowEdit(true)}
         isMobile={isMobile}
         onBack={onBack}
@@ -1141,7 +1266,17 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         padding: isMobile ? '0 12px 12px' : '0 24px 18px',
         pointerEvents: 'none',
       }}>
-        <div style={{ maxWidth: 760, margin: '0 auto', pointerEvents: 'auto', borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
+        <div style={{ maxWidth: 760, margin: '0 auto', pointerEvents: 'auto' }}>
+          {mode === 'bypass' && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6, padding: '6px 12px',
+              borderRadius: R.lg, background: C.dangerBg, color: C.danger, fontSize: 12, fontWeight: 600,
+            }}>
+              <span style={{ display: 'flex' }}><ModeIcon mode="bypass" /></span>
+              Режим «Без ограничений» — Claude действует без подтверждений
+            </div>
+          )}
+          <div style={{ borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
           <Composer
             offline={!online}
             onSend={handleSend}
@@ -1152,12 +1287,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onModeChange={setMode}
             attachments={attachedFiles}
             onRemoveAttachment={path => onAttachedFilesChange(attachedFiles.filter(p => p !== path))}
+            onAttachImages={handleAttachImages}
             isMobile={isMobile}
             skills={skills}
             agents={agents}
             selectedAgent={selectedAgent}
             onAgentChange={onAgentChange}
           />
+          </div>
         </div>
       </div>
 
@@ -2626,14 +2763,14 @@ function CollapsedPlanBody({ plan }: { plan: string }) {
 
 // Карточка согласования плана (ExitPlanMode в режиме «План»):
 // показывает план и кнопки «Одобрить и выполнить» / «Отклонить» (с комментарием).
-function PlanReviewView({ item, online, onRespond, version, showBadge, showSwitch, onSwitchToAuto }: {
+function PlanReviewView({ item, online, onRespond, version, showBadge, showSwitch, onSwitchMode }: {
   item: Extract<ChatItem, { kind: 'plan_review' }>;
   online: boolean;
   onRespond: (requestId: string, approve: boolean, feedback?: string) => void;
   version?: number;
   showBadge?: boolean;
   showSwitch?: boolean;
-  onSwitchToAuto?: () => void;
+  onSwitchMode?: (mode: Mode) => void;
 }) {
   const [rejecting, setRejecting] = useState(false);
   const [feedback, setFeedback] = useState('');
@@ -2661,14 +2798,20 @@ function PlanReviewView({ item, online, onRespond, version, showBadge, showSwitc
           План одобрен — выполняется
         </div>
         <CollapsedPlanBody plan={plan} />
-        {/* Подсказка про выход в Авто — только у актуального (последнего) одобренного плана */}
-        {showSwitch && onSwitchToAuto && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, paddingTop: 9, borderTop: '1px solid #CFE3CA', fontSize: 12, color: C.textSecondary }}>
-            <span style={{ flex: 1 }}>Чат остаётся в режиме «План» — следующие задачи тоже будут согласованы.</span>
-            <button onClick={onSwitchToAuto}
-              style={{ flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: C.plan, padding: '2px 4px' }}>
-              Перейти в Авто
-            </button>
+        {/* Выход из режима «План» — только у актуального (последнего) одобренного плана.
+            Предлагаем выбрать режим исполнения, как в нативном approval Claude Code. */}
+        {showSwitch && onSwitchMode && (
+          <div style={{ marginTop: 9, paddingTop: 9, borderTop: '1px solid #CFE3CA', fontSize: 12, color: C.textSecondary }}>
+            <div style={{ marginBottom: 7 }}>Чат остаётся в режиме «План» — следующие задачи тоже будут согласованы. Выйти и выполнять в:</div>
+            <div style={{ display: 'flex', gap: 7 }}>
+              {(['acceptEdits', 'auto'] as Mode[]).map(m => (
+                <button key={m} onClick={() => onSwitchMode(m)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, cursor: 'pointer', fontSize: 12, fontWeight: 600, color: C.textHeading, padding: '5px 10px' }}>
+                  <span style={{ display: 'flex', color: C.accent }}><ModeIcon mode={m} /></span>
+                  {MODE_META[m].label}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -2884,14 +3027,14 @@ interface ItemProps {
   planVersion?: number;
   planShowBadge?: boolean;
   planShowSwitch?: boolean;
-  onSwitchToAuto: () => void;
+  onSwitchMode: (mode: Mode) => void;
   onOpenFile: (path: string) => void;
   onRevert: (path: string) => void;
   onRetry: () => void;
   onInterrupt: () => void;
 }
 
-function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchToAuto, onOpenFile, onRevert, onRetry, onInterrupt }: ItemProps) {
+function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt }: ItemProps) {
   const project = useContext(ChatProjectContext);
   switch (item.kind) {
     case 'user_message':
@@ -3015,7 +3158,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
       return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} onInterrupt={onInterrupt} />;
 
     case 'plan_review':
-      return <PlanReviewView item={item} online={online} onRespond={onRespondPlan} version={planVersion} showBadge={planShowBadge} showSwitch={planShowSwitch} onSwitchToAuto={onSwitchToAuto} />;
+      return <PlanReviewView item={item} online={online} onRespond={onRespondPlan} version={planVersion} showBadge={planShowBadge} showSwitch={planShowSwitch} onSwitchMode={onSwitchMode} />;
 
     case 'permission_request': {
       // Что именно собирается выполнить Claude — команда/путь/аргументы

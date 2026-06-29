@@ -1,3 +1,11 @@
+import type { Mode } from '../lib/modes';
+export type { Mode };
+
+export interface PermissionRule {
+  pattern: string;
+  action: 'allow' | 'deny';
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -9,6 +17,7 @@ export interface Project {
   difyDatasetId?: string;
   systemPrompt?: string;
   showHiddenFiles?: boolean;
+  permissionRules?: PermissionRule[];
   builtInSystemPrompt?: string;
 }
 
@@ -20,7 +29,7 @@ export interface Session {
   id: string;
   projectId: string;
   claudeSessionId?: string;
-  mode: 'auto' | 'plan' | 'ask';
+  mode: Mode;
   status: 'starting' | 'working' | 'active' | 'waiting' | 'orphaned' | 'finished' | 'error';
   lastMessage?: string;
   messageCount: number;
@@ -28,6 +37,7 @@ export interface Session {
   updatedAt: string;
   name?: string;
   model?: string;
+  effort?: string;
   agentName?: string;
 }
 

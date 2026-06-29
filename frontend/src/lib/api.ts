@@ -1,4 +1,4 @@
-import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData } from '../types';
+import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -47,7 +47,7 @@ export const api = {
     list: () => request<Project[]>('/projects'),
     create: (name: string, rootPath: string | null, createDirectory = false) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean }) =>
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[] }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
     getBuiltinPrompt: () => request<{ content: string }>('/projects/builtin-prompt'),
@@ -55,12 +55,12 @@ export const api = {
 
   sessions: {
     list: (projectId: string) => request<Session[]>(`/projects/${projectId}/sessions`),
-    create: (projectId: string, mode = 'auto', resumeSessionId?: string, name?: string, model?: string, agentName?: string) =>
+    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string) =>
       request<Session>(`/projects/${projectId}/sessions`, {
         method: 'POST',
-        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName }),
+        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort }),
       }),
-    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null }) =>
+    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {
         method: 'PUT',
         body: JSON.stringify(data),

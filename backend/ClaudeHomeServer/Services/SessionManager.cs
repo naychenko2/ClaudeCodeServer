@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.SignalR;
@@ -23,6 +24,13 @@ public class SessionManager
     private readonly ChatHistoryService _history;
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
+
+    // Enum (в т.ч. ClaudeMode) сериализуем строками — устойчиво к изменению порядка значений.
+    // При чтении конвертер принимает и старый числовой формат.
+    private static readonly JsonSerializerOptions _jsonOpts = new()
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
 
     private readonly string? _mcpConfigPath;
     private readonly SkillsService _skills;
@@ -56,7 +64,7 @@ public class SessionManager
         try
         {
             var json = File.ReadAllText(_sessionsFilePath);
-            var list = JsonSerializer.Deserialize<List<Session>>(json);
+            var list = JsonSerializer.Deserialize<List<Session>>(json, _jsonOpts);
             if (list is null) return;
             foreach (var session in list)
             {
@@ -82,7 +90,7 @@ public class SessionManager
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(_sessionsFilePath)!);
                 var sessions = _sessions.Values.Select(e => e.Info).ToList();
-                File.WriteAllText(_sessionsFilePath, JsonSerializer.Serialize(sessions));
+                File.WriteAllText(_sessionsFilePath, JsonSerializer.Serialize(sessions, _jsonOpts));
             }
             catch { }
         }
@@ -105,7 +113,8 @@ public class SessionManager
         _sessions.TryGetValue(id, out var entry) ? entry.Info : null;
 
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
-        string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null)
+        string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
+        string? effort = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -118,6 +127,7 @@ public class SessionManager
             Name = name,
             Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
             AgentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim(),
+            Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
         };
 
         var existingHistory = resumeSessionId != null
@@ -131,7 +141,8 @@ public class SessionManager
         var claudeSession = new ClaudeSession(session, project.RootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
             _mcpConfigPath, project.SystemPrompt,
-            _skills, _workspaceStore);
+            _skills, _workspaceStore,
+            () => _projects.GetById(projectId)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>());
         entry.Process = claudeSession;
 
         await claudeSession.StartAsync();
@@ -166,7 +177,8 @@ public class SessionManager
             var claudeSession = new ClaudeSession(entry.Info, project.RootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 _mcpConfigPath, project.SystemPrompt,
-                _skills, _workspaceStore);
+                _skills, _workspaceStore,
+                () => _projects.GetById(entry.Info.ProjectId)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>());
             entry.Process = claudeSession;
             await claudeSession.StartAsync();
         }
@@ -182,11 +194,12 @@ public class SessionManager
 
     // Редактирование названия и модели. Модель применяется со следующего хода
     // (процесс claude пересоздаётся в RunTurnAsync), Info — общая ссылка с ClaudeSession.
-    public Session? Update(string sessionId, string? name, string? model)
+    public Session? Update(string sessionId, string? name, string? model, string? effort)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         entry.Info.Name = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
         entry.Info.Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+        entry.Info.Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim();
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return entry.Info;

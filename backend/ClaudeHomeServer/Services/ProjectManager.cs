@@ -57,7 +57,8 @@ public class ProjectManager
         return project;
     }
 
-    public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null, bool? showHiddenFiles = null)
+    public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null,
+        bool? showHiddenFiles = null, List<PermissionRule>? permissionRules = null)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
@@ -71,6 +72,7 @@ public class ProjectManager
         }
         if (systemPrompt is not null) project.SystemPrompt = systemPrompt;
         if (showHiddenFiles is not null) project.ShowHiddenFiles = showHiddenFiles.Value;
+        if (permissionRules is not null) project.PermissionRules = permissionRules.Count == 0 ? null : permissionRules;
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;

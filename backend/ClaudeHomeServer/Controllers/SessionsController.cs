@@ -18,8 +18,8 @@ public class SessionsController(SessionManager sessions) : ControllerBase
     {
         try
         {
-            var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
-            var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name, req.Model, req.AgentName);
+            var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;
+            var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name, req.Model, req.AgentName, req.Effort);
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
@@ -30,7 +30,7 @@ public class SessionsController(SessionManager sessions) : ControllerBase
     {
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
-        var updated = sessions.Update(sessionId, req.Name, req.Model);
+        var updated = sessions.Update(sessionId, req.Name, req.Model, req.Effort);
         return updated == null ? NotFound() : Ok(updated);
     }
 
@@ -51,6 +51,6 @@ public class SessionsController(SessionManager sessions) : ControllerBase
     }
 }
 
-public record CreateSessionRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null);
+public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null);
 
-public record UpdateSessionRequest(string? Name = null, string? Model = null);
+public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null);

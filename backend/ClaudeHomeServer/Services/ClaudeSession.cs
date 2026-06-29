@@ -46,12 +46,15 @@ public class ClaudeSession : IAsyncDisposable
     private readonly string? _mcpConfigPath;
     private readonly SkillsService? _skills;
     private readonly WorkspaceKnowledgeStore? _wkStore;
+    // Провайдер правил разрешений проекта — резолвим каждый запрос (правила могут меняться)
+    private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
     // Кэш последнего отправленного системного промпта — передаём только при изменении
     private string? _lastSentSystemPrompt;
 
     public ClaudeSession(Session info, string rootPath, Func<ServerMessage, Task> onMessage,
         string? mcpConfigPath = null, string? rawSystemPrompt = null,
-        SkillsService? skills = null, WorkspaceKnowledgeStore? workspaceStore = null)
+        SkillsService? skills = null, WorkspaceKnowledgeStore? workspaceStore = null,
+        Func<IReadOnlyList<PermissionRule>>? permissionRules = null)
     {
         Info = info;
         _rootPath = rootPath;
@@ -60,6 +63,7 @@ public class ClaudeSession : IAsyncDisposable
         _rawSystemPrompt = rawSystemPrompt;
         _skills = skills;
         _wkStore = workspaceStore;
+        _permissionRules = permissionRules;
     }
 
     private static string? CreateSessionMcpConfig(string? basePath, string? datasetId)
@@ -93,14 +97,16 @@ public class ClaudeSession : IAsyncDisposable
 
         // Если сообщение — вызов скилла (/skill-name [args]), разворачиваем его содержимое
         var effectiveText = _skills?.TryExpandSkill(text) ?? text;
-        var fullText = BuildMessageText(effectiveText, attachedPaths);
+        // Картинки отправляем как image-блоки (base64), остальные файлы — инлайним в текст
+        var (imagePaths, otherPaths) = SplitImagePaths(attachedPaths);
+        var fullText = BuildMessageText(effectiveText, otherPaths);
 
         // Запускаем ход в фоне, чтобы не блокировать SignalR-соединение
         _ = Task.Run(async () =>
         {
             if (_cts.IsCancellationRequested) return;
             await _turnLock.WaitAsync(_cts.Token);
-            try { await RunTurnAsync(fullText, _cts.Token); }
+            try { await RunTurnAsync(fullText, imagePaths, _cts.Token); }
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
@@ -113,6 +119,54 @@ public class ClaudeSession : IAsyncDisposable
         return Task.CompletedTask;
     }
 
+    // Расширения, которые отправляем как image-блоки, а не инлайним текстом
+    private static readonly HashSet<string> _imageExts =
+        new(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".gif", ".webp" };
+
+    private static (List<string> images, List<string> others) SplitImagePaths(IReadOnlyList<string>? paths)
+    {
+        var images = new List<string>();
+        var others = new List<string>();
+        if (paths != null)
+            foreach (var p in paths)
+                (_imageExts.Contains(Path.GetExtension(p)) ? images : others).Add(p);
+        return (images, others);
+    }
+
+    private static string MediaTypeForExt(string ext) => ext.ToLowerInvariant() switch
+    {
+        ".png" => "image/png",
+        ".gif" => "image/gif",
+        ".webp" => "image/webp",
+        _ => "image/jpeg",
+    };
+
+    // Блоки изображений для content стартового сообщения. Пустые/слишком большие (>8 МБ) пропускаем.
+    private List<object> BuildImageBlocks(IReadOnlyList<string> imagePaths)
+    {
+        var blocks = new List<object>();
+        foreach (var rel in imagePaths)
+        {
+            try
+            {
+                var full = FileService.SafeJoin(_rootPath, rel);
+                if (!File.Exists(full)) continue;
+                var bytes = File.ReadAllBytes(full);
+                if (bytes.Length == 0 || bytes.Length > 8 * 1024 * 1024) continue;
+                blocks.Add(new
+                {
+                    type = "image",
+                    source = new { type = "base64", media_type = MediaTypeForExt(Path.GetExtension(rel)), data = Convert.ToBase64String(bytes) }
+                });
+            }
+            catch { }
+        }
+        return blocks;
+    }
+
+    // Максимум текста на один инлайн-файл — чтобы вложение не раздуло сообщение
+    private const int MaxInlineBytes = 256 * 1024;
+
     private string BuildMessageText(string text, IReadOnlyList<string>? paths)
     {
         if (paths is null || paths.Count == 0) return text;
@@ -124,9 +178,36 @@ public class ClaudeSession : IAsyncDisposable
             {
                 var fullPath = FileService.SafeJoin(_rootPath, relativePath);
                 if (!File.Exists(fullPath)) continue;
-                var content = File.ReadAllText(fullPath);
+
+                var info = new FileInfo(fullPath);
+                byte[] bytes;
+                using (var fs = info.OpenRead())
+                {
+                    var len = (int)Math.Min(info.Length, MaxInlineBytes);
+                    bytes = new byte[len];
+                    var read = 0;
+                    while (read < len)
+                    {
+                        var n = fs.Read(bytes, read, len - read);
+                        if (n == 0) break;
+                        read += n;
+                    }
+                    if (read < len) Array.Resize(ref bytes, read);
+                }
+
+                // Бинарный файл (PDF/docx/xlsx/архив и т.п.) определяем по нулевому байту.
+                // Не инлайним мусор-кракозябры: даём ссылку — рабочая папка = корень проекта,
+                // Claude при необходимости откроет файл инструментом Read (умеет PDF/изображения/notebook).
+                if (Array.IndexOf(bytes, (byte)0) >= 0)
+                {
+                    sb.Append($"\n\n---\nПрикреплён файл: {relativePath} (бинарный/документ — открой инструментом Read, если нужно его содержимое).");
+                    continue;
+                }
+
+                var content = System.Text.Encoding.UTF8.GetString(bytes);
+                var truncated = info.Length > MaxInlineBytes ? "\n…(файл обрезан по размеру)" : "";
                 var ext = Path.GetExtension(relativePath).TrimStart('.');
-                sb.Append($"\n\n---\nФайл: {relativePath}\n```{ext}\n{content}\n```");
+                sb.Append($"\n\n---\nФайл: {relativePath}\n```{ext}\n{content}{truncated}\n```");
             }
             catch { }
         }
@@ -237,7 +318,7 @@ public class ClaudeSession : IAsyncDisposable
         _forceNonPlanNextTurn = false;
     }
 
-    private async Task RunTurnAsync(string text, CancellationToken ct)
+    private async Task RunTurnAsync(string text, IReadOnlyList<string> imagePaths, CancellationToken ct)
     {
         // --print обязателен: без него --output-format/--input-format/--include-partial-messages/--permission-prompt-tool не работают
         // --input-format stream-json нужен: мы посылаем JSON-объекты в stdin, а не plain text
@@ -254,20 +335,19 @@ public class ClaudeSession : IAsyncDisposable
         if (Info.ClaudeSessionId is not null)
             args.AddRange(["--resume", Info.ClaudeSessionId]);
 
-        // Режим прав у claude CLI задаётся флагом --permission-mode (plan/default),
-        // а НЕ --mode (такого флага нет — claude падает с "unknown option '--mode'").
-        // Auto — без флага (поведение по умолчанию); Plan — режим планирования;
-        // Ask — default, при котором claude спрашивает разрешение через permission-prompt-tool.
+        // Режим прав у claude CLI задаётся флагом --permission-mode (значения: default,
+        // acceptEdits, plan, auto, dontAsk, bypassPermissions), а НЕ --mode (такого флага нет).
         // После одобрения плана один ход выполняем без plan, чтобы Claude реализовал, а не планировал заново.
         if (_forceNonPlanNextTurn)
             _forceNonPlanNextTurn = false;
-        else if (Info.Mode == ClaudeMode.Plan)
-            args.AddRange(["--permission-mode", "plan"]);
-        else if (Info.Mode == ClaudeMode.Ask)
-            args.AddRange(["--permission-mode", "default"]);
+        else
+            args.AddRange(["--permission-mode", Info.Mode.ToCliFlag()]);
 
         if (!string.IsNullOrWhiteSpace(Info.Model))
             args.AddRange(["--model", Info.Model]);
+
+        if (!string.IsNullOrWhiteSpace(Info.Effort))
+            args.AddRange(["--effort", Info.Effort]);
 
         // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)
         var currentWk = _wkStore?.GetByPath(_rootPath);
@@ -334,11 +414,24 @@ public class ClaudeSession : IAsyncDisposable
         // Читаем stderr асинхронно, иначе при переполнении буфера процесс зависнет
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
 
-        // stdin оставляем открытым — claude пишет control_response в него при permission-запросах
+        // stdin оставляем открытым — claude пишет control_response в него при permission-запросах.
+        // С картинками content — массив блоков (text + image base64), иначе просто строка.
+        var imageBlocks = BuildImageBlocks(imagePaths);
+        object content;
+        if (imageBlocks.Count == 0)
+        {
+            content = text;
+        }
+        else
+        {
+            var blocks = new List<object> { new { type = "text", text } };
+            blocks.AddRange(imageBlocks);
+            content = blocks;
+        }
         var msg = JsonSerializer.Serialize(new
         {
             type = "user",
-            message = new { role = "user", content = text }
+            message = new { role = "user", content }
         });
         await process.StandardInput.WriteLineAsync(msg);
         await process.StandardInput.FlushAsync();
@@ -456,7 +549,7 @@ public class ClaudeSession : IAsyncDisposable
                         }
                     }
                     await _onMessage(new SessionStartedMessage(
-                        Info.ClaudeSessionId!, isResume, model, Info.Mode.ToString().ToLower(), cwd, toolCount, mcp));
+                        Info.ClaudeSessionId!, isResume, model, Info.Mode.ToWireToken(), cwd, toolCount, mcp));
                 }
                 else if (sysSubtype == "compact_boundary")
                 {
@@ -702,13 +795,21 @@ public class ClaudeSession : IAsyncDisposable
             : Guid.NewGuid().ToString();
 
         var toolName = root.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
-        var toolInput = root.TryGetProperty("tool_input", out var ti)
-            ? JsonSerializer.Deserialize<object>(ti.GetRawText())! : new object();
+        var inputEl = root.TryGetProperty("tool_input", out var ti) ? ti : default;
+        var toolInput = inputEl.ValueKind != JsonValueKind.Undefined
+            ? JsonSerializer.Deserialize<object>(inputEl.GetRawText())! : new object();
+
+        // Правила проекта: deny приоритетнее; allow — авто-разрешить; null — спросить пользователя
+        var ruleDecision = EvaluateRules(toolName, inputEl);
 
         string behavior;
-        if (_autoAllowTools.Contains(toolName))
+        if (ruleDecision == "deny")
         {
-            // Пользователь ранее выбрал «всегда разрешать» этот инструмент — не спрашиваем повторно
+            behavior = "deny";
+        }
+        else if (ruleDecision == "allow" || _autoAllowTools.Contains(toolName))
+        {
+            // Разрешено правилом проекта или ранее выбрано «всегда разрешать» — не спрашиваем
             behavior = "allow";
         }
         else
@@ -760,6 +861,68 @@ public class ClaudeSession : IAsyncDisposable
             await _currentProcess.StandardInput.WriteLineAsync(response);
             await _currentProcess.StandardInput.FlushAsync();
         }
+    }
+
+    // Применение правил проекта к permission-запросу.
+    // Возвращает "deny" (запрет приоритетен), "allow" или null (решает пользователь).
+    private string? EvaluateRules(string toolName, JsonElement input)
+    {
+        var rules = _permissionRules?.Invoke();
+        if (rules is null || rules.Count == 0) return null;
+        string? allow = null;
+        foreach (var r in rules)
+        {
+            if (!RuleMatches(r, toolName, input)) continue;
+            if (string.Equals(r.Action, "deny", StringComparison.OrdinalIgnoreCase)) return "deny";
+            if (string.Equals(r.Action, "allow", StringComparison.OrdinalIgnoreCase)) allow = "allow";
+        }
+        return allow;
+    }
+
+    private static bool RuleMatches(PermissionRule rule, string toolName, JsonElement input)
+    {
+        var (tool, spec) = ParseRule(rule.Pattern);
+        if (tool != "*" && !string.Equals(tool, toolName, StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.IsNullOrEmpty(spec)) return true; // правило по имени инструмента — матчит любой вызов
+        return GlobMatch(spec, ExtractRuleArg(toolName, input));
+    }
+
+    // "Tool(specifier)" → (Tool, specifier); "Tool" → (Tool, null)
+    private static (string tool, string? spec) ParseRule(string pattern)
+    {
+        pattern = pattern.Trim();
+        var i = pattern.IndexOf('(');
+        if (i < 0 || !pattern.EndsWith(")")) return (pattern, null);
+        return (pattern[..i].Trim(), pattern[(i + 1)..^1]);
+    }
+
+    // Основной аргумент инструмента, по которому матчим specifier
+    private static string? ExtractRuleArg(string toolName, JsonElement input)
+    {
+        if (input.ValueKind != JsonValueKind.Object) return null;
+        var keys = toolName.ToLowerInvariant() switch
+        {
+            "bash" => new[] { "command" },
+            "edit" or "write" or "read" or "notebookedit" => new[] { "file_path", "path" },
+            "glob" or "grep" => new[] { "pattern", "path" },
+            "webfetch" => new[] { "url" },
+            "websearch" => new[] { "query" },
+            _ => [],
+        };
+        foreach (var k in keys)
+            if (input.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String)
+                return v.GetString();
+        return null;
+    }
+
+    // Glob: '*' — любая подстрока; остальное — буквально, без учёта регистра
+    private static bool GlobMatch(string pattern, string? value)
+    {
+        if (value is null) return false;
+        var rx = "^" + string.Join(".*",
+            pattern.Split('*').Select(System.Text.RegularExpressions.Regex.Escape)) + "$";
+        return System.Text.RegularExpressions.Regex.IsMatch(
+            value, rx, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
     private static UsageInfo? ParseUsage(JsonElement root)

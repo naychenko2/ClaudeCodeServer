@@ -24,6 +24,8 @@ public class SessionManager
     private readonly ChatHistoryService _history;
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
+    // Сериализует прямую запись стоимости fal.ai в историю неактивных сессий (load-modify-save)
+    private readonly SemaphoreSlim _falPersistLock = new(1, 1);
 
     // Enum (в т.ч. ClaudeMode) сериализуем строками — устойчиво к изменению порядка значений.
     // При чтении конвертер принимает и старый числовой формат.
@@ -274,13 +276,17 @@ public class SessionManager
         if (!_sessions.TryGetValue(sessionId, out var entry))
             return [];
 
+        IReadOnlyList<StoredMessage> list;
         if (entry.Accumulator != null)
-            return entry.Accumulator.GetAll();
+            list = entry.Accumulator.GetAll();
+        else if (entry.Info.ClaudeSessionId != null)
+            list = await _history.LoadAsync(entry.Info.ClaudeSessionId);
+        else
+            list = [];
 
-        if (entry.Info.ClaudeSessionId != null)
-            return await _history.LoadAsync(entry.Info.ClaudeSessionId);
-
-        return [];
+        // Догоняем стоимость старых fal-генераций, у которых её ещё нет (фоном, дедуп внутри)
+        BackfillFalCosts(sessionId, list);
+        return list;
     }
 
     public IReadOnlyList<WorkflowProgressMessage> GetWorkflowProgress(string sessionId)
@@ -374,51 +380,82 @@ public class SessionManager
         await BroadcastAsync(sessionId, msg);
     }
 
-    // Распознаёт результат генерации fal.ai (есть request_id + *_url на fal) и ставит
-    // его на отслеживание стоимости. Сам опрос billing-events — в фоне (FalCostService).
-    private void TryTrackFalCost(string sessionId, string content)
+    // Извлекает request_id из результата вызова, если это генерация fal.ai. Признак fal —
+    // наличие request_id И fal-домена где-либо в ответе. Покрывает обе формы результата:
+    //  • run_model/submit_job: fal.run в *_url (status_url/response_url/cancel_url);
+    //  • get_job_result (видео/аудио): *_url нет, но fal.media в URL медиа.
+    private static string? TryExtractFalRequestId(string content)
     {
-        if (string.IsNullOrEmpty(content) || !_falCost.Enabled) return;
-        string? requestId;
+        if (string.IsNullOrEmpty(content)) return null;
+        if (!content.Contains("fal.run") && !content.Contains("fal.ai") && !content.Contains("fal.media")) return null;
         try
         {
             using var doc = JsonDocument.Parse(content);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return;
-            if (!root.TryGetProperty("request_id", out var rid) || rid.ValueKind != JsonValueKind.String) return;
-
-            bool isFal = false;
-            foreach (var key in new[] { "response_url", "status_url", "cancel_url" })
-            {
-                if (root.TryGetProperty(key, out var u) && u.ValueKind == JsonValueKind.String)
-                {
-                    var s = u.GetString();
-                    if (s != null && (s.Contains("fal.run") || s.Contains("fal.ai"))) { isFal = true; break; }
-                }
-            }
-            if (!isFal) return;
-            requestId = rid.GetString();
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (root.TryGetProperty("request_id", out var rid) && rid.ValueKind == JsonValueKind.String)
+                return rid.GetString();
+            return null;
         }
-        catch { return; } // не JSON / не наш формат — это не fal-результат
+        catch { return null; } // не JSON / не наш формат — это не fal-результат
+    }
+
+    // Ставит результат генерации fal.ai на отслеживание стоимости (опрос billing-events — в фоне).
+    private void TryTrackFalCost(string sessionId, string content)
+    {
+        if (!_falCost.Enabled) return;
+        var requestId = TryExtractFalRequestId(content);
         if (!string.IsNullOrEmpty(requestId))
             _falCost.Track(sessionId, requestId);
     }
 
-    // Публикация найденной стоимости fal.ai: запись в историю (дедуп) + broadcast клиентам
+    // Догоняет стоимость для СТАРЫХ генераций fal.ai в истории, у которых ещё нет fal_cost
+    // (сгенерированы до появления фичи/ключа). Вызывается при загрузке истории сессии.
+    private void BackfillFalCosts(string sessionId, IReadOnlyList<StoredMessage> history)
+    {
+        if (!_falCost.Enabled) return;
+        var have = new HashSet<string>();
+        foreach (var m in history)
+            if (m is StoredFalCostMessage f) have.Add(f.RequestId);
+        foreach (var m in history)
+        {
+            if (m is not StoredToolUseMessage t || t.IsError || string.IsNullOrEmpty(t.Result)) continue;
+            var rid = TryExtractFalRequestId(t.Result);
+            if (rid != null && !have.Contains(rid))
+                _falCost.Track(sessionId, rid);
+        }
+    }
+
+    // Публикация найденной стоимости fal.ai: запись в историю (дедуп) + broadcast клиентам.
+    // Активная сессия → через аккумулятор; неактивная (нет аккумулятора) → прямо в файл истории,
+    // иначе стоимость не переживёт переоткрытие и «считается…» зависнет.
     public async Task PublishFalCostAsync(string sessionId, FalCostMessage msg)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-        var added = entry.Accumulator?.OnFalCost(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice) ?? true;
-        if (!added) return; // дубликат — повторно не публикуем
-        try
+
+        if (entry.Accumulator is not null)
         {
-            if (entry.Accumulator is not null)
-                await entry.Accumulator.SaveSnapshotAsync(_history);
+            if (!entry.Accumulator.OnFalCost(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice))
+                return; // дубликат — уже опубликован
+            try { await entry.Accumulator.SaveSnapshotAsync(_history); }
+            catch (Exception ex) { Console.Error.WriteLine($"[FalCost] Сохранение истории ({sessionId}) не удалось: {ex.Message}"); }
         }
-        catch (Exception ex)
+        else if (entry.Info.ClaudeSessionId is string key)
         {
-            Console.Error.WriteLine($"[FalCost] Сохранение истории ({sessionId}) не удалось: {ex.Message}");
+            // Сессия не активна — пишем стоимость напрямую в историю на диске (под локом против гонок)
+            await _falPersistLock.WaitAsync();
+            try
+            {
+                var stored = await _history.LoadAsync(key);
+                if (stored.Any(m => m is StoredFalCostMessage f && f.RequestId == msg.RequestId))
+                    return; // дубликат — уже в истории
+                stored.Add(new StoredFalCostMessage(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice));
+                await _history.SaveAsync(key, stored);
+            }
+            catch (Exception ex) { Console.Error.WriteLine($"[FalCost] Прямая запись истории ({sessionId}) не удалась: {ex.Message}"); }
+            finally { _falPersistLock.Release(); }
         }
+
         await BroadcastAsync(sessionId, msg);
     }
 

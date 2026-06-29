@@ -2000,6 +2000,14 @@ function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 
   const falCostUsd = falRequestId ? falCostByRequest.get(falRequestId) : undefined;
   // Генерация fal распознана, но стоимость ещё не подсчитана (биллинг приходит с задержкой)
   const costPending = hasMedia && !!falRequestId && falCostUsd === undefined;
+  // «Считается…» не должно висеть вечно: если стоимость так и не пришла (напр. старое
+  // изображение под другим аккаунтом fal.ai — его нет в текущем billing), убираем метку через 30с.
+  const [pendingExpired, setPendingExpired] = useState(false);
+  useEffect(() => {
+    if (!costPending) { setPendingExpired(false); return; }
+    const t = setTimeout(() => setPendingExpired(true), 30000);
+    return () => clearTimeout(t);
+  }, [costPending]);
   // Имя модели — из input вызова (в результате fal его нет)
   const falModel = ((inp.endpoint_id as string | undefined) ?? mediaMeta.model)?.split('/').pop();
   // Медиа показываем сразу, без клика; текст/diff — за клик
@@ -2037,7 +2045,7 @@ function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 
           {media.map((m, i) => {
             const filename = m.fileName ?? m.url.split('/').pop()?.split('?')[0] ?? m.kind;
             return (
-              <MediaBlock key={i} m={m} filename={filename} model={falModel} inferenceTime={mediaMeta.inferenceTime} costUsd={falCostUsd} costPending={costPending} online={online} />
+              <MediaBlock key={i} m={m} filename={filename} model={falModel} inferenceTime={mediaMeta.inferenceTime} costUsd={falCostUsd} costPending={costPending && !pendingExpired} online={online} />
             );
           })}
         </div>

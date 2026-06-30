@@ -11,10 +11,14 @@ public class FileWatcherService : IDisposable
 {
     private const int DebounceMs = 400;
     private const int MaxPaths = 200;
+    // Защита от зависания обхода на огромных деревьях в polling-режиме.
+    private const int SnapshotMaxEntries = 20000;
 
     private class Entry
     {
         public FileSystemWatcher? Watcher;
+        public Timer? Poll;                         // polling-режим (ФС без inotify: 9p/virtiofs bind-mount)
+        public Dictionary<string, long>? Snapshot;  // rel -> LastWriteTicks (-1 = директория), для polling-диффа
         public string Root = "";
         public readonly HashSet<string> Connections = new();
         public readonly HashSet<string> PendingPaths = new(StringComparer.OrdinalIgnoreCase);
@@ -26,11 +30,16 @@ public class FileWatcherService : IDisposable
     private readonly ProjectManager _projects;
     private readonly IHubContext<SessionHub> _hub;
     private readonly Lock _lock = new();
+    // Polling вместо FileSystemWatcher — для bind-mount ФС без inotify (9p/virtiofs в Docker Desktop).
+    private readonly bool _usePolling;
+    private readonly int _pollIntervalMs;
 
-    public FileWatcherService(ProjectManager projects, IHubContext<SessionHub> hub)
+    public FileWatcherService(ProjectManager projects, IHubContext<SessionHub> hub, IConfiguration config)
     {
         _projects = projects;
         _hub = hub;
+        _usePolling = config.GetValue("FileWatcher:UsePolling", false);
+        _pollIntervalMs = config.GetValue("FileWatcher:PollIntervalMs", 2000);
     }
 
     // Клиент начал смотреть проект — поднимаем watcher (или увеличиваем ref-count)
@@ -44,8 +53,11 @@ public class FileWatcherService : IDisposable
             var entry = _entries.GetOrAdd(projectId, _ => new Entry { Root = project.RootPath });
             entry.Connections.Add(connectionId);
             _byConnection.GetOrAdd(connectionId, _ => new HashSet<string>()).Add(projectId);
-            if (entry.Watcher is null)
-                entry.Watcher = CreateWatcher(projectId, entry);
+            if (entry.Watcher is null && entry.Poll is null)
+            {
+                if (_usePolling) StartPolling(projectId, entry);
+                else entry.Watcher = CreateWatcher(projectId, entry);
+            }
         }
     }
 
@@ -115,6 +127,81 @@ public class FileWatcherService : IDisposable
         }
     }
 
+    // --- Polling-режим (ФС без inotify) -------------------------------------
+
+    // Базовый снапшот без эмита — дальше шлём только дельту. Таймер one-shot,
+    // перевзводится в конце скана, чтобы сканы не накладывались на медленной 9p.
+    private void StartPolling(string projectId, Entry entry)
+    {
+        entry.Snapshot = BuildSnapshot(entry.Root);
+        entry.Poll = new Timer(_ => PollScan(projectId, entry), null, _pollIntervalMs, Timeout.Infinite);
+    }
+
+    // Обход дерева с теми же исключениями, что и FileService.Tree.
+    // Значение: тики последней записи файла, -1 — маркер директории.
+    private static Dictionary<string, long> BuildSnapshot(string root)
+    {
+        var snap = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var stack = new Stack<string>();
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            var dir = stack.Pop();
+            string[] dirs, files;
+            try { dirs = Directory.GetDirectories(dir); files = Directory.GetFiles(dir); }
+            catch { continue; }
+
+            foreach (var f in files)
+            {
+                if (snap.Count >= SnapshotMaxEntries) return snap;
+                var rel = Path.GetRelativePath(root, f).Replace('\\', '/');
+                if (IsExcluded(rel)) continue;
+                long ticks;
+                try { ticks = File.GetLastWriteTimeUtc(f).Ticks; } catch { ticks = 0; }
+                snap[rel] = ticks;
+            }
+            foreach (var d in dirs)
+            {
+                if (FileService.TreeExcludes.Contains(Path.GetFileName(d))) continue;
+                if (snap.Count >= SnapshotMaxEntries) return snap;
+                snap[Path.GetRelativePath(root, d).Replace('\\', '/')] = -1;
+                stack.Push(d);
+            }
+        }
+        return snap;
+    }
+
+    private void PollScan(string projectId, Entry entry)
+    {
+        try
+        {
+            var old = entry.Snapshot;
+            if (old is null) return;
+            var cur = BuildSnapshot(entry.Root);
+
+            var changed = new List<string>();
+            foreach (var kv in cur)
+                if (!old.TryGetValue(kv.Key, out var t) || t != kv.Value) changed.Add(kv.Key);
+            foreach (var key in old.Keys)
+                if (!cur.ContainsKey(key)) changed.Add(key);
+
+            entry.Snapshot = cur;
+            if (changed.Count == 0) return;
+
+            lock (_lock)
+            {
+                if (!_entries.ContainsKey(projectId)) return; // entry уже снят
+                foreach (var p in changed) entry.PendingPaths.Add(p);
+            }
+            Flush(projectId, entry);
+        }
+        finally
+        {
+            // Перевзвод one-shot таймера; если entry уже disposed — Change бросит, игнорируем.
+            try { entry.Poll?.Change(_pollIntervalMs, Timeout.Infinite); } catch { /* disposed */ }
+        }
+    }
+
     // Любой сегмент пути в списке исключений → игнорируем
     private static bool IsExcluded(string rel)
     {
@@ -148,6 +235,7 @@ public class FileWatcherService : IDisposable
     private void DisposeEntry(string projectId, Entry entry)
     {
         try { entry.Watcher?.Dispose(); } catch { }
+        entry.Poll?.Dispose();
         entry.Debounce?.Dispose();
         _entries.TryRemove(projectId, out _);
     }
@@ -157,6 +245,7 @@ public class FileWatcherService : IDisposable
         foreach (var e in _entries.Values)
         {
             try { e.Watcher?.Dispose(); } catch { }
+            e.Poll?.Dispose();
             e.Debounce?.Dispose();
         }
         _entries.Clear();

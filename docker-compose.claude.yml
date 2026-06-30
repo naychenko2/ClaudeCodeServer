@@ -30,7 +30,11 @@ services:
       McpConfigPath: /app/.mcp.docker.json
       # Внешние сервисы — через хост-шлюз
       Dify__ApiUrl: http://host.docker.internal:8080/v1
-      OnlyOffice__ServerUrl: http://host.docker.internal:8090
+      # ServerUrl уходит В БРАУЗЕР (грузит api.js, создаёт iframe) → нужен адрес,
+      # видимый с хоста, а не контейнерный host.docker.internal. Указываем на сам
+      # бэкенд: YARP проксирует /web-apps/* и версионные пути в OnlyOffice DS.
+      # Один origin с фронтом → работает кастомная тема Claude Home.
+      OnlyOffice__ServerUrl: http://localhost:5000
       OnlyOffice__BackendUrl: http://host.docker.internal:5000
       ReverseProxy__Clusters__onlyoffice__Destinations__default__Address: http://host.docker.internal:8090
       # Egress в интернет через прокси (вызовы API Claude). Пусто = прямой интернет.

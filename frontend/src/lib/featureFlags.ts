@@ -8,7 +8,6 @@ import { useSyncExternalStore } from 'react';
 // бэкового FeatureFlagCatalog (одна строка на флаг). Описания/дефолты/стадии
 // приходят с сервера — здесь только ключи.
 export const FLAGS = {
-  exampleFlag: 'example-flag',
   sessionArtifacts: 'session-artifacts',
 } as const;
 

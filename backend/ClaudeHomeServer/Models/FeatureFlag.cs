@@ -23,15 +23,6 @@ public static class FeatureFlagCatalog
 {
     public static readonly IReadOnlyList<FeatureFlagDefinition> All =
     [
-        // Пример-заглушка: показывает рецепт и служит для проверки сквозного потока.
-        // Удали или замени реальными флагами по мере появления фич.
-        new FeatureFlagDefinition(
-            Key: "example-flag",
-            Title: "Пример фич-флага",
-            Description: "Демонстрационный флаг для проверки системы. По умолчанию выключен.",
-            Default: false,
-            Stage: "dev"),
-
         // Панель «Артефакты сессии» — сводка по активной сессии справа от чата:
         // изменённые файлы (с дельтами строк), план (из ExitPlanMode) и ссылки.
         new FeatureFlagDefinition(
@@ -39,7 +30,7 @@ public static class FeatureFlagCatalog
             Title: "Артефакты сессии",
             Description: "Панель справа от чата с изменёнными файлами, планом и ссылками за текущую сессию.",
             Default: false,
-            Stage: "dev"),
+            Stage: "beta"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

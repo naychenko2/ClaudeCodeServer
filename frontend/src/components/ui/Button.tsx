@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode, MouseEvent } from 'react';
-import { C, R, SHADOW } from '../../lib/design';
+import { C, R, SHADOW, FONT } from '../../lib/design';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'ghostAccent' | 'danger' | 'dashed';
 export type ButtonSize = 'sm' | 'md' | 'lg';
@@ -68,7 +68,7 @@ export function Button({
         ...variantStyle(variant, loading),
         width: fullWidth ? '100%' : undefined,
         fontWeight: 600,
-        fontFamily: 'inherit',
+        fontFamily: FONT.sans,
         cursor: isDisabled ? 'not-allowed' : 'pointer',
         opacity: disabled && !loading ? 0.7 : 1,
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,

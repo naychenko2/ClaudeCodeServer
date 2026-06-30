@@ -4,17 +4,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Команды
 
+> **Стандарт: сборка и тестирование — в dev-контейнере.** По умолчанию собираем и
+> прогоняем приложение в контейнере (песочница для Claude + единое воспроизводимое
+> окружение), а не на хосте. Подробности — [docs/docker.md](docs/docker.md).
+
 ```powershell
-# Backend (из корня проекта)
+# Контейнер (из корня проекта) — основной путь
+copy .env.example .env                       # один раз: пути, CLAUDE_EGRESS_PROXY
+docker compose -f docker-compose.claude.yml up -d --build   # сборка + запуск, http://localhost:5000
+docker exec -it claude-server claude login   # один раз: вход по подписке
+docker logs -f claude-server                  # логи
+docker compose -f docker-compose.claude.yml up -d --build claude-server  # пересборка после правок
+```
+
+```powershell
+# Хостовый запуск (справочно, для быстрых локальных итераций)
 cd backend; dotnet build
 cd backend; dotnet run --project ClaudeHomeServer   # порт 5000
-
-# Frontend (из корня проекта)
 cd frontend; npm run dev       # порт 5173
-cd frontend; npx tsc --noEmit # проверка типов
-cd frontend; npm run build     # production-сборка
-
-# Запускать вместе: backend на :5000, frontend на :5173
+cd frontend; npm run build     # production-сборка (tsc -b + vite)
 # Vite проксирует /api и /hubs (WebSocket) на :5000
 ```
 

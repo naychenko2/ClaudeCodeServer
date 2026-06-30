@@ -7,13 +7,33 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/roles")]
-public class RolesController(RoleManager roles, ProjectManager projects) : ControllerBase
+public class RolesController(RoleManager roles, ProjectManager projects, RoleMemoryService roleMemory,
+    RoleGeneratorService generator) : ControllerBase
 {
     [HttpGet]
     public IActionResult GetAll(string projectId)
     {
         if (projects.GetById(projectId) is null) return NotFound();
         return Ok(roles.GetByProject(projectId));
+    }
+
+    // Диалог-интервью для генерации роли: возвращает следующий вопрос либо готовый черновик.
+    // messages — вся история диалога (stateless: фронт держит её и шлёт целиком).
+    [HttpPost("interview")]
+    public async Task<IActionResult> Interview(string projectId, [FromBody] InterviewRequest req)
+    {
+        var project = projects.GetById(projectId);
+        if (project is null) return NotFound();
+        var history = (req.Messages ?? [])
+            .Select(m => new InterviewMessage(m.Role, m.Content))
+            .ToList();
+        try
+        {
+            var result = await generator.InterviewAsync(project.RootPath, history);
+            return Ok(result);
+        }
+        catch (TimeoutException ex) { return StatusCode(504, new { error = ex.Message }); }
+        catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 
     [HttpPost]
@@ -41,9 +61,33 @@ public class RolesController(RoleManager roles, ProjectManager projects) : Contr
         var role = roles.GetById(roleId);
         if (role is null || role.ProjectId != projectId) return NotFound();
         roles.Delete(roleId);
+        roleMemory.Delete(roleId);   // память роли больше не нужна
+        return NoContent();
+    }
+
+    // Память роли — просмотр и ручная правка из UI
+    [HttpGet("{roleId}/memory")]
+    public IActionResult GetMemory(string projectId, string roleId)
+    {
+        var role = roles.GetById(roleId);
+        if (role is null || role.ProjectId != projectId) return NotFound();
+        return Ok(new { content = roleMemory.Read(roleId) });
+    }
+
+    [HttpPut("{roleId}/memory")]
+    public IActionResult SaveMemory(string projectId, string roleId, [FromBody] RoleMemoryRequest req)
+    {
+        var role = roles.GetById(roleId);
+        if (role is null || role.ProjectId != projectId) return NotFound();
+        roleMemory.Overwrite(roleId, req.Content ?? "");
         return NoContent();
     }
 }
+
+public record RoleMemoryRequest(string? Content = null);
+
+public record InterviewRequest(List<InterviewMsgDto>? Messages = null);
+public record InterviewMsgDto(string Role = "", string Content = "");
 
 public record CreateRoleRequest(
     string Name = "",

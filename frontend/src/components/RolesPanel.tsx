@@ -86,20 +86,20 @@ export function RolesPanel({ project, onStartChat, isMobile = false }: Props) {
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
           }}
         >
-          + Новая роль
+          + Новый член команды
         </button>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
         {roles.length === 0 ? (
           <div style={{ padding: '28px 18px', textAlign: 'center', color: C.textMuted, fontSize: 13, lineHeight: 1.5 }}>
-            Пока нет ролей.<br />Создайте первого собеседника — например «Игорь, бэкендер».
+            В команде пока никого.<br />Проведите собеседование — например «Игорь, бэкендер».
           </div>
         ) : roles.map(role => (
           <div
             key={role.id}
             onClick={() => startChat(role)}
-            title="Начать чат с ролью"
+            title="Начать чат с сотрудником"
             style={{
               position: 'relative', display: 'flex', alignItems: 'center', gap: 10,
               paddingTop: isMobile ? 12 : 10, paddingBottom: isMobile ? 12 : 10,
@@ -121,13 +121,13 @@ export function RolesPanel({ project, onStartChat, isMobile = false }: Props) {
               )}
             </div>
             <div style={{ display: 'flex', flexShrink: 0 }}>
-              {iconBtn(e => { e.stopPropagation(); setEditTarget(role); }, 'Редактировать роль', false, (
+              {iconBtn(e => { e.stopPropagation(); setEditTarget(role); }, 'Редактировать', false, (
                 <>
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                 </>
               ))}
-              {iconBtn(e => { e.stopPropagation(); setDeleteTarget(role); }, 'Удалить роль', true, (
+              {iconBtn(e => { e.stopPropagation(); setDeleteTarget(role); }, 'Удалить из команды', true, (
                 <>
                   <polyline points="3 6 5 6 21 6" />
                   <path d="M19 6l-1 14H6L5 6" />
@@ -151,12 +151,12 @@ export function RolesPanel({ project, onStartChat, isMobile = false }: Props) {
 
       {deleteTarget && (
         <Modal
-          title="Удалить роль?"
+          title="Удалить из команды?"
           width={MODAL_W.confirm}
           onClose={() => setDeleteTarget(null)}
           subtitle={
             <>
-              Роль «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{deleteTarget.name}</strong>» будет удалена. Существующие чаты с ней останутся.
+              Сотрудник «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{deleteTarget.name}</strong>» будет удалён из команды. Существующие чаты с ним останутся.
             </>
           }
           footer={

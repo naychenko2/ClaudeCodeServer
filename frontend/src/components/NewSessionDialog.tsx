@@ -66,7 +66,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
       }
     >
       {roles.length > 0 && (
-        <Field label="Роль" hint="Собеседник-персонаж: задаёт характер и компетенции чата.">
+        <Field label="Член команды" hint="Собеседник-персонаж: задаёт характер и компетенции чата.">
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             <button type="button" onClick={() => setRoleId('')}
               style={{
@@ -75,7 +75,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
                 border: `1px solid ${roleId === '' ? C.accent : C.border}`,
                 background: roleId === '' ? C.accentLight : C.bgWhite,
               }}
-            >Без роли</button>
+            >Без сотрудника</button>
             {roles.map(r => {
               const active = r.id === roleId;
               return (

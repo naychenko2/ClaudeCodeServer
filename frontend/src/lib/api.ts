@@ -1,4 +1,4 @@
-import type { Project, Session, Role, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageSnapshot, FeatureFlagDefinition } from '../types';
+import type { Project, Session, Role, InterviewResult, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageSnapshot, FeatureFlagDefinition } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -92,6 +92,15 @@ export const api = {
       request<Role>(`/projects/${projectId}/roles/${roleId}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (projectId: string, roleId: string) =>
       request<void>(`/projects/${projectId}/roles/${roleId}`, { method: 'DELETE' }),
+    getMemory: (projectId: string, roleId: string) =>
+      request<{ content: string }>(`/projects/${projectId}/roles/${roleId}/memory`),
+    saveMemory: (projectId: string, roleId: string, content: string) =>
+      request<void>(`/projects/${projectId}/roles/${roleId}/memory`, { method: 'PUT', body: JSON.stringify({ content }) }),
+    interview: (projectId: string, messages: { role: string; content: string }[]) =>
+      request<InterviewResult>(`/projects/${projectId}/roles/interview`, {
+        method: 'POST',
+        body: JSON.stringify({ messages }),
+      }),
   },
 
   files: {

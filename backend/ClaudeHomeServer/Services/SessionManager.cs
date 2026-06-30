@@ -37,19 +37,21 @@ public class SessionManager
     private readonly string? _mcpConfigPath;
     private readonly SkillsService _skills;
     private readonly RoleManager _roles;
+    private readonly RoleMemoryService _roleMemory;
     private readonly WorkspaceKnowledgeStore _workspaceStore;
     private readonly FalCostService _falCost;
     private readonly UsageService _usage;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, SkillsService skills,
-        RoleManager roles, WorkspaceKnowledgeStore workspaceStore, FalCostService falCost, UsageService usage)
+        RoleManager roles, RoleMemoryService roleMemory, WorkspaceKnowledgeStore workspaceStore, FalCostService falCost, UsageService usage)
     {
         _projects = projects;
         _hub = hub;
         _history = history;
         _skills = skills;
         _roles = roles;
+        _roleMemory = roleMemory;
         _workspaceStore = workspaceStore;
         _falCost = falCost;
         _usage = usage;
@@ -159,7 +161,7 @@ public class SessionManager
             _mcpConfigPath, project.SystemPrompt,
             _skills, _workspaceStore,
             () => _projects.GetById(projectId)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-            _roles);
+            _roles, _roleMemory);
         entry.Process = claudeSession;
 
         await claudeSession.StartAsync();
@@ -196,7 +198,7 @@ public class SessionManager
                 _mcpConfigPath, project.SystemPrompt,
                 _skills, _workspaceStore,
                 () => _projects.GetById(entry.Info.ProjectId)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                _roles);
+                _roles, _roleMemory);
             entry.Process = claudeSession;
             await claudeSession.StartAsync();
         }

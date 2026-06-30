@@ -46,17 +46,24 @@ public class ClaudeSession : IAsyncDisposable
     private readonly string? _mcpConfigPath;
     private readonly SkillsService? _skills;
     private readonly RoleManager? _roles;
+    private readonly RoleMemoryService? _roleMemory;
     private readonly WorkspaceKnowledgeStore? _wkStore;
     // Провайдер правил разрешений проекта — резолвим каждый запрос (правила могут меняться)
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
     // Кэш последнего отправленного системного промпта — передаём только при изменении
     private string? _lastSentSystemPrompt;
 
+    // Память роли (Фаза 2): накопитель текста ответа за ход (для извлечения [MEMORY])
+    // и счётчик ходов с ролью (авто-summary каждые N ходов).
+    private readonly System.Text.StringBuilder _turnText = new();
+    private int _roleTurnCount;
+    private const int MemorySummaryEveryNTurns = 5;
+
     public ClaudeSession(Session info, string rootPath, Func<ServerMessage, Task> onMessage,
         string? mcpConfigPath = null, string? rawSystemPrompt = null,
         SkillsService? skills = null, WorkspaceKnowledgeStore? workspaceStore = null,
         Func<IReadOnlyList<PermissionRule>>? permissionRules = null,
-        RoleManager? roles = null)
+        RoleManager? roles = null, RoleMemoryService? roleMemory = null)
     {
         Info = info;
         _rootPath = rootPath;
@@ -65,6 +72,7 @@ public class ClaudeSession : IAsyncDisposable
         _rawSystemPrompt = rawSystemPrompt;
         _skills = skills;
         _roles = roles;
+        _roleMemory = roleMemory;
         _wkStore = workspaceStore;
         _permissionRules = permissionRules;
     }
@@ -93,8 +101,107 @@ public class ClaudeSession : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(role.SystemPrompt))
             parts.Add(role.SystemPrompt);
 
+        // Память роли — устойчивые факты/договорённости из прошлых бесед
+        var memory = _roleMemory?.Read(role.Id);
+        if (!string.IsNullOrWhiteSpace(memory))
+            parts.Add("## Твоя память о проекте и договорённостях\n\n" + memory.Trim());
+
+        // Инструкция по ведению памяти (канал маркера [MEMORY])
+        parts.Add("## Ведение памяти\n" +
+            "Когда узнаёшь устойчивый важный факт о проекте, принятое решение или договорённость " +
+            "с пользователем — добавь в конец ответа отдельную строку вида:\n[MEMORY] <краткий факт>\n" +
+            "Записывай только действительно важное для будущих бесед, без дублей и сиюминутных деталей.");
+
         return parts.Count > 0 ? string.Join("\n\n---\n\n", parts) : null;
     }
+
+    // Обработка памяти роли по завершении хода: маркеры [MEMORY] (реалтайм) + авто-summary раз в N ходов.
+    private async Task ProcessRoleMemoryAsync(Role role)
+    {
+        try
+        {
+            // Канал 1: явные факты из маркеров [MEMORY] в ответе роли
+            var facts = ExtractMemoryMarkers(_turnText.ToString());
+            if (facts.Count > 0) _roleMemory!.Append(role.Id, facts);
+
+            // Канал 2: периодически компактим память лёгким вызовом claude
+            _roleTurnCount++;
+            if (_roleTurnCount % MemorySummaryEveryNTurns == 0)
+                await SummarizeMemoryAsync(role);
+        }
+        catch { /* память — не критичный путь, ход уже завершён */ }
+    }
+
+    // Извлекает факты из строк вида "[MEMORY] текст" (маркер может быть в любом месте строки)
+    private static List<string> ExtractMemoryMarkers(string text)
+    {
+        var facts = new List<string>();
+        foreach (var line in text.Split('\n'))
+        {
+            var idx = line.IndexOf("[MEMORY]", StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) continue;
+            var fact = line[(idx + "[MEMORY]".Length)..].Trim().TrimStart(':', '-', ' ', '\t').Trim();
+            if (fact.Length > 0) facts.Add(fact);
+        }
+        return facts;
+    }
+
+    // Авто-summary: лёгкий claude (haiku) компактит память с учётом последнего диалога
+    private async Task SummarizeMemoryAsync(Role role)
+    {
+        var currentMemory = _roleMemory!.Read(role.Id);
+        if (string.IsNullOrWhiteSpace(currentMemory)) return;   // нечего компактить
+
+        var prompt =
+            $"Ты ведёшь память роли «{role.Name}» о проекте. Вот её текущая память:\n\n{currentMemory}\n\n" +
+            "Вот последний фрагмент диалога роли с пользователем:\n\n" +
+            Truncate(_turnText.ToString(), 4000) + "\n\n" +
+            "Перепиши память компактно: объедини дубли, убери устаревшее и сиюминутное, добавь важные " +
+            "устойчивые факты и договорённости из диалога. Верни ТОЛЬКО обновлённый markdown-список " +
+            "фактов (строки вида «- …»), без преамбул, заголовков и комментариев.";
+
+        var summary = await RunOneShotClaudeAsync(prompt, "claude-haiku-4-5-20251001");
+        if (!string.IsNullOrWhiteSpace(summary))
+            _roleMemory.Overwrite(role.Id, summary.Trim() + "\n");
+    }
+
+    // Разовый текстовый прогон claude (--print) без stream/инструментов — для авто-summary памяти
+    private async Task<string?> RunOneShotClaudeAsync(string prompt, string model)
+    {
+        try
+        {
+            var utf8NoBom = new System.Text.UTF8Encoding(false);
+            var psi = new ProcessStartInfo
+            {
+                FileName = FindClaudeExecutable(),
+                WorkingDirectory = _rootPath,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = utf8NoBom,
+                StandardInputEncoding = utf8NoBom,
+                CreateNoWindow = true,
+            };
+            psi.ArgumentList.Add("--print");
+            psi.ArgumentList.Add("--model");
+            psi.ArgumentList.Add(model);
+
+            using var proc = Process.Start(psi);
+            if (proc is null) return null;
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(90));
+            await proc.StandardInput.WriteAsync(prompt);
+            proc.StandardInput.Close();
+            var output = await proc.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            await proc.WaitForExitAsync(timeoutCts.Token);
+            return proc.ExitCode == 0 ? output : null;
+        }
+        catch { return null; }
+    }
+
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
 
     private static string? CreateSessionMcpConfig(string? basePath, string? datasetId)
     {
@@ -350,6 +457,7 @@ public class ClaudeSession : IAsyncDisposable
 
     private async Task RunTurnAsync(string text, IReadOnlyList<string> imagePaths, CancellationToken ct)
     {
+        _turnText.Clear();   // копим текст ответа роли за этот ход (для памяти Фазы 2)
         // --print обязателен: без него --output-format/--input-format/--include-partial-messages/--permission-prompt-tool не работают
         // --input-format stream-json нужен: мы посылаем JSON-объекты в stdin, а не plain text
         var args = new List<string>
@@ -631,6 +739,13 @@ public class ClaudeSession : IAsyncDisposable
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, ParseUsage(root), totalCost, apiErr, denials));
                 // Закрываем stdin: все permission-запросы уже обработаны, Claude может завершить процесс
                 try { _currentProcess?.StandardInput.Close(); } catch { }
+                // Память роли (Фаза 2): извлекаем [MEMORY]-факты и периодически компактим память.
+                // Не блокируем завершение хода — гоняем в фоне.
+                if (subtype != "error" && Info.RoleId is not null && _roles is not null && _roleMemory is not null)
+                {
+                    var memRole = _roles.GetById(Info.RoleId);
+                    if (memRole is not null) _ = ProcessRoleMemoryAsync(memRole);
+                }
                 // Гарантия исполнения одобренного плана: если ход завершился, а Claude так и не
                 // приступил к правкам — дошлём команду на реализацию (следующий ход — без plan-режима)
                 if (_awaitPlanExecution)
@@ -778,7 +893,11 @@ public class ClaudeSession : IAsyncDisposable
         {
             case "text_delta":
                 if (delta.TryGetProperty("text", out var text))
-                    await _onMessage(new TextDeltaMessage(text.GetString() ?? ""));
+                {
+                    var td = text.GetString() ?? "";
+                    if (Info.RoleId is not null) _turnText.Append(td);   // копим для памяти роли
+                    await _onMessage(new TextDeltaMessage(td));
+                }
                 break;
 
             case "thinking_delta":

@@ -37,6 +37,8 @@ builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
 builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<RoleManager>();
+builder.Services.AddSingleton<RoleGeneratorService>();
+builder.Services.AddSingleton<RoleMemoryService>();
 builder.Services.AddSingleton<FileService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();

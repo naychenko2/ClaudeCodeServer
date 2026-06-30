@@ -72,6 +72,25 @@ export interface Role {
   updatedAt: string;
 }
 
+// Черновик роли из диалога-интервью (заполняет мастер; без id/дат — роль ещё не создана)
+export interface RoleDraft {
+  name: string;
+  title: string;
+  avatar: string;
+  color: string;
+  persona: string;
+  agentNames: string[];
+  systemPrompt?: string;
+  model?: string;
+  effort?: string;
+}
+
+// Ход интервью: либо следующий вопрос, либо готовый черновик роли
+export interface InterviewResult {
+  question: string | null;
+  role: RoleDraft | null;
+}
+
 export interface FileEntry {
   name: string;
   path: string;
@@ -185,6 +204,7 @@ export interface AgentInfo {
   tools: string[];
   permissionMode?: string;
   fileName: string; // без .md
+  scope?: string;   // 'user' (глобальный ~/.claude/agents) | 'project'
 }
 
 export interface SkillsData {

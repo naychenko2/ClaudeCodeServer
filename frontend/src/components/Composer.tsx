@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { SkillsDropdown } from './SkillsDropdown';
 import { AgentSelector } from './AgentSelector';
@@ -453,11 +453,25 @@ export function Composer({
     </div>
   );
 
+  // Гасим нативный touch-callout / контекстное меню на иконочных кнопках.
+  // На планшете long-press по SVG-иконке внутри кнопки иначе вызывает меню
+  // браузера «Скачать/Поделиться/Печать» и перебивает onClick (голосовой ввод
+  // не стартует). Подавляем callout и выделение; onContextMenu гасит и правый клик.
+  const iconBtnGuard: CSSProperties = {
+    WebkitTouchCallout: 'none',
+    WebkitUserSelect: 'none',
+    userSelect: 'none',
+    touchAction: 'manipulation',
+  };
+
   const micButton = hasSpeech ? (
     <button
+      type="button"
       onClick={startMic}
+      onContextMenu={(e) => e.preventDefault()}
       title="Голосовой ввод"
       style={{
+        ...iconBtnGuard,
         width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
         background: 'none', cursor: 'pointer', color: C.textMuted,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -470,14 +484,14 @@ export function Composer({
 
   // Во время записи mic+send заменяются на отмену (✕) и подтверждение (✓)
   const cancelRecBtn = (
-    <button onClick={() => stopMic(false)} title="Отменить запись"
-      style={{ width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: C.dangerBg, color: C.danger, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+    <button type="button" onClick={() => stopMic(false)} onContextMenu={(e) => e.preventDefault()} title="Отменить запись"
+      style={{ ...iconBtnGuard, width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: C.dangerBg, color: C.danger, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
     </button>
   );
   const confirmRecBtn = (
-    <button onClick={() => stopMic(true)} title="Готово — вставить текст"
-      style={{ width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: R.pill, border: 'none', background: C.success, color: C.onAccent, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+    <button type="button" onClick={() => stopMic(true)} onContextMenu={(e) => e.preventDefault()} title="Готово — вставить текст"
+      style={{ ...iconBtnGuard, width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: R.pill, border: 'none', background: C.success, color: C.onAccent, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
     </button>
   );
@@ -487,9 +501,12 @@ export function Composer({
   // Как только появился текст — кнопка становится «Отправить» (даже во время генерации).
   const sendButton = isGenerating && !canSend ? (
     <button
+      type="button"
       onClick={onStop}
+      onContextMenu={(e) => e.preventDefault()}
       title="Остановить"
       style={{
+        ...iconBtnGuard,
         width: isMobile ? 38 : 34,
         height: isMobile ? 38 : 34,
         borderRadius: R.pill,
@@ -507,10 +524,13 @@ export function Composer({
     </button>
   ) : (
     <button
+      type="button"
       onClick={handleSend}
+      onContextMenu={(e) => e.preventDefault()}
       disabled={!canSend}
       title="Отправить (Enter)"
       style={{
+        ...iconBtnGuard,
         width: isMobile ? 38 : 34,
         height: isMobile ? 38 : 34,
         borderRadius: R.pill,

@@ -4,6 +4,15 @@
   box-sizing: border-box;
 }
 
+/*
+ * Иконки внутри кнопок не перехватывают тач/клик: касание всегда попадает на
+ * саму <button>, а не на inline-<svg> (который браузер на планшете считает
+ * картинкой и по long-press предлагает «Скачать/Поделиться/Печать»).
+ */
+button > svg {
+  pointer-events: none;
+}
+
 html, body, #root {
   margin: 0;
   padding: 0;

@@ -109,7 +109,12 @@ POST                /api/projects/{id}/files/create   { path }
 POST                /api/projects/{id}/files/mkdir    { path }
 POST                /api/projects/{id}/files/rename   { oldPath, newPath }
 DELETE              /api/projects/{id}/files          ?path=
+GET                 /api/feature-flags                → { definitions[], values{} }  (реестр + эффективные значения юзера)
+PUT                 /api/feature-flags/{key}          { enabled } → { values{} }      (override per-user; ключ валидируется по каталогу)
 ```
+
+Эффективные значения флагов также возвращаются в `GET /api/auth/me` (поле `featureFlags`),
+чтобы фронт получал их тем же запросом, что и при старте. Подробнее — раздел «Фич-флаги».
 
 ## SignalR Hub `/hubs/session`
 
@@ -129,6 +134,28 @@ DELETE              /api/projects/{id}/files          ?path=
 - Empty states: нет сессий, пустой чат с подсказками, пустая папка, нет результатов поиска
 - Файловый менеджер: дерево, поиск, просмотр/редактирование, diff/revert, бинарные, изображения, loading
 - Несохранённые изменения: диалог при закрытии файла
+- Фич-флаги: per-user тогглы (dark launch), реестр в коде (`FeatureFlagCatalog`), UI-тумблеры в меню аватара («Экспериментальные функции»). См. раздел «Фич-флаги»
+
+## Фич-флаги (feature toggles)
+
+Позволяют коммитить фичу выключенной и включать её по флагу без пересборки (dark launch).
+Флаги **per-user**: каждый юзер сам включает себе в меню «Экспериментальные функции».
+
+- **Реестр (source of truth) — в коде:** `FeatureFlagCatalog.All` в
+  [Models/FeatureFlag.cs](backend/ClaudeHomeServer/Models/FeatureFlag.cs). Каждый флаг:
+  `Key`, `Title`, `Description`, `Default`, `Stage` (`dev`/`beta`/`stable` — метка зрелости в UI).
+- **Хранение:** override per-user в `data/users.json` (поле `FeatureFlags`). Эффективное
+  значение = override юзера ?? дефолт реестра ([FeatureFlagService](backend/ClaudeHomeServer/Services/FeatureFlagService.cs)).
+- **Фронт:** стор на `useSyncExternalStore` ([lib/featureFlags.ts](frontend/src/lib/featureFlags.ts)),
+  значения грузятся из `/api/auth/me` при старте. Проверка в UI — хук `useFeature(FLAGS.key)`.
+
+**Как добавить новый флаг (3 шага):**
+1. Бэк: добавить строку в `FeatureFlagCatalog.All` (`key`, `title`, `description`, `Default: false`, `stage`).
+2. Фронт: добавить ключ в const `FLAGS` в `lib/featureFlags.ts`.
+3. Обернуть фичу: `{ useFeature(FLAGS.myFeature) && <MyFeature /> }`.
+
+Тумблер в модалке появится сам (рендерится из каталога). Ключи дублируются в двух местах
+(C#-каталог и TS-`FLAGS`) — при переименовании править оба.
 
 ## Агенты (.claude/agents/)
 

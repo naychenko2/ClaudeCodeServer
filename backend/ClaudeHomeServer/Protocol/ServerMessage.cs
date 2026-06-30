@@ -63,9 +63,11 @@ public record RedactedThinkingMessage() : ServerMessage("redacted_thinking");
 public record ErrorMessage(string Text)
     : ServerMessage("error");
 
-// Мягкий лимит API во время хода: claude приостанавливается до сброса (rate_limit_event).
-// Status: "rejected" — лимит достигнут; "allowed_warning" — приближается. "allowed" сюда не доходит.
-public record RateLimitMessage(string LimitType, string? ResetsAt, string? Status = null)
+// Телеметрия лимитов подписки (rate_limit_event, ~каждый ход). Utilization (0..1) — доля
+// использования окна; LimitType — five_hour/seven_day/weekly; Status — allowed/allowed_warning/
+// rejected. Используется и для непрерывного индикатора, и для баннера (при warning/rejected).
+public record RateLimitMessage(string LimitType, string? ResetsAt, string? Status = null,
+    double? Utilization = null, bool IsUsingOverage = false)
     : ServerMessage("rate_limit");
 
 // Граница компакции контекста: Claude свернул часть истории (system/compact_boundary)

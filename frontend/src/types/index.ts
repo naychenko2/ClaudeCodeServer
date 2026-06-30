@@ -21,8 +21,12 @@ export interface Project {
   builtInSystemPrompt?: string;
 }
 
+// Тип доступа к Claude: подписка (стоимость ≈ API-эквивалент) или оплата по API-ключу (реальная цена)
+export type ClaudeBilling = 'subscription' | 'api';
+
 export interface AppSettings {
   defaultProjectsPath: string;
+  claudeBilling?: ClaudeBilling;
 }
 
 export interface Session {
@@ -82,7 +86,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[] }
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { type: 'error'; text: string }
-  | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }
+  | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean }
   | { type: 'compact_boundary'; trigger: string; preTokens?: number }
   | { type: 'truncated' }
   | { type: 'redacted_thinking' }
@@ -96,6 +100,15 @@ export interface UsageInfo {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+}
+
+// Состояние одного окна лимита подписки (из rate_limit_event). utilization: 0..1.
+export interface RateLimitInfo {
+  limitType: string;
+  utilization?: number;
+  resetsAt?: string;
+  status?: string;
+  isUsingOverage?: boolean;
 }
 
 // Элементы чата

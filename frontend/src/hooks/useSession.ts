@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import type { ChatItem, ServerMessage } from '../types';
+import type { ChatItem, ServerMessage, RateLimitInfo } from '../types';
 import { joinSession, joinProject, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision } from '../lib/signalr';
 import { api } from '../lib/api';
 
@@ -14,6 +14,8 @@ interface SessionState {
   isJoined: boolean;
   projectId?: string;
   isHistoryLoading: boolean;
+  // Лимиты подписки по окнам (five_hour/seven_day/…) — последнее значение, обновляется каждый ход
+  rateLimits: Record<string, RateLimitInfo>;
 }
 
 const _store = new Map<string, SessionState>();
@@ -21,7 +23,7 @@ const _listeners = new Map<string, Set<() => void>>();
 const _joining = new Map<string, Promise<void>>();
 
 function getState(sid: string): SessionState {
-  if (!_store.has(sid)) _store.set(sid, { items: [], isWaiting: false, isJoined: false, isHistoryLoading: true });
+  if (!_store.has(sid)) _store.set(sid, { items: [], isWaiting: false, isJoined: false, isHistoryLoading: true, rateLimits: {} });
   return _store.get(sid)!;
 }
 
@@ -197,13 +199,21 @@ function ensureHandler() {
         updateItems(sid, items => [...items, { kind: 'redacted_thinking' }]);
         break;
       case 'rate_limit':
-        // Реальный лимит/предупреждение во время хода (status != allowed). isWaiting не трогаем.
-        // Дедуп: если последний элемент — такой же баннер лимита, не дублируем.
-        updateItems(sid, items => {
-          const last = items[items.length - 1];
-          if (last?.kind === 'rate_limit' && last.limitType === msg.limitType && last.status === msg.status) return items;
-          return [...items, { kind: 'rate_limit', limitType: msg.limitType, resetsAt: msg.resetsAt, status: msg.status }];
-        });
+        // Телеметрия использования подписки (приходит каждый ход). Храним последнее значение
+        // по каждому окну; индикатор/строку рисует ChatPanel из этого состояния (не в ленте).
+        setState(sid, prev => ({
+          ...prev,
+          rateLimits: {
+            ...prev.rateLimits,
+            [msg.limitType]: {
+              limitType: msg.limitType,
+              utilization: msg.utilization,
+              resetsAt: msg.resetsAt,
+              status: msg.status,
+              isUsingOverage: msg.isUsingOverage,
+            },
+          },
+        }));
         break;
       case 'compact_boundary':
         updateItems(sid, items => [...items, { kind: 'compact_boundary', trigger: msg.trigger, preTokens: msg.preTokens }]);
@@ -342,7 +352,7 @@ export function useSession(sessionId: string | null, projectId?: string) {
     };
   }, [sessionId, projectId]);
 
-  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false };
+  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo> };
 
   const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string) => {
     if (!sessionId) return;
@@ -465,5 +475,5 @@ export function useSession(sessionId: string | null, projectId?: string) {
     ));
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking };
 }

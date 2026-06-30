@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useMemo, useCallback, createContext, useContext, Fragment } from 'react';
 import { getExplorerCreateInDir } from './FileExplorer';
-import type { Project, Session, ChatItem, FileEntry, SkillInfo, AgentInfo } from '../types';
+import type { Project, Session, ChatItem, FileEntry, SkillInfo, AgentInfo, ClaudeBilling } from '../types';
 import { useSession } from '../hooks/useSession';
 import { useOnline } from '../hooks/useOnline';
 import { api, type WorkflowAgentInfo } from '../lib/api';
 import { modelLabel } from '../lib/models';
 import { effortLabel } from '../lib/effort';
+import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, toRateWindows, worstWindow } from '../lib/rateLimit';
 import { notify } from '../lib/notify';
 import { type Mode, MODE_META, ModeIcon } from '../lib/modes';
 import { Composer } from './Composer';
@@ -220,12 +221,63 @@ const badgeTitleStyle: React.CSSProperties = {
 function BadgeRow({ k, v }: { k: string; v: string }) {
   return <div style={badgeRowStyle}><span style={{ color: C.textMuted }}>{k}</span><span style={{ fontWeight: 600 }}>{v}</span></div>;
 }
+const badgeSectionStyle: React.CSSProperties = {
+  fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted,
+  textTransform: 'uppercase', letterSpacing: 0.4, margin: '10px 0 4px',
+};
+
+// Строка одного окна лимита в выпадашке (метка + бар + % + сброс)
+function RateRow({ w }: { w: RateWindow }) {
+  const c = RATE_COLORS[w.level];
+  const reset = fmtReset(w.resetsAt);
+  return (
+    <div style={{ padding: '3px 0' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <span style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary }}>
+          {windowLabel(w.limitType)}{w.isUsingOverage ? ' · перерасход' : ''}
+        </span>
+        <span style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: c.text }}>{w.pct}%{w.isUsingOverage ? '+' : ''}</span>
+      </div>
+      <div style={{ height: 4, borderRadius: 2, background: '#E5DCCB', overflow: 'hidden', margin: '3px 0' }}>
+        <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
+      </div>
+      {reset && <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted }}>сброс {reset}</div>}
+    </div>
+  );
+}
+
+// Закреплённая строка-предупреждение над composer (вариант В) — при warning/rejected
+function RateLimitBar({ w }: { w: RateWindow }) {
+  const c = RATE_COLORS[w.level];
+  const reset = fmtReset(w.resetsAt);
+  const reached = w.level === 'danger';
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', marginBottom: 8,
+      background: c.bg, border: `1px solid ${c.border}`, borderRadius: 8, fontSize: 12, color: c.text,
+    }}>
+      <span style={{ flexShrink: 0 }}>{reached ? '⛔' : '⚠'}</span>
+      <span style={{ flexShrink: 0, fontFamily: FONT.sans, whiteSpace: 'nowrap' }}>
+        {windowLabel(w.limitType)} — {reached ? 'лимит достигнут' : 'лимит близко'}
+      </span>
+      <div style={{ flex: 1, minWidth: 30, height: 5, borderRadius: 3, background: '#E5DCCB', overflow: 'hidden' }}>
+        <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
+      </div>
+      <span style={{ flexShrink: 0, fontFamily: FONT.mono, fontWeight: 700 }}>{w.pct}%{w.isUsingOverage ? '+' : ''}</span>
+      {reset && <span style={{ flexShrink: 0, fontFamily: FONT.sans, color: C.textMuted, whiteSpace: 'nowrap' }}>· сброс {reset}</span>}
+    </div>
+  );
+}
 
 // Общая оболочка бейджа стоимости: пилюля с подписью + суммой и выпадающая разбивка по клику.
-function BadgeShell({ label, amount, title, isMobile, children }: {
-  label: string; amount: string; title: string; isMobile?: boolean; children: React.ReactNode;
+// tone окрашивает пилюлю при приближении к лимиту (warn/danger).
+function BadgeShell({ label, amount, title, isMobile, tone, children }: {
+  label: string; amount: React.ReactNode; title: string; isMobile?: boolean;
+  tone?: 'warn' | 'danger'; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const toneBg = tone === 'danger' ? RATE_COLORS.danger.bg : tone === 'warn' ? RATE_COLORS.warn.bg : C.bgWhite;
+  const toneBorder = tone === 'danger' ? RATE_COLORS.danger.border : tone === 'warn' ? RATE_COLORS.warn.border : C.border;
   return (
     <div style={{ position: 'relative', flexShrink: 0 }}>
       <button
@@ -234,7 +286,7 @@ function BadgeShell({ label, amount, title, isMobile, children }: {
         title={title}
         style={{
           display: 'flex', alignItems: 'center', gap: 4, padding: '3px 9px',
-          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+          background: toneBg, border: `1px solid ${toneBorder}`, borderRadius: R.lg,
           cursor: 'pointer', fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: '#B05C38',
         }}
       >
@@ -258,18 +310,68 @@ function BadgeShell({ label, amount, title, isMobile, children }: {
 }
 
 // Бейдж стоимости Claude (токены/ходы). Клик раскрывает разбивку (аналог /cost).
-function CostBadge({ stats, isMobile }: { stats: CostStats; isMobile?: boolean }) {
-  if (stats.cost <= 0) return null;
+// В режиме подписки сумма — это ≈ API-эквивалент (отдельно не списывается), что и поясняется.
+function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
+  stats: CostStats; isMobile?: boolean; billing: ClaudeBilling; onBillingChange: (b: ClaudeBilling) => void;
+  windows: RateWindow[];
+}) {
+  const worst = worstWindow(windows);
+  if (stats.cost <= 0 && !worst) return null;
+  const sub = billing === 'subscription';
+  const tone = worst && worst.level !== 'normal' ? worst.level : undefined;
+  const amountNode = (
+    <>
+      <span>{stats.cost > 0 ? (sub ? '≈ ' : '') + fmtUsd(stats.cost) : '—'}</span>
+      {tone && worst && (
+        <span style={{ marginLeft: 5, color: RATE_COLORS[worst.level].text, fontWeight: 700 }}>· {worst.pct}%</span>
+      )}
+    </>
+  );
   return (
-    <BadgeShell label="Claude" amount={fmtUsd(stats.cost)} isMobile={isMobile}
-      title="Стоимость Claude — нажмите для разбивки">
-      <div style={badgeTitleStyle}>Стоимость Claude</div>
-      <BadgeRow k="Всего" v={fmtUsd(stats.cost)} />
-      <BadgeRow k="Ходов" v={String(stats.turns || stats.results)} />
-      <BadgeRow k="Входные токены" v={fmtTokens(stats.input)} />
-      <BadgeRow k="Выходные токены" v={fmtTokens(stats.output)} />
-      <BadgeRow k="Кэш (чтение)" v={fmtTokens(stats.cacheRead)} />
-      <BadgeRow k="Кэш (запись)" v={fmtTokens(stats.cacheCreate)} />
+    <BadgeShell
+      label="Claude"
+      amount={amountNode}
+      isMobile={isMobile}
+      tone={tone}
+      title={sub
+        ? 'Claude ≈ по API-тарифу · по подписке отдельно не списывается'
+        : 'Стоимость Claude — нажмите для разбивки'}
+    >
+      <div style={badgeTitleStyle}>{sub ? 'Claude · ≈ по API-тарифу' : 'Стоимость Claude'}</div>
+      {sub && (
+        <div style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, marginBottom: 8, lineHeight: 1.45 }}>
+          Эквивалент на pay-as-you-go API. По подписке покрыто абонплатой — отдельно не списывается.
+        </div>
+      )}
+      {stats.cost > 0 && <>
+        <BadgeRow k={sub ? '≈ Всего' : 'Всего'} v={fmtUsd(stats.cost)} />
+        <BadgeRow k="Ходов" v={String(stats.turns || stats.results)} />
+        <BadgeRow k="Входные токены" v={fmtTokens(stats.input)} />
+        <BadgeRow k="Выходные токены" v={fmtTokens(stats.output)} />
+        <BadgeRow k="Кэш (чтение)" v={fmtTokens(stats.cacheRead)} />
+        <BadgeRow k="Кэш (запись)" v={fmtTokens(stats.cacheCreate)} />
+      </>}
+      {windows.length > 0 && (
+        <>
+          <div style={badgeSectionStyle}>Лимиты подписки</div>
+          {windows.map(w => <RateRow key={w.limitType} w={w} />)}
+        </>
+      )}
+      <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${C.bgInset}`, display: 'flex', alignItems: 'center', gap: 6, fontFamily: FONT.sans, fontSize: 11 }}>
+        <span style={{ color: C.textMuted }}>Оплата:</span>
+        {(['subscription', 'api'] as ClaudeBilling[]).map(b => (
+          <button key={b} type="button" onClick={() => onBillingChange(b)}
+            style={{
+              padding: '2px 9px', borderRadius: 6, cursor: 'pointer', fontSize: 11,
+              fontFamily: FONT.sans, fontWeight: billing === b ? 700 : 500,
+              border: `1px solid ${billing === b ? '#B05C38' : C.border}`,
+              background: billing === b ? '#F1DDD1' : C.bgWhite,
+              color: billing === b ? '#B05C38' : C.textMuted,
+            }}>
+            {b === 'subscription' ? 'Подписка' : 'API-ключ'}
+          </button>
+        ))}
+      </div>
     </BadgeShell>
   );
 }
@@ -298,6 +400,9 @@ interface ChatHeaderBarProps {
   online: boolean;
   cost: CostStats;
   falCost: FalCostStats;
+  billing: ClaudeBilling;
+  onBillingChange: (b: ClaudeBilling) => void;
+  rateWindows: RateWindow[];
   onOpenSettings: () => void;
   isMobile?: boolean;
   onBack?: () => void;
@@ -305,7 +410,7 @@ interface ChatHeaderBarProps {
   onOpenSidebar?: () => void;
 }
 
-function ChatHeaderBar({ session, project, online, cost, falCost, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -348,7 +453,7 @@ function ChatHeaderBar({ session, project, online, cost, falCost, onOpenSettings
           </span>
         </div>
       )}
-      <CostBadge stats={cost} isMobile={isMobile} />
+      <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />
       <FalCostBadge stats={falCost} isMobile={isMobile} />
       {online && (
         <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
@@ -643,7 +748,10 @@ function ToolGroupBlock({ isGroupDone, toolCount, children }: {
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
+  // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
+  const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
+  const worstRate = useMemo(() => worstWindow(rateWindows), [rateWindows]);
   const online = useOnline();
 
   const [hasCLAUDEmd, setHasCLAUDEmd] = useState<boolean | null>(null);
@@ -679,6 +787,17 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     }
     return { total, count, byModel };
   }, [items]);
+
+  // Тип оплаты Claude (подписка/api) — глобальная настройка; влияет на подачу стоимости Claude
+  const [claudeBilling, setClaudeBilling] = useState<ClaudeBilling>('subscription');
+  useEffect(() => {
+    api.settings.get().then(s => { if (s?.claudeBilling) setClaudeBilling(s.claudeBilling); }).catch(() => {});
+  }, []);
+  const changeBilling = useCallback((b: ClaudeBilling) => {
+    setClaudeBilling(b);
+    // Сохраняем, не затирая остальные настройки
+    api.settings.get().then(s => api.settings.save({ ...s, claudeBilling: b })).catch(() => {});
+  }, []);
 
   const [mode, setMode] = useState<Mode>(session.mode);
   const [showAttachPicker, setShowAttachPicker] = useState(false);
@@ -1133,6 +1252,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         online={online}
         cost={costStats}
         falCost={falCostStats}
+        billing={claudeBilling}
+        onBillingChange={changeBilling}
+        rateWindows={rateWindows}
         onOpenSettings={() => setShowEdit(true)}
         isMobile={isMobile}
         onBack={onBack}
@@ -1318,6 +1440,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               Режим «Без ограничений» — Claude действует без подтверждений
             </div>
           )}
+          {/* Вариант В: строка-предупреждение о лимите подписки у места отправки (warning/rejected) */}
+          {worstRate && worstRate.level !== 'normal' && <RateLimitBar w={worstRate} />}
           <div style={{ borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
           <Composer
             offline={!online}

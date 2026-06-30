@@ -25,7 +25,11 @@ public class AppSettingsService
             var path = string.IsNullOrWhiteSpace(_settings.DefaultProjectsPath)
                 ? _configDefault
                 : _settings.DefaultProjectsPath;
-            return new AppSettings { DefaultProjectsPath = path };
+            return new AppSettings
+            {
+                DefaultProjectsPath = path,
+                ClaudeBilling = string.IsNullOrWhiteSpace(_settings.ClaudeBilling) ? "subscription" : _settings.ClaudeBilling,
+            };
         }
     }
 

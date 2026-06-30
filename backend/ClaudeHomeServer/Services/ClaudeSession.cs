@@ -630,16 +630,22 @@ public class ClaudeSession : IAsyncDisposable
     {
         if (!root.TryGetProperty("rate_limit_info", out var info)) return;
 
-        // status: "allowed" — это просто телеметрия об остатке окна (лимит НЕ достигнут),
-        // такие события приходят регулярно. Баннер показываем только при реальном ограничении
-        // ("rejected") или предупреждении ("allowed_warning"); "allowed"/без статуса — игнорируем.
+        // Форвардим ВСЕ события (включая "allowed"): utilization нужен для непрерывного индикатора
+        // использования подписки. Баннер на фронте решается по status (allowed_warning/rejected),
+        // "allowed" просто тихо обновляет индикатор.
         var status = info.TryGetProperty("status", out var stEl) ? stEl.GetString() : null;
-        if (string.IsNullOrEmpty(status) || status == "allowed") return;
+
+        var utilization = info.TryGetProperty("utilization", out var utEl) && utEl.ValueKind == JsonValueKind.Number
+            ? utEl.GetDouble() : (double?)null;
+        var isUsingOverage = info.TryGetProperty("isUsingOverage", out var ovEl) && ovEl.ValueKind == JsonValueKind.True;
 
         var limitType =
             (info.TryGetProperty("rateLimitType", out var lt) ? lt.GetString() : null)
             ?? (info.TryGetProperty("rate_limit_type", out var lt2) ? lt2.GetString() : null)
             ?? "";
+
+        // Нет ни типа окна, ни utilization — нечего показывать
+        if (string.IsNullOrEmpty(limitType) && utilization is null) return;
 
         // resetsAt может прийти как ISO-строка или unix-время (сек/мс) — нормализуем в ISO
         string? resetsAt = null;
@@ -653,7 +659,7 @@ public class ClaudeSession : IAsyncDisposable
                     : DateTimeOffset.FromUnixTimeSeconds(n)).ToString("o");
         }
 
-        await _onMessage(new RateLimitMessage(limitType, resetsAt, status));
+        await _onMessage(new RateLimitMessage(limitType, resetsAt, status, utilization, isUsingOverage));
     }
 
     private async Task HandleUserMessageAsync(JsonElement root)

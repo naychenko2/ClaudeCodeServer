@@ -345,7 +345,7 @@ public class SessionManager
                     await acc.SaveSnapshotAsync(_history);
                     break;
                 case ResultMessage m:       await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history); break;
-                case RateLimitMessage m:    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt); break;
+                case RateLimitMessage m:    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt); break;
                 case ErrorMessage m:        await acc.OnErrorAsync(m.Text, _history); break;
             }
         }

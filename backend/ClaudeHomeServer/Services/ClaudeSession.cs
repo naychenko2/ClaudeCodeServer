@@ -648,18 +648,27 @@ public class ClaudeSession : IAsyncDisposable
         if (string.IsNullOrEmpty(limitType) && utilization is null) return;
 
         // resetsAt может прийти как ISO-строка или unix-время (сек/мс) — нормализуем в ISO
-        string? resetsAt = null;
-        if (info.TryGetProperty("resetsAt", out var ra) || info.TryGetProperty("resets_at", out ra))
+        var resetsAt = NormalizeReset(info, "resetsAt", "resets_at");
+
+        // Overage (перерасход сверх лимита, у тарифа Max): статус + время сброса окна перерасхода
+        var overageStatus = info.TryGetProperty("overageStatus", out var osEl) ? osEl.GetString() : null;
+        var overageResetsAt = NormalizeReset(info, "overageResetsAt", "overage_resets_at");
+
+        await _onMessage(new RateLimitMessage(limitType, resetsAt, status, utilization, isUsingOverage, overageStatus, overageResetsAt));
+    }
+
+    // Нормализует поле времени сброса (ISO-строка или unix сек/мс) в ISO-строку
+    private static string? NormalizeReset(JsonElement info, string key1, string key2)
+    {
+        if (info.TryGetProperty(key1, out var ra) || info.TryGetProperty(key2, out ra))
         {
-            if (ra.ValueKind == JsonValueKind.String)
-                resetsAt = ra.GetString();
-            else if (ra.ValueKind == JsonValueKind.Number && ra.TryGetInt64(out var n))
-                resetsAt = (n > 100_000_000_000
+            if (ra.ValueKind == JsonValueKind.String) return ra.GetString();
+            if (ra.ValueKind == JsonValueKind.Number && ra.TryGetInt64(out var n))
+                return (n > 100_000_000_000
                     ? DateTimeOffset.FromUnixTimeMilliseconds(n)
                     : DateTimeOffset.FromUnixTimeSeconds(n)).ToString("o");
         }
-
-        await _onMessage(new RateLimitMessage(limitType, resetsAt, status, utilization, isUsingOverage));
+        return null;
     }
 
     private async Task HandleUserMessageAsync(JsonElement root)

@@ -81,19 +81,36 @@ docker exec claude-server curl -s -o /dev/null -w '%{http_code}\n' -x $env:CLAUD
 
 ## Прод-режим (naychenko.me)
 
-Тот же образ + оверрайд с портами 80/443 и TLS-сертами:
+Тот же образ + оверрайд с портами 80/443 и TLS-сертами. Прод-контур **разведён с dev**
+отдельным env-файлом `.env.prod` (скопировать из `.env.prod.example`):
+
+| | dev | prod |
+|---|---|---|
+| env-file | `.env` | `.env.prod` |
+| compose project | `claudecodeserver` | `claude-prod` (`COMPOSE_PROJECT_NAME`) |
+| container | `claude-server` | `claude-server-prod` |
+| порты | 5000 | 80, 443 |
+| папка проектов | `C:\Temp\ClaudeHome` | `C:\ClaudeHome` |
+| volumes | `claudecodeserver_*` | `claude-prod_*` |
+
+Контуры изолированы (разные volumes/папки/имена) и могут работать одновременно.
 
 ```powershell
-$env:CLAUDE_CERTS_DIR = "C:/certs/naychenko"   # fullchain.pem + privkey.pem
-docker compose -f docker-compose.claude.yml -f docker-compose.claude.prod.yml up -d --build
+docker compose --env-file .env.prod -f docker-compose.claude.yml -f docker-compose.claude.prod.yml up -d --build
+docker exec -it claude-server-prod claude login   # один раз: вход по подписке (в prod-volume)
 ```
 
 `appsettings.Production.json` подхватывается автоматически (Kestrel 80/443, `AllowedHosts` с доменом).
-Пути сертов переопределены на `/certs/*`.
+Пути сертов переопределены на `/certs/*`; OnlyOffice callback — на `http://host.docker.internal:80`.
 
 > Примечание: при наложении файлов список `ports` суммируется, поэтому в прод-режиме
 > хост-порт 5000 тоже остаётся проброшенным (слушателя на нём нет — безвреден). Если порт
 > занят, убрать его из базового файла или объявить отдельный прод-compose без наследования.
+
+### Автозапуск после перезагрузки ПК
+
+`restart: unless-stopped` (базовый compose) поднимает контейнер сам — нужно лишь, чтобы
+стартовал Docker: **Docker Desktop → Settings → General → «Start Docker Desktop when you sign in»**.
 
 ## Проверка изоляции
 

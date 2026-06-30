@@ -37,6 +37,7 @@ mcp/tasks-server/dist/
 # Среда
 .env
 .env.local
+.env.prod
 *.env
 
 # Локальный override-конфиг (машинно-специфичные пути/секреты), у каждого свой

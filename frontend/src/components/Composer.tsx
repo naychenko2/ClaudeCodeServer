@@ -130,6 +130,7 @@ export function Composer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
   const recCancelRef = useRef(false);
+  const micWatchdogRef = useRef<number | null>(null); // детект «мёртвого» Web Speech (нет audiostart)
   const modeRef = useRef<HTMLDivElement>(null);
 
   // Таймер записи голоса
@@ -261,33 +262,77 @@ export function Composer({
     }
   };
 
+  // Голосовой ввод. На устройствах с рабочим Web Speech (телефоны) распознаём сами.
+  // Где движок «мёртвый» (например, Huawei без Google-сервисов) — фокусируем поле,
+  // чтобы пользователь надиктовал системным голосовым вводом клавиатуры.
+  const micKeyboardOnly = () => {
+    try { return localStorage.getItem('micKeyboardFallback') === '1'; } catch { return false; }
+  };
+
   const startMic = () => {
-    if (!hasSpeech || isListening) return;
+    if (isListening) return;
+
+    // Web Speech отсутствует или ранее выяснили, что он не работает → сразу клавиатура.
+    if (!hasSpeech || micKeyboardOnly()) {
+      textareaRef.current?.focus();
+      return;
+    }
+
     const SpeechRecognitionCtor =
       (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
     const rec = new SpeechRecognitionCtor() as any;
     rec.lang = 'ru-RU';
-    rec.interimResults = false;
+    rec.interimResults = true;
+    rec.continuous = false;
     rec.maxAlternatives = 1;
     recCancelRef.current = false;
 
-    rec.onresult = (e: SpeechRecognitionEvent) => {
-      if (recCancelRef.current) return; // отменено — не вставляем
-      const transcript = e.results[0][0].transcript;
-      setText(prev => (prev ? prev + ' ' + transcript : transcript));
+    let gotAudio = false;
+    const clearWatchdog = () => {
+      if (micWatchdogRef.current !== null) { clearTimeout(micWatchdogRef.current); micWatchdogRef.current = null; }
     };
 
-    rec.onend = () => setIsListening(false);
-    rec.onerror = () => setIsListening(false);
+    rec.onaudiostart = () => { gotAudio = true; clearWatchdog(); };
+
+    rec.onresult = (e: any) => {
+      let last = '';
+      for (let i = 0; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal && r[0]?.transcript) last = r[0].transcript;
+      }
+      if (recCancelRef.current) return; // отменено — не вставляем
+      if (last) setText(prev => (prev ? prev + ' ' + last : last));
+    };
+
+    rec.onend = () => { clearWatchdog(); setIsListening(false); };
+    rec.onerror = () => { clearWatchdog(); setIsListening(false); };
 
     recognitionRef.current = rec;
-    rec.start();
-    setIsListening(true);
+    try {
+      rec.start();
+      setIsListening(true);
+      // Детектор «мёртвого» движка: если за 2.5с не пришёл audiostart — распознавания
+      // в браузере нет (нет Google-сервисов). Переходим на клавиатурный ввод и
+      // запоминаем выбор, чтобы впредь сразу открывать клавиатуру.
+      micWatchdogRef.current = window.setTimeout(() => {
+        if (gotAudio) return;
+        try { rec.abort(); } catch { /* noop */ }
+        setIsListening(false);
+        try { localStorage.setItem('micKeyboardFallback', '1'); } catch { /* noop */ }
+        alert('Распознавание речи недоступно в браузере на этом устройстве.\n' +
+          'Переключаюсь на голосовой ввод клавиатуры — нажми кнопку микрофона ещё раз: ' +
+          'откроется клавиатура, на ней нажми микрофон и говори.');
+      }, 2500);
+    } catch {
+      setIsListening(false);
+    }
   };
 
   // confirm=true — остановить и вставить распознанное; false — отменить без вставки
   const stopMic = (confirm: boolean) => {
     recCancelRef.current = !confirm;
+    if (micWatchdogRef.current !== null) { clearTimeout(micWatchdogRef.current); micWatchdogRef.current = null; }
+    setIsListening(false); // фикс: закрываем режим записи сразу, не дожидаясь onend (его может не быть)
     try {
       if (confirm) recognitionRef.current?.stop();
       else recognitionRef.current?.abort();

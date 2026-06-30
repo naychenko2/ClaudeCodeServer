@@ -1334,7 +1334,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       // Workflow-блок рендерим специальным компонентом
       if (items[i].kind === 'tool_use' && (items[i] as ToolUseItem).name.toLowerCase() === 'workflow') {
         const wf = items[i] as ToolUseItem;
-        pushNode(<WorkflowBlockView key={`wf-${i}`} workflow={wf} agents={childrenByParentId.get(wf.id) ?? []} childrenByParentId={childrenByParentId} />, i);
+        pushNode(<WorkflowBlockView key={`wf-${i}`} workflow={wf} agents={childrenByParentId.get(wf.id) ?? []} childrenByParentId={childrenByParentId} onOpenFile={onOpenFile} />, i);
         i++; prevNodeWasBlock = false; continue;
       }
       // Субагенты Workflow и их инструменты рендерятся внутри WorkflowBlockView
@@ -2287,7 +2287,7 @@ function MediaBlock({
 }
 
 // Строка инструмента с раскрываемым телом результата (вывод Bash/Read и т.п.)
-function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 'tool_use' }>; online?: boolean }) {
+function ToolUseView({ item, online = true, onOpenFile }: { item: Extract<ChatItem, { kind: 'tool_use' }>; online?: boolean; onOpenFile?: (path: string) => void }) {
   const meta = toolMeta(item.name);
   const [open, setOpen] = useState(false);
   const project = useContext(ChatProjectContext);
@@ -2361,7 +2361,20 @@ function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 
           <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>{displayName}</span>
         </span>
         {toolArg
-          ? <span className={argIsPath ? 'cc-trunc-left' : undefined} style={{ fontFamily: FONT.mono, fontSize: 11, flex: 1, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolArg}</span>
+          ? (() => {
+              // Путь к файлу делаем кликабельным — открывает файл на просмотр (десктоп: split справа от чата).
+              const clickable = argIsPath && !!onOpenFile && pathVal != null;
+              return (
+                <span
+                  className={argIsPath ? 'cc-trunc-left' : undefined}
+                  onClick={clickable ? (e) => { e.stopPropagation(); onOpenFile!(relPath(String(pathVal), project?.rootPath)); } : undefined}
+                  title={clickable ? 'Открыть файл' : undefined}
+                  style={{ fontFamily: FONT.mono, fontSize: 11, flex: 1, color: clickable ? C.accent : C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: clickable ? 'pointer' : 'inherit' }}
+                >
+                  {toolArg}
+                </span>
+              );
+            })()
           : <span style={{ flex: 1 }} />}
         {item.result !== undefined && (
           <span style={{ fontSize: 11, color: item.isError ? '#C0392B' : C.textMuted, flexShrink: 0 }}>
@@ -2496,10 +2509,11 @@ function parseWorkflowMeta(input: unknown): { description?: string; phases?: { t
   return { description, phases: phases.length > 0 ? phases : undefined };
 }
 
-function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
+function WorkflowBlockView({ workflow, agents, childrenByParentId, onOpenFile }: {
   workflow: ToolUseItem;
   agents: ToolUseItem[];
   childrenByParentId: Map<string, ToolUseItem[]>;
+  onOpenFile?: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
@@ -2712,7 +2726,7 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
                       <div style={{ paddingLeft: 22, paddingRight: 14, paddingBottom: 4, borderTop: `1px solid ${C.bgInset}` }}>
                         {tools.map((tool, ti) => (
                           <div key={tool.id} style={ti > 0 ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
-                            <ToolUseView item={tool} />
+                            <ToolUseView item={tool} onOpenFile={onOpenFile} />
                           </div>
                         ))}
                       </div>
@@ -3529,7 +3543,7 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
     case 'tool_use':
       // План задач рисуем отдельной карточкой-чек-листом. Линию-коннектор для дочерних
       // вызовов субагента (parentToolUseId) рисует renderItems — единой непрерывной полосой.
-      return item.name === 'TodoWrite' ? <TodoPlanView input={item.input} /> : <ToolUseView item={item} online={online} />;
+      return item.name === 'TodoWrite' ? <TodoPlanView input={item.input} /> : <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
 
     case 'ask_question':
       return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} onInterrupt={onInterrupt} />;

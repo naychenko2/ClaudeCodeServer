@@ -16,6 +16,7 @@ public class AgentInfo
     public string[] Tools { get; set; } = [];
     public string? PermissionMode { get; set; }
     public string FileName { get; set; } = ""; // без .md
+    public string Scope { get; set; } = "project"; // "user" (глобальный ~/.claude/agents) | "project"
 }
 
 public class SkillsService
@@ -25,6 +26,10 @@ public class SkillsService
 
     private static string GetAgentsDir(string projectRootPath) =>
         Path.Combine(projectRootPath, ".claude", "agents");
+
+    // Глобальные (пользовательские) агенты — доступны во всех проектах
+    private static string GlobalAgentsDir =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "agents");
 
     // --- Чтение скиллов и агентов ---
 
@@ -55,34 +60,39 @@ public class SkillsService
         return result;
     }
 
+    // Агенты, доступные в проекте: глобальные (~/.claude/agents) + проектные (.claude/agents).
+    // Проектный агент перекрывает глобального с тем же именем файла (как в Claude Code CLI).
     public IReadOnlyList<AgentInfo> GetProjectAgents(string projectRootPath)
     {
-        var dir = GetAgentsDir(projectRootPath);
-        if (!Directory.Exists(dir)) return [];
-
-        var result = new List<AgentInfo>();
-        foreach (var file in Directory.GetFiles(dir, "*.md"))
+        var byName = new Dictionary<string, AgentInfo>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (dir, scope) in new[] { (GlobalAgentsDir, "user"), (GetAgentsDir(projectRootPath), "project") })
         {
-            try
+            if (!Directory.Exists(dir)) continue;
+            foreach (var file in Directory.GetFiles(dir, "*.md"))
             {
-                var content = File.ReadAllText(file);
-                var meta = ParseFrontmatter(content);
-                var toolsStr = meta.TryGetValue("tools", out var t) ? t : null;
-                result.Add(new AgentInfo
+                try
                 {
-                    Name = meta.TryGetValue("name", out var n) ? n : Path.GetFileNameWithoutExtension(file),
-                    Description = meta.TryGetValue("description", out var d) ? d : "",
-                    Color = meta.TryGetValue("color", out var c) ? c : null,
-                    Tools = toolsStr != null
-                        ? toolsStr.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToArray()
-                        : [],
-                    PermissionMode = meta.TryGetValue("permissionMode", out var pm) ? pm : null,
-                    FileName = Path.GetFileNameWithoutExtension(file),
-                });
+                    var content = File.ReadAllText(file);
+                    var meta = ParseFrontmatter(content);
+                    var toolsStr = meta.TryGetValue("tools", out var t) ? t : null;
+                    var fileName = Path.GetFileNameWithoutExtension(file);
+                    byName[fileName] = new AgentInfo
+                    {
+                        Name = meta.TryGetValue("name", out var n) ? n : fileName,
+                        Description = meta.TryGetValue("description", out var d) ? d : "",
+                        Color = meta.TryGetValue("color", out var c) ? c : null,
+                        Tools = toolsStr != null
+                            ? toolsStr.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToArray()
+                            : [],
+                        PermissionMode = meta.TryGetValue("permissionMode", out var pm) ? pm : null,
+                        FileName = fileName,
+                        Scope = scope,
+                    };
+                }
+                catch { }
             }
-            catch { }
         }
-        return result;
+        return byName.Values.ToList();
     }
 
     // --- Получение содержимого файла ---
@@ -95,8 +105,11 @@ public class SkillsService
 
     public string? GetAgentContent(string projectRootPath, string agentFileName)
     {
-        var file = Path.Combine(GetAgentsDir(projectRootPath), agentFileName + ".md");
-        return File.Exists(file) ? File.ReadAllText(file) : null;
+        // Проектный агент приоритетнее глобального
+        var projectFile = Path.Combine(GetAgentsDir(projectRootPath), agentFileName + ".md");
+        if (File.Exists(projectFile)) return File.ReadAllText(projectFile);
+        var globalFile = Path.Combine(GlobalAgentsDir, agentFileName + ".md");
+        return File.Exists(globalFile) ? File.ReadAllText(globalFile) : null;
     }
 
     // --- Сохранение ---

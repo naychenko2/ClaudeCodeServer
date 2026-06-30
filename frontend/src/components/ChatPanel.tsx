@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback, createContext, useCo
 import { getExplorerCreateInDir } from './FileExplorer';
 import type { Project, Session, ChatItem, FileEntry, SkillInfo, AgentInfo, ClaudeBilling } from '../types';
 import { useSession } from '../hooks/useSession';
+import { countFiles } from '../hooks/useSessionArtifacts';
 import { useOnline } from '../hooks/useOnline';
 import { api, type WorkflowAgentInfo } from '../lib/api';
 import { modelLabel } from '../lib/models';
@@ -37,6 +38,9 @@ interface Props {
   attachedFiles: string[];
   onAttachedFilesChange: (files: string[]) => void;
   onResume?: (message?: string) => void;
+  // Тумблер панели «Артефакты сессии» в шапке (приходит только при включённом фич-флаге)
+  artifactsOpen?: boolean;
+  onToggleArtifacts?: () => void;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -447,9 +451,12 @@ interface ChatHeaderBarProps {
   onBack?: () => void;
   activeWorkflow?: { phasesDone: number; phasesTotal: number };
   onOpenSidebar?: () => void;
+  artifactsOpen?: boolean;
+  onToggleArtifacts?: () => void;
+  artifactFileCount?: number;
 }
 
-function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -494,6 +501,25 @@ function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBil
       )}
       <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />
       <FalCostBadge stats={falCost} isMobile={isMobile} />
+      {onToggleArtifacts && (
+        <ToolbarIconButton onClick={onToggleArtifacts} title="Артефакты сессии" isMobile={isMobile} active={artifactsOpen}>
+          <div style={{ position: 'relative', display: 'flex' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6M9 13h6M9 17h3" />
+            </svg>
+            {artifactFileCount !== undefined && artifactFileCount > 0 && (
+              <span style={{
+                position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
+                borderRadius: 7, background: C.accent, color: C.onAccent,
+                fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
+              }}>
+                {artifactFileCount}
+              </span>
+            )}
+          </div>
+        </ToolbarIconButton>
+      )}
       {online && (
         <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -786,12 +812,18 @@ function ToolGroupBlock({ isGroupDone, toolCount, children }: {
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
   const worstRate = useMemo(() => worstWindow(rateWindows), [rateWindows]);
   const online = useOnline();
+
+  // Число изменённых файлов — для бейджа на кнопке «Артефакты» (только когда тумблер проброшен)
+  const artifactFileCount = useMemo(
+    () => onToggleArtifacts ? countFiles(items, project.rootPath) : 0,
+    [onToggleArtifacts, items, project.rootPath]
+  );
 
   const [hasCLAUDEmd, setHasCLAUDEmd] = useState<boolean | null>(null);
   useEffect(() => {
@@ -1386,6 +1418,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         onBack={onBack}
         activeWorkflow={activeWorkflowInfo ?? undefined}
         onOpenSidebar={onOpenSidebar}
+        artifactsOpen={artifactsOpen}
+        onToggleArtifacts={onToggleArtifacts}
+        artifactFileCount={artifactFileCount}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}

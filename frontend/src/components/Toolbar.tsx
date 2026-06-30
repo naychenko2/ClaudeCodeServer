@@ -38,12 +38,13 @@ export function Toolbar({ isMobile, noBorder, bg, children, style }: {
 }
 
 // === Icon-кнопка тулбара: единый тач-таргет, hover-подложка, svg 16 ===
-export function ToolbarIconButton({ onClick, title, isMobile, color, disabled, children }: {
+export function ToolbarIconButton({ onClick, title, isMobile, color, disabled, active, children }: {
   onClick?: (e: MouseEvent) => void;
   title?: string;
   isMobile?: boolean;
   color?: string;
   disabled?: boolean;
+  active?: boolean;
   children: ReactNode;
 }) {
   const [hover, setHover] = useState(false);
@@ -56,8 +57,8 @@ export function ToolbarIconButton({ onClick, title, isMobile, color, disabled, c
         width: hit, height: hit, flexShrink: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         border: 'none', borderRadius: TB.iconRadius, cursor: disabled ? 'default' : 'pointer',
-        background: hover && !disabled ? TB.iconHoverBg : 'transparent',
-        color: disabled ? C.border : (color ?? (hover ? TB.iconColorHover : TB.iconColor)),
+        background: active ? C.accentMuted : (hover && !disabled ? TB.iconHoverBg : 'transparent'),
+        color: disabled ? C.border : (color ?? (active ? C.accent : (hover ? TB.iconColorHover : TB.iconColor))),
         transition: 'background 0.12s, color 0.12s',
       }}
     >

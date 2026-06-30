@@ -804,11 +804,18 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const [showEdit, setShowEdit] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Внутренний контент-блок ленты — именно он растёт при дорендере (картинки base64,
+  // syntax highlight, markdown). Наблюдаем за ним, чтобы держать низ после загрузки истории.
+  const contentRef = useRef<HTMLDivElement>(null);
   // Плавающий composer переменной высоты — измеряем, чтобы лента упиралась ровно под него
   const composerWrapRef = useRef<HTMLDivElement>(null);
   const [composerH, setComposerH] = useState(96);
   // Прилипание к низу: автоскролл при новых сообщениях только если пользователь уже внизу
   const atBottomRef = useRef(true);
+  // Восстановление позиции чтения после refresh: храним scrollTop per-session в localStorage.
+  const scrollKey = `cc-scroll-${session.id}`;
+  const pendingRestoreRef = useRef<number | null>(null); // позиция к восстановлению (null = нечего/был внизу)
+  const restoredRef = useRef(false);                     // восстановление для текущей сессии уже выполнено
   // Показывать плавающую кнопку «вниз», когда пользователь отлистал вверх
   const [showScrollDown, setShowScrollDown] = useState(false);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
@@ -872,7 +879,28 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     atBottomRef.current = atBottom;
     setShowScrollDown(!atBottom);
-  }, []);
+    // После восстановления — запоминаем позицию чтения, чтобы пережить refresh.
+    // Внизу позицию не храним: по умолчанию прилипаем к низу.
+    if (restoredRef.current) {
+      try {
+        if (atBottom) localStorage.removeItem(scrollKey);
+        else localStorage.setItem(scrollKey, String(Math.round(el.scrollTop)));
+      } catch { /* localStorage недоступен — не критично */ }
+    }
+  }, [scrollKey]);
+
+  // При смене сессии — поднимаем сохранённую позицию чтения для восстановления после refresh
+  useEffect(() => {
+    restoredRef.current = false;
+    let saved: number | null = null;
+    try {
+      const raw = localStorage.getItem(scrollKey);
+      const v = raw != null ? parseInt(raw, 10) : NaN;
+      if (Number.isFinite(v)) saved = v;
+    } catch { /* нет доступа к localStorage */ }
+    pendingRestoreRef.current = saved;
+    if (saved != null) atBottomRef.current = false; // есть что восстановить — не прыгаем вниз
+  }, [scrollKey]);
 
   // Следим за изменением высоты scroll-контейнера (resize окна, dock expand) — переразмер
   // может сделать позицию «не внизу» без события scroll
@@ -881,6 +909,27 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     if (!el) return;
     const ro = new ResizeObserver(syncScrollState);
     ro.observe(el);
+    return () => ro.disconnect();
+  }, [syncScrollState]);
+
+  // Прилипание к низу при росте КОНТЕНТА (не контейнера): история после refresh
+  // дорендеривается асинхронно (картинки base64, syntax highlight, markdown) — высота
+  // растёт уже после первичного scrollIntoView и низ «уезжает». Пока пользователь у низа,
+  // доскролливаем в конец на каждый прирост высоты. Отлистнул вверх → atBottom=false → не дёргаем.
+  useEffect(() => {
+    const content = contentRef.current;
+    const el = scrollRef.current;
+    if (!content || !el) return;
+    const ro = new ResizeObserver(() => {
+      if (!restoredRef.current && pendingRestoreRef.current != null) {
+        // история ещё дорендеривается — держим сохранённую позицию чтения, низ не трогаем
+        el.scrollTop = Math.min(pendingRestoreRef.current, el.scrollHeight - el.clientHeight);
+      } else if (atBottomRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+      syncScrollState();
+    });
+    ro.observe(content);
     return () => ro.disconnect();
   }, [syncScrollState]);
 
@@ -894,6 +943,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   };
 
   useEffect(() => {
+    // Пока восстанавливаем позицию после refresh — низ не трогаем, держим сохранённую точку
+    if (!restoredRef.current && pendingRestoreRef.current != null) {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = Math.min(pendingRestoreRef.current, el.scrollHeight - el.clientHeight);
+      setShowScrollDown(true);
+      return;
+    }
     // Прокручиваем вниз только если пользователь у нижней точки (не отрываем его от истории)
     if (atBottomRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'instant' });
@@ -903,6 +959,23 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       setShowScrollDown(true);
     }
   }, [items]);
+
+  // Финализируем восстановление позиции: после загрузки истории даём асинхронному дорендеру
+  // (картинки base64, подсветка кода) утихнуть, затем переходим в обычный режим —
+  // прилипание к низу + сохранение позиции в onScroll.
+  useEffect(() => {
+    if (isHistoryLoading || restoredRef.current) return;
+    if (pendingRestoreRef.current == null) { restoredRef.current = true; return; }
+    const apply = () => {
+      const e = scrollRef.current;
+      if (e && pendingRestoreRef.current != null)
+        e.scrollTop = Math.min(pendingRestoreRef.current, e.scrollHeight - e.clientHeight);
+    };
+    apply();
+    const raf = requestAnimationFrame(apply);
+    const done = window.setTimeout(() => { restoredRef.current = true; syncScrollState(); }, 800);
+    return () => { cancelAnimationFrame(raf); clearTimeout(done); };
+  }, [isHistoryLoading, syncScrollState]);
 
   // Автоотправка первого сообщения сразу после присоединения к сессии
   useEffect(() => {
@@ -1263,7 +1336,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {/* Спиннер загрузки истории */}
         {items.length === 0 && isHistoryLoading && (
           <div style={{

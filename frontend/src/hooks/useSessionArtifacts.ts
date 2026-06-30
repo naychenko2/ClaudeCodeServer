@@ -69,9 +69,35 @@ function extractToolPath(input: unknown): string | null {
   return typeof p === 'string' && p.length > 0 ? p : null;
 }
 
-// Пути к файлам в тексте: с разделителем (/ или \) и расширением — чтобы не ловить
-// голые слова и доменные имена. Абсолютные Windows (C:\…), Unix (/…), относительные (src/…).
-const PATH_RE = /(?:[A-Za-z]:[\\/]|\.{0,2}[\\/])?(?:[\w.@~-]+[\\/])+[\w.@~-]+\.[A-Za-z0-9]{1,8}/g;
+// Белый список расширений — чтобы не ловить версии (api/v2.0), даты и «слово/слово.ещё»
+// из прозы. Длинные варианты раньше коротких (jsonc до json) для корректного \b.
+const FILE_EXT = 'tsx?|jsx?|mjs|cjs|jsonc|json|csproj|css|cs|sln|mdx|markdown|md|txt|ya?ml|xml|html?|scss|less|pyi|py|go|rs|java|kts|kt|cpp|cxx|cc|hpp|hxx|sh|bash|ps1|psm1|bat|cmd|sql|toml|ini|cfg|conf|env|vue|svelte|astro|rb|php|lua|swift|dart|gradle|props|targets|proto|graphql|gql|tf';
+
+// Путь в голом тексте: с разделителем (/ или \), без пробелов, известное расширение.
+// Абсолютные Windows (C:\…), Unix (/…), относительные (src/…).
+const PATH_RE = new RegExp(
+  `(?:[A-Za-z]:[\\\\/]|\\.{0,2}[\\\\/])?(?:[\\w.@~-]+[\\\\/])+[\\w.@~-]+\\.(?:${FILE_EXT})\\b`,
+  'gi',
+);
+// Тот же путь, но с пробелами — только для путей внутри `кавычек`/'…'/"…" (C:\My Project\a.ts).
+const PATH_DELIMITED_RE = new RegExp(
+  `^(?:[A-Za-z]:[\\\\/]|\\.{0,2}[\\\\/])?(?:[\\w.@~ -]+[\\\\/])+[\\w.@~ -]+\\.(?:${FILE_EXT})$`,
+  'i',
+);
+// Содержимое `inline-code`, "строк" и 'строк' — кандидаты на путь с пробелами.
+const DELIM_SPAN_RE = /`([^`\n]+)`|"([^"\n]+)"|'([^'\n]+)'/g;
+
+// Все пути к файлам в тексте: делимитированные (допускают пробелы) + голые (строгий regex).
+function extractTextFilePaths(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(DELIM_SPAN_RE)) {
+    const inner = (m[1] ?? m[2] ?? m[3] ?? '').trim();
+    if (PATH_DELIMITED_RE.test(inner)) out.push(inner);
+  }
+  const bare = text.replace(URL_RE, ' ').match(PATH_RE);
+  if (bare) out.push(...bare);
+  return out;
+}
 
 // Классификация пути из текста: внутри проекта → относительный (external=false),
 // вне проекта (абсолютный за пределами rootPath) → абсолютный (external=true),
@@ -153,11 +179,8 @@ export function computeArtifacts(items: ChatItem[], rootPath: string): SessionAr
       case 'text': {
         const urls = it.text.match(URL_RE);
         if (urls) for (const m of urls) addLink(m);
-        // Пути к файлам — по тексту без URL (чтобы хвосты ссылок не считались путями)
-        const noUrls = it.text.replace(URL_RE, ' ');
-        const paths = noUrls.match(PATH_RE);
-        if (paths) for (const m of paths) {
-          const c = classifyTextPath(m, rootPath);
+        for (const p of extractTextFilePaths(it.text)) {
+          const c = classifyTextPath(p, rootPath);
           if (c) touchMentioned(c.path, c.external);
         }
         break;
@@ -188,9 +211,8 @@ export function countFiles(items: ChatItem[], rootPath: string): number {
       const rel = raw ? toRelative(raw, rootPath) : null;
       if (rel) keys.add(rel.toLowerCase());
     } else if (it.kind === 'text') {
-      const paths = it.text.replace(URL_RE, ' ').match(PATH_RE);
-      if (paths) for (const m of paths) {
-        const c = classifyTextPath(m, rootPath);
+      for (const p of extractTextFilePaths(it.text)) {
+        const c = classifyTextPath(p, rootPath);
         if (c) keys.add(c.path.toLowerCase());
       }
     }

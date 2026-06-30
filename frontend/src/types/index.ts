@@ -111,6 +111,16 @@ export interface RateLimitInfo {
   isUsingOverage?: boolean;
 }
 
+// Снимок использования окна во времени (история с бэка, data/usage.json) — для экрана usage и тренда
+export interface UsageSnapshot {
+  timestamp: string;
+  limitType: string;
+  utilization?: number;
+  status?: string;
+  isUsingOverage?: boolean;
+  resetsAt?: string;
+}
+
 // Элементы чата
 export type ChatItem =
   | { kind: 'user_message'; text: string; attachedPaths?: string[] }

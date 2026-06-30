@@ -38,10 +38,11 @@ public class SessionManager
     private readonly SkillsService _skills;
     private readonly WorkspaceKnowledgeStore _workspaceStore;
     private readonly FalCostService _falCost;
+    private readonly UsageService _usage;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, SkillsService skills,
-        WorkspaceKnowledgeStore workspaceStore, FalCostService falCost)
+        WorkspaceKnowledgeStore workspaceStore, FalCostService falCost, UsageService usage)
     {
         _projects = projects;
         _hub = hub;
@@ -49,6 +50,7 @@ public class SessionManager
         _skills = skills;
         _workspaceStore = workspaceStore;
         _falCost = falCost;
+        _usage = usage;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
         _falCost.OnCostResolved = PublishFalCostAsync;
 
@@ -343,6 +345,7 @@ public class SessionManager
                     await acc.SaveSnapshotAsync(_history);
                     break;
                 case ResultMessage m:       await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history); break;
+                case RateLimitMessage m:    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt); break;
                 case ErrorMessage m:        await acc.OnErrorAsync(m.Text, _history); break;
             }
         }

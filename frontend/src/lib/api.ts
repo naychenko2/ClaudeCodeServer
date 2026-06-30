@@ -1,4 +1,4 @@
-import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule } from '../types';
+import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageSnapshot } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -41,6 +41,10 @@ export const api = {
   settings: {
     get: () => request<AppSettings>('/settings'),
     save: (s: AppSettings) => request<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(s) }),
+  },
+
+  usage: {
+    getHistory: () => request<UsageSnapshot[]>('/usage'),
   },
 
   projects: {

@@ -6,6 +6,7 @@ import { ChatPanel } from '../components/ChatPanel';
 import { FileViewer } from '../components/FileViewer';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { SkillsPanel } from '../components/SkillsPanel';
+import { UsageScreen } from '../components/UsageScreen';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
 import { api } from '../lib/api';
@@ -104,6 +105,7 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
   const [chatFlex, setChatFlex] = useState(1); // 1:1 = 50/50 по умолчанию
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
   const [showSkillsModal, setShowSkillsModal] = useState(false);
+  const [showUsage, setShowUsage] = useState(false);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
   const activeSessionRef = useRef<Session | null>(null);
@@ -443,6 +445,15 @@ const windowWidth = useWindowWidth();
               {projectForEdit.name}
             </span>
             <button
+              onClick={() => setShowUsage(true)}
+              title="Использование подписки"
+              style={{ width: 22, height: 22, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+              </svg>
+            </button>
+            <button
               onClick={() => setEditProjectOpen(true)}
               title="Настройки проекта"
               style={{ width: 22, height: 22, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
@@ -708,6 +719,7 @@ const windowWidth = useWindowWidth();
           </div>
         </div>
       )}
+      {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
       {editProjectOpen && (
         <EditDialog
           project={projectForEdit}

@@ -43,6 +43,7 @@ builder.Services.AddSingleton<ConnectionDiagnostics>();
 builder.Services.AddSingleton<ChatHistoryService>();
 builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
 builder.Services.AddSingleton<FalCostService>();
+builder.Services.AddSingleton<UsageService>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");

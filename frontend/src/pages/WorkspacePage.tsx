@@ -752,7 +752,7 @@ const windowWidth = useWindowWidth();
         );
       })()}
 
-      {/* Панель «Артефакты сессии» — десктоп: третья колонка в потоке */}
+      {/* Панель «Артефакты сессии» — десктоп: боковая колонка в потоке (никогда поверх) */}
       {artifactsEnabled && artifactsOpen && activeSession && !isTablet && (
         <>
           <Splitter orientation="v" active={draggingSplitter === 'artifacts'}
@@ -764,7 +764,7 @@ const windowWidth = useWindowWidth();
         </>
       )}
 
-      {/* Панель «Артефакты сессии» — планшет: drawer поверх контента */}
+      {/* Панель «Артефакты сессии» — планшет: drawer поверх контента (узкий экран) */}
       {artifactsEnabled && artifactsOpen && activeSession && isTablet && (
         <>
           <div onClick={() => setArtifactsOpen(false)}

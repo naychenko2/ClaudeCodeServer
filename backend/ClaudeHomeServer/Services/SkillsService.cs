@@ -215,8 +215,10 @@ public class SkillsService
             var value = line[(colonIdx + 1)..].Trim().Trim('"').Trim('\'');
             if (string.IsNullOrEmpty(key)) continue;
 
-            // YAML folded (>) или literal (|) scalar — следующие строки с отступом являются значением
-            if (value == ">" || value == "|")
+            // YAML block scalar: folded (>) или literal (|), опционально с
+            // chomping- (-/+) и/или indentation-индикатором (цифра): >-, |-, >2, |2- и т.п.
+            // Следующие строки с отступом являются значением.
+            if (IsBlockScalarHeader(value))
             {
                 multilineKey = key;
             }
@@ -229,6 +231,20 @@ public class SkillsService
         FlushMultiline();
 
         return result;
+    }
+
+    // Заголовок блочного скаляра YAML: '>' (folded) или '|' (literal),
+    // далее любая комбинация chomping-индикаторов (-/+) и indentation-цифр.
+    // Примеры: ">", "|", ">-", "|+", ">2", "|2-".
+    private static bool IsBlockScalarHeader(string value)
+    {
+        if (value.Length == 0 || (value[0] != '>' && value[0] != '|')) return false;
+        for (var i = 1; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (c is not ('-' or '+' or (>= '0' and <= '9'))) return false;
+        }
+        return true;
     }
 
     private static string StripFrontmatter(string content)

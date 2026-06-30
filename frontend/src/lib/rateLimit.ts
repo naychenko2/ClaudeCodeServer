@@ -2,7 +2,8 @@ import type { RateLimitInfo, UsageSnapshot } from '../types';
 
 // Окно лимита подписки с вычисленными процентом и уровнем тревоги
 export interface RateWindow extends RateLimitInfo {
-  pct: number;                          // 0..100
+  pct: number;                          // 0..100 (0 если процент неизвестен)
+  hasUtil: boolean;                     // пришёл ли реальный utilization (при низком расходе его нет)
   level: 'normal' | 'warn' | 'danger';
 }
 
@@ -38,7 +39,12 @@ function rateLevel(w: RateLimitInfo): RateWindow['level'] {
 export function toRateWindows(rateLimits: Record<string, RateLimitInfo>): RateWindow[] {
   return Object.values(rateLimits)
     .filter(w => typeof w.utilization === 'number' || !!w.status)
-    .map(w => ({ ...w, pct: Math.round(Math.min(1, Math.max(0, w.utilization ?? 0)) * 100), level: rateLevel(w) }))
+    .map(w => ({
+      ...w,
+      pct: Math.round(Math.min(1, Math.max(0, w.utilization ?? 0)) * 100),
+      hasUtil: typeof w.utilization === 'number',
+      level: rateLevel(w),
+    }))
     .sort((a, b) => (b.utilization ?? 0) - (a.utilization ?? 0));
 }
 
@@ -57,7 +63,7 @@ export function latestPerWindow(snapshots: UsageSnapshot[]): Array<RateWindow & 
   }
   const map: Record<string, RateLimitInfo> = {};
   latest.forEach((s, k) => {
-    map[k] = { limitType: s.limitType, utilization: s.utilization, status: s.status, isUsingOverage: s.isUsingOverage, resetsAt: s.resetsAt };
+    map[k] = { limitType: s.limitType, utilization: s.utilization, status: s.status, isUsingOverage: s.isUsingOverage, resetsAt: s.resetsAt, overageStatus: s.overageStatus, overageResetsAt: s.overageResetsAt };
   });
   return toRateWindows(map).map(w => ({ ...w, timestamp: latest.get(w.limitType)?.timestamp }));
 }

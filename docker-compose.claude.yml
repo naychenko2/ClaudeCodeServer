@@ -30,8 +30,18 @@ services:
       McpConfigPath: /app/.mcp.docker.json
       # Внешние сервисы — через хост-шлюз
       Dify__ApiUrl: http://host.docker.internal:8080/v1
-      OnlyOffice__ServerUrl: http://host.docker.internal:8090
+      # Platform API-ключ fal.ai для учёта стоимости генераций (billing-events).
+      # Это НЕ тот токен, что у MCP fal-ai — отдельный ключ key:secret. Значение в .env.
+      Fal__ApiKey: ${FAL_API_KEY:-}
+      # ServerUrl уходит В БРАУЗЕР (грузит api.js, создаёт iframe) → нужен адрес,
+      # видимый с хоста, а не контейнерный host.docker.internal. Указываем на сам
+      # бэкенд: YARP проксирует /web-apps/* и версионные пути в OnlyOffice DS.
+      # Один origin с фронтом → работает кастомная тема Claude Home.
+      OnlyOffice__ServerUrl: http://localhost:5000
       OnlyOffice__BackendUrl: http://host.docker.internal:5000
+      # /projects смонтирован как 9p bind-mount (Windows-хост) — inotify там не работает,
+      # FileSystemWatcher молчит. Включаем polling-обход дерева для авто-обновления файлов.
+      FileWatcher__UsePolling: "true"
       ReverseProxy__Clusters__onlyoffice__Destinations__default__Address: http://host.docker.internal:8090
       # Egress в интернет через прокси (вызовы API Claude). Пусто = прямой интернет.
       # NO_PROXY исключает локальные адреса (host.docker.internal — Dify/OnlyOffice).

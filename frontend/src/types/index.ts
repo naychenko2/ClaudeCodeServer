@@ -132,7 +132,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[] }
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { type: 'error'; text: string }
-  | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean }
+  | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean; overageStatus?: string; overageResetsAt?: string }
   | { type: 'compact_boundary'; trigger: string; preTokens?: number }
   | { type: 'truncated' }
   | { type: 'redacted_thinking' }
@@ -155,6 +155,8 @@ export interface RateLimitInfo {
   resetsAt?: string;
   status?: string;
   isUsingOverage?: boolean;
+  overageStatus?: string;
+  overageResetsAt?: string;
 }
 
 // Снимок использования окна во времени (история с бэка, data/usage.json) — для экрана usage и тренда
@@ -165,6 +167,37 @@ export interface UsageSnapshot {
   status?: string;
   isUsingOverage?: boolean;
   resetsAt?: string;
+  overageStatus?: string;
+  overageResetsAt?: string;
+}
+
+// Тариф подписки (с бэка, из credentials)
+export interface PlanInfo {
+  subscriptionType?: string;
+  rateLimitTier?: string;
+  label: string;
+}
+
+// Ответ /api/usage: история снимков + тариф
+export interface UsageResponse {
+  snapshots: UsageSnapshot[];
+  plan?: PlanInfo;
+}
+
+// Статистика аккаунта fal.ai (баланс + расход за период)
+export interface FalModelSpend { endpointId: string; cost: number; }
+export interface FalDaySpend { date: string; cost: number; }
+export interface FalUsageSummary {
+  days: number;
+  total: number;
+  byModel: FalModelSpend[];
+  series: FalDaySpend[];
+}
+export interface FalAccountResponse {
+  enabled: boolean;
+  balance?: number | null;
+  currency?: string | null;
+  usage?: FalUsageSummary | null;
 }
 
 // Элементы чата

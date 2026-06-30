@@ -40,6 +40,8 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
+    // Разрешаем заход через внешний домен (реверс-прокси/туннель) — иначе Vite режет чужой Host
+    allowedHosts: ['naychenko.me'],
     proxy: {
       '/api': { target: backendTarget, changeOrigin: true },
       '/hubs': { target: backendTarget, changeOrigin: true, ws: true },
@@ -47,6 +49,7 @@ export default defineConfig({
   },
   preview: {
     port: 4173,
+    allowedHosts: ['naychenko.me'],
     proxy: {
       '/api': { target: backendTarget, changeOrigin: true },
       '/hubs': { target: backendTarget, changeOrigin: true, ws: true },

@@ -67,7 +67,8 @@ public record ErrorMessage(string Text)
 // использования окна; LimitType — five_hour/seven_day/weekly; Status — allowed/allowed_warning/
 // rejected. Используется и для непрерывного индикатора, и для баннера (при warning/rejected).
 public record RateLimitMessage(string LimitType, string? ResetsAt, string? Status = null,
-    double? Utilization = null, bool IsUsingOverage = false)
+    double? Utilization = null, bool IsUsingOverage = false,
+    string? OverageStatus = null, string? OverageResetsAt = null)
     : ServerMessage("rate_limit");
 
 // Граница компакции контекста: Claude свернул часть истории (system/compact_boundary)

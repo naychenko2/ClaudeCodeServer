@@ -28,7 +28,8 @@ public class UsageService
 
     // Регистрирует снимок. Троттлинг: пропускаем, если для этого окна последний снимок свежий
     // (<3 мин) И значение/статус практически не изменились. Иначе — добавляем, прунем, сохраняем.
-    public void Record(string limitType, double? utilization, string? status, bool isUsingOverage, string? resetsAt)
+    public void Record(string limitType, double? utilization, string? status, bool isUsingOverage,
+        string? resetsAt, string? overageStatus = null, string? overageResetsAt = null)
     {
         if (string.IsNullOrEmpty(limitType) && utilization is null) return;
         lock (_lock)
@@ -38,16 +39,49 @@ public class UsageService
             if (last is not null
                 && now - last.Timestamp < Throttle
                 && last.Status == status
+                && last.OverageStatus == overageStatus
                 && Math.Abs((last.Utilization ?? 0) - (utilization ?? 0)) < UtilEpsilon)
                 return; // дубль в окне троттлинга — не пишем
 
-            _snapshots.Add(new UsageSnapshot(now, limitType, utilization, status, isUsingOverage, resetsAt));
+            _snapshots.Add(new UsageSnapshot(now, limitType, utilization, status, isUsingOverage, resetsAt, overageStatus, overageResetsAt));
 
             var cutoff = now - Retention;
             _snapshots.RemoveAll(s => s.Timestamp < cutoff);
 
             Save();
         }
+    }
+
+    // Тариф подписки из ~/.claude/.credentials.json (subscriptionType + rateLimitTier → ярлык).
+    // Читаем при каждом запросе — файл маленький, может обновиться после re-login.
+    public PlanInfo? GetPlan()
+    {
+        try
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var credsPath = Path.Combine(home, ".claude", ".credentials.json");
+            if (!File.Exists(credsPath)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(credsPath));
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("claudeAiOauth", out var oauth)) return null;
+            var subType = oauth.TryGetProperty("subscriptionType", out var st) ? st.GetString() : null;
+            var tier = oauth.TryGetProperty("rateLimitTier", out var rt) ? rt.GetString() : null;
+            return new PlanInfo(subType, tier, PlanLabel(subType, tier));
+        }
+        catch { return null; }
+    }
+
+    private static string PlanLabel(string? subType, string? tier)
+    {
+        var t = tier ?? "";
+        if (string.Equals(subType, "max", StringComparison.OrdinalIgnoreCase))
+        {
+            if (t.Contains("20x")) return "Max 20×";
+            if (t.Contains("5x")) return "Max 5×";
+            return "Max";
+        }
+        if (string.Equals(subType, "pro", StringComparison.OrdinalIgnoreCase)) return "Pro";
+        return string.IsNullOrEmpty(subType) ? "—" : subType!;
     }
 
     public IReadOnlyList<UsageSnapshot> GetAll()

@@ -3,6 +3,7 @@ import { getExplorerCreateInDir } from './FileExplorer';
 import type { Project, Session, ChatItem, FileEntry, SkillInfo, AgentInfo, ClaudeBilling, Role } from '../types';
 import { RoleAvatar } from './RoleAvatar';
 import { useSession } from '../hooks/useSession';
+import { countFiles } from '../hooks/useSessionArtifacts';
 import { useOnline } from '../hooks/useOnline';
 import { api, type WorkflowAgentInfo } from '../lib/api';
 import { modelLabel } from '../lib/models';
@@ -38,6 +39,9 @@ interface Props {
   attachedFiles: string[];
   onAttachedFilesChange: (files: string[]) => void;
   onResume?: (message?: string) => void;
+  // Тумблер панели «Артефакты сессии» в шапке (приходит только при включённом фич-флаге)
+  artifactsOpen?: boolean;
+  onToggleArtifacts?: () => void;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -378,19 +382,58 @@ function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
 }
 
 // Бейдж трат на fal.ai (медиа). Отдельная от Claude цифра. Разбивка по моделям.
+// В выпадашке: остаток баланса аккаунта (асинхронно) сверху + траты этого чата + ссылка на статистику.
 function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boolean }) {
+  // undefined = грузится, null = недоступно, number = баланс
+  const [balance, setBalance] = useState<number | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    api.fal.account(7)
+      .then(d => { if (!cancelled) setBalance(d.enabled ? (d.balance ?? null) : null); })
+      .catch(() => { if (!cancelled) setBalance(null); });
+    return () => { cancelled = true; };
+  }, []);
   if (stats.total <= 0) return null;
+  const lowBal = typeof balance === 'number' && balance < 5;
+  const balanceText = balance === undefined ? '…' : typeof balance === 'number' ? fmtUsd(balance) : '—';
+  // Разбивка по моделям одной inline-строкой: топ-2 + «+N в статистике»
+  const entries = [...stats.byModel.entries()].sort((a, b) => b[1].cost - a[1].cost);
+  const topModels = entries.slice(0, 2);
+  const moreCount = entries.length - topModels.length;
+  const inline = topModels
+    .map(([ep, m]) => `${ep.split('/').pop()}${m.count > 1 ? ` ×${m.count}` : ''} ${fmtUsd(m.cost)}`)
+    .join('  ·  ');
   return (
     <BadgeShell label="fal.ai" amount={fmtUsd(stats.total)} isMobile={isMobile}
       title="Траты на fal.ai (медиа) — нажмите для разбивки">
-      <div style={badgeTitleStyle}>Траты fal.ai · медиа</div>
-      <BadgeRow k="Всего" v={fmtUsd(stats.total)} />
-      <BadgeRow k="Генераций" v={String(stats.count)} />
-      {[...stats.byModel.entries()].map(([endpoint, m]) => (
-        <BadgeRow key={endpoint}
-          k={`${endpoint.split('/').pop()}${m.count > 1 ? ` ×${m.count}` : ''}`}
-          v={fmtUsd(m.cost)} />
-      ))}
+      {/* Герой — траты этого чата (за этим и кликнули) */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+        <span>Траты fal.ai · этот чат</span>
+        <span style={{ letterSpacing: 0 }}>{stats.count} ген.</span>
+      </div>
+      <div style={{ fontFamily: FONT.mono, fontSize: 22, fontWeight: 700, color: '#B05C38', margin: '2px 0 4px' }}>{fmtUsd(stats.total)}</div>
+      {inline && (
+        <div style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textSecondary, marginBottom: 4, lineHeight: 1.4 }}>
+          {inline}{moreCount > 0 ? `  ·  +${moreCount} в статистике` : ''}
+        </div>
+      )}
+      {/* Баланс аккаунта — отдельной плашкой (другая сущность). Краснеет при низком остатке. */}
+      <div style={{
+        marginTop: 8, padding: '8px 10px', borderRadius: R.lg,
+        background: lowBal ? '#FBF1EC' : C.bgInset, border: lowBal ? '1px solid #F5C6BF' : 'none',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+        fontFamily: FONT.sans, fontSize: 12, color: lowBal ? '#B4452F' : C.textSecondary,
+      }}>
+        <span>Счёт fal.ai <span style={{ fontFamily: FONT.mono, fontWeight: 700, color: lowBal ? '#B4452F' : '#B05C38' }}>{balanceText}</span></span>
+        <a href="https://fal.ai/dashboard/billing" target="_blank" rel="noopener noreferrer"
+          style={{ color: C.accent, fontWeight: 600, textDecoration: 'none', flexShrink: 0, marginLeft: 8 }}>пополнить ↗</a>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <button type="button" onClick={() => window.dispatchEvent(new Event('open-fal-stats'))}
+          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, color: C.accent }}>
+          Подробная статистика →
+        </button>
+      </div>
     </BadgeShell>
   );
 }
@@ -410,9 +453,12 @@ interface ChatHeaderBarProps {
   onBack?: () => void;
   activeWorkflow?: { phasesDone: number; phasesTotal: number };
   onOpenSidebar?: () => void;
+  artifactsOpen?: boolean;
+  onToggleArtifacts?: () => void;
+  artifactFileCount?: number;
 }
 
-function ChatHeaderBar({ session, project, role, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, role, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -461,6 +507,25 @@ function ChatHeaderBar({ session, project, role, online, cost, falCost, billing,
       )}
       <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />
       <FalCostBadge stats={falCost} isMobile={isMobile} />
+      {onToggleArtifacts && (
+        <ToolbarIconButton onClick={onToggleArtifacts} title="Артефакты сессии" isMobile={isMobile} active={artifactsOpen}>
+          <div style={{ position: 'relative', display: 'flex' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6M9 13h6M9 17h3" />
+            </svg>
+            {artifactFileCount !== undefined && artifactFileCount > 0 && (
+              <span style={{
+                position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
+                borderRadius: 7, background: C.accent, color: C.onAccent,
+                fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
+              }}>
+                {artifactFileCount}
+              </span>
+            )}
+          </div>
+        </ToolbarIconButton>
+      )}
       {online && (
         <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -753,12 +818,18 @@ function ToolGroupBlock({ isGroupDone, toolCount, children }: {
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
   const worstRate = useMemo(() => worstWindow(rateWindows), [rateWindows]);
   const online = useOnline();
+
+  // Число изменённых файлов — для бейджа на кнопке «Артефакты» (только когда тумблер проброшен)
+  const artifactFileCount = useMemo(
+    () => onToggleArtifacts ? countFiles(items, project.rootPath) : 0,
+    [onToggleArtifacts, items, project.rootPath]
+  );
 
   const [hasCLAUDEmd, setHasCLAUDEmd] = useState<boolean | null>(null);
   useEffect(() => {
@@ -818,11 +889,20 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }, [session.roleId, project.id]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Внутренний контент-блок ленты — именно он растёт при дорендере (картинки base64,
+  // syntax highlight, markdown). Наблюдаем за ним, чтобы держать низ после загрузки истории.
+  const contentRef = useRef<HTMLDivElement>(null);
   // Плавающий composer переменной высоты — измеряем, чтобы лента упиралась ровно под него
   const composerWrapRef = useRef<HTMLDivElement>(null);
   const [composerH, setComposerH] = useState(96);
   // Прилипание к низу: автоскролл при новых сообщениях только если пользователь уже внизу
   const atBottomRef = useRef(true);
+  // Восстановление позиции чтения после refresh: храним позицию + высоту ленты per-session.
+  // Высота нужна, чтобы дождаться асинхронного дорендера (картинки base64 грузятся сетевыми
+  // запросами, дольше любого фиксированного таймаута): держим позицию, пока лента не дорастёт.
+  const scrollKey = `cc-scroll-${session.id}`;
+  const pendingRestoreRef = useRef<{ top: number; h: number } | null>(null); // к восстановлению (null = нечего/был внизу)
+  const restoredRef = useRef(false);                                          // восстановление для текущей сессии выполнено
   // Показывать плавающую кнопку «вниз», когда пользователь отлистал вверх
   const [showScrollDown, setShowScrollDown] = useState(false);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
@@ -886,7 +966,46 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     atBottomRef.current = atBottom;
     setShowScrollDown(!atBottom);
+    // После восстановления — запоминаем позицию чтения + высоту ленты, чтобы пережить refresh.
+    // Внизу позицию не храним: по умолчанию прилипаем к низу.
+    if (restoredRef.current) {
+      try {
+        if (atBottom) localStorage.removeItem(scrollKey);
+        else localStorage.setItem(scrollKey, JSON.stringify({ top: Math.round(el.scrollTop), h: Math.round(el.scrollHeight) }));
+      } catch { /* localStorage недоступен — не критично */ }
+    }
+  }, [scrollKey]);
+
+  // Один тик восстановления: ставим сохранённую позицию и финализируем, когда лента доросла
+  // до сохранённой высоты (значит весь асинхронный контент дорендерился — позиция точна).
+  const restoreTick = useCallback(() => {
+    if (restoredRef.current) return;
+    const el = scrollRef.current;
+    const pend = pendingRestoreRef.current;
+    if (!el) return;
+    if (pend == null) { restoredRef.current = true; return; }
+    el.scrollTop = Math.min(pend.top, el.scrollHeight - el.clientHeight);
+    // Лента дорендерилась до сохранённой высоты (с допуском) — позиция стабильна, выходим в обычный режим
+    if (el.scrollHeight >= pend.h - 50) {
+      restoredRef.current = true;
+      setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight >= 80);
+    }
   }, []);
+
+  // При смене сессии — поднимаем сохранённую позицию чтения для восстановления после refresh
+  useEffect(() => {
+    restoredRef.current = false;
+    let saved: { top: number; h: number } | null = null;
+    try {
+      const raw = localStorage.getItem(scrollKey);
+      if (raw) {
+        const o = JSON.parse(raw);
+        if (o && Number.isFinite(o.top) && Number.isFinite(o.h)) saved = { top: o.top, h: o.h };
+      }
+    } catch { /* нет доступа к localStorage / старый формат */ }
+    pendingRestoreRef.current = saved;
+    if (saved != null) atBottomRef.current = false; // есть что восстановить — не прыгаем вниз
+  }, [scrollKey]);
 
   // Следим за изменением высоты scroll-контейнера (resize окна, dock expand) — переразмер
   // может сделать позицию «не внизу» без события scroll
@@ -898,6 +1017,27 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return () => ro.disconnect();
   }, [syncScrollState]);
 
+  // Прилипание к низу при росте КОНТЕНТА (не контейнера): история после refresh
+  // дорендеривается асинхронно (картинки base64, syntax highlight, markdown) — высота
+  // растёт уже после первичного scrollIntoView и низ «уезжает». Пока пользователь у низа,
+  // доскролливаем в конец на каждый прирост высоты. Отлистнул вверх → atBottom=false → не дёргаем.
+  useEffect(() => {
+    const content = contentRef.current;
+    const el = scrollRef.current;
+    if (!content || !el) return;
+    const ro = new ResizeObserver(() => {
+      if (!restoredRef.current && pendingRestoreRef.current != null) {
+        // история ещё дорендеривается — держим сохранённую позицию, пока лента не дорастёт
+        restoreTick();
+      } else if (atBottomRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+      syncScrollState();
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [syncScrollState, restoreTick]);
+
   const handleMessagesScroll = syncScrollState;
 
   // Программный скролл в конец ленты (клик по плавающей кнопке)
@@ -908,6 +1048,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   };
 
   useEffect(() => {
+    // Пока восстанавливаем позицию после refresh — низ не трогаем, держим сохранённую точку
+    if (!restoredRef.current && pendingRestoreRef.current != null) {
+      restoreTick();
+      setShowScrollDown(true);
+      return;
+    }
     // Прокручиваем вниз только если пользователь у нижней точки (не отрываем его от истории)
     if (atBottomRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'instant' });
@@ -916,7 +1062,19 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       // пришёл новый контент, а пользователь читает выше — подсветим кнопку «вниз»
       setShowScrollDown(true);
     }
-  }, [items]);
+  }, [items, restoreTick]);
+
+  // Восстановление позиции после загрузки истории. Финал привязан не к таймеру, а к достижению
+  // сохранённой высоты ленты (restoreTick) — ждём, пока картинки base64 догрузятся по сети.
+  // Таймер — лишь страховка на случай, если лента так и не дорастёт (контент стал короче).
+  useEffect(() => {
+    if (isHistoryLoading || restoredRef.current) return;
+    if (pendingRestoreRef.current == null) { restoredRef.current = true; return; }
+    restoreTick();
+    const raf = requestAnimationFrame(restoreTick);
+    const done = window.setTimeout(() => { restoredRef.current = true; syncScrollState(); }, 5000);
+    return () => { cancelAnimationFrame(raf); clearTimeout(done); };
+  }, [isHistoryLoading, restoreTick, syncScrollState]);
 
   // Автоотправка первого сообщения сразу после присоединения к сессии
   useEffect(() => {
@@ -1275,10 +1433,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         onBack={onBack}
         activeWorkflow={activeWorkflowInfo ?? undefined}
         onOpenSidebar={onOpenSidebar}
+        artifactsOpen={artifactsOpen}
+        onToggleArtifacts={onToggleArtifacts}
+        artifactFileCount={artifactFileCount}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {/* Спиннер загрузки истории */}
         {items.length === 0 && isHistoryLoading && (
           <div style={{

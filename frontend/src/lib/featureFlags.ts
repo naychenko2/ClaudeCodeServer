@@ -9,6 +9,7 @@ import { useSyncExternalStore } from 'react';
 // приходят с сервера — здесь только ключи.
 export const FLAGS = {
   roles: 'roles',
+  sessionArtifacts: 'session-artifacts',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

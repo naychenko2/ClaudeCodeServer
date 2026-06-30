@@ -30,6 +30,9 @@ services:
       McpConfigPath: /app/.mcp.docker.json
       # Внешние сервисы — через хост-шлюз
       Dify__ApiUrl: http://host.docker.internal:8080/v1
+      # Platform API-ключ fal.ai для учёта стоимости генераций (billing-events).
+      # Это НЕ тот токен, что у MCP fal-ai — отдельный ключ key:secret. Значение в .env.
+      Fal__ApiKey: ${FAL_API_KEY:-}
       # ServerUrl уходит В БРАУЗЕР (грузит api.js, создаёт iframe) → нужен адрес,
       # видимый с хоста, а не контейнерный host.docker.internal. Указываем на сам
       # бэкенд: YARP проксирует /web-apps/* и версионные пути в OnlyOffice DS.

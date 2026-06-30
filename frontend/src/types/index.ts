@@ -29,6 +29,15 @@ export interface AppSettings {
   claudeBilling?: ClaudeBilling;
 }
 
+// Определение фич-флага из реестра (приходит с бэка для рендера тумблеров)
+export interface FeatureFlagDefinition {
+  key: string;
+  title: string;
+  description: string;
+  default: boolean;
+  stage: 'dev' | 'beta' | 'stable';
+}
+
 export interface Session {
   id: string;
   projectId: string;

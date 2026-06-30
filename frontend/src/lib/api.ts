@@ -1,4 +1,4 @@
-import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageSnapshot } from '../types';
+import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageSnapshot, FeatureFlagDefinition } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -19,7 +19,7 @@ export const api = {
         body: JSON.stringify({ username, password }),
       }),
     me: () =>
-      request<{ userId: string; username: string; role: string }>('/auth/me'),
+      request<{ userId: string; username: string; role: string; featureFlags?: Record<string, boolean> }>('/auth/me'),
     changePassword: (currentPassword: string, newPassword: string) =>
       request<void>('/auth/password', {
         method: 'PUT',
@@ -45,6 +45,15 @@ export const api = {
 
   usage: {
     getHistory: () => request<UsageSnapshot[]>('/usage'),
+  },
+
+  featureFlags: {
+    get: () => request<{ definitions: FeatureFlagDefinition[]; values: Record<string, boolean> }>('/feature-flags'),
+    set: (key: string, enabled: boolean) =>
+      request<{ values: Record<string, boolean> }>(`/feature-flags/${key}`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      }),
   },
 
   projects: {

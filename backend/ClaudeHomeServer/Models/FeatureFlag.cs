@@ -1,0 +1,40 @@
+namespace ClaudeHomeServer.Models;
+
+/// <summary>
+/// Определение фич-флага — декларируется в коде (source of truth).
+/// </summary>
+/// <param name="Key">Стабильный машинный ключ (kebab-case), по нему хранится override юзера.</param>
+/// <param name="Title">Человекочитаемое название для тумблера.</param>
+/// <param name="Description">Что включает фича.</param>
+/// <param name="Default">Значение по умолчанию, когда у юзера нет override.</param>
+/// <param name="Stage">Зрелость: "dev" | "beta" | "stable" — только для метки в UI.</param>
+public record FeatureFlagDefinition(
+    string Key,
+    string Title,
+    string Description,
+    bool Default,
+    string Stage);
+
+/// <summary>
+/// Единственное место, где объявляются фич-флаги. Чтобы добавить новый флаг —
+/// допиши строку в <see cref="All"/> (и продублируй ключ в lib/featureFlags.ts на фронте).
+/// </summary>
+public static class FeatureFlagCatalog
+{
+    public static readonly IReadOnlyList<FeatureFlagDefinition> All =
+    [
+        // Пример-заглушка: показывает рецепт и служит для проверки сквозного потока.
+        // Удали или замени реальными флагами по мере появления фич.
+        new FeatureFlagDefinition(
+            Key: "example-flag",
+            Title: "Пример фич-флага",
+            Description: "Демонстрационный флаг для проверки системы. По умолчанию выключен.",
+            Default: false,
+            Stage: "dev"),
+    ];
+
+    private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();
+
+    /// <summary>Существует ли флаг с таким ключом в реестре.</summary>
+    public static bool Exists(string key) => Keys.Contains(key);
+}

@@ -9,4 +9,6 @@ public class User
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     // NT-хэш для NTLM WebDAV: MD4(UTF-16LE(password)); null — если пользователь ещё не логинился после обновления
     public byte[]? NtHash { get; set; }
+    // Per-user override фич-флагов поверх дефолтов из FeatureFlagCatalog; null/отсутствует — все по дефолту
+    public Dictionary<string, bool>? FeatureFlags { get; set; }
 }

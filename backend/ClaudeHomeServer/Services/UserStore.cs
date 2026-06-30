@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using Microsoft.AspNetCore.Identity;
@@ -167,6 +167,19 @@ public class UserStore
         if (!VerifyPassword(user, currentPassword)) return false;
 
         SetPasswordInternal(user, newPassword);
+        Save();
+        return true;
+    }
+
+    /// <summary>
+    /// Устанавливает per-user override фич-флага. Возвращает false если пользователь не найден.
+    /// </summary>
+    public bool SetFeatureFlag(string id, string key, bool enabled)
+    {
+        var user = _users.FirstOrDefault(u => u.Id == id);
+        if (user is null) return false;
+
+        (user.FeatureFlags ??= new())[key] = enabled;
         Save();
         return true;
     }

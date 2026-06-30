@@ -48,8 +48,6 @@ public class ClaudeSession : IAsyncDisposable
     private readonly WorkspaceKnowledgeStore? _wkStore;
     // Провайдер правил разрешений проекта — резолвим каждый запрос (правила могут меняться)
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
-    // Кэш последнего отправленного системного промпта — передаём только при изменении
-    private string? _lastSentSystemPrompt;
 
     public ClaudeSession(Session info, string rootPath, Func<ServerMessage, Task> onMessage,
         string? mcpConfigPath = null, string? rawSystemPrompt = null,
@@ -357,8 +355,9 @@ public class ClaudeSession : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
             args.AddRange(["--mcp-config", effectiveMcpConfig]);
 
-        // Системный промпт: пересчитываем каждый ход — датасет мог появиться после создания сессии.
-        // Передаём через --append-system-prompt только при изменении (кэш _lastSentSystemPrompt).
+        // Системный промпт: пересчитываем и передаём КАЖДЫЙ ход. Каждый ход — новый процесс
+        // claude --print --resume, а --append-system-prompt не сохраняется в транскрипте сессии:
+        // не передать его → инструкции (fal-ai/запрет ASCII, Dify, теги) пропадут на этом ходу.
         {
             var basePrompt = ProjectManager.BuildSystemPrompt(
                 _rawSystemPrompt, currentDatasetId != null, currentWk?.DocumentTags);
@@ -373,11 +372,8 @@ public class ClaudeSession : IAsyncDisposable
                     : basePrompt + "\n\n---\n\n" + agentPrompt)
                 : basePrompt;
 
-            if (!string.IsNullOrWhiteSpace(combinedPrompt) && combinedPrompt != _lastSentSystemPrompt)
-            {
+            if (!string.IsNullOrWhiteSpace(combinedPrompt))
                 args.AddRange(["--append-system-prompt", combinedPrompt]);
-                _lastSentSystemPrompt = combinedPrompt;
-            }
         }
 
         // claude.exe пишет/читает UTF-8. Без явной кодировки .NET берёт системную

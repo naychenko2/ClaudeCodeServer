@@ -49,6 +49,18 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+    # Персист конфига claude: реальный .claude.json держим в volume /home/app/.claude,
+    # на ожидаемом пути /home/app/.claude.json — симлинк (создаётся на старте). Иначе при
+    # пересоздании контейнера файл (он вне volume) теряется → claude разлогинивается → нет ответов.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ -f /home/app/.claude.json ] && [ ! -L /home/app/.claude.json ]; then
+          if [ ! -f /home/app/.claude/.claude.json ]; then mv /home/app/.claude.json /home/app/.claude/.claude.json; else rm -f /home/app/.claude.json; fi
+        fi
+        ln -sf /home/app/.claude/.claude.json /home/app/.claude.json
+        exec dotnet ClaudeHomeServer.dll
 
 volumes:
   claude-data:

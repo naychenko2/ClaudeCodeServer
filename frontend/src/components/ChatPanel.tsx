@@ -377,19 +377,58 @@ function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
 }
 
 // Бейдж трат на fal.ai (медиа). Отдельная от Claude цифра. Разбивка по моделям.
+// В выпадашке: остаток баланса аккаунта (асинхронно) сверху + траты этого чата + ссылка на статистику.
 function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boolean }) {
+  // undefined = грузится, null = недоступно, number = баланс
+  const [balance, setBalance] = useState<number | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    api.fal.account(7)
+      .then(d => { if (!cancelled) setBalance(d.enabled ? (d.balance ?? null) : null); })
+      .catch(() => { if (!cancelled) setBalance(null); });
+    return () => { cancelled = true; };
+  }, []);
   if (stats.total <= 0) return null;
+  const lowBal = typeof balance === 'number' && balance < 5;
+  const balanceText = balance === undefined ? '…' : typeof balance === 'number' ? fmtUsd(balance) : '—';
+  // Разбивка по моделям одной inline-строкой: топ-2 + «+N в статистике»
+  const entries = [...stats.byModel.entries()].sort((a, b) => b[1].cost - a[1].cost);
+  const topModels = entries.slice(0, 2);
+  const moreCount = entries.length - topModels.length;
+  const inline = topModels
+    .map(([ep, m]) => `${ep.split('/').pop()}${m.count > 1 ? ` ×${m.count}` : ''} ${fmtUsd(m.cost)}`)
+    .join('  ·  ');
   return (
     <BadgeShell label="fal.ai" amount={fmtUsd(stats.total)} isMobile={isMobile}
       title="Траты на fal.ai (медиа) — нажмите для разбивки">
-      <div style={badgeTitleStyle}>Траты fal.ai · медиа</div>
-      <BadgeRow k="Всего" v={fmtUsd(stats.total)} />
-      <BadgeRow k="Генераций" v={String(stats.count)} />
-      {[...stats.byModel.entries()].map(([endpoint, m]) => (
-        <BadgeRow key={endpoint}
-          k={`${endpoint.split('/').pop()}${m.count > 1 ? ` ×${m.count}` : ''}`}
-          v={fmtUsd(m.cost)} />
-      ))}
+      {/* Герой — траты этого чата (за этим и кликнули) */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+        <span>Траты fal.ai · этот чат</span>
+        <span style={{ letterSpacing: 0 }}>{stats.count} ген.</span>
+      </div>
+      <div style={{ fontFamily: FONT.mono, fontSize: 22, fontWeight: 700, color: '#B05C38', margin: '2px 0 4px' }}>{fmtUsd(stats.total)}</div>
+      {inline && (
+        <div style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textSecondary, marginBottom: 4, lineHeight: 1.4 }}>
+          {inline}{moreCount > 0 ? `  ·  +${moreCount} в статистике` : ''}
+        </div>
+      )}
+      {/* Баланс аккаунта — отдельной плашкой (другая сущность). Краснеет при низком остатке. */}
+      <div style={{
+        marginTop: 8, padding: '8px 10px', borderRadius: R.lg,
+        background: lowBal ? '#FBF1EC' : C.bgInset, border: lowBal ? '1px solid #F5C6BF' : 'none',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+        fontFamily: FONT.sans, fontSize: 12, color: lowBal ? '#B4452F' : C.textSecondary,
+      }}>
+        <span>Счёт fal.ai <span style={{ fontFamily: FONT.mono, fontWeight: 700, color: lowBal ? '#B4452F' : '#B05C38' }}>{balanceText}</span></span>
+        <a href="https://fal.ai/dashboard/billing" target="_blank" rel="noopener noreferrer"
+          style={{ color: C.accent, fontWeight: 600, textDecoration: 'none', flexShrink: 0, marginLeft: 8 }}>пополнить ↗</a>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <button type="button" onClick={() => window.dispatchEvent(new Event('open-fal-stats'))}
+          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, color: C.accent }}>
+          Подробная статистика →
+        </button>
+      </div>
     </BadgeShell>
   );
 }

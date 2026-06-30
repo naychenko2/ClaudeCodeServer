@@ -106,6 +106,12 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
   const [showSkillsModal, setShowSkillsModal] = useState(false);
   const [showUsage, setShowUsage] = useState(false);
+  // Ссылка «Подробная статистика» в pop-up бейджа fal.ai открывает единый экран «Использование»
+  useEffect(() => {
+    const open = () => setShowUsage(true);
+    window.addEventListener('open-fal-stats', open);
+    return () => window.removeEventListener('open-fal-stats', open);
+  }, []);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
   const activeSessionRef = useRef<Session | null>(null);
@@ -446,7 +452,7 @@ const windowWidth = useWindowWidth();
             </span>
             <button
               onClick={() => setShowUsage(true)}
-              title="Использование подписки"
+              title="Использование (Claude + fal.ai)"
               style={{ width: 22, height: 22, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

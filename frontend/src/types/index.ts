@@ -147,6 +147,22 @@ export interface UsageResponse {
   plan?: PlanInfo;
 }
 
+// Статистика аккаунта fal.ai (баланс + расход за период)
+export interface FalModelSpend { endpointId: string; cost: number; }
+export interface FalDaySpend { date: string; cost: number; }
+export interface FalUsageSummary {
+  days: number;
+  total: number;
+  byModel: FalModelSpend[];
+  series: FalDaySpend[];
+}
+export interface FalAccountResponse {
+  enabled: boolean;
+  balance?: number | null;
+  currency?: string | null;
+  usage?: FalUsageSummary | null;
+}
+
 // Элементы чата
 export type ChatItem =
   | { kind: 'user_message'; text: string; attachedPaths?: string[] }

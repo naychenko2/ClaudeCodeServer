@@ -9,7 +9,7 @@ namespace ClaudeHomeServer.Controllers;
 
 [ApiController]
 [Route("api/auth")]
-public class AuthController(UserStore users, JwtService jwt) : ControllerBase
+public class AuthController(UserStore users, JwtService jwt, FeatureFlagService flags) : ControllerBase
 {
     [AllowAnonymous]
     [EnableRateLimiting("auth-login")]
@@ -38,7 +38,8 @@ public class AuthController(UserStore users, JwtService jwt) : ControllerBase
         var userId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
         var username = User.FindFirstValue(ClaimTypes.Name);
         var role = User.FindFirstValue(ClaimTypes.Role);
-        return Ok(new { userId, username, role });
+        var featureFlags = userId is null ? null : flags.GetEffective(userId);
+        return Ok(new { userId, username, role, featureFlags });
     }
 
     [Authorize]

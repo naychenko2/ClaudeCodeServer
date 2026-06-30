@@ -1,0 +1,19 @@
+# Прод-оверрайд для naychenko.me. Применять поверх базового файла:
+#
+#   docker compose -f docker-compose.claude.yml -f docker-compose.claude.prod.yml up -d --build
+#
+# Тот же образ, но окружение Production: Kestrel слушает 80/443 с TLS-сертом
+# (см. appsettings.Production.json). Серты монтируются из C:\certs\naychenko как volume.
+
+services:
+  claude-server:
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # Переопределяем пути сертов на контейнерные (в appsettings.Production.json — C:\certs\...)
+      Kestrel__Endpoints__Https__Certificate__Path: /certs/fullchain.pem
+      Kestrel__Endpoints__Https__Certificate__KeyPath: /certs/privkey.pem
+    volumes:
+      - ${CLAUDE_CERTS_DIR:-C:/certs/naychenko}:/certs:ro

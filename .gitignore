@@ -24,6 +24,7 @@ frontend/dev-dist/
 
 # MCP конфиги с ключами
 .mcp.json
+.mcp.docker.json
 
 # mcp-dify
 mcp-dify/node_modules/

@@ -12,6 +12,7 @@ import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
+import { setAllFlags } from './lib/featureFlags'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 
@@ -57,6 +58,7 @@ export default function App() {
     // Если не ответил — показываем приложение в текущем (возможно офлайн) состоянии.
     const timer = setTimeout(() => setAuthChecking(false), 3_000)
     api.auth.me()
+      .then(me => { if (me?.featureFlags) setAllFlags(me.featureFlags) })
       .catch(() => { /* результат отразится в _online */ })
       .finally(() => {
         clearTimeout(timer)

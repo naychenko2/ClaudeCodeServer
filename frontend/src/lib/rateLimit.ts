@@ -1,4 +1,4 @@
-import type { RateLimitInfo } from '../types';
+import type { RateLimitInfo, UsageSnapshot } from '../types';
 
 // Окно лимита подписки с вычисленными процентом и уровнем тревоги
 export interface RateWindow extends RateLimitInfo {
@@ -46,6 +46,31 @@ export function toRateWindows(rateLimits: Record<string, RateLimitInfo>): RateWi
 export function worstWindow(windows: RateWindow[]): RateWindow | undefined {
   const rank = { danger: 2, warn: 1, normal: 0 };
   return [...windows].sort((a, b) => (rank[b.level] - rank[a.level]) || ((b.utilization ?? 0) - (a.utilization ?? 0)))[0];
+}
+
+// Последний снимок по каждому окну (для колец на экране usage), с временем снимка
+export function latestPerWindow(snapshots: UsageSnapshot[]): Array<RateWindow & { timestamp?: string }> {
+  const latest = new Map<string, UsageSnapshot>();
+  for (const s of snapshots) {
+    const prev = latest.get(s.limitType);
+    if (!prev || new Date(s.timestamp).getTime() > new Date(prev.timestamp).getTime()) latest.set(s.limitType, s);
+  }
+  const map: Record<string, RateLimitInfo> = {};
+  latest.forEach((s, k) => {
+    map[k] = { limitType: s.limitType, utilization: s.utilization, status: s.status, isUsingOverage: s.isUsingOverage, resetsAt: s.resetsAt };
+  });
+  return toRateWindows(map).map(w => ({ ...w, timestamp: latest.get(w.limitType)?.timestamp }));
+}
+
+// Точки {время(мс), доля} по каждому окну, отсортированные — для спарклайна тренда
+export function seriesByWindow(snapshots: UsageSnapshot[]): Record<string, { t: number; u: number }[]> {
+  const out: Record<string, { t: number; u: number }[]> = {};
+  for (const s of snapshots) {
+    if (typeof s.utilization !== 'number') continue;
+    (out[s.limitType] ??= []).push({ t: new Date(s.timestamp).getTime(), u: s.utilization });
+  }
+  for (const k of Object.keys(out)) out[k].sort((a, b) => a.t - b.t);
+  return out;
 }
 
 // Время сброса окна: относительное (<6ч) либо абсолютное

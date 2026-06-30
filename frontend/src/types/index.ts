@@ -29,6 +29,15 @@ export interface AppSettings {
   claudeBilling?: ClaudeBilling;
 }
 
+// Определение фич-флага из реестра (приходит с бэка для рендера тумблеров)
+export interface FeatureFlagDefinition {
+  key: string;
+  title: string;
+  description: string;
+  default: boolean;
+  stage: 'dev' | 'beta' | 'stable';
+}
+
 export interface Session {
   id: string;
   projectId: string;
@@ -127,6 +136,16 @@ export interface RateLimitInfo {
   resetsAt?: string;
   status?: string;
   isUsingOverage?: boolean;
+}
+
+// Снимок использования окна во времени (история с бэка, data/usage.json) — для экрана usage и тренда
+export interface UsageSnapshot {
+  timestamp: string;
+  limitType: string;
+  utilization?: number;
+  status?: string;
+  isUsingOverage?: boolean;
+  resetsAt?: string;
 }
 
 // Элементы чата

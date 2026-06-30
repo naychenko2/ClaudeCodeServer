@@ -5,6 +5,7 @@ import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
 import { UserManagementModal } from '../components/UserManagementModal';
 import { ChangePasswordDialog } from '../components/ChangePasswordDialog';
+import { FeatureFlagsModal } from '../components/FeatureFlagsModal';
 import { C, R, FONT } from '../lib/design';
 import { AvatarMenu } from '../features/projects/AvatarMenu';
 import { ProjectCard } from '../features/projects/ProjectCard';
@@ -37,6 +38,7 @@ export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
 
   const [showUserMgmt, setShowUserMgmt] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [showFeatureFlags, setShowFeatureFlags] = useState(false);
 
   const isAdmin = auth?.role === 'admin';
   const username = auth?.username ?? '';
@@ -119,6 +121,7 @@ export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
               serverUrl={serverUrl}
               onLogout={onLogout}
               onShowChangePassword={() => setShowChangePassword(true)}
+              onShowFeatureFlags={() => setShowFeatureFlags(true)}
             />
           </div>
         </div>
@@ -294,6 +297,9 @@ export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
       )}
       {showChangePassword && (
         <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />
+      )}
+      {showFeatureFlags && (
+        <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />
       )}
     </div>
   );

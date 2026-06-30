@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using Microsoft.AspNetCore.Identity;
@@ -12,6 +12,11 @@ public class UserStore
     private List<User> _users = [];
     // DevPassword работает только когда задан в конфиге (обычно только в Development)
     private readonly string? _devPassword;
+    // UserStore — Singleton, шарится между конкурентными HTTP-запросами. Все чтения/мутации
+    // _users и запись файла идут под этим локом, иначе возможны IOException на File.WriteAllText
+    // из двух потоков и "Collection was modified" в JsonSerializer. Лок реентерабельный, поэтому
+    // мутирующие методы спокойно вызывают Save() уже из-под взятого лока.
+    private readonly object _lock = new();
 
     public UserStore(IConfiguration config, ILogger<UserStore> logger)
     {
@@ -19,7 +24,7 @@ public class UserStore
         var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
         _filePath = Path.Combine(dataDir, "users.json");
         _devPassword = config["Auth:DevPassword"];
-        Load(logger);
+        Load(logger); // конструктор однопоточен — отдельный лок не нужен
     }
 
     private void Load(ILogger logger)
@@ -51,14 +56,22 @@ public class UserStore
 
     private void Save()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-        File.WriteAllText(_filePath, JsonSerializer.Serialize(
-            new UsersFile { Users = _users }, JsonOptions));
+        lock (_lock)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+            File.WriteAllText(_filePath, JsonSerializer.Serialize(
+                new UsersFile { Users = _users }, JsonOptions));
+        }
     }
 
-    public User? FindByUsername(string username) =>
-        _users.FirstOrDefault(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase));
+    public User? FindByUsername(string username)
+    {
+        lock (_lock)
+            return _users.FirstOrDefault(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase));
+    }
 
+    // Без лока намеренно: метод не трогает _users (user приходит снаружи), а bcrypt-проверка
+    // дорогая по дизайну — держать на ней общий лок значило бы сериализовать все логины.
     public bool VerifyPassword(User user, string password)
     {
         if (_devPassword != null && password == _devPassword) return true;
@@ -71,8 +84,11 @@ public class UserStore
     /// </summary>
     public void SetPassword(User user, string password)
     {
-        SetPasswordInternal(user, password);
-        Save();
+        lock (_lock)
+        {
+            SetPasswordInternal(user, password);
+            Save();
+        }
     }
 
     /// <summary>
@@ -81,9 +97,12 @@ public class UserStore
     /// </summary>
     public void EnsureNtHash(User user, string plainPassword)
     {
-        if (user.NtHash is { Length: 16 }) return;
-        user.NtHash = WebDav.NtlmHelper.ComputeNtHash(plainPassword);
-        Save();
+        lock (_lock)
+        {
+            if (user.NtHash is { Length: 16 }) return;
+            user.NtHash = WebDav.NtlmHelper.ComputeNtHash(plainPassword);
+            Save();
+        }
     }
 
     private void SetPasswordInternal(User user, string password)
@@ -92,85 +111,130 @@ public class UserStore
         user.NtHash       = WebDav.NtlmHelper.ComputeNtHash(password);
     }
 
-    public User? GetById(string id) =>
-        _users.FirstOrDefault(u => u.Id == id);
+    public User? GetById(string id)
+    {
+        lock (_lock)
+            return _users.FirstOrDefault(u => u.Id == id);
+    }
 
-    public User? GetFirst() => _users.FirstOrDefault();
+    public User? GetFirst()
+    {
+        lock (_lock)
+            return _users.FirstOrDefault();
+    }
 
-    public IReadOnlyList<User> GetAll() => _users.AsReadOnly();
+    // Возвращаем снимок: вызывающий итерирует его вне лока, поэтому отдаём копию,
+    // а не view на живой _users (иначе конкурентная мутация → "Collection was modified").
+    public IReadOnlyList<User> GetAll()
+    {
+        lock (_lock)
+            return _users.ToList();
+    }
 
     public User Add(string username, string password, string role)
     {
-        if (_users.Any(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException($"Пользователь '{username}' уже существует");
+        lock (_lock)
+        {
+            if (_users.Any(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"Пользователь '{username}' уже существует");
 
-        var user = new User { Username = username, Role = role };
-        SetPasswordInternal(user, password);
-        _users.Add(user);
-        Save();
-        return user;
+            var user = new User { Username = username, Role = role };
+            SetPasswordInternal(user, password);
+            _users.Add(user);
+            Save();
+            return user;
+        }
     }
 
     public bool Update(string id, string? username, string? role)
     {
-        var user = _users.FirstOrDefault(u => u.Id == id);
-        if (user is null) return false;
-
-        if (username is not null && !string.Equals(username, user.Username, StringComparison.OrdinalIgnoreCase))
+        lock (_lock)
         {
-            if (_users.Any(u => u.Id != id && string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase)))
-                throw new InvalidOperationException($"Пользователь '{username}' уже существует");
-            user.Username = username;
-        }
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
 
-        if (role is not null && role != user.Role)
-        {
-            // Понижение роли admin → user: проверяем что останется хотя бы один admin
-            if (user.Role == "admin" && role == "user" && !HasOtherAdmin(id))
-                throw new InvalidOperationException("Нельзя понизить роль единственного администратора");
-            user.Role = role;
-        }
+            if (username is not null && !string.Equals(username, user.Username, StringComparison.OrdinalIgnoreCase))
+            {
+                if (_users.Any(u => u.Id != id && string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidOperationException($"Пользователь '{username}' уже существует");
+                user.Username = username;
+            }
 
-        Save();
-        return true;
+            if (role is not null && role != user.Role)
+            {
+                // Понижение роли admin → user: проверяем что останется хотя бы один admin
+                if (user.Role == "admin" && role == "user" && !HasOtherAdmin(id))
+                    throw new InvalidOperationException("Нельзя понизить роль единственного администратора");
+                user.Role = role;
+            }
+
+            Save();
+            return true;
+        }
     }
 
     public bool Delete(string id)
     {
-        var user = _users.FirstOrDefault(u => u.Id == id);
-        if (user is null) return false;
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
 
-        if (user.Role == "admin" && !HasOtherAdmin(id))
-            throw new InvalidOperationException("Нельзя удалить единственного администратора");
+            if (user.Role == "admin" && !HasOtherAdmin(id))
+                throw new InvalidOperationException("Нельзя удалить единственного администратора");
 
-        _users.Remove(user);
-        Save();
-        return true;
+            _users.Remove(user);
+            Save();
+            return true;
+        }
     }
 
     public bool ResetPassword(string id, string newPassword)
     {
-        var user = _users.FirstOrDefault(u => u.Id == id);
-        if (user is null) return false;
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
 
-        user.PasswordHash = _hasher.HashPassword(user, newPassword);
-        // NtHash пересчитается лениво при следующем логине
-        user.NtHash = null;
-        Save();
-        return true;
+            user.PasswordHash = _hasher.HashPassword(user, newPassword);
+            // NtHash пересчитается лениво при следующем логине
+            user.NtHash = null;
+            Save();
+            return true;
+        }
     }
 
     public bool ChangePassword(string id, string currentPassword, string newPassword)
     {
-        var user = _users.FirstOrDefault(u => u.Id == id);
-        if (user is null) return false;
-        if (!VerifyPassword(user, currentPassword)) return false;
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            if (!VerifyPassword(user, currentPassword)) return false;
 
-        SetPasswordInternal(user, newPassword);
-        Save();
-        return true;
+            SetPasswordInternal(user, newPassword);
+            Save();
+            return true;
+        }
     }
 
+    /// <summary>
+    /// Устанавливает per-user override фич-флага. Возвращает false если пользователь не найден.
+    /// </summary>
+    public bool SetFeatureFlag(string id, string key, bool enabled)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+
+            (user.FeatureFlags ??= new())[key] = enabled;
+            Save();
+            return true;
+        }
+    }
+
+    // Вызывается только из Update/Delete, уже из-под взятого лока — отдельная синхронизация не нужна.
     private bool HasOtherAdmin(string excludeId) =>
         _users.Any(u => u.Id != excludeId && u.Role == "admin");
 

@@ -1,0 +1,14 @@
+{
+  "_comment": "Контейнерная версия .mcp.json. Скопируй в .mcp.docker.json и впиши DIFY_API_KEY. Монтируется в /app/.mcp.docker.json (см. docker-compose.claude.yml). Путь к серверу и Dify — для сети контейнера.",
+  "mcpServers": {
+    "dify": {
+      "command": "node",
+      "args": ["/app/mcp-dify/dist/index.js"],
+      "env": {
+        "DIFY_API_URL": "http://host.docker.internal:8080/v1",
+        "DIFY_API_KEY": "",
+        "DIFY_DEFAULT_DATASET_ID": ""
+      }
+    }
+  }
+}

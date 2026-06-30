@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, type CSSProperties } from 'react';
 import { C, FONT, R } from '../lib/design';
 import { PillSwitch } from './Toolbar';
 import { MarkdownViewer } from './MarkdownViewer';
@@ -25,6 +25,15 @@ function dirname(p: string): string {
   const i = norm.lastIndexOf('/');
   return i > 0 ? norm.slice(0, i) : '';
 }
+
+// Единый стиль кнопок-чипов в навигаторе плана («последний», «оглавление») —
+// утопленный фон (не белый), одинаковые размеры/типографика.
+const navChip: CSSProperties = {
+  height: 28, padding: '0 10px', borderRadius: R.md, cursor: 'pointer',
+  display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+  fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+  border: `1px solid ${C.border}`, background: C.bgInset, color: C.textSecondary,
+};
 
 // Заголовок оглавления = реальный <h*> узел из отрендеренного плана.
 // Единый источник (DOM), чтобы список TOC и цель скролла были тем же узлом —
@@ -256,23 +265,31 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
                     {STATUS_META[curPlan.status].label}
                   </span>
                   <div style={{ flex: 1 }} />
+                  {plans.length > 1 && effIdx !== plans.length - 1 && (
+                    <button
+                      onClick={() => setPlanIdx(null)}
+                      title="К последнему плану"
+                      style={navChip}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M13 17l5-5-5-5" /><path d="M6 17l5-5-5-5" />
+                      </svg>
+                      последний
+                    </button>
+                  )}
                   {headings.length > 0 && (
                     <button
                       onClick={() => setTocOpen(v => !v)}
                       title="Оглавление"
-                      style={{
-                        height: 28, padding: '0 10px', border: `1px solid ${tocOpen ? C.accentMuted : C.border}`, borderRadius: R.md,
-                        background: tocOpen ? C.accentMuted : C.bgWhite, cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', gap: 6,
-                        color: tocOpen ? C.accent : C.textSecondary, flexShrink: 0,
-                        fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
-                      }}
+                      style={tocOpen
+                        ? { ...navChip, background: C.accentMuted, border: `1px solid ${C.accentMuted}`, color: C.accent }
+                        : navChip}
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
                         <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
                       </svg>
-                      Оглавление
+                      оглавление
                     </button>
                   )}
 

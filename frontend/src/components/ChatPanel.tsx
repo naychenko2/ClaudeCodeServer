@@ -812,10 +812,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const [composerH, setComposerH] = useState(96);
   // Прилипание к низу: автоскролл при новых сообщениях только если пользователь уже внизу
   const atBottomRef = useRef(true);
-  // Восстановление позиции чтения после refresh: храним scrollTop per-session в localStorage.
+  // Восстановление позиции чтения после refresh: храним позицию + высоту ленты per-session.
+  // Высота нужна, чтобы дождаться асинхронного дорендера (картинки base64 грузятся сетевыми
+  // запросами, дольше любого фиксированного таймаута): держим позицию, пока лента не дорастёт.
   const scrollKey = `cc-scroll-${session.id}`;
-  const pendingRestoreRef = useRef<number | null>(null); // позиция к восстановлению (null = нечего/был внизу)
-  const restoredRef = useRef(false);                     // восстановление для текущей сессии уже выполнено
+  const pendingRestoreRef = useRef<{ top: number; h: number } | null>(null); // к восстановлению (null = нечего/был внизу)
+  const restoredRef = useRef(false);                                          // восстановление для текущей сессии выполнено
   // Показывать плавающую кнопку «вниз», когда пользователь отлистал вверх
   const [showScrollDown, setShowScrollDown] = useState(false);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
@@ -879,25 +881,43 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     atBottomRef.current = atBottom;
     setShowScrollDown(!atBottom);
-    // После восстановления — запоминаем позицию чтения, чтобы пережить refresh.
+    // После восстановления — запоминаем позицию чтения + высоту ленты, чтобы пережить refresh.
     // Внизу позицию не храним: по умолчанию прилипаем к низу.
     if (restoredRef.current) {
       try {
         if (atBottom) localStorage.removeItem(scrollKey);
-        else localStorage.setItem(scrollKey, String(Math.round(el.scrollTop)));
+        else localStorage.setItem(scrollKey, JSON.stringify({ top: Math.round(el.scrollTop), h: Math.round(el.scrollHeight) }));
       } catch { /* localStorage недоступен — не критично */ }
     }
   }, [scrollKey]);
 
+  // Один тик восстановления: ставим сохранённую позицию и финализируем, когда лента доросла
+  // до сохранённой высоты (значит весь асинхронный контент дорендерился — позиция точна).
+  const restoreTick = useCallback(() => {
+    if (restoredRef.current) return;
+    const el = scrollRef.current;
+    const pend = pendingRestoreRef.current;
+    if (!el) return;
+    if (pend == null) { restoredRef.current = true; return; }
+    el.scrollTop = Math.min(pend.top, el.scrollHeight - el.clientHeight);
+    // Лента дорендерилась до сохранённой высоты (с допуском) — позиция стабильна, выходим в обычный режим
+    if (el.scrollHeight >= pend.h - 50) {
+      restoredRef.current = true;
+      setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight >= 80);
+    }
+  }, []);
+
   // При смене сессии — поднимаем сохранённую позицию чтения для восстановления после refresh
   useEffect(() => {
     restoredRef.current = false;
-    let saved: number | null = null;
+    let saved: { top: number; h: number } | null = null;
     try {
       const raw = localStorage.getItem(scrollKey);
-      const v = raw != null ? parseInt(raw, 10) : NaN;
-      if (Number.isFinite(v)) saved = v;
-    } catch { /* нет доступа к localStorage */ }
+      if (raw) {
+        const o = JSON.parse(raw);
+        if (o && Number.isFinite(o.top) && Number.isFinite(o.h)) saved = { top: o.top, h: o.h };
+      }
+    } catch { /* нет доступа к localStorage / старый формат */ }
     pendingRestoreRef.current = saved;
     if (saved != null) atBottomRef.current = false; // есть что восстановить — не прыгаем вниз
   }, [scrollKey]);
@@ -922,8 +942,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     if (!content || !el) return;
     const ro = new ResizeObserver(() => {
       if (!restoredRef.current && pendingRestoreRef.current != null) {
-        // история ещё дорендеривается — держим сохранённую позицию чтения, низ не трогаем
-        el.scrollTop = Math.min(pendingRestoreRef.current, el.scrollHeight - el.clientHeight);
+        // история ещё дорендеривается — держим сохранённую позицию, пока лента не дорастёт
+        restoreTick();
       } else if (atBottomRef.current) {
         el.scrollTop = el.scrollHeight;
       }
@@ -931,7 +951,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     });
     ro.observe(content);
     return () => ro.disconnect();
-  }, [syncScrollState]);
+  }, [syncScrollState, restoreTick]);
 
   const handleMessagesScroll = syncScrollState;
 
@@ -945,8 +965,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   useEffect(() => {
     // Пока восстанавливаем позицию после refresh — низ не трогаем, держим сохранённую точку
     if (!restoredRef.current && pendingRestoreRef.current != null) {
-      const el = scrollRef.current;
-      if (el) el.scrollTop = Math.min(pendingRestoreRef.current, el.scrollHeight - el.clientHeight);
+      restoreTick();
       setShowScrollDown(true);
       return;
     }
@@ -958,24 +977,19 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       // пришёл новый контент, а пользователь читает выше — подсветим кнопку «вниз»
       setShowScrollDown(true);
     }
-  }, [items]);
+  }, [items, restoreTick]);
 
-  // Финализируем восстановление позиции: после загрузки истории даём асинхронному дорендеру
-  // (картинки base64, подсветка кода) утихнуть, затем переходим в обычный режим —
-  // прилипание к низу + сохранение позиции в onScroll.
+  // Восстановление позиции после загрузки истории. Финал привязан не к таймеру, а к достижению
+  // сохранённой высоты ленты (restoreTick) — ждём, пока картинки base64 догрузятся по сети.
+  // Таймер — лишь страховка на случай, если лента так и не дорастёт (контент стал короче).
   useEffect(() => {
     if (isHistoryLoading || restoredRef.current) return;
     if (pendingRestoreRef.current == null) { restoredRef.current = true; return; }
-    const apply = () => {
-      const e = scrollRef.current;
-      if (e && pendingRestoreRef.current != null)
-        e.scrollTop = Math.min(pendingRestoreRef.current, e.scrollHeight - e.clientHeight);
-    };
-    apply();
-    const raf = requestAnimationFrame(apply);
-    const done = window.setTimeout(() => { restoredRef.current = true; syncScrollState(); }, 800);
+    restoreTick();
+    const raf = requestAnimationFrame(restoreTick);
+    const done = window.setTimeout(() => { restoredRef.current = true; syncScrollState(); }, 5000);
     return () => { cancelAnimationFrame(raf); clearTimeout(done); };
-  }, [isHistoryLoading, syncScrollState]);
+  }, [isHistoryLoading, restoreTick, syncScrollState]);
 
   // Автоотправка первого сообщения сразу после присоединения к сессии
   useEffect(() => {

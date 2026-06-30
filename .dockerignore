@@ -1,0 +1,36 @@
+# Сборочный мусор и локальные артефакты — не тащим в build-контекст
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/dev-dist
+
+# Готовые публикации бэкенда
+backend/publish_out
+backend/publish_out.bak
+backend/publish_staging
+publish
+
+# Исходный wwwroot — фронт пересобирается в stage `frontend`
+backend/ClaudeHomeServer/wwwroot
+
+# Runtime-данные и секреты (монтируются volume / задаются env)
+data
+backend/ClaudeHomeServer/data
+**/appsettings.Local.json
+.mcp.json
+.mcp.docker.json
+mcp-dify/.env
+
+# Логи и бэкапы
+*.log
+oo-console-*.log
+**/*.bak
+
+# Прочее
+.git
+.vs
+.idea
+.playwright-mcp
+*.jpg
+*.png

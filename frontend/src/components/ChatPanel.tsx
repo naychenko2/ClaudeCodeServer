@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback, createContext, useContext, Fragment } from 'react';
 import { getExplorerCreateInDir } from './FileExplorer';
-import type { Project, Session, ChatItem, FileEntry, SkillInfo, AgentInfo, ClaudeBilling } from '../types';
+import type { Project, Session, ChatItem, FileEntry, SkillInfo, AgentInfo, ClaudeBilling, Role } from '../types';
+import { RoleAvatar } from './RoleAvatar';
 import { useSession } from '../hooks/useSession';
 import { useOnline } from '../hooks/useOnline';
 import { api, type WorkflowAgentInfo } from '../lib/api';
@@ -397,6 +398,7 @@ function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boo
 interface ChatHeaderBarProps {
   session: Session;
   project: Project;
+  role?: Role | null;
   online: boolean;
   cost: CostStats;
   falCost: FalCostStats;
@@ -410,7 +412,7 @@ interface ChatHeaderBarProps {
   onOpenSidebar?: () => void;
 }
 
-function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, role, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -433,6 +435,10 @@ function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBil
             <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
           </svg>
         </ToolbarIconButton>
+      )}
+      {/* Аватар роли-собеседника (если чат ведётся с ролью) */}
+      {role && !isMobile && (
+        <RoleAvatar name={role.name} avatar={role.avatar} color={role.color} size={32} />
       )}
       {/* На мобиле стрелка + название кликабельны как «назад» в сайдбар; на десктопе — просто заголовок */}
       {isMobile && onBack
@@ -802,6 +808,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const [mode, setMode] = useState<Mode>(session.mode);
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  // Роль-собеседник чата (если задана) — для аватара в шапке
+  const [role, setRole] = useState<Role | null>(null);
+  useEffect(() => {
+    if (!session.roleId) { setRole(null); return; }
+    api.roles.list(project.id)
+      .then(rs => setRole(rs.find(r => r.id === session.roleId) ?? null))
+      .catch(() => {});
+  }, [session.roleId, project.id]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Плавающий composer переменной высоты — измеряем, чтобы лента упиралась ровно под него
@@ -1249,6 +1263,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       <ChatHeaderBar
         session={session}
         project={project}
+        role={role}
         online={online}
         cost={costStats}
         falCost={falCostStats}

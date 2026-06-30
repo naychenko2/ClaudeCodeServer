@@ -46,6 +46,9 @@ public class Session
     public string? Name { get; set; }
     // Имя агента (.claude/agents/<name>.md), чей промпт инжектируется в системный контекст
     public string? AgentName { get; set; }
+    // Id роли-собеседника (Role): если задан — её промпт (Persona + агенты + доп.) инжектируется
+    // в системный контекст, приоритетнее AgentName
+    public string? RoleId { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

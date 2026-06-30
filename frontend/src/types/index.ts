@@ -43,6 +43,24 @@ export interface Session {
   model?: string;
   effort?: string;
   agentName?: string;
+  roleId?: string;
+}
+
+// Роль-собеседник проекта: «лицо» (имя/аватар/характер) + компетенции (агенты)
+export interface Role {
+  id: string;
+  projectId: string;
+  name: string;
+  title: string;
+  avatar: string;        // эмодзи; пусто → инициалы-фолбэк
+  color: string;         // hex цвета аватара
+  persona: string;       // характер, стиль речи
+  agentNames: string[];  // прикреплённые агенты (fileName) = компетенции
+  systemPrompt?: string; // опц. свободный промпт поверх агентов
+  model?: string;
+  effort?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface FileEntry {

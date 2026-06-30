@@ -2,6 +2,11 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
+// Порт backend для dev/preview-прокси. По умолчанию 5000; переопределяется через
+// BACKEND_PORT (напр. при работе из git worktree на отдельном порту).
+const backendPort = process.env.BACKEND_PORT ?? '5000';
+const backendTarget = `http://localhost:${backendPort}`;
+
 export default defineConfig({
   plugins: [
     react(),
@@ -36,15 +41,15 @@ export default defineConfig({
     host: true,
     port: 5173,
     proxy: {
-      '/api': { target: 'http://localhost:5000', changeOrigin: true },
-      '/hubs': { target: 'http://localhost:5000', changeOrigin: true, ws: true },
+      '/api': { target: backendTarget, changeOrigin: true },
+      '/hubs': { target: backendTarget, changeOrigin: true, ws: true },
     },
   },
   preview: {
     port: 4173,
     proxy: {
-      '/api': { target: 'http://localhost:5000', changeOrigin: true },
-      '/hubs': { target: 'http://localhost:5000', changeOrigin: true, ws: true },
+      '/api': { target: backendTarget, changeOrigin: true },
+      '/hubs': { target: backendTarget, changeOrigin: true, ws: true },
     },
   },
 });

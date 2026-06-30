@@ -1,11 +1,12 @@
 import { useEffect, useState, useRef } from 'react';
-import type { Project, Session, AgentInfo } from '../types';
+import type { Project, Session, AgentInfo, Role } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { isOnline } from '../lib/offline';
 import { StatusBadge } from './StatusBadge';
 import { EditSessionDialog } from './EditSessionDialog';
+import { RoleAvatar } from './RoleAvatar';
 import { C, R, SHADOW, MODAL_W } from '../lib/design';
 import { Modal, ModalActions } from './ui';
 
@@ -23,9 +24,16 @@ interface Props {
 export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor, selectedAgent }: Props) {
   const online = useOnline();
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [editTarget, setEditTarget] = useState<Session | null>(null);
   const initializedRef = useRef(false);
+
+  // Роли проекта — для аватара на карточке чата (мапим session.roleId → роль)
+  useEffect(() => {
+    api.roles.list(project.id).then(setRoles).catch(() => {});
+  }, [project.id]);
+  const roleMap = new Map(roles.map(r => [r.id, r]));
 
   useEffect(() => { onSessionsChanged?.(sessions.length); }, [sessions.length, onSessionsChanged]);
 
@@ -192,7 +200,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             {isActive && (
               <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: C.accent }} />
             )}
-            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, flex: 1, minWidth: 0 }}>
+              {(() => {
+                const role = s.roleId ? roleMap.get(s.roleId) : undefined;
+                return role ? <div style={{ marginTop: 1 }}><RoleAvatar name={role.name} avatar={role.avatar} color={role.color} size={26} /></div> : null;
+              })()}
+              <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                 {(s.status === 'active') && (
                   <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.success, flexShrink: 0 }} />
@@ -223,6 +236,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                   {s.lastMessage}
                 </div>
               )}
+              </div>
             </div>
             <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 6 }}>
               {online && (<>

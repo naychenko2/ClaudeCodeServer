@@ -36,17 +36,19 @@ public class SessionManager
 
     private readonly string? _mcpConfigPath;
     private readonly SkillsService _skills;
+    private readonly RoleManager _roles;
     private readonly WorkspaceKnowledgeStore _workspaceStore;
     private readonly FalCostService _falCost;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, SkillsService skills,
-        WorkspaceKnowledgeStore workspaceStore, FalCostService falCost)
+        RoleManager roles, WorkspaceKnowledgeStore workspaceStore, FalCostService falCost)
     {
         _projects = projects;
         _hub = hub;
         _history = history;
         _skills = skills;
+        _roles = roles;
         _workspaceStore = workspaceStore;
         _falCost = falCost;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
@@ -120,10 +122,15 @@ public class SessionManager
 
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
-        string? effort = null)
+        string? effort = null, string? roleId = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
+
+        // Роль (если выбрана) задаёт дефолтную модель/effort, когда они не указаны явно
+        var role = string.IsNullOrWhiteSpace(roleId) ? null : _roles.GetById(roleId);
+        var effectiveModel = !string.IsNullOrWhiteSpace(model) ? model : role?.Model;
+        var effectiveEffort = !string.IsNullOrWhiteSpace(effort) ? effort : role?.Effort;
 
         var session = new Session
         {
@@ -131,9 +138,10 @@ public class SessionManager
             Mode = mode,
             ClaudeSessionId = resumeSessionId,
             Name = name,
-            Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
+            Model = string.IsNullOrWhiteSpace(effectiveModel) ? null : effectiveModel.Trim(),
             AgentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim(),
-            Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
+            Effort = string.IsNullOrWhiteSpace(effectiveEffort) ? null : effectiveEffort.Trim(),
+            RoleId = role?.Id,
         };
 
         var existingHistory = resumeSessionId != null
@@ -148,7 +156,8 @@ public class SessionManager
             msg => OnMessageAsync(session.Id, accumulator, msg),
             _mcpConfigPath, project.SystemPrompt,
             _skills, _workspaceStore,
-            () => _projects.GetById(projectId)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>());
+            () => _projects.GetById(projectId)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
+            _roles);
         entry.Process = claudeSession;
 
         await claudeSession.StartAsync();
@@ -184,7 +193,8 @@ public class SessionManager
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 _mcpConfigPath, project.SystemPrompt,
                 _skills, _workspaceStore,
-                () => _projects.GetById(entry.Info.ProjectId)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>());
+                () => _projects.GetById(entry.Info.ProjectId)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
+                _roles);
             entry.Process = claudeSession;
             await claudeSession.StartAsync();
         }

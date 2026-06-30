@@ -1,4 +1,4 @@
-import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule } from '../types';
+import type { Project, Session, Role, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -55,10 +55,10 @@ export const api = {
 
   sessions: {
     list: (projectId: string) => request<Session[]>(`/projects/${projectId}/sessions`),
-    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string) =>
+    create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string, roleId?: string) =>
       request<Session>(`/projects/${projectId}/sessions`, {
         method: 'POST',
-        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort }),
+        body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort, roleId }),
       }),
     update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {
@@ -69,6 +69,16 @@ export const api = {
       request<void>(`/projects/${projectId}/sessions/${sessionId}`, { method: 'DELETE' }),
     getHistory: (projectId: string, sessionId: string) =>
       request<unknown[]>(`/projects/${projectId}/sessions/${sessionId}/history`),
+  },
+
+  roles: {
+    list: (projectId: string) => request<Role[]>(`/projects/${projectId}/roles`),
+    create: (projectId: string, data: Partial<Role>) =>
+      request<Role>(`/projects/${projectId}/roles`, { method: 'POST', body: JSON.stringify(data) }),
+    update: (projectId: string, roleId: string, data: Partial<Role>) =>
+      request<Role>(`/projects/${projectId}/roles/${roleId}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (projectId: string, roleId: string) =>
+      request<void>(`/projects/${projectId}/roles/${roleId}`, { method: 'DELETE' }),
   },
 
   files: {

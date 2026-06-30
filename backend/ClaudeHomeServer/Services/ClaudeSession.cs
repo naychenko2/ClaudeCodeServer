@@ -45,6 +45,7 @@ public class ClaudeSession : IAsyncDisposable
     private readonly string? _rawSystemPrompt;
     private readonly string? _mcpConfigPath;
     private readonly SkillsService? _skills;
+    private readonly RoleManager? _roles;
     private readonly WorkspaceKnowledgeStore? _wkStore;
     // Провайдер правил разрешений проекта — резолвим каждый запрос (правила могут меняться)
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
@@ -54,7 +55,8 @@ public class ClaudeSession : IAsyncDisposable
     public ClaudeSession(Session info, string rootPath, Func<ServerMessage, Task> onMessage,
         string? mcpConfigPath = null, string? rawSystemPrompt = null,
         SkillsService? skills = null, WorkspaceKnowledgeStore? workspaceStore = null,
-        Func<IReadOnlyList<PermissionRule>>? permissionRules = null)
+        Func<IReadOnlyList<PermissionRule>>? permissionRules = null,
+        RoleManager? roles = null)
     {
         Info = info;
         _rootPath = rootPath;
@@ -62,8 +64,36 @@ public class ClaudeSession : IAsyncDisposable
         _mcpConfigPath = mcpConfigPath;
         _rawSystemPrompt = rawSystemPrompt;
         _skills = skills;
+        _roles = roles;
         _wkStore = workspaceStore;
         _permissionRules = permissionRules;
+    }
+
+    // Собирает системный промпт роли: самоидентификация + характер (Persona) +
+    // тела прикреплённых агентов (компетенции) + опц. свободный промпт роли.
+    private string? BuildRolePrompt(Role role)
+    {
+        var parts = new List<string>();
+
+        var identity = $"Тебя зовут {role.Name}.";
+        if (!string.IsNullOrWhiteSpace(role.Title))
+            identity += $" Твоя роль в команде: {role.Title}.";
+        parts.Add(identity);
+
+        if (!string.IsNullOrWhiteSpace(role.Persona))
+            parts.Add(role.Persona);
+
+        foreach (var agentName in role.AgentNames)
+        {
+            var body = _skills?.GetAgentSystemPrompt(_rootPath, agentName);
+            if (!string.IsNullOrWhiteSpace(body))
+                parts.Add(body);
+        }
+
+        if (!string.IsNullOrWhiteSpace(role.SystemPrompt))
+            parts.Add(role.SystemPrompt);
+
+        return parts.Count > 0 ? string.Join("\n\n---\n\n", parts) : null;
     }
 
     private static string? CreateSessionMcpConfig(string? basePath, string? datasetId)
@@ -363,9 +393,18 @@ public class ClaudeSession : IAsyncDisposable
             var basePrompt = ProjectManager.BuildSystemPrompt(
                 _rawSystemPrompt, currentDatasetId != null, currentWk?.DocumentTags);
 
+            // Промпт роли (если задана) приоритетнее одиночного агента
             string? agentPrompt = null;
-            if (!string.IsNullOrEmpty(Info.AgentName) && _skills is not null)
+            if (!string.IsNullOrEmpty(Info.RoleId) && _roles is not null)
+            {
+                var role = _roles.GetById(Info.RoleId);
+                if (role is not null)
+                    agentPrompt = BuildRolePrompt(role);
+            }
+            else if (!string.IsNullOrEmpty(Info.AgentName) && _skills is not null)
+            {
                 agentPrompt = _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName);
+            }
 
             var combinedPrompt = agentPrompt is not null
                 ? (string.IsNullOrWhiteSpace(basePrompt)

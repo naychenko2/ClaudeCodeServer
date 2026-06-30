@@ -1,10 +1,11 @@
-import { useState } from 'react';
-import type { Session } from '../types';
+import { useState, useEffect } from 'react';
+import type { Session, Role } from '../types';
 import { api } from '../lib/api';
 import { MODELS } from '../lib/models';
 import { EFFORTS } from '../lib/effort';
 import { C, R, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, TextArea, SegmentedControl } from './ui';
+import { RoleAvatar } from './RoleAvatar';
 import { type Mode, MODES, MODE_META, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
 
@@ -21,15 +22,24 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [roleId, setRoleId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.roles.list(projectId).then(setRoles).catch(() => {});
+  }, [projectId]);
+
+  const selectedRole = roles.find(r => r.id === roleId);
 
   const handleSubmit = async () => {
     setLoading(true);
     setError(null);
     try {
-      const sessionName = name.trim() || undefined;
-      const session = await api.sessions.create(projectId, mode, undefined, sessionName, model || undefined, undefined, effort || undefined);
+      // Если имя не задано — берём имя роли (когда выбрана)
+      const sessionName = name.trim() || selectedRole?.name || undefined;
+      const session = await api.sessions.create(projectId, mode, undefined, sessionName, model || undefined, undefined, effort || undefined, roleId || undefined);
       onCreated(session, firstMessage.trim() || undefined);
       onClose();
     } catch (err) {
@@ -55,8 +65,39 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
         />
       }
     >
+      {roles.length > 0 && (
+        <Field label="Роль" hint="Собеседник-персонаж: задаёт характер и компетенции чата.">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            <button type="button" onClick={() => setRoleId('')}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 7, padding: '6px 11px', borderRadius: R.lg, cursor: 'pointer',
+                fontSize: 13, fontWeight: 600, color: roleId === '' ? C.accent : C.textSecondary,
+                border: `1px solid ${roleId === '' ? C.accent : C.border}`,
+                background: roleId === '' ? C.accentLight : C.bgWhite,
+              }}
+            >Без роли</button>
+            {roles.map(r => {
+              const active = r.id === roleId;
+              return (
+                <button key={r.id} type="button" onClick={() => setRoleId(r.id)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 7, padding: '5px 11px 5px 6px', borderRadius: R.lg, cursor: 'pointer',
+                    fontSize: 13, fontWeight: 600, color: active ? C.accent : C.textHeading,
+                    border: `1px solid ${active ? C.accent : C.border}`,
+                    background: active ? C.accentLight : C.bgWhite,
+                  }}
+                >
+                  <RoleAvatar name={r.name} avatar={r.avatar} color={r.color} size={22} />
+                  {r.name}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+      )}
+
       <Field label="Название">
-        <TextField value={name} onChange={setName} placeholder="авто из первого сообщения" />
+        <TextField value={name} onChange={setName} placeholder={selectedRole ? selectedRole.name : 'авто из первого сообщения'} />
       </Field>
 
       <Field label="Первое сообщение">

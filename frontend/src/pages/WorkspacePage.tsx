@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { Project, Session, AgentInfo, SkillsData } from '../types';
 import { SessionList } from '../components/SessionList';
+import { RolesPanel } from '../components/RolesPanel';
 import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
 import { FileViewer } from '../components/FileViewer';
@@ -20,7 +21,7 @@ interface Props {
   onGoToProjects: () => void;
 }
 
-type LeftTab = 'sessions' | 'files';
+type LeftTab = 'sessions' | 'files' | 'roles';
 type FileSubTab = 'files' | 'knowledge';
 
 function useWindowWidth() {
@@ -94,7 +95,7 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
     const saved = loadWorkspaceState(project.id)?.leftTab;
-    return saved === 'sessions' || saved === 'files' ? saved : 'sessions';
+    return saved === 'sessions' || saved === 'files' || saved === 'roles' ? saved : 'sessions';
   });
   const [fileSubTab, setFileSubTab] = useState<FileSubTab>(() => loadWorkspaceState(project.id)?.fileSubTab ?? 'files');
   const [activeSession, setActiveSession] = useState<Session | null>(() => loadWorkspaceState(project.id)?.activeSession ?? null);
@@ -473,6 +474,7 @@ const windowWidth = useWindowWidth();
             value={leftTab}
             options={[
               { value: 'sessions', label: 'Чаты' },
+              { value: 'roles', label: 'Команда' },
               { value: 'files', label: 'Файлы' },
             ]}
             onChange={handleTabSwitch}
@@ -483,6 +485,8 @@ const windowWidth = useWindowWidth();
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {leftTab === 'sessions' ? (
           <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
+        ) : leftTab === 'roles' ? (
+          <RolesPanel project={project} onStartChat={s => handleSelectSession(s)} isMobile={isMobile} />
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
@@ -509,6 +513,7 @@ const windowWidth = useWindowWidth();
               value={leftTab}
               options={[
                 { value: 'sessions', label: 'Чаты' },
+                { value: 'roles', label: 'Команда' },
                 { value: 'files', label: 'Файлы' },
               ]}
               onChange={handleTabSwitch}
@@ -537,6 +542,8 @@ const windowWidth = useWindowWidth();
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
               ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
+              : leftTab === 'roles'
+              ? <RolesPanel project={project} onStartChat={s => { handleSelectSession(s); setMobileView('chat'); }} isMobile={isMobile} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'

@@ -19,7 +19,7 @@ public class SessionsController(SessionManager sessions) : ControllerBase
         try
         {
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;
-            var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name, req.Model, req.AgentName, req.Effort);
+            var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name, req.Model, req.AgentName, req.Effort, req.RoleId);
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
@@ -51,6 +51,6 @@ public class SessionsController(SessionManager sessions) : ControllerBase
     }
 }
 
-public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null);
+public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null, string? RoleId = null);
 
 public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null);

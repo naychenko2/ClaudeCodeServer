@@ -35,6 +35,7 @@ builder.Services.AddSingleton<UserStore>();
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<AppSettingsService>();
 builder.Services.AddSingleton<ProjectManager>();
+builder.Services.AddSingleton<RoleManager>();
 builder.Services.AddSingleton<FileService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();

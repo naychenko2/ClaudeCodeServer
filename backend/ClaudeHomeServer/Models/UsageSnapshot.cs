@@ -8,4 +8,12 @@ public record UsageSnapshot(
     double? Utilization,
     string? Status,
     bool IsUsingOverage,
-    string? ResetsAt);
+    string? ResetsAt,
+    string? OverageStatus = null,
+    string? OverageResetsAt = null);
+
+// Информация о тарифе подписки (из ~/.claude/.credentials.json)
+public record PlanInfo(string? SubscriptionType, string? RateLimitTier, string Label);
+
+// Ответ /api/usage: история снимков + тариф
+public record UsageResponse(IReadOnlyList<UsageSnapshot> Snapshots, PlanInfo? Plan);

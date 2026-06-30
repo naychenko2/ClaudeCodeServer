@@ -1,4 +1,4 @@
-import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageSnapshot, FeatureFlagDefinition } from '../types';
+import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FeatureFlagDefinition } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -44,7 +44,7 @@ export const api = {
   },
 
   usage: {
-    getHistory: () => request<UsageSnapshot[]>('/usage'),
+    get: () => request<UsageResponse>('/usage'),
   },
 
   featureFlags: {

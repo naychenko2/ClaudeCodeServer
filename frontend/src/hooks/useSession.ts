@@ -211,6 +211,8 @@ function ensureHandler() {
               resetsAt: msg.resetsAt,
               status: msg.status,
               isUsingOverage: msg.isUsingOverage,
+              overageStatus: msg.overageStatus,
+              overageResetsAt: msg.overageResetsAt,
             },
           },
         }));

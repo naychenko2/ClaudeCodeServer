@@ -11,6 +11,7 @@ import { UsageScreen } from '../components/UsageScreen';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
 import { api } from '../lib/api';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { C, FONT } from '../lib/design';
 import { PillSwitch } from '../components/Toolbar';
 import { BackButton } from '../components/ui';
@@ -98,6 +99,18 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
     const saved = loadWorkspaceState(project.id)?.leftTab;
     return saved === 'sessions' || saved === 'files' || saved === 'roles' ? saved : 'sessions';
   });
+  // Фича «Команда» (роли-собеседники) за фич-флагом — dark launch
+  const rolesEnabled = useFeature(FLAGS.roles);
+  // Если флаг выключен, а сохранён таб «Команда» — откатываемся на «Чаты»
+  useEffect(() => {
+    if (!rolesEnabled && leftTab === 'roles') setLeftTab('sessions');
+  }, [rolesEnabled, leftTab]);
+  // Опции левого переключателя: «Команда» появляется только при включённом флаге
+  const leftTabOptions: { value: LeftTab; label: string }[] = [
+    { value: 'sessions', label: 'Чаты' },
+    ...(rolesEnabled ? [{ value: 'roles' as LeftTab, label: 'Команда' }] : []),
+    { value: 'files', label: 'Файлы' },
+  ];
   const [fileSubTab, setFileSubTab] = useState<FileSubTab>(() => loadWorkspaceState(project.id)?.fileSubTab ?? 'files');
   const [activeSession, setActiveSession] = useState<Session | null>(() => loadWorkspaceState(project.id)?.activeSession ?? null);
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
@@ -483,11 +496,7 @@ const windowWidth = useWindowWidth();
           </div>
           <PillSwitch<LeftTab>
             value={leftTab}
-            options={[
-              { value: 'sessions', label: 'Чаты' },
-              { value: 'roles', label: 'Команда' },
-              { value: 'files', label: 'Файлы' },
-            ]}
+            options={leftTabOptions}
             onChange={handleTabSwitch}
             fill
           />
@@ -522,11 +531,7 @@ const windowWidth = useWindowWidth();
             </BackButton>
             <PillSwitch<LeftTab>
               value={leftTab}
-              options={[
-                { value: 'sessions', label: 'Чаты' },
-                { value: 'roles', label: 'Команда' },
-                { value: 'files', label: 'Файлы' },
-              ]}
+              options={leftTabOptions}
               onChange={handleTabSwitch}
               isMobile
             />

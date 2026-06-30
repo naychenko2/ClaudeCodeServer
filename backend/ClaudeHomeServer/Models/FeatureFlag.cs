@@ -23,14 +23,13 @@ public static class FeatureFlagCatalog
 {
     public static readonly IReadOnlyList<FeatureFlagDefinition> All =
     [
-        // Пример-заглушка: показывает рецепт и служит для проверки сквозного потока.
-        // Удали или замени реальными флагами по мере появления фич.
         new FeatureFlagDefinition(
-            Key: "example-flag",
-            Title: "Пример фич-флага",
-            Description: "Демонстрационный флаг для проверки системы. По умолчанию выключен.",
+            Key: "roles",
+            Title: "Команда (роли-собеседники)",
+            Description: "Отдельный таб «Команда»: создавай роли-персонажи (имя, аватар, характер, " +
+                         "компетенции из агентов) и веди с ними отдельные чаты.",
             Default: false,
-            Stage: "dev"),
+            Stage: "beta"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

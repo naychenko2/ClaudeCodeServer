@@ -437,6 +437,48 @@ function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boo
   );
 }
 
+// Мобильный объединённый бейдж: Claude и fal.ai одной компактной пилюлей с разделителем.
+// Сжимается (minWidth:0 + ellipsis), не распирает узкий тулбар. Клик открывает окно «Использование».
+function CombinedCostBadge({ cost, falCost, billing, windows }: {
+  cost: CostStats; falCost: FalCostStats; billing: ClaudeBilling; windows: RateWindow[];
+}) {
+  const worst = worstWindow(windows);
+  const hasClaude = cost.cost > 0 || !!worst;
+  const hasFal = falCost.total > 0;
+  if (!hasClaude && !hasFal) return null;
+  const sub = billing === 'subscription';
+  const tone = worst && worst.level !== 'normal' ? worst.level : undefined;
+  const toneBg = tone === 'danger' ? RATE_COLORS.danger.bg : tone === 'warn' ? RATE_COLORS.warn.bg : C.bgWhite;
+  const toneBorder = tone === 'danger' ? RATE_COLORS.danger.border : tone === 'warn' ? RATE_COLORS.warn.border : C.border;
+  return (
+    <button
+      type="button"
+      onClick={() => window.dispatchEvent(new Event('open-fal-stats'))}
+      title="Использование Claude + fal.ai — открыть статистику"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5, padding: '3px 9px', minWidth: 0, flexShrink: 1,
+        overflow: 'hidden', whiteSpace: 'nowrap',
+        background: toneBg, border: `1px solid ${toneBorder}`, borderRadius: R.lg,
+        cursor: 'pointer', fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: '#B05C38',
+      }}
+    >
+      {hasClaude && (
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {cost.cost > 0 ? (sub ? '≈' : '') + fmtUsd(cost.cost) : '—'}
+          {tone && worst && <span style={{ marginLeft: 4, color: RATE_COLORS[worst.level].text }}>{worst.pct}%</span>}
+        </span>
+      )}
+      {hasClaude && hasFal && <span style={{ color: C.textMuted, flexShrink: 0 }}>·</span>}
+      {hasFal && (
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <span style={{ fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.3, marginRight: 3 }}>fal</span>
+          {fmtUsd(falCost.total)}
+        </span>
+      )}
+    </button>
+  );
+}
+
 interface ChatHeaderBarProps {
   session: Session;
   project: Project;
@@ -499,8 +541,14 @@ function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBil
           </span>
         </div>
       )}
-      <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />
-      <FalCostBadge stats={falCost} isMobile={isMobile} />
+      {isMobile ? (
+        <CombinedCostBadge cost={cost} falCost={falCost} billing={billing} windows={rateWindows} />
+      ) : (
+        <>
+          <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />
+          <FalCostBadge stats={falCost} isMobile={isMobile} />
+        </>
+      )}
       {onToggleArtifacts && (
         <ToolbarIconButton onClick={onToggleArtifacts} title="Артефакты сессии" isMobile={isMobile} active={artifactsOpen}>
           <div style={{ position: 'relative', display: 'flex' }}>

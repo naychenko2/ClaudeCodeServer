@@ -6,7 +6,6 @@ import { ChatPanel } from '../components/ChatPanel';
 import { FileViewer } from '../components/FileViewer';
 import { ArtifactsPanel } from '../components/ArtifactsPanel';
 import { KnowledgePanel } from '../components/KnowledgePanel';
-import { SkillsPanel } from '../components/SkillsPanel';
 import { UsageScreen } from '../components/UsageScreen';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
@@ -106,7 +105,6 @@ export function WorkspacePage({ project, onGoToProjects }: Props) {
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
   const [chatFlex, setChatFlex] = useState(1); // 1:1 = 50/50 по умолчанию
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
-  const [showSkillsModal, setShowSkillsModal] = useState(false);
   const [showUsage, setShowUsage] = useState(false);
   // Ссылка «Подробная статистика» в pop-up бейджа fal.ai открывает единый экран «Использование»
   useEffect(() => {
@@ -502,22 +500,6 @@ const windowWidth = useWindowWidth();
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
               </svg>
             </button>
-            <button
-              onClick={() => setShowSkillsModal(true)}
-              title="Скиллы и агенты"
-              style={{ width: 22, height: 22, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"/>
-                <path d="m14 7 3 3"/>
-                <path d="M5 6v4"/>
-                <path d="M19 14v4"/>
-                <path d="M10 2v2"/>
-                <path d="M7 8H3"/>
-                <path d="M21 16h-4"/>
-                <path d="M11 3H9"/>
-              </svg>
-            </button>
           </div>
           <PillSwitch<LeftTab>
             value={leftTab}
@@ -565,19 +547,12 @@ const windowWidth = useWindowWidth();
               isMobile
             />
             <button
-              onClick={() => setShowSkillsModal(true)}
-              title="Скиллы и агенты"
+              onClick={() => setShowUsage(true)}
+              title="Использование (Claude + fal.ai)"
               style={{ width: 34, height: 34, border: 'none', borderRadius: 9, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"/>
-                <path d="m14 7 3 3"/>
-                <path d="M5 6v4"/>
-                <path d="M19 14v4"/>
-                <path d="M10 2v2"/>
-                <path d="M7 8H3"/>
-                <path d="M21 16h-4"/>
-                <path d="M11 3H9"/>
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
               </svg>
             </button>
           </div>
@@ -622,23 +597,7 @@ const windowWidth = useWindowWidth();
             </div>
           </>
         )}
-        {/* Модальное окно скиллов/агентов */}
-        {showSkillsModal && (
-          <div
-            style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-            onClick={e => { if (e.target === e.currentTarget) setShowSkillsModal(false); }}
-          >
-            <div style={{ width: '100%', maxWidth: 600, height: 'min(70vh, 600px)', background: '#FFFFFF', borderRadius: 20, boxShadow: '0 24px 60px rgba(23,19,15,0.40)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-                <span style={{ fontSize: 15, fontWeight: 700, color: C.textHeading, fontFamily: FONT.sans }}>Скиллы и агенты</span>
-                <button onClick={() => setShowSkillsModal(false)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 18, padding: '0 4px', borderRadius: 6 }}>✕</button>
-              </div>
-              <div style={{ flex: 1, overflow: 'hidden' }}>
-                <SkillsPanel projectId={project.id} />
-              </div>
-            </div>
-          </div>
-        )}
+        {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
         {editProjectOpen && (
           <EditDialog
             project={projectForEdit}
@@ -776,23 +735,6 @@ const windowWidth = useWindowWidth();
         </>
       )}
 
-      {/* Модальное окно скиллов/агентов */}
-      {showSkillsModal && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-          onClick={e => { if (e.target === e.currentTarget) setShowSkillsModal(false); }}
-        >
-          <div style={{ width: '100%', maxWidth: 600, height: 'min(70vh, 600px)', background: '#FFFFFF', borderRadius: 20, boxShadow: '0 24px 60px rgba(23,19,15,0.40)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <div style={{ padding: '14px 20px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-              <span style={{ fontSize: 15, fontWeight: 700, color: C.textHeading, fontFamily: FONT.sans }}>Скиллы и агенты</span>
-              <button onClick={() => setShowSkillsModal(false)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 18, padding: '0 4px', borderRadius: 6 }}>✕</button>
-            </div>
-            <div style={{ flex: 1, overflow: 'hidden' }}>
-              <SkillsPanel projectId={project.id} />
-            </div>
-          </div>
-        </div>
-      )}
       {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
       {editProjectOpen && (
         <EditDialog

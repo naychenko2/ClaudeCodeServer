@@ -38,7 +38,7 @@ public class KnowledgeController(
 
         try
         {
-            var docs = await knowledge.ListDocumentsAsync(wk.DifyDatasetId);
+            var docs = await knowledge.ListAllDocumentsAsync(wk.DifyDatasetId);
             var tags = wk.DocumentTags ?? new Dictionary<string, List<string>>();
             var docsDto = docs.Data.Select(d => new
             {

@@ -257,6 +257,26 @@ public class KnowledgeService
             ?? new DifyDocumentsPage([], false, 0);
     }
 
+    // Возвращает ВСЕ документы датасета, обходя пагинацию Dify (одна страница ограничена).
+    // Без этого статус БЗ показывал только первую страницу, и недавно добавленные документы
+    // в крупных датасетах (>limit) были не видны на вкладке знаний.
+    public async Task<DifyDocumentsPage> ListAllDocumentsAsync(string datasetId)
+    {
+        const int pageSize = 100;
+        var all = new List<DifyDocumentItem>();
+        var page = 1;
+        var total = 0;
+        while (true)
+        {
+            var p = await ListDocumentsAsync(datasetId, page, pageSize);
+            all.AddRange(p.Data);
+            total = p.Total;
+            if (!p.HasMore || p.Data.Count == 0) break;
+            page++;
+        }
+        return new DifyDocumentsPage(all, false, total);
+    }
+
     public async Task DeleteDocumentAsync(string datasetId, string documentId)
     {
         var client = CreateClient();

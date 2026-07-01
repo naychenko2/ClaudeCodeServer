@@ -628,6 +628,101 @@ function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   );
 }
 
+// Диаграмма Mermaid: клиентский рендер в SVG. Библиотека грузится лениво (тяжёлая),
+// только когда в чате реально встретился блок ```mermaid.
+let mermaidInited = false;
+let mermaidSeq = 0;
+async function loadMermaid() {
+  const mermaid = (await import('mermaid')).default;
+  if (!mermaidInited) {
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict', // санитизация SVG, без исполнения click-биндингов
+      theme: 'base',
+      fontFamily: FONT.sans,
+      themeVariables: {
+        background: 'transparent',
+        primaryColor: '#EDE7DA',
+        primaryBorderColor: C.border,
+        primaryTextColor: C.textPrimary,
+        lineColor: C.accent,
+        secondaryColor: '#F4F0E8',
+        tertiaryColor: '#F4F0E8',
+        fontSize: '13px',
+      },
+    });
+    mermaidInited = true;
+  }
+  return mermaid;
+}
+
+function MermaidDiagram({ code }: { code: string }) {
+  const [svg, setSvg] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [view, setView] = useState<'diagram' | 'code'>('diagram');
+
+  useEffect(() => {
+    let cancelled = false;
+    setFailed(false);
+    // Дебаунс: во время стриминга код досылается по частям и невалиден —
+    // не дёргаем рендер на каждую дельту.
+    const t = setTimeout(async () => {
+      try {
+        const mermaid = await loadMermaid();
+        if (cancelled) return;
+        const ok = await mermaid.parse(code, { suppressErrors: true });
+        if (cancelled) return;
+        if (!ok) { setFailed(true); return; }
+        const { svg: rendered } = await mermaid.render(`mermaid-svg-${++mermaidSeq}`, code);
+        if (!cancelled) { setSvg(rendered); setFailed(false); }
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    }, 120);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [code]);
+
+  const codeBlock = (
+    <pre style={{ background: C.outputBg, border: `1px solid ${C.outputBorder}`, borderRadius: 8, padding: '10px 14px', margin: 0, overflowX: 'auto' }}>
+      <code style={{ fontFamily: FONT.mono, fontSize: 12.5, color: C.textPrimary, lineHeight: 1.5 }}>{code}</code>
+    </pre>
+  );
+
+  // Пока диаграмма не отрендерилась (стриминг) или невалидна — показываем
+  // исходный код как фолбэк, чтобы чат не падал и не мигал. Переключать нечего.
+  if (failed || !svg) {
+    return <div style={{ margin: '6px 0' }}>{codeBlock}</div>;
+  }
+
+  // Диаграмма готова — даём тумблер «диаграмма ⇄ код».
+  const showCode = view === 'code';
+  return (
+    <div style={{ margin: '8px 0' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+        <button
+          type="button"
+          onClick={() => setView(showCode ? 'diagram' : 'code')}
+          title={showCode ? 'Показать диаграмму' : 'Показать исходный код'}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+            background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 6,
+            padding: '2px 8px', fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted,
+            lineHeight: 1.6,
+          }}
+        >
+          {showCode ? '◇ Диаграмма' : '</> Код'}
+        </button>
+      </div>
+      {showCode
+        ? codeBlock
+        : (
+          <div className="cc-mermaid" style={{ overflowX: 'auto', textAlign: 'center' }}
+            dangerouslySetInnerHTML={{ __html: svg }} />
+        )}
+    </div>
+  );
+}
+
 // Рендер текста Claude с поддержкой Markdown
 function MarkdownContent({ text }: { text: string }) {
   return (
@@ -656,6 +751,9 @@ function MarkdownContent({ text }: { text: string }) {
         code: ({ className, children, ...props }) => {
           const language = /language-(\w+)/.exec(className || '')?.[1];
           const text = String(children).replace(/\n$/, '');
+          if (language === 'mermaid') {
+            return <MermaidDiagram code={text} />;
+          }
           if (language) {
             return (
               <SyntaxHighlighter

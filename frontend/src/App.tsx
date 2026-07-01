@@ -101,7 +101,9 @@ export default function App() {
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
     navReplace({ screen: hubTab === 'chats' ? 'chats' : 'projects' })
-    if (project) {
+    // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
+    // проектом — при hubTab==='chats' проект «спит» и в истории не отражается.
+    if (hubTab === 'projects' && project) {
       navPush({ screen: 'project', project, view: 'sidebar', file: null })
       const ws = loadWorkspaceState(project.id)
       if (ws?.openFile) navPush({ screen: 'project', project, view: 'sidebar', file: ws.openFile })
@@ -115,23 +117,24 @@ export default function App() {
     const onPop = (e: PopStateEvent) => {
       const s = e.state as NavSnapshot | null
       if (s?.screen === 'project' && s.project) {
+        // Возврат в открытый проект
         if (project?.id !== s.project.id) {
           localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(s.project))
           setProject(s.project)
         }
-      } else {
-        if (project) {
-          localStorage.removeItem(OPEN_PROJECT_KEY)
-          setProject(null)
-        }
-        // Вне проекта — синхронизируем вкладку хаба со снимком истории
-        if (s?.screen === 'chats') { localStorage.setItem(HUB_TAB_KEY, 'chats'); setHubTab('chats') }
-        else if (s?.screen === 'projects') { localStorage.setItem(HUB_TAB_KEY, 'projects'); setHubTab('projects') }
+        if (hubTab !== 'projects') { localStorage.setItem(HUB_TAB_KEY, 'projects'); setHubTab('projects') }
+      } else if (s?.screen === 'chats') {
+        // Раздел «Чаты» — открытый проект «спит», его не сбрасываем (навигационная память)
+        if (hubTab !== 'chats') { localStorage.setItem(HUB_TAB_KEY, 'chats'); setHubTab('chats') }
+      } else if (s?.screen === 'projects') {
+        // Список проектов — явный выход из проекта
+        if (project) { localStorage.removeItem(OPEN_PROJECT_KEY); setProject(null) }
+        if (hubTab !== 'projects') { localStorage.setItem(HUB_TAB_KEY, 'projects'); setHubTab('projects') }
       }
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [project])
+  }, [project, hubTab])
 
   // Прогрев/синхронизация: при входе и при возврате в онлайн — все проекты, начиная с текущего
   useEffect(() => {
@@ -165,23 +168,20 @@ export default function App() {
     navPush({ screen: 'project', project: p, view: 'sidebar', file: null })
     setProject(p)
   }
+  // Явный выход из открытого проекта к списку проектов (кнопка «К проектам» в сайдбаре)
   const goToProjects = () => {
     localStorage.removeItem(OPEN_PROJECT_KEY)
-    navReplace({ screen: hubTab === 'chats' ? 'chats' : 'projects' })
+    localStorage.setItem(HUB_TAB_KEY, 'projects')
+    setHubTab('projects')
+    navReplace({ screen: 'projects' })
     setProject(null)
   }
+  // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
+  // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTab) => {
     localStorage.setItem(HUB_TAB_KEY, t)
     setHubTab(t)
     navReplace({ screen: t === 'chats' ? 'chats' : 'projects' })
-  }
-  // Выход из открытого проекта сразу в нужный раздел хаба (переключатель в шапке проекта)
-  const exitToHub = (t: HubTab) => {
-    localStorage.removeItem(OPEN_PROJECT_KEY)
-    localStorage.setItem(HUB_TAB_KEY, t)
-    setHubTab(t)
-    navReplace({ screen: t === 'chats' ? 'chats' : 'projects' })
-    setProject(null)
   }
   const logout = () => {
     localStorage.removeItem('cc_token')
@@ -206,10 +206,10 @@ export default function App() {
         ? <div style={{ minHeight: '100vh', background: '#F4F0E8' }} />
         : !auth
           ? <LoginPage onConnect={setAuth} />
-          : project
-            ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={exitToHub} />
-            : hubTab === 'chats'
-              ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+          : hubTab === 'chats'
+            ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+            : project
+              ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
               : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
       }
     </>

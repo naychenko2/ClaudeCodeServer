@@ -11,6 +11,7 @@ import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/sign
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
 import { api } from '../lib/api';
 import { C, FONT } from '../lib/design';
+import { useSidebarWidth } from '../lib/sidebarWidth';
 import { PillSwitch } from '../components/Toolbar';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
@@ -176,12 +177,8 @@ const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth < 768;
   const isTablet = windowWidth >= 768 && windowWidth < 1200;
-  // Ширина сайдбара — перетаскиваемая, сохраняется между сессиями
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const v = localStorage.getItem('cc_sidebar_width');
-    return v ? Math.max(220, Math.min(520, Number(v))) : 300;
-  });
-  useEffect(() => { localStorage.setItem('cc_sidebar_width', String(sidebarWidth)); }, [sidebarWidth]);
+  // Ширина сайдбара — общая для всех областей (перетаскиваемая, персистится)
+  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
 
   // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут) | open (drawer поверх контента)
   // Персистируется только 'pinned'/'collapsed'; 'open' — временное состояние

@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { Project, ProjectGroup, Session, AuthState } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
-import { C, R, FONT, MODAL_W } from '../lib/design';
-import { Modal } from '../components/ui';
+import { C, R, FONT } from '../lib/design';
+import { useSidebarWidth } from '../lib/sidebarWidth';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ProjectCard } from '../features/projects/ProjectCard';
@@ -13,17 +13,14 @@ import { ProjectRow } from '../features/projects/ProjectRow';
 import { GroupHeader } from '../features/projects/GroupHeader';
 import { ProjectSidebar } from '../features/projects/ProjectSidebar';
 import type { ProjectView } from '../features/projects/ProjectSidebar';
-import { CreateDialog } from '../features/projects/dialogs/CreateDialog';
-import { AddExistingDialog } from '../features/projects/dialogs/AddExistingDialog';
+import { AddProjectDialog } from '../features/projects/dialogs/AddProjectDialog';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { DeleteDialog } from '../features/projects/dialogs/DeleteDialog';
 import { MoveToGroupDialog } from '../features/projects/dialogs/MoveToGroupDialog';
 import { GroupManagerDialog } from '../features/projects/dialogs/GroupManagerDialog';
 
 type ActiveDialog =
-  | { type: 'addChoose' }
-  | { type: 'create' }
-  | { type: 'addExisting' }
+  | { type: 'add' }
   | { type: 'edit'; project: Project }
   | { type: 'delete'; project: Project }
   | { type: 'move'; project: Project }
@@ -55,9 +52,25 @@ function useWide(bp = 900) {
   return wide;
 }
 
+// Ширина элемента (для решения о числе колонок карточек)
+function useMeasuredWidth<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(entries => { for (const e of entries) setWidth(e.contentRect.width); });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width] as const;
+}
+
 export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const online = useOnline();
   const wide = useWide();
+  const [listRef, listW] = useMeasuredWidth<HTMLDivElement>();
+  const twoCol = listW >= 760;   // две колонки, когда панель достаточно широкая
   const [projects, setProjects] = useState<Project[]>([]);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [activeSessions, setActiveSessions] = useState<Set<string>>(new Set());
@@ -67,6 +80,31 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'offline' | 'error'>('loading');
   const [retryKey, setRetryKey] = useState(0);
+
+  // Сайдбар: общая ширина + режим (закреплён / свёрнут / drawer), как в чатах и воркспейсе
+  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
+  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed' | 'open'>(() =>
+    localStorage.getItem('cc_projects_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
+  useEffect(() => { if (sidebarMode !== 'open') localStorage.setItem('cc_projects_sidebar_mode', sidebarMode); }, [sidebarMode]);
+  const [draggingSplitter, setDraggingSplitter] = useState(false);
+  const handleSidebarSplitterMouseDown = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    setDraggingSplitter(true);
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    const onMove = (ev: MouseEvent) => setSidebarWidth(startW + (ev.clientX - startX));
+    const onUp = () => {
+      setDraggingSplitter(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   useEffect(() => {
     setLoadState('loading');
@@ -136,34 +174,8 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   // ===== Общие диалоги =====
   const dialogs = (
     <>
-      {activeDialog?.type === 'addChoose' && (
-        <Modal title="Добавить проект" width={MODAL_W.form} onClose={closeDialog} footer={null}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <AddChoice
-              title="Новый проект"
-              subtitle="Создать новую папку проекта"
-              icon={<><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></>}
-              onClick={() => setActiveDialog({ type: 'create' })}
-            />
-            <AddChoice
-              title="Существующая папка"
-              subtitle="Добавить проект по пути к папке"
-              icon={<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>}
-              onClick={() => setActiveDialog({ type: 'addExisting' })}
-            />
-          </div>
-        </Modal>
-      )}
-      {activeDialog?.type === 'create' && (
-        <CreateDialog
-          groups={orderedGroups}
-          defaultGroupId={view !== 'all' && view !== 'sleeping' ? view : undefined}
-          onSuccess={p => { setProjects(prev => [...prev, p]); closeDialog(); }}
-          onClose={closeDialog}
-        />
-      )}
-      {activeDialog?.type === 'addExisting' && (
-        <AddExistingDialog
+      {activeDialog?.type === 'add' && (
+        <AddProjectDialog
           groups={orderedGroups}
           defaultGroupId={view !== 'all' && view !== 'sleeping' ? view : undefined}
           onSuccess={p => { setProjects(prev => [...prev, p]); closeDialog(); }}
@@ -217,7 +229,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
 
   const addButton = online && loadState === 'ok' && (
     <button
-      onClick={() => setActiveDialog({ type: 'addChoose' })}
+      onClick={() => setActiveDialog({ type: 'add' })}
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
         border: `1.5px dashed ${C.dashed}`, borderRadius: 16, padding: 15, marginTop: 3,
@@ -237,17 +249,59 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
     return (
       <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
-        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-          <ProjectSidebar
-            view={view}
-            onSelect={setView}
-            total={filtered.length}
-            groups={byGroup.map(({ group, items }) => ({ group, count: items.length }))}
-            sleepingCount={ungrouped.length}
-          />
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
+          {(() => {
+            const sidebar = (
+              <ProjectSidebar
+                view={view}
+                onSelect={v => { setView(v); if (sidebarMode === 'open') setSidebarMode('collapsed'); }}
+                total={filtered.length}
+                groups={byGroup.map(({ group, items }) => ({ group, count: items.length }))}
+                sleepingCount={ungrouped.length}
+                onCollapse={() => setSidebarMode('collapsed')}
+                onPin={sidebarMode === 'open' ? () => setSidebarMode('pinned') : undefined}
+              />
+            );
+            return (
+              <>
+                {/* Закреплён: в потоке + перетаскиваемый сплиттер */}
+                {sidebarMode === 'pinned' && (
+                  <>
+                    <div style={{ width: sidebarWidth, flexShrink: 0, height: '100%' }}>{sidebar}</div>
+                    <Splitter active={draggingSplitter} onMouseDown={handleSidebarSplitterMouseDown} />
+                  </>
+                )}
+                {/* Свёрнут/drawer: поверх контента */}
+                {sidebarMode !== 'pinned' && (
+                  <div style={{
+                    position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10,
+                    width: Math.min(sidebarWidth, 320),
+                    transform: sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-110%)',
+                    transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                    boxShadow: sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
+                    borderRight: `1px solid ${C.border}`,
+                  }}>{sidebar}</div>
+                )}
+                {sidebarMode === 'open' && (
+                  <div onClick={() => setSidebarMode('collapsed')} style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }} />
+                )}
+              </>
+            );
+          })()}
           <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: C.bgMain }}>
             {/* Шапка панели: заголовок + сортировка + Проект */}
             <div style={{ flexShrink: 0, padding: '20px 26px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
+              {sidebarMode === 'collapsed' && (
+                <button
+                  onClick={() => setSidebarMode('open')}
+                  title="Показать панель"
+                  style={{ flexShrink: 0, width: 34, height: 34, border: 'none', borderRadius: 9, background: C.bgPanel, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: -4 }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                    <path d="M2 4h12M2 8h12M2 12h12" stroke={C.textMuted} strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                </button>
+              )}
               <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 24, color: C.textHeading, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {title}
               </div>
@@ -264,7 +318,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
               </button>
               {online && (
                 <button
-                  onClick={() => setActiveDialog({ type: 'addChoose' })}
+                  onClick={() => setActiveDialog({ type: 'add' })}
                   style={{
                     flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 15px',
                     borderRadius: R.lg, background: C.accent, color: C.onAccent, fontSize: 13.5, fontWeight: 600,
@@ -280,7 +334,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             </div>
 
             {/* Список секций */}
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 26px 18px' }}>
+            <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 26px 18px' }}>
               {loadState === 'offline' && retryBlock('Сервер недоступен — нет сохранённых данных для офлайн-доступа')}
               {loadState === 'error' && retryBlock('Ошибка загрузки проектов')}
               {loadState === 'ok' && !hasAny && emptyBlock(search ? `Ничего не найдено по запросу «${search}»` : 'Нет проектов. Добавьте первый.')}
@@ -293,7 +347,9 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                     <span style={{ fontSize: 11.5, color: '#9A8F7E' }}>{sec.items.length}</span>
                     <div style={{ flex: 1, height: 1, background: '#E4DDCE' }} />
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={twoCol
+                    ? { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }
+                    : { display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {sec.items.map(p => (
                       <ProjectRow
                         key={p.id}
@@ -425,32 +481,17 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   );
 }
 
-// Плитка выбора способа добавления проекта (в диалоге «Добавить проект»)
-function AddChoice({ title, subtitle, icon, onClick }: { title: string; subtitle: string; icon: ReactNode; onClick: () => void }) {
+// Вертикальный ресайз-сплиттер сайдбара (тонкая линия, accent при наведении/перетаскивании)
+function Splitter({ active, onMouseDown }: { active: boolean; onMouseDown: (e: ReactMouseEvent) => void }) {
   const [hover, setHover] = useState(false);
   return (
-    <button
-      onClick={onClick}
+    <div
+      onMouseDown={onMouseDown}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 13, textAlign: 'left', width: '100%',
-        background: hover ? C.bgSelected : C.bgWhite, border: `1px solid ${C.border}`,
-        borderRadius: R.xl, padding: '13px 14px', cursor: 'pointer', fontFamily: FONT.sans,
-      }}
+      style={{ flexShrink: 0, width: 6, cursor: 'col-resize', display: 'flex', justifyContent: 'center', zIndex: 5 }}
     >
-      <span style={{
-        width: 38, height: 38, borderRadius: R.lg, flexShrink: 0, background: C.accentLight, color: C.accent,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          {icon}
-        </svg>
-      </span>
-      <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: 'block', fontSize: 15, fontWeight: 600, color: C.textHeading }}>{title}</span>
-        <span style={{ display: 'block', fontSize: 12.5, color: C.textMuted, marginTop: 2 }}>{subtitle}</span>
-      </span>
-    </button>
+      <div style={{ width: 1, alignSelf: 'stretch', background: active || hover ? C.accent : C.divider, transition: 'background 0.15s' }} />
+    </div>
   );
 }

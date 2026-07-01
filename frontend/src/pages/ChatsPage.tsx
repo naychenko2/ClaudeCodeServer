@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { joinUser, leaveUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { C, FONT } from '../lib/design';
+import { useSidebarWidth } from '../lib/sidebarWidth';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ChatList } from '../components/ChatList';
@@ -77,12 +78,8 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (sidebarMode !== 'open') localStorage.setItem('cc_chats_sidebar_mode', sidebarMode);
   }, [sidebarMode]);
 
-  // Ширина сайдбара (десктоп, режим pinned) — перетаскиваемая, персистится
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const n = parseInt(localStorage.getItem('cc_chats_sidebar_width') ?? '', 10);
-    return Number.isFinite(n) ? Math.max(220, Math.min(480, n)) : 262;
-  });
-  useEffect(() => { localStorage.setItem('cc_chats_sidebar_width', String(sidebarWidth)); }, [sidebarWidth]);
+  // Ширина сайдбара — общая для всех областей (перетаскиваемая, персистится)
+  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
   const [draggingSplitter, setDraggingSplitter] = useState(false);
 
   const handleSidebarSplitterMouseDown = (e: ReactMouseEvent) => {

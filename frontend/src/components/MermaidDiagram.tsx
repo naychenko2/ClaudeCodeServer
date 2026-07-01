@@ -27,6 +27,21 @@ async function loadMermaid() {
         secondaryColor: '#F4F0E8',
         tertiaryColor: '#F4F0E8',
         fontSize: '13px',
+        // xychart-beta: дефолт темы base — plotColorPalette #FFF4DD (бледно-жёлтый),
+        // не виден на светлом фоне. Задаём читаемую палитру и цвета осей под тему.
+        xyChart: {
+          backgroundColor: 'transparent',
+          titleColor: C.textHeading,
+          xAxisLabelColor: C.textPrimary,
+          xAxisTitleColor: C.textPrimary,
+          xAxisTickColor: C.border,
+          xAxisLineColor: C.border,
+          yAxisLabelColor: C.textPrimary,
+          yAxisTitleColor: C.textPrimary,
+          yAxisTickColor: C.border,
+          yAxisLineColor: C.border,
+          plotColorPalette: '#D97757, #5B8C6E, #4A7BA8, #B5843B, #9A5B3B',
+        },
       },
     });
     mermaidInited = true;
@@ -144,6 +159,16 @@ function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void })
   );
 }
 
+// Мягкая правка распространённых грабель синтаксиса. Применяется ТОЛЬКО как запасной
+// вариант, если исходник не распарсился — валидные диаграммы не трогаем.
+// quadrantChart: круглые скобки в title/осях/квадрантах ломают парсер, а структурного
+// смысла в этом типе не несут (координаты — в []), поэтому убираем их.
+function sanitizeMermaid(code: string): string {
+  const first = code.replace(/^\s+/, '').split('\n', 1)[0].trim();
+  if (first.startsWith('quadrantChart')) return code.replace(/[()]/g, '');
+  return code;
+}
+
 // Рендер блока mermaid: SVG + тумблер «диаграмма ⇄ код» + разворот на весь экран с зумом.
 // Используется и в чате (```mermaid), и в файловом менеджере (.mmd).
 export function MermaidDiagram({ code }: { code: string }) {
@@ -166,10 +191,18 @@ export function MermaidDiagram({ code }: { code: string }) {
       try {
         const mermaid = await loadMermaid();
         if (cancelled) return;
-        const ok = await mermaid.parse(code, { suppressErrors: true });
+        // Пробуем как есть; если не парсится — пробуем «подчищенный» вариант (запасной путь).
+        let src = code;
+        let ok = !!(await mermaid.parse(code, { suppressErrors: true }));
         if (cancelled) return;
+        if (!ok) {
+          const cleaned = sanitizeMermaid(code);
+          if (cleaned !== code && !!(await mermaid.parse(cleaned, { suppressErrors: true }))) { ok = true; src = cleaned; }
+          if (cancelled) return;
+        }
         if (!ok) { setFailed(true); return; }
-        const { svg: rendered } = await mermaid.render(`mermaid-svg-${++mermaidSeq}`, code);
+        const { svg: rendered } = await mermaid.render(`mermaid-svg-${++mermaidSeq}`, src);
+        // Кэшируем по ОРИГИНАЛЬНОМУ коду (ключ = проп code).
         if (!cancelled) { mermaidSvgCache.set(code, rendered); setSvg(rendered); setFailed(false); }
       } catch {
         if (!cancelled) setFailed(true);
@@ -184,9 +217,20 @@ export function MermaidDiagram({ code }: { code: string }) {
     </pre>
   );
 
-  // Пока диаграмма не отрендерилась (стриминг) или невалидна — показываем
-  // исходный код как фолбэк, чтобы ничего не падало и не мигало. Переключать нечего.
-  if (failed || !svg) {
+  // Не распарсилось (failed ставится только после дебаунса — во время стриминга код
+  // меняется чаще, таймер сбрасывается, плашка не мигает). Показываем плашку + исходник.
+  if (failed) {
+    return (
+      <div style={{ margin: '6px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontFamily: FONT.sans, fontSize: 12, color: '#9A5B3B' }}>
+          ⚠ Не удалось построить диаграмму — показан исходный код
+        </div>
+        {codeBlock}
+      </div>
+    );
+  }
+  // Ещё рендерится (стриминг/загрузка mermaid) — тихо показываем код как заглушку, без плашки.
+  if (!svg) {
     return <div style={{ margin: '6px 0' }}>{codeBlock}</div>;
   }
 

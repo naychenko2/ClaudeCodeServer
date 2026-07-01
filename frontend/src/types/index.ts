@@ -13,12 +13,21 @@ export interface Project {
   relativePath?: string;
   createdAt: string;
   updatedAt: string;
+  groupId?: string;          // группа проекта; отсутствует = без группы
   sessionCount?: number;
   difyDatasetId?: string;
   systemPrompt?: string;
   showHiddenFiles?: boolean;
   permissionRules?: PermissionRule[];
   builtInSystemPrompt?: string;
+}
+
+// Группа проектов на вкладке «Проекты»
+export interface ProjectGroup {
+  id: string;
+  name: string;
+  color: string;   // hex из палитры GROUP_COLORS
+  order: number;
 }
 
 // Тип доступа к Claude: подписка (стоимость ≈ API-эквивалент) или оплата по API-ключу (реальная цена)

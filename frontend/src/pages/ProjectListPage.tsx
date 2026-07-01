@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Project, Session, AuthState } from '../types';
+import type { Project, ProjectGroup, Session, AuthState } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
@@ -7,16 +7,21 @@ import { C, R, FONT } from '../lib/design';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ProjectCard } from '../features/projects/ProjectCard';
+import { GroupHeader } from '../features/projects/GroupHeader';
 import { CreateDialog } from '../features/projects/dialogs/CreateDialog';
 import { AddExistingDialog } from '../features/projects/dialogs/AddExistingDialog';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { DeleteDialog } from '../features/projects/dialogs/DeleteDialog';
+import { MoveToGroupDialog } from '../features/projects/dialogs/MoveToGroupDialog';
+import { GroupManagerDialog } from '../features/projects/dialogs/GroupManagerDialog';
 
 type ActiveDialog =
   | { type: 'create' }
   | { type: 'addExisting' }
   | { type: 'edit'; project: Project }
   | { type: 'delete'; project: Project }
+  | { type: 'move'; project: Project }
+  | { type: 'groups' }
   | null;
 
 interface Props {
@@ -26,9 +31,12 @@ interface Props {
   onHubTab: (t: HubTab) => void;
 }
 
+const ACTIVE_STATUSES = new Set(['starting', 'working', 'active', 'waiting']);
+
 export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const online = useOnline();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [activeSessions, setActiveSessions] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
@@ -37,16 +45,16 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
 
   useEffect(() => {
     setLoadState('loading');
-    api.projects.list()
-      .then(async list => {
+    Promise.all([api.projects.list(), api.projectGroups.list().catch(() => [] as ProjectGroup[])])
+      .then(async ([list, grps]) => {
         setProjects(list);
+        setGroups(grps);
         setLoadState('ok');
         // Параллельно проверяем активные сессии
-        const ACTIVE = new Set(['starting', 'working', 'active', 'waiting']);
         const results = await Promise.allSettled(list.map(p => api.sessions.list(p.id)));
         const ids = new Set<string>();
         results.forEach((r, i) => {
-          if (r.status === 'fulfilled' && (r.value as Session[]).some((s: Session) => ACTIVE.has(s.status))) {
+          if (r.status === 'fulfilled' && (r.value as Session[]).some((s: Session) => ACTIVE_STATUSES.has(s.status))) {
             ids.add(list[i].id);
           }
         });
@@ -62,13 +70,43 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
     p.rootPath.toLowerCase().includes(search.toLowerCase())
   );
 
-  // Сортировка: активные сверху, внутри каждой группы — по дате обновления
-  const activeProjects = filtered.filter(p => activeSessions.has(p.id))
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  const otherProjects = filtered.filter(p => !activeSessions.has(p.id))
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  // Сортировка внутри блока: активные сверху, затем по дате обновления
+  const sortBlock = (arr: Project[]) => [...arr].sort((a, b) => {
+    const aa = activeSessions.has(a.id) ? 1 : 0;
+    const bb = activeSessions.has(b.id) ? 1 : 0;
+    if (aa !== bb) return bb - aa;
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+
+  const orderedGroups = [...groups].sort((a, b) => a.order - b.order);
+  // «Без группы» — нет groupId либо ссылка на удалённую группу
+  const ungrouped = sortBlock(filtered.filter(p => !p.groupId || !groups.some(g => g.id === p.groupId)));
+  const byGroup = orderedGroups.map(g => ({ group: g, items: sortBlock(filtered.filter(p => p.groupId === g.id)) }));
+
+  // Сплошной индекс для ротации цвета плитки — по порядку отрисовки
+  const colorIndex = new Map<string, number>();
+  let ci = 0;
+  ungrouped.forEach(p => colorIndex.set(p.id, ci++));
+  byGroup.forEach(({ items }) => items.forEach(p => colorIndex.set(p.id, ci++)));
 
   const closeDialog = () => setActiveDialog(null);
+  const upsertProject = (updated: Project) => setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
+
+  const renderCard = (p: Project) => (
+    <ProjectCard
+      key={p.id}
+      project={p}
+      index={colorIndex.get(p.id) ?? 0}
+      online={online}
+      hasActiveSession={activeSessions.has(p.id)}
+      onOpen={onOpen}
+      onMove={pr => setActiveDialog({ type: 'move', project: pr })}
+      onEdit={(pr, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: pr }); }}
+      onDelete={pr => setActiveDialog({ type: 'delete', project: pr })}
+    />
+  );
+
+  const hasAny = filtered.length > 0;
 
   return (
     <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -97,13 +135,13 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           />
         </div>
 
-        {/* Кнопки создания */}
+        {/* Кнопки создания + управление группами */}
         {online && (
-          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
             <button
               onClick={() => setActiveDialog({ type: 'create' })}
               style={{
-                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                flex: 1, minWidth: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
                 background: C.accent, color: C.onAccent, border: 'none',
                 borderRadius: R.xl, padding: '9px 16px',
                 fontSize: 14, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
@@ -118,7 +156,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             <button
               onClick={() => setActiveDialog({ type: 'addExisting' })}
               style={{
-                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                flex: 1, minWidth: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
                 background: 'none', color: C.textSecondary, border: `1px solid ${C.border}`,
                 borderRadius: R.xl, padding: '9px 16px',
                 fontSize: 14, fontWeight: 500, fontFamily: 'inherit', cursor: 'pointer',
@@ -129,6 +167,22 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
               </svg>
               Добавить существующий
             </button>
+            <button
+              onClick={() => setActiveDialog({ type: 'groups' })}
+              title="Управление группами"
+              style={{
+                flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                background: 'none', color: C.textSecondary, border: `1px solid ${C.border}`,
+                borderRadius: R.xl, padding: '9px 14px',
+                fontSize: 14, fontWeight: 500, fontFamily: 'inherit', cursor: 'pointer',
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
+                <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+              </svg>
+              Группы
+            </button>
           </div>
         )}
 
@@ -138,48 +192,25 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
         <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 14, paddingRight: 6 }}>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-          {/* Секция: активные проекты */}
-          {activeProjects.length > 0 && (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 2px 2px' }}>
-                <span className="pc-pulse" style={{ width: 7, height: 7, borderRadius: '50%', background: C.accent, flexShrink: 0 }} />
-                <style>{`@keyframes pc-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.5;transform:scale(1.15)}} .pc-pulse{animation:pc-pulse 1.5s ease-in-out infinite}`}</style>
-                <span style={{ fontSize: 11, fontWeight: 700, color: C.accent, letterSpacing: '0.06em', textTransform: 'uppercase', fontFamily: FONT.sans }}>Активные</span>
+          {/* Проекты без группы — сверху, без заголовка */}
+          {ungrouped.map(renderCard)}
+
+          {/* Группы по порядку */}
+          {byGroup.map(({ group, items }) => {
+            // Пустые группы прячем при активном поиске, показываем при пустом
+            if (items.length === 0 && search !== '') return null;
+            return (
+              <div key={group.id} style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+                <GroupHeader group={group} count={items.length} />
+                {items.map(renderCard)}
+                {items.length === 0 && (
+                  <div style={{ fontSize: 12.5, color: C.textMuted, padding: '0 2px 2px' }}>
+                    Пусто — переместите сюда проект через меню «⋯»
+                  </div>
+                )}
               </div>
-              {activeProjects.map((p, index) => (
-                <ProjectCard
-                  key={p.id}
-                  project={p}
-                  index={index}
-                  online={online}
-                  hasActiveSession
-                  onOpen={onOpen}
-                  onEdit={(p, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: p }); }}
-                  onDelete={p => setActiveDialog({ type: 'delete', project: p })}
-                />
-              ))}
-              {otherProjects.length > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 2px 2px' }}>
-                  <div style={{ flex: 1, height: 1, background: C.border }} />
-                  <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, letterSpacing: '0.05em', textTransform: 'uppercase', fontFamily: FONT.sans, flexShrink: 0 }}>Остальные</span>
-                  <div style={{ flex: 1, height: 1, background: C.border }} />
-                </div>
-              )}
-            </>
-          )}
-          {/* Секция: остальные проекты */}
-          {otherProjects.map((p, index) => (
-            <ProjectCard
-              key={p.id}
-              project={p}
-              index={index + activeProjects.length}
-              online={online}
-              hasActiveSession={false}
-              onOpen={onOpen}
-              onEdit={(p, e) => { e.stopPropagation(); setActiveDialog({ type: 'edit', project: p }); }}
-              onDelete={p => setActiveDialog({ type: 'delete', project: p })}
-            />
-          ))}
+            );
+          })}
         </div>
 
         {loadState === 'offline' && (
@@ -202,12 +233,12 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             </button>
           </div>
         )}
-        {loadState === 'ok' && filtered.length === 0 && search === '' && (
+        {loadState === 'ok' && !hasAny && search === '' && (
           <div style={{ textAlign: 'center', padding: '48px 0 0', color: C.textMuted, fontSize: 14 }}>
             Нет проектов. Создайте первый выше.
           </div>
         )}
-        {loadState === 'ok' && filtered.length === 0 && search !== '' && (
+        {loadState === 'ok' && !hasAny && search !== '' && (
           <div style={{ textAlign: 'center', padding: '48px 0 0', color: C.textMuted, fontSize: 14 }}>
             Ничего не найдено по запросу «{search}»
           </div>
@@ -219,12 +250,14 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
 
       {activeDialog?.type === 'create' && (
         <CreateDialog
+          groups={orderedGroups}
           onSuccess={p => { setProjects(prev => [...prev, p]); closeDialog(); }}
           onClose={closeDialog}
         />
       )}
       {activeDialog?.type === 'addExisting' && (
         <AddExistingDialog
+          groups={orderedGroups}
           onSuccess={p => { setProjects(prev => [...prev, p]); closeDialog(); }}
           onClose={closeDialog}
         />
@@ -232,7 +265,8 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
       {activeDialog?.type === 'edit' && (
         <EditDialog
           project={activeDialog.project}
-          onSuccess={updated => { setProjects(prev => prev.map(p => p.id === updated.id ? updated : p)); closeDialog(); }}
+          groups={orderedGroups}
+          onSuccess={updated => { upsertProject(updated); closeDialog(); }}
           onClose={closeDialog}
         />
       )}
@@ -240,6 +274,21 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
         <DeleteDialog
           project={activeDialog.project}
           onSuccess={() => { setProjects(prev => prev.filter(p => p.id !== activeDialog.project.id)); closeDialog(); }}
+          onClose={closeDialog}
+        />
+      )}
+      {activeDialog?.type === 'move' && (
+        <MoveToGroupDialog
+          project={activeDialog.project}
+          groups={orderedGroups}
+          onSuccess={updated => { upsertProject(updated); closeDialog(); }}
+          onClose={closeDialog}
+        />
+      )}
+      {activeDialog?.type === 'groups' && (
+        <GroupManagerDialog
+          groups={orderedGroups}
+          onChange={setGroups}
           onClose={closeDialog}
         />
       )}

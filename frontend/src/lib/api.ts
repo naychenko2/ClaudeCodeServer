@@ -1,4 +1,4 @@
-import type { Project, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -62,12 +62,24 @@ export const api = {
 
   projects: {
     list: () => request<Project[]>('/projects'),
-    create: (name: string, rootPath: string | null, createDirectory = false) =>
-      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[] }) =>
+    create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null) =>
+      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId }) }),
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
     getBuiltinPrompt: () => request<{ content: string }>('/projects/builtin-prompt'),
+  },
+
+  // Группы проектов
+  projectGroups: {
+    list: () => request<ProjectGroup[]>('/project-groups'),
+    create: (name: string, color: string) =>
+      request<ProjectGroup>('/project-groups', { method: 'POST', body: JSON.stringify({ name, color }) }),
+    update: (id: string, data: { name?: string; color?: string }) =>
+      request<ProjectGroup>(`/project-groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    reorder: (orderedIds: string[]) =>
+      request<ProjectGroup[]>('/project-groups/reorder', { method: 'POST', body: JSON.stringify({ orderedIds }) }),
+    delete: (id: string) => request<void>(`/project-groups/${id}`, { method: 'DELETE' }),
   },
 
   sessions: {

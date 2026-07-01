@@ -1,6 +1,7 @@
-import type { CSSProperties, MouseEvent } from 'react';
+import { useState } from 'react';
+import type { CSSProperties, MouseEvent, ReactNode } from 'react';
 import type { Project } from '../../types';
-import { C, R, FONT, SHADOW } from '../../lib/design';
+import { C, R, FONT, SHADOW, Z } from '../../lib/design';
 
 const TILE_COLORS: [string, string][] = [
   ['#E7F0E8', '#3F7A4F'],
@@ -19,14 +20,17 @@ interface Props {
   index: number;
   online: boolean;
   hasActiveSession?: boolean;
+  groupColor?: string;                       // цвет-точка группы у названия (если проект в группе)
   onOpen: (p: Project) => void;
+  onMove: (p: Project) => void;
   onEdit: (p: Project, e: MouseEvent) => void;
   onDelete: (p: Project) => void;
 }
 
-export function ProjectCard({ project: p, index, online, hasActiveSession, onOpen, onEdit, onDelete }: Props) {
+export function ProjectCard({ project: p, index, online, hasActiveSession, groupColor, onOpen, onMove, onEdit, onDelete }: Props) {
   const [tileBg, tileFg] = TILE_COLORS[index % TILE_COLORS.length];
   const letter = p.name.charAt(0).toUpperCase() || '?';
+  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
     <div
@@ -55,8 +59,13 @@ export function ProjectCard({ project: p, index, online, hasActiveSession, onOpe
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 16, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {p.name}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          {groupColor && (
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: groupColor, flexShrink: 0 }} />
+          )}
+          <div style={{ fontSize: 16, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {p.name}
+          </div>
         </div>
         {/* Статистика */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>
@@ -81,24 +90,54 @@ export function ProjectCard({ project: p, index, online, hasActiveSession, onOpe
       </div>
 
       {online && (
-        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
-          <button onClick={e => onEdit(p, e)} title="Редактировать" style={cardIconBtn}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+        <div style={{ position: 'relative', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+          <button onClick={() => setMenuOpen(v => !v)} title="Действия" style={cardIconBtn}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/>
             </svg>
           </button>
-          <button onClick={e => { e.stopPropagation(); onDelete(p); }} title="Удалить" style={cardIconBtn}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="3 6 5 6 21 6"/>
-              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-              <path d="M10 11v6"/>
-              <path d="M14 11v6"/>
-              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-            </svg>
-          </button>
+          {menuOpen && (
+            <>
+              {/* слой-подложка для закрытия по клику вне меню */}
+              <div style={{ position: 'fixed', inset: 0, zIndex: Z.dropdown }} onClick={() => setMenuOpen(false)} />
+              <div style={{
+                position: 'absolute', top: 30, right: 0, zIndex: Z.dropdown + 1,
+                background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+                boxShadow: SHADOW.dropdown, padding: 5, minWidth: 200, display: 'flex', flexDirection: 'column',
+              }}>
+                <MenuItem label="Переместить в группу" onClick={() => { setMenuOpen(false); onMove(p); }}
+                  icon={<path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>} />
+                <MenuItem label="Редактировать" onClick={(e) => { setMenuOpen(false); onEdit(p, e); }}
+                  icon={<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></>} />
+                <MenuItem label="Удалить" danger onClick={() => { setMenuOpen(false); onDelete(p); }}
+                  icon={<><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></>} />
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function MenuItem({ label, icon, onClick, danger }: { label: string; icon: ReactNode; onClick: (e: MouseEvent) => void; danger?: boolean }) {
+  const [hover, setHover] = useState(false);
+  const color = danger ? C.danger : C.textPrimary;
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+        background: hover ? C.bgSelected : 'none', border: 'none', borderRadius: R.md,
+        padding: '9px 10px', cursor: 'pointer', color, fontSize: 13.5, fontFamily: FONT.sans,
+      }}
+    >
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+        {icon}
+      </svg>
+      {label}
+    </button>
   );
 }

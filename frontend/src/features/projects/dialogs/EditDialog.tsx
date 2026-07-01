@@ -1,23 +1,26 @@
 import { useState } from 'react';
-import type { Project, PermissionRule } from '../../../types';
+import type { Project, ProjectGroup, PermissionRule } from '../../../types';
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
 import { C, R } from '../../../lib/design';
-import { Modal, ModalActions, TextField, TextArea } from '../../../components/ui';
+import { Modal, ModalActions, TextField, TextArea, Field } from '../../../components/ui';
+import { GroupSelect } from '../GroupSelect';
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 
 interface Props {
   project: Project;
+  groups?: ProjectGroup[];
   onSuccess: (updated: Project) => void;
   onClose: () => void;
 }
 
 type View = 'main' | 'prompt' | 'rules';
 
-export function EditDialog({ project, onSuccess, onClose }: Props) {
+export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) {
   const online = useOnline();
   const [view, setView] = useState<View>('main');
   const [name, setName] = useState(project.name);
+  const [groupId, setGroupId] = useState(project.groupId ?? '');
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
   const [rules, setRules] = useState<PermissionRule[]>(project.permissionRules ?? []);
@@ -30,6 +33,7 @@ export function EditDialog({ project, onSuccess, onClose }: Props) {
     try {
       const updated = await api.projects.update(project.id, {
         name: name.trim(),
+        groupId,
         systemPrompt,
         showHiddenFiles,
         permissionRules: rules.filter(r => r.pattern.trim()).map(r => ({ pattern: r.pattern.trim(), action: r.action })),
@@ -181,6 +185,11 @@ export function EditDialog({ project, onSuccess, onClose }: Props) {
     >
       {error && <div style={{ color: C.danger, fontSize: 13 }}>{error}</div>}
       <TextField value={name} onChange={setName} placeholder="Название" />
+      {groups.length > 0 && (
+        <Field label="Группа">
+          <GroupSelect groups={groups} value={groupId} onChange={setGroupId} />
+        </Field>
+      )}
       <div style={{
         padding: '9px 13px', background: C.bgPanel,
         border: `1px solid ${C.border}`, borderRadius: R.xl,

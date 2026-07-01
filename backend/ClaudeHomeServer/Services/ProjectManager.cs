@@ -35,7 +35,7 @@ public class ProjectManager
     public Project? GetByName(string name) =>
         _projects.Values.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
 
-    public Project Create(string name, string? rootPath, string userId, string username, bool createDirectory = false)
+    public Project Create(string name, string? rootPath, string userId, string username, bool createDirectory = false, string? groupId = null)
     {
         if (string.IsNullOrWhiteSpace(rootPath))
         {
@@ -51,14 +51,20 @@ public class ProjectManager
         else if (!Directory.Exists(rootPath))
             throw new DirectoryNotFoundException($"Папка не найдена: {rootPath}");
 
-        var project = new Project { Name = name, RootPath = rootPath, OwnerId = userId };
+        var project = new Project
+        {
+            Name = name,
+            RootPath = rootPath,
+            OwnerId = userId,
+            GroupId = string.IsNullOrEmpty(groupId) ? null : groupId,
+        };
         _projects[project.Id] = project;
         Save();
         return project;
     }
 
     public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null,
-        bool? showHiddenFiles = null, List<PermissionRule>? permissionRules = null)
+        bool? showHiddenFiles = null, List<PermissionRule>? permissionRules = null, string? groupId = null)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
@@ -73,9 +79,23 @@ public class ProjectManager
         if (systemPrompt is not null) project.SystemPrompt = systemPrompt;
         if (showHiddenFiles is not null) project.ShowHiddenFiles = showHiddenFiles.Value;
         if (permissionRules is not null) project.PermissionRules = permissionRules.Count == 0 ? null : permissionRules;
+        // groupId: null = не менять; "" = убрать из группы; иначе — привязать к группе
+        if (groupId is not null) project.GroupId = groupId.Length == 0 ? null : groupId;
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;
+    }
+
+    // Отвязывает все проекты от удаляемой группы (вызывается при удалении группы)
+    public void ClearGroup(string groupId)
+    {
+        var changed = false;
+        foreach (var p in _projects.Values.Where(p => p.GroupId == groupId))
+        {
+            p.GroupId = null;
+            changed = true;
+        }
+        if (changed) Save();
     }
 
     public static string BuildSystemPrompt(string? userPrompt, bool hasDify,

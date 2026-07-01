@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback, createContext, useContext, Fragment } from 'react';
+import { createPortal } from 'react-dom';
 import { getExplorerCreateInDir } from './FileExplorer';
 import type { Project, Session, ChatItem, FileEntry, SkillInfo, AgentInfo, ClaudeBilling } from '../types';
 import { useSession } from '../hooks/useSession';
@@ -644,6 +645,10 @@ function ChatImage({ src, alt }: { src?: string; alt?: string }) {
 // только когда в чате реально встретился блок ```mermaid.
 let mermaidInited = false;
 let mermaidSeq = 0;
+// Кэш отрендеренного SVG по исходному коду: при ремоунте компонента (на мобиле скролл
+// прячет адресную строку → resize → ремоунт поддерева чата) диаграмма берётся синхронно
+// из кэша, без вспышки код-фолбэка. Рендер mermaid детерминирован по коду + фикс. теме.
+const mermaidSvgCache = new Map<string, string>();
 async function loadMermaid() {
   const mermaid = (await import('mermaid')).default;
   if (!mermaidInited) {
@@ -668,12 +673,91 @@ async function loadMermaid() {
   return mermaid;
 }
 
-function MermaidDiagram({ code }: { code: string }) {
-  const [svg, setSvg] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [view, setView] = useState<'diagram' | 'code'>('diagram');
+// Полноэкранный просмотр диаграммы: зум колесом/кнопками + панорамирование мышью,
+// на тач-устройствах — пинч-зум двумя пальцами и перетаскивание одним.
+function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void }) {
+  const [scale, setScale] = useState(1);
+  const [tx, setTx] = useState(0);
+  const [ty, setTy] = useState(0);
+  const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
+  const pinch = useRef<{ dist: number; scale: number } | null>(null);
+
+  const clamp = (s: number) => Math.min(8, Math.max(0.2, s));
+  const reset = () => { setScale(1); setTx(0); setTy(0); };
 
   useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden'; // не скроллим страницу под лайтбоксом
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prevOverflow; };
+  }, [onClose]);
+
+  const twoTouchDist = (t: React.TouchList) => {
+    const dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+    return Math.hypot(dx, dy);
+  };
+
+  const btn: React.CSSProperties = {
+    width: 34, height: 34, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    cursor: 'pointer', background: 'rgba(255,255,255,0.92)', border: `1px solid ${C.border}`,
+    borderRadius: 8, fontFamily: FONT.sans, fontSize: 16, color: C.textPrimary, lineHeight: 1,
+  };
+
+  return (
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(22,17,12,0.96)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+      }}
+    >
+      {/* Панель управления */}
+      <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', gap: 8, zIndex: 2 }}>
+        <button type="button" title="Уменьшить" style={btn} onClick={() => setScale(s => clamp(s * 0.8))}>−</button>
+        <button type="button" title="Сбросить" style={{ ...btn, fontSize: 13 }} onClick={reset}>1:1</button>
+        <button type="button" title="Увеличить" style={btn} onClick={() => setScale(s => clamp(s * 1.25))}>+</button>
+        <button type="button" title="Закрыть (Esc)" style={btn} onClick={onClose}>✕</button>
+      </div>
+      {/* Область с диаграммой: зум/пан */}
+      <div
+        onWheel={(e) => setScale(s => clamp(s * (e.deltaY < 0 ? 1.12 : 0.89)))}
+        onPointerDown={(e) => { drag.current = { x: e.clientX, y: e.clientY, tx, ty }; (e.currentTarget as Element).setPointerCapture?.(e.pointerId); }}
+        onPointerMove={(e) => { if (drag.current) { setTx(drag.current.tx + (e.clientX - drag.current.x)); setTy(drag.current.ty + (e.clientY - drag.current.y)); } }}
+        onPointerUp={() => { drag.current = null; }}
+        onPointerCancel={() => { drag.current = null; }}
+        onTouchStart={(e) => {
+          if (e.touches.length === 2) { pinch.current = { dist: twoTouchDist(e.touches), scale }; drag.current = null; }
+          else if (e.touches.length === 1) { drag.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, tx, ty }; }
+        }}
+        onTouchMove={(e) => {
+          if (e.touches.length === 2 && pinch.current) { setScale(clamp(pinch.current.scale * twoTouchDist(e.touches) / pinch.current.dist)); }
+          else if (e.touches.length === 1 && drag.current) { setTx(drag.current.tx + (e.touches[0].clientX - drag.current.x)); setTy(drag.current.ty + (e.touches[0].clientY - drag.current.y)); }
+        }}
+        onTouchEnd={(e) => { if (e.touches.length === 0) { drag.current = null; pinch.current = null; } }}
+        style={{ touchAction: 'none', cursor: 'grab', width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      >
+        <div
+          style={{ transform: `translate(${tx}px, ${ty}px) scale(${scale})`, transition: drag.current ? 'none' : 'transform 0.08s', maxWidth: '92vw', maxHeight: '92vh' }}
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function MermaidDiagram({ code }: { code: string }) {
+  // Ленивая инициализация из кэша — если диаграмма уже рендерилась, показываем её
+  // сразу первым кадром (без вспышки кода при ремоунте).
+  const [svg, setSvg] = useState<string | null>(() => mermaidSvgCache.get(code) ?? null);
+  const [failed, setFailed] = useState(false);
+  const [view, setView] = useState<'diagram' | 'code'>('diagram');
+  const [zoom, setZoom] = useState(false);
+
+  useEffect(() => {
+    // Уже в кэше — перерисовывать нечего, берём готовый SVG (не мигаем при ремоунте).
+    const cached = mermaidSvgCache.get(code);
+    if (cached) { setSvg(cached); setFailed(false); return; }
     let cancelled = false;
     setFailed(false);
     // Дебаунс: во время стриминга код досылается по частям и невалиден —
@@ -686,7 +770,7 @@ function MermaidDiagram({ code }: { code: string }) {
         if (cancelled) return;
         if (!ok) { setFailed(true); return; }
         const { svg: rendered } = await mermaid.render(`mermaid-svg-${++mermaidSeq}`, code);
-        if (!cancelled) { setSvg(rendered); setFailed(false); }
+        if (!cancelled) { mermaidSvgCache.set(code, rendered); setSvg(rendered); setFailed(false); }
       } catch {
         if (!cancelled) setFailed(true);
       }
@@ -706,21 +790,26 @@ function MermaidDiagram({ code }: { code: string }) {
     return <div style={{ margin: '6px 0' }}>{codeBlock}</div>;
   }
 
-  // Диаграмма готова — даём тумблер «диаграмма ⇄ код».
+  // Диаграмма готова — даём тумблер «диаграмма ⇄ код» и разворот на весь экран.
   const showCode = view === 'code';
+  const toggleBtn: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+    background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 6,
+    padding: '2px 8px', fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.6,
+  };
   return (
     <div style={{ margin: '8px 0' }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginBottom: 4 }}>
+        {!showCode && (
+          <button type="button" onClick={() => setZoom(true)} title="Открыть на весь экран" style={toggleBtn}>
+            ⤢ Развернуть
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setView(showCode ? 'diagram' : 'code')}
           title={showCode ? 'Показать диаграмму' : 'Показать исходный код'}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
-            background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 6,
-            padding: '2px 8px', fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted,
-            lineHeight: 1.6,
-          }}
+          style={toggleBtn}
         >
           {showCode ? '◇ Диаграмма' : '</> Код'}
         </button>
@@ -728,9 +817,12 @@ function MermaidDiagram({ code }: { code: string }) {
       {showCode
         ? codeBlock
         : (
-          <div className="cc-mermaid" style={{ overflowX: 'auto', textAlign: 'center' }}
+          <div className="cc-mermaid" onClick={() => setZoom(true)}
+            title="Нажмите, чтобы открыть на весь экран"
+            style={{ overflowX: 'auto', textAlign: 'center', cursor: 'zoom-in' }}
             dangerouslySetInnerHTML={{ __html: svg }} />
         )}
+      {zoom && createPortal(<MermaidLightbox svg={svg} onClose={() => setZoom(false)} />, document.body)}
     </div>
   );
 }

@@ -13,7 +13,7 @@ import { notify } from '../lib/notify';
 import { type Mode, MODE_META, ModeIcon } from '../lib/modes';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
-import { C, FONT, R, MODAL_W, SHADOW } from '../lib/design';
+import { C, FONT, R, MODAL_W, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { Toolbar, ToolbarIconButton } from './Toolbar';
 import { BackButton, Modal, ModalActions } from './ui';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
@@ -1495,7 +1495,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
         {/* Спиннер загрузки истории */}
         {items.length === 0 && isHistoryLoading && (
           <div style={{
@@ -1696,7 +1696,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         padding: isMobile ? '0 12px 12px' : '0 24px 18px',
         pointerEvents: 'none',
       }}>
-        <div style={{ maxWidth: 760, margin: '0 auto', pointerEvents: 'auto' }}>
+        <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
           {mode === 'bypass' && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6, padding: '6px 12px',

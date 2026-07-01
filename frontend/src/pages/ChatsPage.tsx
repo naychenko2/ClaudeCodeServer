@@ -6,6 +6,7 @@ import { joinUser, leaveUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { C, FONT } from '../lib/design';
 import { useSidebarWidth } from '../lib/sidebarWidth';
+import { Button, IconButton, Splitter } from '../components/ui';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ChatList } from '../components/ChatList';
@@ -23,32 +24,6 @@ function useWindowWidth() {
   return width;
 }
 
-// Вертикальный сплиттер для ресайза сайдбара (как в WorkspacePage)
-function Splitter({ active, onMouseDown }: { active: boolean; onMouseDown: (e: ReactMouseEvent) => void }) {
-  return (
-    <div
-      onMouseDown={onMouseDown}
-      style={{
-        position: 'relative', flexShrink: 0, cursor: 'col-resize',
-        background: active ? C.accent : C.border, transition: 'background 0.15s ease',
-        flex: '0 0 1px', width: 1, alignSelf: 'stretch',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}
-      onMouseEnter={e => { if (!active) (e.currentTarget.firstElementChild as HTMLElement).style.opacity = '1'; }}
-      onMouseLeave={e => { if (!active) (e.currentTarget.firstElementChild as HTMLElement).style.opacity = '0'; }}
-    >
-      <div style={{
-        position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-        borderRadius: 3, background: C.accent, opacity: active ? 1 : 0, transition: 'opacity 0.15s ease',
-        pointerEvents: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3,
-        width: 4, height: 34,
-      }}>
-        {[0, 1, 2].map(i => <span key={i} style={{ width: 2, height: 2, borderRadius: '50%', background: C.onAccent }} />)}
-      </div>
-      <div style={{ position: 'absolute', top: 0, bottom: 0, left: -6, right: -6, cursor: 'col-resize' }} />
-    </div>
-  );
-}
 
 interface Props {
   auth: AuthState;
@@ -180,27 +155,19 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, minHeight: 28 }}>
         {/* Свернуть панель (◀) */}
-        <button
-          onClick={() => setSidebarMode('collapsed')}
-          title="Свернуть панель"
-          style={{ width: 28, height: 28, border: 'none', borderRadius: 8, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0, marginLeft: -2 }}
-        >
+        <IconButton onClick={() => setSidebarMode('collapsed')} title="Свернуть панель" size="sm" style={{ marginLeft: -2 }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M15 6l-6 6 6 6" />
           </svg>
-        </button>
+        </IconButton>
         <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Чаты</span>
         {/* В режиме open — закрепить (📌) */}
         {sidebarMode === 'open' && (
-          <button
-            onClick={() => setSidebarMode('pinned')}
-            title="Закрепить панель"
-            style={{ width: 22, height: 22, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <IconButton onClick={() => setSidebarMode('pinned')} title="Закрепить панель" size="sm">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="17" x2="12" y2="22" /><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
             </svg>
-          </button>
+          </IconButton>
         )}
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
@@ -286,15 +253,11 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
             <>
               {sidebarMode === 'collapsed' && (
                 <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}` }}>
-                  <button
-                    onClick={() => setSidebarMode('open')}
-                    title="Открыть панель"
-                    style={{ width: 34, height: 34, border: 'none', borderRadius: 9, background: C.bgPanel, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                      <path d="M2 4h12M2 8h12M2 12h12" stroke={C.textMuted} strokeWidth="1.8" strokeLinecap="round" />
+                  <IconButton onClick={() => setSidebarMode('open')} title="Открыть панель" size="md" variant="soft">
+                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                      <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                     </svg>
-                  </button>
+                  </IconButton>
                 </div>
               )}
               <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
@@ -311,22 +274,17 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                   <div style={{ fontSize: 13.5, color: C.textSecondary, lineHeight: 1.55, maxWidth: 360 }}>
                     Обсуждайте любые темы, ищите нужную информацию, генерируйте тексты и изображения — просто начните разговор.
                   </div>
-                  <button
-                    onClick={newChat}
-                    disabled={creating}
-                    style={{
-                      marginTop: 10, display: 'flex', alignItems: 'center', gap: 7,
-                      height: 42, padding: '0 20px', borderRadius: 11, border: 'none',
-                      background: C.accent, color: C.onAccent, fontSize: 14, fontWeight: 600,
-                      cursor: creating ? 'default' : 'pointer', opacity: creating ? 0.7 : 1,
-                      boxShadow: '0 4px 14px rgba(217,119,87,0.30)',
-                    }}
+                  <Button
+                    variant="primary" size="md" glow loading={creating}
+                    onClick={newChat} style={{ marginTop: 10 }}
+                    leftIcon={
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                        <path d="M12 5v14M5 12h14" />
+                      </svg>
+                    }
                   >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                      <path d="M12 5v14M5 12h14" />
-                    </svg>
                     Новый чат
-                  </button>
+                  </Button>
                   <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>или выберите чат слева</div>
                 </div>
               </div>

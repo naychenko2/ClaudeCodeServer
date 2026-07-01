@@ -6,6 +6,7 @@ import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
 import { C, R, FONT } from '../lib/design';
 import { useSidebarWidth } from '../lib/sidebarWidth';
+import { IconButton, Splitter } from '../components/ui';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ProjectCard } from '../features/projects/ProjectCard';
@@ -276,15 +277,11 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             {/* Шапка панели: заголовок + сортировка + Проект */}
             <div style={{ flexShrink: 0, padding: '20px 26px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
               {sidebarMode === 'collapsed' && (
-                <button
-                  onClick={() => setSidebarMode('open')}
-                  title="Показать панель"
-                  style={{ flexShrink: 0, width: 34, height: 34, border: 'none', borderRadius: 9, background: C.bgPanel, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: -4 }}
-                >
+                <IconButton onClick={() => setSidebarMode('open')} title="Показать панель" size="md" variant="soft" style={{ marginLeft: -4 }}>
                   <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                    <path d="M2 4h12M2 8h12M2 12h12" stroke={C.textMuted} strokeWidth="1.8" strokeLinecap="round" />
+                    <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                   </svg>
-                </button>
+                </IconButton>
               )}
               <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 24, color: C.textHeading, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {title}
@@ -473,29 +470,3 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   );
 }
 
-// Вертикальный сплиттер для ресайза сайдбара (единый с ChatsPage/WorkspacePage)
-function Splitter({ active, onMouseDown }: { active: boolean; onMouseDown: (e: ReactMouseEvent) => void }) {
-  return (
-    <div
-      onMouseDown={onMouseDown}
-      style={{
-        position: 'relative', flexShrink: 0, cursor: 'col-resize',
-        background: active ? C.accent : C.border, transition: 'background 0.15s ease',
-        flex: '0 0 1px', width: 1, alignSelf: 'stretch',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}
-      onMouseEnter={e => { if (!active) (e.currentTarget.firstElementChild as HTMLElement).style.opacity = '1'; }}
-      onMouseLeave={e => { if (!active) (e.currentTarget.firstElementChild as HTMLElement).style.opacity = '0'; }}
-    >
-      <div style={{
-        position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-        borderRadius: 3, background: C.accent, opacity: active ? 1 : 0, transition: 'opacity 0.15s ease',
-        pointerEvents: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3,
-        width: 4, height: 34,
-      }}>
-        {[0, 1, 2].map(i => <span key={i} style={{ width: 2, height: 2, borderRadius: '50%', background: C.onAccent }} />)}
-      </div>
-      <div style={{ position: 'absolute', top: 0, bottom: 0, left: -6, right: -6, cursor: 'col-resize' }} />
-    </div>
-  );
-}

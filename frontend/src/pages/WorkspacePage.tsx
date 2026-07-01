@@ -15,7 +15,7 @@ import { useSidebarWidth } from '../lib/sidebarWidth';
 import { PillSwitch } from '../components/Toolbar';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
-import { BackButton } from '../components/ui';
+import { BackButton, IconButton, Splitter } from '../components/ui';
 import { navPush, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { useFeature, FLAGS } from '../lib/featureFlags';
@@ -61,42 +61,6 @@ function useViewportHeight() {
     };
   }, []);
   return h;
-}
-
-// Современный ресайз-сплиттер: в покое — тонкая 1px-линия (как граница панели),
-// на hover/drag — accent-линия с точечным grip; широкая невидимая hit-зона ±6px
-function Splitter({ orientation, active, onMouseDown }: {
-  orientation: 'v' | 'h';
-  active: boolean;
-  onMouseDown: (e: React.MouseEvent) => void;
-}) {
-  const vertical = orientation === 'v';
-  return (
-    <div
-      onMouseDown={onMouseDown}
-      style={{
-        position: 'relative', flexShrink: 0, cursor: vertical ? 'col-resize' : 'row-resize',
-        background: active ? C.accent : C.border, transition: 'background 0.15s ease',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        ...(vertical ? { flex: '0 0 1px', width: 1, alignSelf: 'stretch' } : { height: 1, width: '100%' }),
-      }}
-      onMouseEnter={e => { if (!active) (e.currentTarget.firstElementChild as HTMLElement).style.opacity = '1'; }}
-      onMouseLeave={e => { if (!active) (e.currentTarget.firstElementChild as HTMLElement).style.opacity = '0'; }}
-    >
-      <div style={{
-        position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-        borderRadius: 3, background: C.accent, opacity: active ? 1 : 0,
-        transition: 'opacity 0.15s ease', pointerEvents: 'none',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
-        ...(vertical ? { width: 4, height: 34, flexDirection: 'column' } : { width: 34, height: 4, flexDirection: 'row' }),
-      }}>
-        {[0, 1, 2].map(i => <span key={i} style={{ width: 2, height: 2, borderRadius: '50%', background: C.onAccent }} />)}
-      </div>
-      <div style={vertical
-        ? { position: 'absolute', top: 0, bottom: 0, left: -6, right: -6, cursor: 'col-resize' }
-        : { position: 'absolute', left: 0, right: 0, top: -6, bottom: -6, cursor: 'row-resize' }} />
-    </div>
-  );
 }
 
 export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
@@ -444,15 +408,16 @@ const windowWidth = useWindowWidth();
           {/* Строка проекта: свернуть панель + кликабельное имя (→ к списку) + управление */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 13, padding: '0 2px' }}>
             {/* Свернуть панель (◀) — в обоих режимах */}
-            <button
+            <IconButton
+              size="sm"
               onClick={() => setSidebarMode('collapsed')}
               title="Свернуть панель"
-              style={{ width: 28, height: 28, border: 'none', borderRadius: 8, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0, marginLeft: -2 }}
+              style={{ marginLeft: -2 }}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M15 6l-6 6 6 6"/>
               </svg>
-            </button>
+            </IconButton>
             {/* Индикатор + имя проекта — кликабельны, ведут к списку проектов */}
             <div
               onClick={onGoToProjects}
@@ -468,35 +433,35 @@ const windowWidth = useWindowWidth();
             </div>
             {/* В режиме open — кнопка «закрепить» (📌) */}
             {sidebarMode === 'open' && (
-              <button
+              <IconButton
+                size="sm"
                 onClick={() => setSidebarMode('pinned')}
                 title="Закрепить панель"
-                style={{ width: 22, height: 22, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
                 </svg>
-              </button>
+              </IconButton>
             )}
-            <button
+            <IconButton
+              size="sm"
               onClick={() => setShowUsage(true)}
               title="Использование (Claude + fal.ai)"
-              style={{ width: 22, height: 22, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
               </svg>
-            </button>
-            <button
+            </IconButton>
+            <IconButton
+              size="sm"
               onClick={() => setEditProjectOpen(true)}
               title="Настройки проекта"
-              style={{ width: 22, height: 22, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3"/>
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
               </svg>
-            </button>
+            </IconButton>
           </div>
           <PillSwitch<LeftTab>
             value={leftTab}
@@ -543,15 +508,15 @@ const windowWidth = useWindowWidth();
               onChange={handleTabSwitch}
               isMobile
             />
-            <button
+            <IconButton
+              size="md"
               onClick={() => setShowUsage(true)}
               title="Использование (Claude + fal.ai)"
-              style={{ width: 34, height: 34, border: 'none', borderRadius: 9, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
               </svg>
-            </button>
+            </IconButton>
           </div>
         )}
         {/* Sidebar — ВСЕГДА в DOM: FileExplorer не теряет текущий путь при смене вида */}
@@ -661,15 +626,16 @@ const windowWidth = useWindowWidth();
           <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             {sidebarMode === 'collapsed' && (
               <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
-                <button
+                <IconButton
+                  size="md"
+                  variant="soft"
                   onClick={() => setSidebarMode('open')}
                   title="Открыть панель"
-                  style={{ width: 34, height: 34, border: 'none', borderRadius: 9, background: C.bgPanel, cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                 >
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                    <path d="M2 4h12M2 8h12M2 12h12" stroke={C.textMuted} strokeWidth="1.8" strokeLinecap="round"/>
+                    <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
                   </svg>
-                </button>
+                </IconButton>
               </div>
             )}
             {NoSession}

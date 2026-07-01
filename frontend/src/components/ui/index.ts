@@ -1,5 +1,9 @@
 export { Button } from './Button';
 export type { ButtonVariant, ButtonSize } from './Button';
+export { IconButton } from './IconButton';
+export type { IconButtonSize, IconButtonTone, IconButtonVariant } from './IconButton';
+export { Splitter } from './Splitter';
+export { Menu, MenuItem } from './Menu';
 export { Modal } from './Modal';
 export { ModalActions, useIsMobileModal } from './ModalActions';
 export { Field, FieldLabel, TextField, TextArea, IconField } from './Field';

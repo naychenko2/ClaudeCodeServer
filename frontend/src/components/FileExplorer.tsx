@@ -23,7 +23,7 @@ import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { C, R, FONT, MODAL_W, TB } from '../lib/design';
-import { Modal, ModalActions, TextField } from './ui';
+import { Modal, ModalActions, TextField, IconButton } from './ui';
 
 interface Props {
   project: Project;
@@ -945,34 +945,37 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {/* Hover-иконки: переименовать + удалить — только десктоп при hover */}
         {online && !isRenaming && !isMobile && hoveredPath === entry.path && (
           <>
-            <button
+            <IconButton
+              size="sm"
               onClick={e => { e.stopPropagation(); startRename(entry); }}
               title="Переименовать (F2)"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.textMuted }}
             >
               <RenameIcon />
-            </button>
-            <button
+            </IconButton>
+            <IconButton
+              size="sm"
+              tone="danger"
+              color="#C85A3F"
               onClick={e => { e.stopPropagation(); setDeleteConfirm(entry); }}
               title="Удалить"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#C85A3F' }}
             >
               <TrashIcon />
-            </button>
+            </IconButton>
           </>
         )}
         {/* Кнопка «добавить в чат» — десктоп hover; мобила/планшет — через long-press меню */}
         {!entry.isDirectory && onAttachToChat && !isMobile && !alwaysShowIcons && (
           hoveredPath === entry.path ? (
-            <button
+            <IconButton
+              size="sm"
+              tone="accent"
               onClick={e => { e.stopPropagation(); onAttachToChat(entry.path); }}
               title="Добавить в чат"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.accent }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
               </svg>
-            </button>
+            </IconButton>
           ) : null
         )}
         {/* Иконка знаний: спиннер при индексации; при hover — добавить или удалить */}
@@ -986,13 +989,15 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             </span>
           ) : indexedFileNames?.has(entry.name) ? (
             !isMobile && !alwaysShowIcons && hoveredPath === entry.path && onRemoveFromKnowledge ? (
-              <button
+              <IconButton
+                size="sm"
+                tone="danger"
+                color="#C85A3F"
                 onClick={e => { e.stopPropagation(); onRemoveFromKnowledge(entry.path); }}
                 title="Удалить из знаний"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#C85A3F' }}
               >
                 <BookMinusIcon />
-              </button>
+              </IconButton>
             ) : (
               <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1004,16 +1009,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           ) : (
             // Не в знаниях — показать «добавить» при hover (только десктоп)
             onAddToKnowledge && isKnowledgeIndexable(entry.name) && !isMobile && !alwaysShowIcons && hoveredPath === entry.path ? (
-              <button
+              <IconButton
+                size="sm"
+                color="#3F7A4F"
                 onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
                 title="Добавить в базу знаний"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
                   <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
                 </svg>
-              </button>
+              </IconButton>
             ) : null
           )
         )}

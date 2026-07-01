@@ -17,11 +17,12 @@ interface Props {
   onLogout: () => void;
   onShowChangePassword: () => void;
   onShowFeatureFlags: () => void;
+  onShowUserManagement: () => void;
   // На мобилке URL-бейдж распирает шапку — прячем, оставляя только аватар
   hideStatus?: boolean;
 }
 
-export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, hideStatus }: Props) {
+export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -72,6 +73,19 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
               <span style={{ marginLeft: 6, fontSize: 11, color: C.accent }}>admin</span>
             )}
           </div>
+          {isAdmin && (
+            <button
+              onClick={() => { setOpen(false); onShowUserManagement(); }}
+              style={dropdownItem}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+              Управление пользователями
+            </button>
+          )}
           <button
             onClick={() => { setOpen(false); onShowChangePassword(); }}
             style={dropdownItem}

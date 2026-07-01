@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { AuthState } from '../types';
-import { C, R, FONT, TB } from '../lib/design';
+import { C, FONT, TB } from '../lib/design';
 import { HubTabs, type HubTab } from './HubTabs';
 import { AvatarMenu } from '../features/projects/AvatarMenu';
 import { UserManagementModal } from './UserManagementModal';
@@ -73,25 +73,8 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
       {/* Центр — переключатель вкладок */}
       <HubTabs value={value} onChange={onTab} />
 
-      {/* Правая секция — управление пользователями (admin) + меню аватара */}
+      {/* Правая секция — меню аватара (управление пользователями — внутри меню, admin) */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
-        {isAdmin && (
-          <button
-            onClick={() => setShowUserMgmt(true)}
-            title="Управление пользователями"
-            style={{
-              width: 32, height: 32, borderRadius: R.md, border: `1px solid ${C.border}`,
-              background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center',
-              justifyContent: 'center', color: C.textMuted, flexShrink: 0,
-            }}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-              <circle cx="9" cy="7" r="4" />
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
-            </svg>
-          </button>
-        )}
         <AvatarMenu
           username={auth.username}
           isAdmin={isAdmin}
@@ -99,6 +82,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
           onLogout={onLogout}
           onShowChangePassword={() => setShowChangePassword(true)}
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
+          onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile}
         />
       </div>

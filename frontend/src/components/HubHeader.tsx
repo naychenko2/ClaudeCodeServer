@@ -53,7 +53,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
         </svg>
       </div>
       <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        Claude Home Server
+        Claude Home
       </span>
     </div>
   );

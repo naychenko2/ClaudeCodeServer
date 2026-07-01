@@ -282,6 +282,19 @@ public class SessionManager
             await claudeSession.StartAsync();
         }
 
+        // Авто-имя сессии по первому сообщению (Claude в --print не отдаёт title/summary).
+        // Ставим только если имя ещё не задано — последующие сообщения название не меняют.
+        // Работает и для чатов вне проекта, и для проектных сессий.
+        if (string.IsNullOrWhiteSpace(entry.Info.Name))
+        {
+            var title = MakeChatTitle(text);
+            if (!string.IsNullOrEmpty(title))
+            {
+                entry.Info.Name = title;
+                SaveSessions();
+            }
+        }
+
         entry.Info.Status = SessionStatus.Working;
         entry.Info.UpdatedAt = DateTime.UtcNow;
         await BroadcastStatusChangeAsync(sessionId, entry.Info,
@@ -289,6 +302,17 @@ public class SessionManager
 
         entry.Accumulator?.OnUserMessage(text, attachedPaths);
         await entry.Process.SendMessageAsync(text, attachedPaths);
+    }
+
+    // Заголовок чата из первого сообщения: первая строка, обрезанная до разумной длины.
+    private static string MakeChatTitle(string text)
+    {
+        var t = text.Trim();
+        var nl = t.IndexOfAny(['\n', '\r']);
+        if (nl >= 0) t = t[..nl].Trim();
+        const int max = 48;
+        if (t.Length > max) t = string.Concat(t.AsSpan(0, max).TrimEnd(), "…");
+        return t;
     }
 
     // Редактирование названия и модели. Модель применяется со следующего хода

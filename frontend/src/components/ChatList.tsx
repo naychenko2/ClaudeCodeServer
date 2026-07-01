@@ -4,9 +4,18 @@ import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { StatusBadge } from './StatusBadge';
 import { EditSessionDialog } from './EditSessionDialog';
-import { C, R, SHADOW, MODAL_W } from '../lib/design';
+import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
 import { Modal, ModalActions } from './ui';
 import { groupChats } from '../lib/chatGroups';
+
+// Время создания чата: сегодня — часы:минуты, иначе — дата (группы и так разбиты по дням)
+function chatTime(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString())
+    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+}
 
 interface Props {
   chats: Session[];
@@ -128,8 +137,12 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                       </div>
                     )}
                   </div>
-                  <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 6 }}>
-                    {online && (<>
+                  {/* Правая колонка: время создания (сверху, выровнено вправо) + действия */}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0, paddingLeft: 6 }}>
+                    <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, lineHeight: 1, whiteSpace: 'nowrap' }}>
+                      {chatTime(chat.createdAt)}
+                    </span>
+                    {online && (<div style={{ display: 'flex' }}>
                       <button
                         onClick={e => { e.stopPropagation(); togglePin(chat); }}
                         title={chat.isPinned ? 'Открепить' : 'Закрепить'}
@@ -182,7 +195,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                           <path d="M9 6V4h6v2" />
                         </svg>
                       </button>
-                    </>)}
+                    </div>)}
                   </div>
                 </div>
               );

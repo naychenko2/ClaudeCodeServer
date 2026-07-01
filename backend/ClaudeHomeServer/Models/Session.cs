@@ -33,7 +33,12 @@ public static class ClaudeModeExtensions
 public class Session
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
-    public string ProjectId { get; init; } = "";
+    // null → чат вне проекта (project-less). set (не init) — задел под будущее «прикрепить проект»
+    public string? ProjectId { get; set; }
+    // Владелец project-less чата (JWT sub). Для проектных сессий null — владелец резолвится через проект
+    public string? OwnerId { get; set; }
+    // Закреплён в списке чатов («Закреплённые»)
+    public bool IsPinned { get; set; }
     public string? ClaudeSessionId { get; set; }
     public ClaudeMode Mode { get; set; } = ClaudeMode.AcceptEdits;
     // Псевдоним или полный id модели для флага --model. null → дефолтная модель CLI

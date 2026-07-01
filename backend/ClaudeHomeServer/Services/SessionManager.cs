@@ -39,10 +39,13 @@ public class SessionManager
     private readonly WorkspaceKnowledgeStore _workspaceStore;
     private readonly FalCostService _falCost;
     private readonly UsageService _usage;
+    private readonly AppSettingsService _appSettings;
+    private readonly UserStore _users;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, SkillsService skills,
-        WorkspaceKnowledgeStore workspaceStore, FalCostService falCost, UsageService usage)
+        WorkspaceKnowledgeStore workspaceStore, FalCostService falCost, UsageService usage,
+        AppSettingsService appSettings, UserStore users)
     {
         _projects = projects;
         _hub = hub;
@@ -51,6 +54,8 @@ public class SessionManager
         _workspaceStore = workspaceStore;
         _falCost = falCost;
         _usage = usage;
+        _appSettings = appSettings;
+        _users = users;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
         _falCost.OnCostResolved = PublishFalCostAsync;
 
@@ -117,6 +122,46 @@ public class SessionManager
     public int CountByProject(string projectId) =>
         _sessions.Values.Count(e => e.Info.ProjectId == projectId);
 
+    // Чаты вне проекта, принадлежащие пользователю (для вкладки «Чаты»)
+    public IReadOnlyCollection<Session> GetProjectlessChats(string ownerId) =>
+        _sessions.Values
+            .Where(e => e.Info.ProjectId == null && e.Info.OwnerId == ownerId)
+            .Select(e => e.Info)
+            .OrderByDescending(s => s.UpdatedAt)
+            .ToList();
+
+    // Закрепить/открепить чат
+    public bool SetPinned(string sessionId, bool pinned)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        entry.Info.IsPinned = pinned;
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        return true;
+    }
+
+    // Рабочая папка чата, принадлежащего пользователю (для загрузки вложений).
+    // null — если это не project-less чат данного владельца.
+    public string? GetChatRoot(string sessionId, string ownerId)
+    {
+        var s = GetById(sessionId);
+        if (s is null || s.ProjectId is not null || s.OwnerId != ownerId) return null;
+        return ResolveChatRoot(ownerId);
+    }
+
+    // Рабочая папка чата вне проекта: {DefaultProjectsPath}/{username}/Chats (создаётся при отсутствии)
+    private string ResolveChatRoot(string ownerId)
+    {
+        var basePath = _appSettings.Get().DefaultProjectsPath;
+        if (string.IsNullOrWhiteSpace(basePath))
+            throw new InvalidOperationException("Не задана папка проектов по умолчанию");
+        var username = _users.GetById(ownerId)?.Username
+            ?? throw new KeyNotFoundException($"Пользователь не найден: {ownerId}");
+        var path = Path.Combine(basePath, username, "Chats");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
     public Session? GetById(string id) =>
         _sessions.TryGetValue(id, out var entry) ? entry.Info : null;
 
@@ -138,24 +183,54 @@ public class SessionManager
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
         };
 
-        var existingHistory = resumeSessionId != null
-            ? await _history.LoadAsync(resumeSessionId)
+        await StartNewSessionAsync(session, project.RootPath, project.SystemPrompt,
+            () => _projects.GetById(projectId)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>());
+        return session;
+    }
+
+    // Создание чата вне проекта: рабочая папка — {DefaultProjectsPath}/{username}/Chats,
+    // системный промпт — только встроенная часть (rawSystemPrompt=null), без проектных правил.
+    public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
+        string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null)
+    {
+        var rootPath = ResolveChatRoot(ownerId);
+
+        var session = new Session
+        {
+            ProjectId = null,
+            OwnerId = ownerId,
+            Mode = mode,
+            ClaudeSessionId = resumeSessionId,
+            Name = name,
+            Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
+            Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
+        };
+
+        await StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);
+        return session;
+    }
+
+    // Общий запуск новой сессии: аккумулятор истории, регистрация в реестре, старт процесса claude.
+    private async Task StartNewSessionAsync(Session session, string rootPath, string? rawSystemPrompt,
+        Func<IReadOnlyList<PermissionRule>>? permissionRules)
+    {
+        var existingHistory = session.ClaudeSessionId != null
+            ? await _history.LoadAsync(session.ClaudeSessionId)
             : [];
-        var accumulator = new TurnAccumulator(existingHistory, resumeSessionId);
+        var accumulator = new TurnAccumulator(existingHistory, session.ClaudeSessionId);
 
         var entry = new SessionEntry { Info = session, Accumulator = accumulator };
         _sessions[session.Id] = entry;
 
-        var claudeSession = new ClaudeSession(session, project.RootPath,
+        var claudeSession = new ClaudeSession(session, rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
-            _mcpConfigPath, project.SystemPrompt,
+            _mcpConfigPath, rawSystemPrompt,
             _skills, _workspaceStore,
-            () => _projects.GetById(projectId)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>());
+            permissionRules);
         entry.Process = claudeSession;
 
         await claudeSession.StartAsync();
         SaveSessions();
-        return session;
     }
 
     public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null)
@@ -175,25 +250,41 @@ public class SessionManager
         // После перезапуска сервера Process может быть null — восстанавливаем сессию
         if (entry.Process is null)
         {
-            var project = _projects.GetById(entry.Info.ProjectId)
-                ?? throw new InvalidOperationException("Проект не найден");
             var existingHistory = entry.Info.ClaudeSessionId != null
                 ? await _history.LoadAsync(entry.Info.ClaudeSessionId)
                 : [];
             var accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
             entry.Accumulator = accumulator;
-            var claudeSession = new ClaudeSession(entry.Info, project.RootPath,
-                msg => OnMessageAsync(sessionId, accumulator, msg),
-                _mcpConfigPath, project.SystemPrompt,
-                _skills, _workspaceStore,
-                () => _projects.GetById(entry.Info.ProjectId)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>());
+
+            // Чат вне проекта — рабочая папка Chats, без проектного промпта и правил;
+            // проектная сессия — RootPath/SystemPrompt/PermissionRules из проекта.
+            ClaudeSession claudeSession;
+            if (entry.Info.ProjectId is null)
+            {
+                var rootPath = ResolveChatRoot(entry.Info.OwnerId
+                    ?? throw new InvalidOperationException("У чата не задан владелец"));
+                claudeSession = new ClaudeSession(entry.Info, rootPath,
+                    msg => OnMessageAsync(sessionId, accumulator, msg),
+                    _mcpConfigPath, rawSystemPrompt: null,
+                    _skills, _workspaceStore, permissionRules: null);
+            }
+            else
+            {
+                var project = _projects.GetById(entry.Info.ProjectId)
+                    ?? throw new InvalidOperationException("Проект не найден");
+                claudeSession = new ClaudeSession(entry.Info, project.RootPath,
+                    msg => OnMessageAsync(sessionId, accumulator, msg),
+                    _mcpConfigPath, project.SystemPrompt,
+                    _skills, _workspaceStore,
+                    () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>());
+            }
             entry.Process = claudeSession;
             await claudeSession.StartAsync();
         }
 
         entry.Info.Status = SessionStatus.Working;
         entry.Info.UpdatedAt = DateTime.UtcNow;
-        await BroadcastStatusChangeAsync(sessionId, entry.Info.ProjectId,
+        await BroadcastStatusChangeAsync(sessionId, entry.Info,
             SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
 
         entry.Accumulator?.OnUserMessage(text, attachedPaths);
@@ -218,7 +309,7 @@ public class SessionManager
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         entry.Process?.RespondPermission(requestId, behavior);
         entry.Info.Status = SessionStatus.Working;
-        _ = BroadcastStatusChangeAsync(sessionId, entry.Info.ProjectId,
+        _ = BroadcastStatusChangeAsync(sessionId, entry.Info,
             SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
     }
 
@@ -247,7 +338,7 @@ public class SessionManager
             _ = entry.Accumulator.SaveSnapshotAsync(_history);
         }
         entry.Info.Status = SessionStatus.Working;
-        _ = BroadcastStatusChangeAsync(sessionId, entry.Info.ProjectId,
+        _ = BroadcastStatusChangeAsync(sessionId, entry.Info,
             SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
     }
 
@@ -262,7 +353,7 @@ public class SessionManager
             _ = entry.Accumulator.SaveSnapshotAsync(_history);
         }
         entry.Info.Status = SessionStatus.Working;
-        _ = BroadcastStatusChangeAsync(sessionId, entry.Info.ProjectId,
+        _ = BroadcastStatusChangeAsync(sessionId, entry.Info,
             SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
     }
 
@@ -375,7 +466,7 @@ public class SessionManager
                 entry.Info.Status = newStatus.Value;
                 entry.Info.UpdatedAt = DateTime.UtcNow;
                 if (msg is ResultMessage) SaveSessions();
-                await BroadcastStatusChangeAsync(sessionId, entry.Info.ProjectId,
+                await BroadcastStatusChangeAsync(sessionId, entry.Info,
                     newStatus.Value, entry.Info.LastMessage, entry.Info.MessageCount);
             }
         }
@@ -465,16 +556,19 @@ public class SessionManager
     private Task BroadcastAsync(string sessionId, ServerMessage msg) =>
         _hub.Clients.Group(sessionId).SendAsync("message", msg with { SessionId = sessionId });
 
-    // Рассылаем в project-группу (все вкладки проекта) И в session-группу (сам чат),
-    // чтобы клиент не пропустил обновление если не успел войти в project-группу.
-    private async Task BroadcastStatusChangeAsync(string sessionId, string projectId, SessionStatus status,
+    // Рассылаем в session-группу (сам чат) всегда, плюс в project-группу (все вкладки проекта)
+    // для проектной сессии ЛИБО в user-группу (список чатов) для чата вне проекта —
+    // чтобы клиент не пропустил обновление, если не успел войти в session-группу.
+    private async Task BroadcastStatusChangeAsync(string sessionId, Session info, SessionStatus status,
         string? lastMessage = null, int messageCount = 0)
     {
         var statusMsg = new StatusChangedMessage(status.ToString().ToLower(), lastMessage, messageCount)
             with { SessionId = sessionId };
-        await Task.WhenAll(
-            _hub.Clients.Group("project_" + projectId).SendAsync("message", statusMsg),
-            _hub.Clients.Group(sessionId).SendAsync("message", statusMsg)
-        );
+        var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", statusMsg) };
+        if (info.ProjectId is string pid)
+            tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", statusMsg));
+        else if (info.OwnerId is string oid)
+            tasks.Add(_hub.Clients.Group("user_" + oid).SendAsync("message", statusMsg));
+        await Task.WhenAll(tasks);
     }
 }

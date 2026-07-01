@@ -22,8 +22,9 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface Props {
   session: Session;
-  project: Project;
-  onOpenFile: (path: string) => void;
+  // Отсутствует для чата вне проекта (project-less) — тогда скрываем файловые возможности
+  project?: Project;
+  onOpenFile?: (path: string) => void;
   pendingMessage?: string;
   onPendingMessageSent?: () => void;
   onSessionUpdated?: (session: Session) => void;
@@ -481,7 +482,7 @@ function CombinedCostBadge({ cost, falCost, billing, windows }: {
 
 interface ChatHeaderBarProps {
   session: Session;
-  project: Project;
+  project?: Project;
   online: boolean;
   cost: CostStats;
   falCost: FalCostStats;
@@ -507,7 +508,7 @@ function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBil
       </div>
       <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
-        {!isMobile && <span>{project.name} · </span>}{modelLabel(session.model)}
+        {!isMobile && <span>{project ? project.name : 'без проекта'} · </span>}{modelLabel(session.model)}
         {session.effort && <span> · {effortLabel(session.effort)}</span>}
       </div>
     </div>
@@ -718,8 +719,11 @@ function MarkdownContent({ text }: { text: string }) {
   );
 }
 
-// Чипы-подсказки для empty state
+// Чипы-подсказки для empty state проектного чата
 const HINTS = ['Объясни структуру проекта', 'Найди и почини падающие тесты'];
+
+// Чипы-подсказки для чата вне проекта — универсальный ассистент (тексты, поиск, генерация медиа)
+const CHAT_HINTS = ['Найди информацию в интернете', 'Напиши пост для соцсетей', 'Сгенерируй картинку'];
 
 // Модальный пикер вложений
 interface AttachPickerProps {
@@ -861,7 +865,7 @@ function ToolGroupBlock({ isGroupDone, toolCount, children }: {
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project?.id);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
   const worstRate = useMemo(() => worstWindow(rateWindows), [rateWindows]);
@@ -869,16 +873,18 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
   // Число изменённых файлов — для бейджа на кнопке «Артефакты» (только когда тумблер проброшен)
   const artifactFileCount = useMemo(
-    () => onToggleArtifacts ? countFiles(items, project.rootPath) : 0,
-    [onToggleArtifacts, items, project.rootPath]
+    () => onToggleArtifacts && project ? countFiles(items, project.rootPath) : 0,
+    [onToggleArtifacts, items, project]
   );
 
   const [hasCLAUDEmd, setHasCLAUDEmd] = useState<boolean | null>(null);
   useEffect(() => {
+    // Для чата вне проекта файлов нет — баннер CLAUDE.md не показываем
+    if (!project) { setHasCLAUDEmd(false); return; }
     api.files.list(project.id)
       .then(files => setHasCLAUDEmd(files.some(f => !f.isDirectory && f.name === 'CLAUDE.md')))
       .catch(() => setHasCLAUDEmd(true)); // при ошибке не показываем баннер
-  }, [project.id]);
+  }, [project?.id]);
 
   // Точная стоимость генераций fal.ai: requestId → списанная сумма (для подписи под медиа).
   // Источник — fal_cost-элементы ленты (backend опрашивает billing-events). Дедуп по requestId.
@@ -940,7 +946,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Показывать плавающую кнопку «вниз», когда пользователь отлистал вверх
   const [showScrollDown, setShowScrollDown] = useState(false);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
-  const projectCtx = useMemo(() => ({ id: project.id, rootPath: project.rootPath }), [project.id, project.rootPath]);
+  const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);
 
   // Накопительная стоимость/токены сессии — сумма по всем result-элементам ленты.
   // Источник правды — история (грузится с бэка), поэтому переживает перезагрузку.
@@ -1131,6 +1137,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Загрузка вставленных/перетащенных картинок в проект → относительные пути в attachedFiles.
   // Бэкенд по расширению отправит их claude как image-блоки base64.
   const handleAttachImages = useCallback(async (files: File[]) => {
+    // Вне проекта файлы никуда не грузим — вложения недоступны
+    if (!project) return;
     const dir = '.cc-attachments';
     try { await api.files.mkdir(project.id, dir); } catch { /* папка уже есть */ }
     const added: string[] = [];
@@ -1145,7 +1153,21 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       } catch { /* пропускаем неудачную загрузку */ }
     }
     if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
-  }, [project.id, attachedFiles, onAttachedFilesChange]);
+  }, [project, attachedFiles, onAttachedFilesChange]);
+
+  // Загрузка файла с устройства для чата вне проекта — грузим в рабочую папку чата,
+  // относительный путь добавляем во вложения. Используется и кнопкой «прикрепить», и paste/drop.
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+  const handleChatUpload = useCallback(async (files: File[]) => {
+    const added: string[] = [];
+    for (const file of files) {
+      try {
+        const { path } = await api.chats.uploadFile(session.id, file);
+        added.push(path);
+      } catch { /* пропускаем неудачную загрузку */ }
+    }
+    if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
+  }, [session.id, attachedFiles, onAttachedFilesChange]);
 
   const handleHint = (hint: string) => {
     atBottomRef.current = true;
@@ -1274,7 +1296,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       planShowSwitch={i === lastApprovedPlanIdx && mode === 'plan'}
       onSwitchMode={setMode}
       onOpenFile={onOpenFile}
-      onRevert={path => api.files.revert(project.id, path)}
+      onRevert={project ? (path => api.files.revert(project.id, path)) : undefined}
       onRetry={handleRetry}
       onInterrupt={interrupt}
     />
@@ -1391,7 +1413,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
                 <Fragment key={idx}>
                   <div style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
                     {it.kind === 'file_changed'
-                      ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={path => api.files.revert(project.id, path)} />
+                      ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={project ? (path => api.files.revert(project.id, path)) : undefined} />
                       : renderItem(it, idx)}
                   </div>
                   {inlineChildren.length > 0 && (
@@ -1500,7 +1522,41 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               }} />
             </div>
 
-            {hasCLAUDEmd === false ? (
+            {!project ? (
+              <>
+                {/* Приветствие чата вне проекта — general-purpose ассистент */}
+                <div style={{
+                  fontFamily: '"PT Serif", Georgia, serif',
+                  fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
+                }}>
+                  Чем помочь?
+                </div>
+
+                <div style={{ fontSize: 13, color: '#8A8070', textAlign: 'center', maxWidth: 320 }}>
+                  Спросите что угодно — тексты и идеи, поиск в интернете, генерация картинок
+                </div>
+
+                {/* Чипы */}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
+                  {CHAT_HINTS.map(hint => (
+                    <button
+                      key={hint}
+                      onClick={() => handleHint(hint)}
+                      style={{
+                        background: '#FFF', border: `1px solid ${C.borderLight}`,
+                        borderRadius: 10, padding: '9px 12px',
+                        fontSize: 13, color: C.textPrimary, cursor: 'pointer',
+                        fontFamily: 'inherit',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = C.accentLight)}
+                      onMouseLeave={e => (e.currentTarget.style.background = '#FFF')}
+                    >
+                      {hint}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : hasCLAUDEmd === false ? (
               <>
                 {/* Заголовок */}
                 <div style={{
@@ -1652,17 +1708,25 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           {/* Вариант В: строка-предупреждение о лимите подписки у места отправки (warning/rejected) */}
           {worstRate && worstRate.level !== 'normal' && <RateLimitBar w={worstRate} />}
           <div style={{ borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
+          <input
+            ref={chatFileInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) handleChatUpload(fs); }}
+          />
           <Composer
             offline={!online}
             onSend={handleSend}
             onStop={interrupt}
-            onAttach={() => setShowAttachPicker(true)}
+            // В проекте — пикер файлов проекта; вне проекта — загрузка файла с устройства
+            onAttach={project ? (() => setShowAttachPicker(true)) : (() => chatFileInputRef.current?.click())}
             isGenerating={isWaiting}
             mode={mode}
             onModeChange={setMode}
             attachments={attachedFiles}
             onRemoveAttachment={path => onAttachedFilesChange(attachedFiles.filter(p => p !== path))}
-            onAttachImages={handleAttachImages}
+            onAttachImages={project ? handleAttachImages : handleChatUpload}
             isMobile={isMobile}
             skills={skills}
             agents={agents}
@@ -1673,8 +1737,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         </div>
       </div>
 
-      {/* Пикер вложений */}
-      {showAttachPicker && (
+      {/* Пикер вложений — только при наличии проекта */}
+      {project && showAttachPicker && (
         <AttachPicker
           projectId={project.id}
           selected={attachedFiles}
@@ -3332,8 +3396,8 @@ function PlanReviewView({ item, online, onRespond, version, showBadge, showSwitc
 function FileChangedRow({ item, online, onOpenFile, onRevert }: {
   item: Extract<ChatItem, { kind: 'file_changed' }>;
   online: boolean;
-  onOpenFile: (path: string) => void;
-  onRevert: (path: string) => void;
+  onOpenFile?: (path: string) => void;
+  onRevert?: (path: string) => void;
 }) {
   const project = useContext(ChatProjectContext);
   const relativePath = relPath(item.path, project?.rootPath);
@@ -3345,13 +3409,13 @@ function FileChangedRow({ item, online, onOpenFile, onRevert }: {
           <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
         </svg>
       </span>
-      <span onClick={() => onOpenFile(item.path)}
-        style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', direction: 'rtl', textAlign: 'left' }}>
+      <span onClick={() => onOpenFile?.(item.path)}
+        style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: onOpenFile ? 'pointer' : 'default', direction: 'rtl', textAlign: 'left' }}>
         {relativePath}
       </span>
       <span style={{ fontSize: 11.5, color: '#27AE60', fontFamily: FONT.mono, flexShrink: 0 }}>+{item.added}</span>
       <span style={{ fontSize: 11.5, color: '#C0392B', fontFamily: FONT.mono, flexShrink: 0 }}>-{item.removed}</span>
-      {online && (
+      {online && onRevert && (
         <button onClick={() => onRevert(item.path)}
           style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid #E0D8CC', background: '#FFF', cursor: 'pointer', color: '#C0392B', flexShrink: 0 }}>
           Откатить
@@ -3419,8 +3483,8 @@ interface ItemProps {
   planShowBadge?: boolean;
   planShowSwitch?: boolean;
   onSwitchMode: (mode: Mode) => void;
-  onOpenFile: (path: string) => void;
-  onRevert: (path: string) => void;
+  onOpenFile?: (path: string) => void;
+  onRevert?: (path: string) => void;
   onRetry: () => void;
   onInterrupt: () => void;
 }
@@ -3443,7 +3507,8 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
                   background: 'rgba(90,51,34,0.1)', borderRadius: 5,
                   padding: '1px 6px', fontSize: 11,
                 }}>
-                  {relPath(p, project?.rootPath)}
+                  {/* В проекте — путь относительно корня; в чате без проекта — только имя файла */}
+                  {project ? relPath(p, project.rootPath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
                 </span>
               ))}
             </div>
@@ -3637,10 +3702,10 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
         }}>
           <div style={{
             display: 'flex', alignItems: 'center', gap: 11,
-            padding: '12px 13px', cursor: 'pointer',
+            padding: '12px 13px', cursor: onOpenFile ? 'pointer' : 'default',
             borderBottom: '1px solid #EFE9DD',
           }}
-            onClick={() => onOpenFile(item.path)}
+            onClick={() => onOpenFile?.(item.path)}
           >
             <div style={{
               width: 28, height: 28, borderRadius: 8,
@@ -3664,16 +3729,18 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
             </span>
           </div>
           <div style={{ padding: '8px 13px', display: 'flex', gap: 6 }}>
-            <button
-              onClick={() => onOpenFile(item.path)}
-              style={{
-                fontSize: 12, padding: '4px 10px', borderRadius: 6,
-                border: `1px solid ${C.borderLight}`, background: '#FFF', cursor: 'pointer', color: C.textPrimary,
-              }}
-            >
-              Открыть
-            </button>
-            {online && (
+            {onOpenFile && (
+              <button
+                onClick={() => onOpenFile(item.path)}
+                style={{
+                  fontSize: 12, padding: '4px 10px', borderRadius: 6,
+                  border: `1px solid ${C.borderLight}`, background: '#FFF', cursor: 'pointer', color: C.textPrimary,
+                }}
+              >
+                Открыть
+              </button>
+            )}
+            {online && onRevert && (
               <button
                 onClick={() => onRevert(item.path)}
                 style={{

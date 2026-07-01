@@ -293,7 +293,7 @@ const windowWidth = useWindowWidth();
       const sess = activeSessionRef.current;
       if (!sess) return;
       try {
-        const sessions = await api.sessions.list(sess.projectId);
+        const sessions = await api.sessions.list(project.id);
         const fresh = sessions.find(s => s.id === sess.id);
         if (fresh && fresh.status !== sess.status) {
           setActiveSession(prev => prev?.id === fresh.id ? { ...prev, status: fresh.status } : prev);

@@ -17,9 +17,11 @@ interface Props {
   onLogout: () => void;
   onShowChangePassword: () => void;
   onShowFeatureFlags: () => void;
+  // На мобилке URL-бейдж распирает шапку — прячем, оставляя только аватар
+  hideStatus?: boolean;
 }
 
-export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags }: Props) {
+export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, hideStatus }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -51,7 +53,7 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
         }}>
           {username ? username.slice(0, 2).toUpperCase() : 'ME'}
         </div>
-        <ConnectionStatus variant="badge" label={serverUrl || 'localhost'} />
+        {!hideStatus && <ConnectionStatus variant="badge" label={serverUrl || 'localhost'} />}
       </div>
 
       {open && (

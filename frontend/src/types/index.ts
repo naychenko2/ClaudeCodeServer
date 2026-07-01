@@ -40,7 +40,12 @@ export interface FeatureFlagDefinition {
 
 export interface Session {
   id: string;
-  projectId: string;
+  // Отсутствует у чатов вне проекта (project-less)
+  projectId?: string;
+  // Владелец чата вне проекта
+  ownerId?: string;
+  // Закреплён в списке чатов
+  isPinned?: boolean;
   claudeSessionId?: string;
   mode: Mode;
   status: 'starting' | 'working' | 'active' | 'waiting' | 'orphaned' | 'finished' | 'error';

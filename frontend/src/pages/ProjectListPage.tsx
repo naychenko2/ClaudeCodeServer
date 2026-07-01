@@ -3,11 +3,9 @@ import type { Project, Session, AuthState } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
-import { UserManagementModal } from '../components/UserManagementModal';
-import { ChangePasswordDialog } from '../components/ChangePasswordDialog';
-import { FeatureFlagsModal } from '../components/FeatureFlagsModal';
 import { C, R, FONT } from '../lib/design';
-import { AvatarMenu } from '../features/projects/AvatarMenu';
+import type { HubTab } from '../components/HubTabs';
+import { HubHeader } from '../components/HubHeader';
 import { ProjectCard } from '../features/projects/ProjectCard';
 import { CreateDialog } from '../features/projects/dialogs/CreateDialog';
 import { AddExistingDialog } from '../features/projects/dialogs/AddExistingDialog';
@@ -25,9 +23,10 @@ interface Props {
   onOpen: (project: Project) => void;
   onLogout: () => void;
   auth?: AuthState | null;
+  onHubTab: (t: HubTab) => void;
 }
 
-export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
+export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const online = useOnline();
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeSessions, setActiveSessions] = useState<Set<string>>(new Set());
@@ -35,15 +34,6 @@ export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'offline' | 'error'>('loading');
   const [retryKey, setRetryKey] = useState(0);
-
-  const [showUserMgmt, setShowUserMgmt] = useState(false);
-  const [showChangePassword, setShowChangePassword] = useState(false);
-  const [showFeatureFlags, setShowFeatureFlags] = useState(false);
-
-  const isAdmin = auth?.role === 'admin';
-  const username = auth?.username ?? '';
-  const serverUrl = localStorage.getItem('cc_server_url') ?? '';
-
 
   useEffect(() => {
     setLoadState('loading');
@@ -82,49 +72,11 @@ export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
 
   return (
     <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <div style={{ maxWidth: 640, width: '100%', margin: '0 auto', display: 'flex', flexDirection: 'column', height: '100%', padding: '0 22px' }}>
+      <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
+      <div style={{ maxWidth: 640, width: '100%', margin: '0 auto', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: '0 22px' }}>
 
-        {/* Шапка + поиск — зафиксированы, не прокручиваются */}
-        <div style={{ flexShrink: 0 }}>
-
-        {/* Шапка */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 20, paddingTop: 20 }}>
-          <h1 style={{
-            fontFamily: FONT.serif, fontSize: 30, fontWeight: 500, margin: 0,
-            letterSpacing: '-0.01em', color: C.textHeading, flexShrink: 0,
-          }}>
-            Проекты
-          </h1>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexShrink: 1 }}>
-            {isAdmin && (
-              <button
-                onClick={() => setShowUserMgmt(true)}
-                title="Управление пользователями"
-                style={{
-                  width: 32, height: 32, borderRadius: R.md, border: `1px solid ${C.border}`,
-                  background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center',
-                  justifyContent: 'center', color: C.textMuted, flexShrink: 0,
-                }}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                  <circle cx="9" cy="7" r="4"/>
-                  <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
-                </svg>
-              </button>
-            )}
-
-            <AvatarMenu
-              username={username}
-              isAdmin={isAdmin}
-              serverUrl={serverUrl}
-              onLogout={onLogout}
-              onShowChangePassword={() => setShowChangePassword(true)}
-              onShowFeatureFlags={() => setShowFeatureFlags(true)}
-            />
-          </div>
-        </div>
+        {/* Поиск + кнопки — зафиксированы, не прокручиваются */}
+        <div style={{ flexShrink: 0, paddingTop: 18 }}>
 
         {/* Поиск */}
         <div style={{
@@ -292,15 +244,6 @@ export function ProjectListPage({ onOpen, onLogout, auth }: Props) {
         />
       )}
 
-      {showUserMgmt && (
-        <UserManagementModal currentUserId={auth?.id} onClose={() => setShowUserMgmt(false)} />
-      )}
-      {showChangePassword && (
-        <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />
-      )}
-      {showFeatureFlags && (
-        <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />
-      )}
     </div>
   );
 }

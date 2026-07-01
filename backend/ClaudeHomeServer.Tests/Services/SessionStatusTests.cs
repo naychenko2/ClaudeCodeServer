@@ -63,7 +63,11 @@ public class SessionStatusTests : IDisposable
     {
         var skills = new SkillsService();
         var workspaceStore = new WorkspaceKnowledgeStore(_config);
-        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, skills, workspaceStore);
+        var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, _config);
+        var usage = new UsageService(_config);
+        var userStore = new UserStore(_config, NullLogger<UserStore>.Instance);
+        var appSettings = new AppSettingsService(_config);
+        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, skills, workspaceStore, falCost, usage, appSettings, userStore);
     }
 
     private void WriteSessions(IEnumerable<Session> sessions)

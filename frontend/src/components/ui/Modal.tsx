@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ReactNode, CSSProperties } from 'react';
 import { C, R, FONT, SHADOW, Z } from '../../lib/design';
 
@@ -80,7 +81,7 @@ export function Modal({
   };
 
   if (isMobile) {
-    return (
+    return createPortal(
       <div
         className="cc-overlay"
         style={{ ...overlayBase, alignItems: 'flex-end' }}
@@ -121,12 +122,13 @@ export function Modal({
             </div>
           )}
         </div>
-      </div>
+      </div>,
+      document.body,
     );
   }
 
   // Планшет/десктоп — центрированная карточка
-  return (
+  return createPortal(
     <div
       className="cc-overlay"
       style={{ ...overlayBase, alignItems: 'center', padding: 16 }}
@@ -160,6 +162,7 @@ export function Modal({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

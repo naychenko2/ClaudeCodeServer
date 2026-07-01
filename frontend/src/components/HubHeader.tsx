@@ -1,0 +1,111 @@
+import { useState, useEffect } from 'react';
+import type { AuthState } from '../types';
+import { C, R, FONT, TB } from '../lib/design';
+import { HubTabs, type HubTab } from './HubTabs';
+import { AvatarMenu } from '../features/projects/AvatarMenu';
+import { UserManagementModal } from './UserManagementModal';
+import { ChangePasswordDialog } from './ChangePasswordDialog';
+import { FeatureFlagsModal } from './FeatureFlagsModal';
+
+interface Props {
+  value: HubTab;
+  onTab: (t: HubTab) => void;
+  auth: AuthState;
+  onLogout: () => void;
+}
+
+// Мобильный брейкпоинт (совпадает с остальными раскладками)
+function useIsMobile() {
+  const [mobile, setMobile] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
+    setMobile(mq.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+  return mobile;
+}
+
+// Верхняя шапка-хаб главной страницы: логотип слева, переключатель «Чаты | Проекты» по центру,
+// аватар/меню справа. На мобилке логотип и URL-бейдж скрыты (не помещаются).
+export function HubHeader({ value, onTab, auth, onLogout }: Props) {
+  const isMobile = useIsMobile();
+  const [showUserMgmt, setShowUserMgmt] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [showFeatureFlags, setShowFeatureFlags] = useState(false);
+
+  const isAdmin = auth.role === 'admin';
+  const serverUrl = localStorage.getItem('cc_server_url') ?? '';
+
+  const logo = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+      <div style={{ width: 30, height: 30, borderRadius: 8, background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <svg width="16" height="16" viewBox="0 0 512 512" fill="none">
+          <g stroke="#FFFFFF" strokeWidth="52" strokeLinecap="round" fill="none">
+            <line x1="256" y1="130" x2="256" y2="382" />
+            <line x1="130" y1="256" x2="382" y2="256" />
+            <line x1="160" y1="160" x2="352" y2="352" />
+            <line x1="352" y1="160" x2="160" y2="352" />
+          </g>
+        </svg>
+      </div>
+      <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        Claude Home Server
+      </span>
+    </div>
+  );
+
+  return (
+    <div style={{
+      flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12,
+      height: isMobile ? TB.heightMobile : TB.heightDesktop,
+      padding: `0 ${isMobile ? TB.padXMobile : TB.padX}px`,
+      boxSizing: 'border-box', borderBottom: `1px solid ${C.border}`,
+    }}>
+      {/* Левая секция — логотип (скрыт на мобилке) */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+        {!isMobile && logo}
+      </div>
+
+      {/* Центр — переключатель вкладок */}
+      <HubTabs value={value} onChange={onTab} />
+
+      {/* Правая секция — управление пользователями (admin) + меню аватара */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+        {isAdmin && (
+          <button
+            onClick={() => setShowUserMgmt(true)}
+            title="Управление пользователями"
+            style={{
+              width: 32, height: 32, borderRadius: R.md, border: `1px solid ${C.border}`,
+              background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center',
+              justifyContent: 'center', color: C.textMuted, flexShrink: 0,
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+          </button>
+        )}
+        <AvatarMenu
+          username={auth.username}
+          isAdmin={isAdmin}
+          serverUrl={serverUrl}
+          onLogout={onLogout}
+          onShowChangePassword={() => setShowChangePassword(true)}
+          onShowFeatureFlags={() => setShowFeatureFlags(true)}
+          hideStatus={isMobile}
+        />
+      </div>
+
+      {showUserMgmt && <UserManagementModal currentUserId={auth.id} onClose={() => setShowUserMgmt(false)} />}
+      {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
+      {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
+    </div>
+  );
+}

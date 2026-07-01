@@ -17,6 +17,8 @@ interface Props {
 type Tab = 'settings' | 'skills';
 
 export function EditSessionDialog({ session, onSaved, onClose }: Props) {
+  // Вкладка «Скиллы» доступна только для проектной сессии (SkillsPanel требует projectId)
+  const hasSkills = !!session.projectId;
   const [tab, setTab] = useState<Tab>('settings');
   const [name, setName] = useState(session.name ?? '');
   const [model, setModel] = useState(session.model ?? '');
@@ -29,11 +31,16 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const updated = await api.sessions.update(session.projectId, session.id, {
+      const data = {
         name: name.trim() || null,
         model: model || null,
         effort: effort || null,
-      });
+      };
+      // Проектная сессия обновляется через /projects/{id}/sessions,
+      // чат вне проекта (нет projectId) — через /chats
+      const updated = session.projectId
+        ? await api.sessions.update(session.projectId, session.id, data)
+        : await api.chats.update(session.id, data);
       onSaved(updated);
       onClose();
     } catch (err) {
@@ -59,7 +66,8 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
         )
         : undefined}
     >
-      {/* Переключатель вкладок: настройки чата · скиллы и агенты */}
+      {/* Переключатель вкладок: настройки чата · скиллы и агенты (вкладка «Скиллы» — только у проектной сессии) */}
+      {hasSkills && (
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${C.border}`, marginBottom: 2 }}>
         {([['settings', 'Настройки'], ['skills', 'Скиллы']] as [Tab, string][]).map(([t, label]) => (
           <button
@@ -78,8 +86,9 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
           </button>
         ))}
       </div>
+      )}
 
-      {tab === 'settings' ? (
+      {(!hasSkills || tab === 'settings') ? (
         <>
           <Field label="Название">
             <TextField value={name} onChange={setName} placeholder="авто из первого сообщения" autoFocus onEnter={handleSave} />
@@ -106,7 +115,7 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
         </>
       ) : (
         <div style={{ height: 'min(58vh, 440px)', margin: '0 -2px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <SkillsPanel projectId={session.projectId} />
+          <SkillsPanel projectId={session.projectId!} />
         </div>
       )}
     </Modal>

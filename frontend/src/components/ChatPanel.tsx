@@ -43,8 +43,6 @@ interface Props {
   // Тумблер панели «Артефакты сессии» в шапке (приходит только при включённом фич-флаге)
   artifactsOpen?: boolean;
   onToggleArtifacts?: () => void;
-  // Переключатель «Чаты | Проекты» по центру шапки (в режиме проекта) — для быстрой смены раздела
-  hubSwitcher?: React.ReactNode;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -500,10 +498,9 @@ interface ChatHeaderBarProps {
   artifactsOpen?: boolean;
   onToggleArtifacts?: () => void;
   artifactFileCount?: number;
-  hubSwitcher?: React.ReactNode;
 }
 
-function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, hubSwitcher }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -575,18 +572,6 @@ function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBil
     </ToolbarIconButton>
   ) : null;
 
-  // В режиме проекта (передан hubSwitcher, десктоп/планшет) — центрируем переключатель «Чаты | Проекты»
-  if (hubSwitcher && !isMobile) {
-    return (
-      <Toolbar isMobile={isMobile}>
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>{openBtn}{titleEl}</div>
-        <div style={{ flexShrink: 0 }}>{hubSwitcher}</div>
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
-          {workflowBadge}{costBadges}{artifactsBtn}{settingsBtn}
-        </div>
-      </Toolbar>
-    );
-  }
   return (
     <Toolbar isMobile={isMobile}>
       {openBtn}{titleEl}{workflowBadge}{costBadges}{artifactsBtn}{settingsBtn}
@@ -676,14 +661,17 @@ async function loadMermaid() {
 // Полноэкранный просмотр диаграммы: зум колесом/кнопками + панорамирование мышью,
 // на тач-устройствах — пинч-зум двумя пальцами и перетаскивание одним.
 function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void }) {
-  const [scale, setScale] = useState(1);
-  const [tx, setTx] = useState(0);
-  const [ty, setTy] = useState(0);
+  // Единое transform-состояние: s — масштаб, x/y — сдвиг (transform-origin = центр области).
+  const [tf, setTf] = useState({ s: 1, x: 0, y: 0 });
+  const [gesturing, setGesturing] = useState(false); // во время жеста выключаем transition (без лага)
+  const areaRef = useRef<HTMLDivElement | null>(null);
+  // Панорамирование одним указателем (мышь/палец)
   const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
-  const pinch = useRef<{ dist: number; scale: number } | null>(null);
+  // Пинч: запоминаем стартовые масштаб/сдвиг и фокус (середину пальцев) относительно центра области
+  const pinch = useRef<{ dist: number; s0: number; x0: number; y0: number; fx0: number; fy0: number } | null>(null);
 
   const clamp = (s: number) => Math.min(8, Math.max(0.2, s));
-  const reset = () => { setScale(1); setTx(0); setTy(0); };
+  const reset = () => setTf({ s: 1, x: 0, y: 0 });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -693,10 +681,23 @@ function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void })
     return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prevOverflow; };
   }, [onClose]);
 
-  const twoTouchDist = (t: React.TouchList) => {
-    const dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
-    return Math.hypot(dx, dy);
+  // Центр области зума в экранных координатах (transform-origin по умолчанию — центр элемента).
+  const center = () => {
+    const r = areaRef.current?.getBoundingClientRect();
+    return r ? { cx: r.left + r.width / 2, cy: r.top + r.height / 2 }
+             : { cx: window.innerWidth / 2, cy: window.innerHeight / 2 };
   };
+  const dist2 = (t: React.TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const mid2 = (t: React.TouchList) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+
+  // Зум вокруг фокальной точки (fx,fy в экранных координатах): точка под фокусом остаётся на месте.
+  const zoomAround = (nextRaw: number, fx: number, fy: number) => setTf(p => {
+    const { cx, cy } = center();
+    const ns = clamp(nextRaw), ratio = ns / p.s;
+    const gx = fx - cx, gy = fy - cy;
+    return { s: ns, x: gx - ratio * (gx - p.x), y: gy - ratio * (gy - p.y) };
+  });
+  const zoomCenter = (factor: number) => { const { cx, cy } = center(); zoomAround(tf.s * factor, cx, cy); };
 
   const btn: React.CSSProperties = {
     width: 34, height: 34, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -714,31 +715,52 @@ function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void })
     >
       {/* Панель управления */}
       <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', gap: 8, zIndex: 2 }}>
-        <button type="button" title="Уменьшить" style={btn} onClick={() => setScale(s => clamp(s * 0.8))}>−</button>
+        <button type="button" title="Уменьшить" style={btn} onClick={() => zoomCenter(0.8)}>−</button>
         <button type="button" title="Сбросить" style={{ ...btn, fontSize: 13 }} onClick={reset}>1:1</button>
-        <button type="button" title="Увеличить" style={btn} onClick={() => setScale(s => clamp(s * 1.25))}>+</button>
+        <button type="button" title="Увеличить" style={btn} onClick={() => zoomCenter(1.25)}>+</button>
         <button type="button" title="Закрыть (Esc)" style={btn} onClick={onClose}>✕</button>
       </div>
       {/* Область с диаграммой: зум/пан */}
       <div
-        onWheel={(e) => setScale(s => clamp(s * (e.deltaY < 0 ? 1.12 : 0.89)))}
-        onPointerDown={(e) => { drag.current = { x: e.clientX, y: e.clientY, tx, ty }; (e.currentTarget as Element).setPointerCapture?.(e.pointerId); }}
-        onPointerMove={(e) => { if (drag.current) { setTx(drag.current.tx + (e.clientX - drag.current.x)); setTy(drag.current.ty + (e.clientY - drag.current.y)); } }}
+        ref={areaRef}
+        onWheel={(e) => zoomAround(tf.s * (e.deltaY < 0 ? 1.12 : 0.89), e.clientX, e.clientY)}
+        onPointerDown={(e) => { if (e.pointerType === 'mouse') { drag.current = { x: e.clientX, y: e.clientY, tx: tf.x, ty: tf.y }; (e.currentTarget as Element).setPointerCapture?.(e.pointerId); } }}
+        onPointerMove={(e) => { if (e.pointerType === 'mouse' && drag.current) { const d = drag.current; setTf(p => ({ ...p, x: d.tx + (e.clientX - d.x), y: d.ty + (e.clientY - d.y) })); } }}
         onPointerUp={() => { drag.current = null; }}
         onPointerCancel={() => { drag.current = null; }}
         onTouchStart={(e) => {
-          if (e.touches.length === 2) { pinch.current = { dist: twoTouchDist(e.touches), scale }; drag.current = null; }
-          else if (e.touches.length === 1) { drag.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, tx, ty }; }
+          setGesturing(true);
+          if (e.touches.length === 2) {
+            const { cx, cy } = center(); const m = mid2(e.touches);
+            pinch.current = { dist: dist2(e.touches), s0: tf.s, x0: tf.x, y0: tf.y, fx0: m.x - cx, fy0: m.y - cy };
+            drag.current = null;
+          } else if (e.touches.length === 1) {
+            drag.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, tx: tf.x, ty: tf.y };
+          }
         }}
         onTouchMove={(e) => {
-          if (e.touches.length === 2 && pinch.current) { setScale(clamp(pinch.current.scale * twoTouchDist(e.touches) / pinch.current.dist)); }
-          else if (e.touches.length === 1 && drag.current) { setTx(drag.current.tx + (e.touches[0].clientX - drag.current.x)); setTy(drag.current.ty + (e.touches[0].clientY - drag.current.y)); }
+          if (e.touches.length === 2 && pinch.current) {
+            // Пинч + одновременный пан: содержимое под серединой пальцев следует за ней и масштабируется
+            const p0 = pinch.current, { cx, cy } = center(), m = mid2(e.touches);
+            const s1 = clamp(p0.s0 * dist2(e.touches) / p0.dist), ratio = s1 / p0.s0;
+            const f1x = m.x - cx, f1y = m.y - cy;
+            setTf({ s: s1, x: f1x - ratio * (p0.fx0 - p0.x0), y: f1y - ratio * (p0.fy0 - p0.y0) });
+          } else if (e.touches.length === 1 && drag.current) {
+            const d = drag.current, tX = e.touches[0].clientX, tY = e.touches[0].clientY;
+            setTf(p => ({ ...p, x: d.tx + (tX - d.x), y: d.ty + (tY - d.y) }));
+          }
         }}
-        onTouchEnd={(e) => { if (e.touches.length === 0) { drag.current = null; pinch.current = null; } }}
+        onTouchEnd={(e) => { if (e.touches.length === 0) { drag.current = null; pinch.current = null; setGesturing(false); } else if (e.touches.length === 1) { pinch.current = null; drag.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, tx: tf.x, ty: tf.y }; } }}
         style={{ touchAction: 'none', cursor: 'grab', width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       >
         <div
-          style={{ transform: `translate(${tx}px, ${ty}px) scale(${scale})`, transition: drag.current ? 'none' : 'transform 0.08s', maxWidth: '92vw', maxHeight: '92vh' }}
+          style={{
+            transform: `translate(${tf.x}px, ${tf.y}px) scale(${tf.s})`,
+            transition: (gesturing || drag.current) ? 'none' : 'transform 0.08s',
+            maxWidth: '92vw', maxHeight: '92vh',
+            // Светлая подложка-лист: SVG прозрачный, иначе диаграмма висит на чёрном фоне
+            background: '#F4F0E8', padding: 20, borderRadius: 10, boxShadow: '0 8px 40px rgba(0,0,0,0.45)',
+          }}
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       </div>
@@ -1066,7 +1088,7 @@ function ToolGroupBlock({ isGroupDone, toolCount, children }: {
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, hubSwitcher }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project?.id);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
@@ -1693,7 +1715,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         artifactsOpen={artifactsOpen}
         onToggleArtifacts={onToggleArtifacts}
         artifactFileCount={artifactFileCount}
-        hubSwitcher={hubSwitcher}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}

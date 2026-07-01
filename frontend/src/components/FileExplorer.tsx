@@ -847,7 +847,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           paddingLeft: 8 + depth * 16, paddingRight: 8,
           paddingTop: isMobile || alwaysShowIcons ? 10 : 6,
           paddingBottom: isMobile || alwaysShowIcons ? 10 : 6,
-          minHeight: isMobile || alwaysShowIcons ? 44 : undefined,
+          // фикс высоты: hover-иконки (24) чуть выше контента строки — держим 36, чтобы строка не «прыгала»
+          minHeight: isMobile || alwaysShowIcons ? 44 : 36,
           borderRadius: 8, cursor: isDragging ? 'grabbing' : 'pointer',
           width: '100%', boxSizing: 'border-box',
           opacity: isDragging ? 0.4 : pressingPath === entry.path ? 0.6 : 1,

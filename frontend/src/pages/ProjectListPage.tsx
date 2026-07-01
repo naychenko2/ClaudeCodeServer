@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { Project, ProjectGroup, Session, AuthState } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
-import { C, R, FONT } from '../lib/design';
+import { C, R, FONT, MODAL_W } from '../lib/design';
+import { Modal } from '../components/ui';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ProjectCard } from '../features/projects/ProjectCard';
@@ -16,6 +18,7 @@ import { MoveToGroupDialog } from '../features/projects/dialogs/MoveToGroupDialo
 import { GroupManagerDialog } from '../features/projects/dialogs/GroupManagerDialog';
 
 type ActiveDialog =
+  | { type: 'addChoose' }
   | { type: 'create' }
   | { type: 'addExisting' }
   | { type: 'edit'; project: Project }
@@ -113,80 +116,44 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
       <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
       <div style={{ maxWidth: 640, width: '100%', margin: '0 auto', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: '0 22px' }}>
 
-        {/* Поиск + кнопки — зафиксированы, не прокручиваются */}
-        <div style={{ flexShrink: 0, paddingTop: 18 }}>
-
-        {/* Поиск */}
-        <div style={{
-          display: 'flex', alignItems: 'center', background: C.bgWhite,
-          border: `1px solid ${C.border}`, borderRadius: R.xl, padding: '0 13px', height: 44, marginBottom: 10,
-        }}>
-          <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', alignItems: 'center' }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="11" cy="11" r="7"/>
-              <path d="m21 21-4.3-4.3"/>
-            </svg>
-          </span>
-          <input
-            placeholder="Поиск проектов…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            style={{ border: 'none', background: 'none', flex: 1, fontSize: 14.5, color: C.textHeading, fontFamily: 'inherit', outline: 'none' }}
-          />
-        </div>
-
-        {/* Кнопки создания + управление группами */}
-        {online && (
-          <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-            <button
-              onClick={() => setActiveDialog({ type: 'create' })}
-              style={{
-                flex: 1, minWidth: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-                background: C.accent, color: C.onAccent, border: 'none',
-                borderRadius: R.xl, padding: '9px 16px',
-                fontSize: 14, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <line x1="12" y1="5" x2="12" y2="19"/>
-                <line x1="5" y1="12" x2="19" y2="12"/>
+        {/* Поиск + управление группами — зафиксированы, не прокручиваются */}
+        <div style={{ flexShrink: 0, paddingTop: 18, paddingBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* Поиск */}
+          <div style={{
+            flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', background: C.bgWhite,
+            border: `1px solid ${C.border}`, borderRadius: R.xl, padding: '0 13px', height: 44,
+          }}>
+            <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', alignItems: 'center' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="7"/>
+                <path d="m21 21-4.3-4.3"/>
               </svg>
-              Новый проект
-            </button>
-            <button
-              onClick={() => setActiveDialog({ type: 'addExisting' })}
-              style={{
-                flex: 1, minWidth: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-                background: 'none', color: C.textSecondary, border: `1px solid ${C.border}`,
-                borderRadius: R.xl, padding: '9px 16px',
-                fontSize: 14, fontWeight: 500, fontFamily: 'inherit', cursor: 'pointer',
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-              </svg>
-              Добавить существующий
-            </button>
+            </span>
+            <input
+              placeholder="Поиск проектов…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ border: 'none', background: 'none', flex: 1, minWidth: 0, fontSize: 14.5, color: C.textHeading, fontFamily: 'inherit', outline: 'none' }}
+            />
+          </div>
+          {/* Управление группами */}
+          {online && (
             <button
               onClick={() => setActiveDialog({ type: 'groups' })}
               title="Управление группами"
               style={{
-                flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-                background: 'none', color: C.textSecondary, border: `1px solid ${C.border}`,
-                borderRadius: R.xl, padding: '9px 14px',
-                fontSize: 14, fontWeight: 500, fontFamily: 'inherit', cursor: 'pointer',
+                flexShrink: 0, width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: C.bgWhite, color: C.textSecondary, border: `1px solid ${C.border}`,
+                borderRadius: R.xl, cursor: 'pointer',
               }}
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
                 <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
               </svg>
-              Группы
             </button>
-          </div>
-        )}
-
-        </div>{/* конец зафиксированной шапки */}
+          )}
+        </div>
 
         {/* Прокручиваемая область */}
         <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 14, paddingRight: 6 }}>
@@ -211,6 +178,24 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
               </div>
             );
           })}
+
+          {/* Добавить проект — одной пунктирной кнопкой внизу списка */}
+          {online && loadState === 'ok' && (
+            <button
+              onClick={() => setActiveDialog({ type: 'addChoose' })}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                border: `1.5px dashed ${C.dashed}`, borderRadius: 16, padding: 15, marginTop: 3,
+                background: 'none', color: '#BE5536', fontSize: 14.5, fontWeight: 600,
+                fontFamily: FONT.sans, cursor: 'pointer', width: '100%',
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+              Добавить проект
+            </button>
+          )}
         </div>
 
         {loadState === 'offline' && (
@@ -234,8 +219,13 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           </div>
         )}
         {loadState === 'ok' && !hasAny && search === '' && (
-          <div style={{ textAlign: 'center', padding: '48px 0 0', color: C.textMuted, fontSize: 14 }}>
-            Нет проектов. Создайте первый выше.
+          <div style={{ textAlign: 'center', padding: '40px 0 0' }}>
+            <div style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 21, color: C.textHeading, marginBottom: 6 }}>
+              Пока нет проектов
+            </div>
+            <div style={{ fontSize: 14, color: C.textSecondary, lineHeight: 1.5 }}>
+              Добавьте первый проект, чтобы начать.
+            </div>
           </div>
         )}
         {loadState === 'ok' && !hasAny && search !== '' && (
@@ -248,6 +238,24 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
         </div>{/* конец прокручиваемой области */}
       </div>
 
+      {activeDialog?.type === 'addChoose' && (
+        <Modal title="Добавить проект" width={MODAL_W.form} onClose={closeDialog} footer={null}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <AddChoice
+              title="Новый проект"
+              subtitle="Создать новую папку проекта"
+              icon={<><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></>}
+              onClick={() => setActiveDialog({ type: 'create' })}
+            />
+            <AddChoice
+              title="Существующая папка"
+              subtitle="Добавить проект по пути к папке"
+              icon={<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>}
+              onClick={() => setActiveDialog({ type: 'addExisting' })}
+            />
+          </div>
+        </Modal>
+      )}
       {activeDialog?.type === 'create' && (
         <CreateDialog
           groups={orderedGroups}
@@ -294,5 +302,35 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
       )}
 
     </div>
+  );
+}
+
+// Плитка выбора способа добавления проекта (в диалоге «Добавить проект»)
+function AddChoice({ title, subtitle, icon, onClick }: { title: string; subtitle: string; icon: ReactNode; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 13, textAlign: 'left', width: '100%',
+        background: hover ? C.bgSelected : C.bgWhite, border: `1px solid ${C.border}`,
+        borderRadius: R.xl, padding: '13px 14px', cursor: 'pointer', fontFamily: FONT.sans,
+      }}
+    >
+      <span style={{
+        width: 38, height: 38, borderRadius: R.lg, flexShrink: 0, background: C.accentLight, color: C.accent,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          {icon}
+        </svg>
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'block', fontSize: 15, fontWeight: 600, color: C.textHeading }}>{title}</span>
+        <span style={{ display: 'block', fontSize: 12.5, color: C.textMuted, marginTop: 2 }}>{subtitle}</span>
+      </span>
+    </button>
   );
 }

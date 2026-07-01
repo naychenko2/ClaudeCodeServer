@@ -42,16 +42,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
 
   const logo = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-      <div style={{ width: 30, height: 30, borderRadius: 8, background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-        <svg width="16" height="16" viewBox="0 0 512 512" fill="none">
-          <g stroke="#FFFFFF" strokeWidth="52" strokeLinecap="round" fill="none">
-            <line x1="256" y1="130" x2="256" y2="382" />
-            <line x1="130" y1="256" x2="382" y2="256" />
-            <line x1="160" y1="160" x2="352" y2="352" />
-            <line x1="352" y1="160" x2="160" y2="352" />
-          </g>
-        </svg>
-      </div>
+      <img src="/favicon.svg" alt="" width={30} height={30} style={{ display: 'block', flexShrink: 0 }} />
       <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         Claude Home
       </span>

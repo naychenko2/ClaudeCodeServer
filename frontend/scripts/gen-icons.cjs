@@ -27,25 +27,10 @@ async function run() {
     console.log(`Generated: ${name} (${size}x${size})`);
   }
 
-  // maskable — padding ~9%, фон bgMain #F4F0E8
+  // maskable — новый значок с собственным градиентным фоном, рисуем full-bleed
   const maskableSize = 512;
-  const innerSize = Math.round(maskableSize * 0.82);
-  const padding = Math.round((maskableSize - innerSize) / 2);
-
-  const innerBuf = await sharp(svgBuffer)
-    .resize(innerSize, innerSize)
-    .png()
-    .toBuffer();
-
-  await sharp({
-    create: {
-      width: maskableSize,
-      height: maskableSize,
-      channels: 4,
-      background: { r: 0xF4, g: 0xF0, b: 0xE8, alpha: 1 }
-    }
-  })
-    .composite([{ input: innerBuf, top: padding, left: padding }])
+  await sharp(svgBuffer)
+    .resize(maskableSize, maskableSize)
     .png()
     .toFile(path.join(outDir, 'maskable-icon-512x512.png'));
   console.log('Generated: maskable-icon-512x512.png');

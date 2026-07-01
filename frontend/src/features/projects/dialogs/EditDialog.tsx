@@ -3,7 +3,7 @@ import type { Project, ProjectGroup, PermissionRule } from '../../../types';
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
 import { C, R } from '../../../lib/design';
-import { Modal, ModalActions, TextField, TextArea, Field } from '../../../components/ui';
+import { Modal, ModalActions, TextField, TextArea, Field, Button } from '../../../components/ui';
 import { GroupSelect } from '../GroupSelect';
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 
@@ -219,15 +219,9 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
             {systemPrompt || 'Не задан'}
           </div>
         </div>
-        <button
-          onClick={handleEditPrompt}
-          style={{
-            flexShrink: 0, padding: '6px 14px', background: C.accent, color: '#fff',
-            border: 'none', borderRadius: R.xl, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
-          }}
-        >
+        <Button variant="ghost" size="sm" onClick={handleEditPrompt} style={{ flexShrink: 0 }}>
           Редактировать
-        </button>
+        </Button>
       </div>
       {/* Скрытые файлы */}
       <div style={{
@@ -276,15 +270,9 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
             {rules.length ? `${rules.length} ${rules.length === 1 ? 'правило' : 'правил'}` : 'Нет правил — спрашивать каждый раз'}
           </div>
         </div>
-        <button
-          onClick={() => setView('rules')}
-          style={{
-            flexShrink: 0, padding: '6px 14px', background: C.accent, color: '#fff',
-            border: 'none', borderRadius: R.xl, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
-          }}
-        >
+        <Button variant="ghost" size="sm" onClick={() => setView('rules')} style={{ flexShrink: 0 }}>
           Настроить
-        </button>
+        </Button>
       </div>
       <ProjectSyncToggle projectId={project.id} online={online} />
     </Modal>

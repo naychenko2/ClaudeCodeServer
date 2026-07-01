@@ -6,7 +6,7 @@ import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
 import { C, R, FONT } from '../lib/design';
 import { useSidebarWidth } from '../lib/sidebarWidth';
-import { IconButton, Splitter } from '../components/ui';
+import { Button, IconButton, Splitter } from '../components/ui';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ProjectCard } from '../features/projects/ProjectCard';
@@ -219,6 +219,19 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const emptyBlock = (msg: string) => (
     <div style={{ textAlign: 'center', padding: '48px 0 0', color: C.textMuted, fontSize: 14 }}>{msg}</div>
   );
+  // Пустое состояние проектов: заголовок + подсказка + hero-CTA (единый стиль с чатами/файлами/логином)
+  const projectsEmptyHero = () => (
+    <div style={{ textAlign: 'center', padding: '44px 0 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+      <div style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 21, color: C.textHeading }}>Пока нет проектов</div>
+      <div style={{ fontSize: 14, color: C.textSecondary, lineHeight: 1.5, marginBottom: 8 }}>Добавьте первый проект, чтобы начать.</div>
+      {online && (
+        <Button variant="primary" size="md" glow onClick={() => setActiveDialog({ type: 'add' })}
+          leftIcon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>}>
+          Добавить проект
+        </Button>
+      )}
+    </div>
+  );
   const retryBlock = (msg: string) => (
     <div style={{ textAlign: 'center', padding: '48px 0 0' }}>
       <div style={{ color: C.textMuted, fontSize: 14, marginBottom: 12 }}>{msg}</div>
@@ -298,19 +311,17 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                 {sortMode === 'activity' ? 'По активности' : 'По названию'}
               </button>
               {online && (
-                <button
+                <Button
+                  variant="primary" size="md"
                   onClick={() => setActiveDialog({ type: 'add' })}
-                  style={{
-                    flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 15px',
-                    borderRadius: R.lg, background: C.accent, color: C.onAccent, fontSize: 13.5, fontWeight: 600,
-                    fontFamily: FONT.sans, border: 'none', cursor: 'pointer',
-                  }}
+                  leftIcon={
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                      <path d="M12 5v14M5 12h14"/>
+                    </svg>
+                  }
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                    <path d="M12 5v14M5 12h14"/>
-                  </svg>
                   Проект
-                </button>
+                </Button>
               )}
             </div>
 
@@ -318,7 +329,9 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 26px 18px' }}>
               {loadState === 'offline' && retryBlock('Сервер недоступен — нет сохранённых данных для офлайн-доступа')}
               {loadState === 'error' && retryBlock('Ошибка загрузки проектов')}
-              {loadState === 'ok' && !hasAny && emptyBlock(search ? `Ничего не найдено по запросу «${search}»` : 'Нет проектов. Добавьте первый.')}
+              {loadState === 'ok' && !hasAny && (search
+                ? emptyBlock(`Ничего не найдено по запросу «${search}»`)
+                : projectsEmptyHero())}
 
               {loadState === 'ok' && sections.map(sec => (
                 <div key={sec.key} style={{ marginBottom: 20 }}>
@@ -451,16 +464,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
 
           {loadState === 'offline' && retryBlock('Сервер недоступен — нет сохранённых данных для офлайн-доступа')}
           {loadState === 'error' && retryBlock('Ошибка загрузки проектов')}
-          {loadState === 'ok' && !hasAny && search === '' && (
-            <div style={{ textAlign: 'center', padding: '40px 0 0' }}>
-              <div style={{ fontFamily: FONT.serif, fontWeight: 700, fontSize: 21, color: C.textHeading, marginBottom: 6 }}>
-                Пока нет проектов
-              </div>
-              <div style={{ fontSize: 14, color: C.textSecondary, lineHeight: 1.5 }}>
-                Добавьте первый проект, чтобы начать.
-              </div>
-            </div>
-          )}
+          {loadState === 'ok' && !hasAny && search === '' && projectsEmptyHero()}
           {loadState === 'ok' && !hasAny && search !== '' && emptyBlock(`Ничего не найдено по запросу «${search}»`)}
         </div>
       </div>

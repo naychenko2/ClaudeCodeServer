@@ -23,7 +23,7 @@ import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { C, R, FONT, MODAL_W, TB } from '../lib/design';
-import { Modal, ModalActions, TextField, IconButton } from './ui';
+import { Modal, ModalActions, TextField, IconButton, Button } from './ui';
 
 interface Props {
   project: Project;
@@ -169,17 +169,15 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
           <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>Здесь пока нет файлов</div>
         </div>
         {onCreateFile && (
-          <button
+          <Button
+            variant="primary"
+            size="md"
+            glow
+            leftIcon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>}
             onClick={onCreateFile}
-            style={{
-              background: C.accent, color: '#fff', border: 'none', borderRadius: R.lg,
-              padding: '9px 20px', fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
-              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
-            }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
             Создать первый файл
-          </button>
+          </Button>
         )}
       </div>
 
@@ -1118,16 +1116,18 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {online && (
           <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
             {/* Новый файл */}
-            <div
+            <Button
+              variant="dashed"
+              size="md"
+              leftIcon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>}
               onClick={() => {
                 if (isMobile) setCreateInDir(mobileDir);
                 setShowCreateFile(true);
               }}
-              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 36, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+              style={{ flex: 1 }}
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
               Новый файл
-            </div>
+            </Button>
             {/* Новая папка */}
             <div
               onClick={() => {
@@ -1135,14 +1135,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 setShowCreateDir(true);
               }}
               title="Новая папка"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, cursor: 'pointer', flexShrink: 0 }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, cursor: 'pointer', flexShrink: 0 }}
             >
               <FolderPlusIcon />
             </div>
             {/* Загрузить */}
             <label
               title="Загрузить файлы"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: uploading ? C.textMuted : C.accent, cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1, flexShrink: 0 }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: uploading ? C.textMuted : C.accent, cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1, flexShrink: 0 }}
             >
               <input
                 ref={uploadInputRef}

@@ -58,12 +58,12 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* Новый чат */}
+      {/* Новый чат — пунктирная «создать в сайдбаре» (единый стиль с SessionList/FileExplorer) */}
       <Button
-        variant="primary" size="md" glow fullWidth loading={creating}
+        variant="dashed" size="md" fullWidth loading={creating}
         onClick={onNew} style={{ marginBottom: 12 }}
         leftIcon={
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
             <path d="M12 5v14M5 12h14" />
           </svg>
         }

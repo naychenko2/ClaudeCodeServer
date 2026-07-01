@@ -12,10 +12,11 @@ interface Props {
   sleepingCount: number;
   onCollapse?: () => void;
   onPin?: () => void;        // «закрепить» — показывается в режиме drawer (open)
+  onManageGroups?: () => void;
 }
 
 // Левый сайдбар навигации: «Все проекты» + список групп + «Без группы».
-export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, onCollapse, onPin }: Props) {
+export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, onCollapse, onPin, onManageGroups }: Props) {
   return (
     <aside style={{
       width: '100%', height: '100%', boxSizing: 'border-box', background: C.bgPanel,
@@ -57,8 +58,22 @@ export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, o
         </>}
       />
 
-      <div style={{ fontFamily: FONT.mono, fontSize: 10, letterSpacing: '0.08em', color: '#9A8F7E', margin: '13px 4px 9px' }}>
-        ГРУППЫ
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '13px 4px 9px' }}>
+        <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 10, letterSpacing: '0.08em', color: '#9A8F7E' }}>
+          ГРУППЫ
+        </span>
+        {onManageGroups && (
+          <button
+            onClick={onManageGroups}
+            title="Управление группами"
+            style={{ width: 22, height: 22, border: 'none', borderRadius: 6, background: 'transparent', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
+        )}
       </div>
 
       {groups.map(({ group: g, count }) => {

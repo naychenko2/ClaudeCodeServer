@@ -227,23 +227,6 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
     </div>
   );
 
-  const addButton = online && loadState === 'ok' && (
-    <button
-      onClick={() => setActiveDialog({ type: 'add' })}
-      style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-        border: `1.5px dashed ${C.dashed}`, borderRadius: 16, padding: 15, marginTop: 3,
-        background: 'none', color: '#BE5536', fontSize: 14.5, fontWeight: 600,
-        fontFamily: FONT.sans, cursor: 'pointer', width: '100%',
-      }}
-    >
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-        <path d="M12 5v14M5 12h14"/>
-      </svg>
-      Добавить проект
-    </button>
-  );
-
   // ===== Десктоп/планшет: две панели =====
   if (wide) {
     return (
@@ -260,6 +243,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                 sleepingCount={ungrouped.length}
                 onCollapse={() => setSidebarMode('collapsed')}
                 onPin={sidebarMode === 'open' ? () => setSidebarMode('pinned') : undefined}
+                onManageGroups={() => setActiveDialog({ type: 'groups' })}
               />
             );
             return (
@@ -371,10 +355,6 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                   </div>
                 </div>
               ))}
-
-              {loadState === 'ok' && (view === 'all' || view === 'sleeping') && (
-                <div style={{ maxWidth: 720 }}>{addButton}</div>
-              )}
             </div>
           </main>
         </div>
@@ -423,6 +403,20 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
               </svg>
             </button>
           )}
+          {online && (
+            <button
+              onClick={() => setActiveDialog({ type: 'add' })}
+              title="Добавить проект"
+              style={{
+                flexShrink: 0, width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.xl, cursor: 'pointer',
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+            </button>
+          )}
         </div>
 
         {/* Прокручиваемая область */}
@@ -456,8 +450,6 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                 </div>
               );
             })}
-
-            {addButton}
           </div>
 
           {loadState === 'offline' && retryBlock('Сервер недоступен — нет сохранённых данных для офлайн-доступа')}
@@ -481,17 +473,29 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   );
 }
 
-// Вертикальный ресайз-сплиттер сайдбара (тонкая линия, accent при наведении/перетаскивании)
+// Вертикальный сплиттер для ресайза сайдбара (единый с ChatsPage/WorkspacePage)
 function Splitter({ active, onMouseDown }: { active: boolean; onMouseDown: (e: ReactMouseEvent) => void }) {
-  const [hover, setHover] = useState(false);
   return (
     <div
       onMouseDown={onMouseDown}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{ flexShrink: 0, width: 6, cursor: 'col-resize', display: 'flex', justifyContent: 'center', zIndex: 5 }}
+      style={{
+        position: 'relative', flexShrink: 0, cursor: 'col-resize',
+        background: active ? C.accent : C.border, transition: 'background 0.15s ease',
+        flex: '0 0 1px', width: 1, alignSelf: 'stretch',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+      onMouseEnter={e => { if (!active) (e.currentTarget.firstElementChild as HTMLElement).style.opacity = '1'; }}
+      onMouseLeave={e => { if (!active) (e.currentTarget.firstElementChild as HTMLElement).style.opacity = '0'; }}
     >
-      <div style={{ width: 1, alignSelf: 'stretch', background: active || hover ? C.accent : C.divider, transition: 'background 0.15s' }} />
+      <div style={{
+        position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+        borderRadius: 3, background: C.accent, opacity: active ? 1 : 0, transition: 'opacity 0.15s ease',
+        pointerEvents: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3,
+        width: 4, height: 34,
+      }}>
+        {[0, 1, 2].map(i => <span key={i} style={{ width: 2, height: 2, borderRadius: '50%', background: C.onAccent }} />)}
+      </div>
+      <div style={{ position: 'absolute', top: 0, bottom: 0, left: -6, right: -6, cursor: 'col-resize' }} />
     </div>
   );
 }

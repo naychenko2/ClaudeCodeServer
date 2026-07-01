@@ -42,6 +42,8 @@ interface Props {
   // Тумблер панели «Артефакты сессии» в шапке (приходит только при включённом фич-флаге)
   artifactsOpen?: boolean;
   onToggleArtifacts?: () => void;
+  // Переключатель «Чаты | Проекты» по центру шапки (в режиме проекта) — для быстрой смены раздела
+  hubSwitcher?: React.ReactNode;
 }
 
 // Спиннер для выполняющегося инструмента
@@ -497,9 +499,10 @@ interface ChatHeaderBarProps {
   artifactsOpen?: boolean;
   onToggleArtifacts?: () => void;
   artifactFileCount?: number;
+  hubSwitcher?: React.ReactNode;
 }
 
-function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, hubSwitcher }: ChatHeaderBarProps) {
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -513,70 +516,79 @@ function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBil
       </div>
     </div>
   );
+  // Элементы шапки — выносим, чтобы отрендерить в двух раскладках (с центр. переключателем и без)
+  const openBtn = onOpenSidebar && !isMobile ? (
+    <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+        <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+      </svg>
+    </ToolbarIconButton>
+  ) : null;
+  const titleEl = isMobile && onBack
+    ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
+    : titleBlock;
+  const workflowBadge = activeWorkflow ? (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
+      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, flexShrink: 0,
+    }}>
+      <div className="tool-spinner" style={{ width: 10, height: 10, flexShrink: 0 }} />
+      <span style={{ fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, whiteSpace: 'nowrap' }}>
+        {activeWorkflow.phasesTotal > 0 ? `${activeWorkflow.phasesDone}/${activeWorkflow.phasesTotal}` : 'Workflow'}
+      </span>
+    </div>
+  ) : null;
+  const costBadges = isMobile ? (
+    <CombinedCostBadge cost={cost} falCost={falCost} billing={billing} windows={rateWindows} />
+  ) : (
+    <>
+      <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />
+      <FalCostBadge stats={falCost} isMobile={isMobile} />
+    </>
+  );
+  const artifactsBtn = onToggleArtifacts ? (
+    <ToolbarIconButton onClick={onToggleArtifacts} title="Артефакты сессии" isMobile={isMobile} active={artifactsOpen}>
+      <div style={{ position: 'relative', display: 'flex' }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6M9 13h6M9 17h3" />
+        </svg>
+        {artifactFileCount !== undefined && artifactFileCount > 0 && (
+          <span style={{
+            position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
+            borderRadius: 7, background: C.accent, color: C.onAccent,
+            fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
+          }}>
+            {artifactFileCount}
+          </span>
+        )}
+      </div>
+    </ToolbarIconButton>
+  ) : null;
+  const settingsBtn = online ? (
+    <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+    </ToolbarIconButton>
+  ) : null;
+
+  // В режиме проекта (передан hubSwitcher, десктоп/планшет) — центрируем переключатель «Чаты | Проекты»
+  if (hubSwitcher && !isMobile) {
+    return (
+      <Toolbar isMobile={isMobile}>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>{openBtn}{titleEl}</div>
+        <div style={{ flexShrink: 0 }}>{hubSwitcher}</div>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+          {workflowBadge}{costBadges}{artifactsBtn}{settingsBtn}
+        </div>
+      </Toolbar>
+    );
+  }
   return (
     <Toolbar isMobile={isMobile}>
-      {/* Кнопка открытия сайдбара — только когда он свёрнут (не на мобиле) */}
-      {onOpenSidebar && !isMobile && (
-        <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-            <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-          </svg>
-        </ToolbarIconButton>
-      )}
-      {/* На мобиле стрелка + название кликабельны как «назад» в сайдбар; на десктопе — просто заголовок */}
-      {isMobile && onBack
-        ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
-        : titleBlock}
-      {activeWorkflow && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          padding: '3px 8px',
-          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
-          flexShrink: 0,
-        }}>
-          <div className="tool-spinner" style={{ width: 10, height: 10, flexShrink: 0 }} />
-          <span style={{ fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, whiteSpace: 'nowrap' }}>
-            {activeWorkflow.phasesTotal > 0
-              ? `${activeWorkflow.phasesDone}/${activeWorkflow.phasesTotal}`
-              : 'Workflow'}
-          </span>
-        </div>
-      )}
-      {isMobile ? (
-        <CombinedCostBadge cost={cost} falCost={falCost} billing={billing} windows={rateWindows} />
-      ) : (
-        <>
-          <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />
-          <FalCostBadge stats={falCost} isMobile={isMobile} />
-        </>
-      )}
-      {onToggleArtifacts && (
-        <ToolbarIconButton onClick={onToggleArtifacts} title="Артефакты сессии" isMobile={isMobile} active={artifactsOpen}>
-          <div style={{ position: 'relative', display: 'flex' }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <path d="M14 2v6h6M9 13h6M9 17h3" />
-            </svg>
-            {artifactFileCount !== undefined && artifactFileCount > 0 && (
-              <span style={{
-                position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
-                borderRadius: 7, background: C.accent, color: C.onAccent,
-                fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
-              }}>
-                {artifactFileCount}
-              </span>
-            )}
-          </div>
-        </ToolbarIconButton>
-      )}
-      {online && (
-        <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-        </ToolbarIconButton>
-      )}
+      {openBtn}{titleEl}{workflowBadge}{costBadges}{artifactsBtn}{settingsBtn}
     </Toolbar>
   );
 }
@@ -864,7 +876,7 @@ function ToolGroupBlock({ isGroupDone, toolCount, children }: {
   );
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, hubSwitcher }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project?.id);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
@@ -1491,6 +1503,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         artifactsOpen={artifactsOpen}
         onToggleArtifacts={onToggleArtifacts}
         artifactFileCount={artifactFileCount}
+        hubSwitcher={hubSwitcher}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}

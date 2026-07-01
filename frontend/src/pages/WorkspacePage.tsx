@@ -12,6 +12,7 @@ import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
 import { api } from '../lib/api';
 import { C, FONT } from '../lib/design';
 import { PillSwitch } from '../components/Toolbar';
+import { HubTabs, type HubTab } from '../components/HubTabs';
 import { BackButton } from '../components/ui';
 import { navPush, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
@@ -20,6 +21,8 @@ import { useFeature, FLAGS } from '../lib/featureFlags';
 interface Props {
   project: Project;
   onGoToProjects: () => void;
+  // Переключение раздела хаба «Чаты | Проекты» из шапки проекта
+  onSwitchHub?: (t: HubTab) => void;
 }
 
 type LeftTab = 'sessions' | 'files';
@@ -92,7 +95,9 @@ function Splitter({ orientation, active, onMouseDown }: {
   );
 }
 
-export function WorkspacePage({ project, onGoToProjects }: Props) {
+export function WorkspacePage({ project, onGoToProjects, onSwitchHub }: Props) {
+  // Переключатель «Чаты | Проекты» для центра шапки чата (в проекте активна вкладка «Проекты»)
+  const hubSwitcher = onSwitchHub ? <HubTabs value="projects" onChange={onSwitchHub} /> : undefined;
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
     const saved = loadWorkspaceState(project.id)?.leftTab;
@@ -576,7 +581,7 @@ const windowWidth = useWindowWidth();
         {/* Чат — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {activeSession
-            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} onWorkflowRunning={handleWorkflowRunning} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined} />
+            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} onWorkflowRunning={handleWorkflowRunning} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined} hubSwitcher={hubSwitcher} />
             : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>Выберите или создайте чат</div>
           }
         </div>
@@ -680,7 +685,7 @@ const windowWidth = useWindowWidth();
             {!openFile && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 {activeSession
-                  ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined} />
+                  ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined} hubSwitcher={hubSwitcher} />
                   : NoSessionWithBar}
               </div>
             )}
@@ -690,7 +695,7 @@ const windowWidth = useWindowWidth();
               <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
                   {activeSession
-                    ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined} />
+                    ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined} hubSwitcher={hubSwitcher} />
                     : NoSessionWithBar}
                 </div>
                 <Splitter orientation="v" active={draggingSplitter === 'split'}

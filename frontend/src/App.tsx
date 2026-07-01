@@ -175,6 +175,14 @@ export default function App() {
     setHubTab(t)
     navReplace({ screen: t === 'chats' ? 'chats' : 'projects' })
   }
+  // Выход из открытого проекта сразу в нужный раздел хаба (переключатель в шапке проекта)
+  const exitToHub = (t: HubTab) => {
+    localStorage.removeItem(OPEN_PROJECT_KEY)
+    localStorage.setItem(HUB_TAB_KEY, t)
+    setHubTab(t)
+    navReplace({ screen: t === 'chats' ? 'chats' : 'projects' })
+    setProject(null)
+  }
   const logout = () => {
     localStorage.removeItem('cc_token')
     localStorage.removeItem('cc_username')
@@ -199,7 +207,7 @@ export default function App() {
         : !auth
           ? <LoginPage onConnect={setAuth} />
           : project
-            ? <WorkspacePage project={project} onGoToProjects={goToProjects} />
+            ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={exitToHub} />
             : hubTab === 'chats'
               ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />

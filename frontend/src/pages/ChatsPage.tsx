@@ -297,8 +297,38 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                   </button>
                 </div>
               )}
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, fontSize: 14, textAlign: 'center', padding: 24 }}>
-                Выберите чат слева или создайте новый
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
+                  {/* Иконка раздела */}
+                  <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 11.5a8.5 8.5 0 0 1-12 7.7L3 21l1.8-6A8.5 8.5 0 1 1 21 11.5z" />
+                    </svg>
+                  </div>
+                  <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 22, color: C.textHeading, letterSpacing: '-0.01em' }}>
+                    О чём поговорим?
+                  </div>
+                  <div style={{ fontSize: 13.5, color: C.textSecondary, lineHeight: 1.55, maxWidth: 360 }}>
+                    Обсуждайте любые темы, ищите нужную информацию, генерируйте тексты и изображения — просто начните разговор.
+                  </div>
+                  <button
+                    onClick={newChat}
+                    disabled={creating}
+                    style={{
+                      marginTop: 10, display: 'flex', alignItems: 'center', gap: 7,
+                      height: 42, padding: '0 20px', borderRadius: 11, border: 'none',
+                      background: C.accent, color: C.onAccent, fontSize: 14, fontWeight: 600,
+                      cursor: creating ? 'default' : 'pointer', opacity: creating ? 0.7 : 1,
+                      boxShadow: '0 4px 14px rgba(217,119,87,0.30)',
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                    Новый чат
+                  </button>
+                  <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>или выберите чат слева</div>
+                </div>
               </div>
             </>
           )}

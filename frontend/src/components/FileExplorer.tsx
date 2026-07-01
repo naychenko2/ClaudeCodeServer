@@ -944,14 +944,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {online && !isRenaming && !isMobile && hoveredPath === entry.path && (
           <>
             <IconButton
-              size="sm"
+              size="xs"
               onClick={e => { e.stopPropagation(); startRename(entry); }}
               title="Переименовать (F2)"
             >
               <RenameIcon />
             </IconButton>
             <IconButton
-              size="sm"
+              size="xs"
               tone="danger"
               color="#C85A3F"
               onClick={e => { e.stopPropagation(); setDeleteConfirm(entry); }}
@@ -965,7 +965,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {!entry.isDirectory && onAttachToChat && !isMobile && !alwaysShowIcons && (
           hoveredPath === entry.path ? (
             <IconButton
-              size="sm"
+              size="xs"
               tone="accent"
               onClick={e => { e.stopPropagation(); onAttachToChat(entry.path); }}
               title="Добавить в чат"
@@ -988,7 +988,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           ) : indexedFileNames?.has(entry.name) ? (
             !isMobile && !alwaysShowIcons && hoveredPath === entry.path && onRemoveFromKnowledge ? (
               <IconButton
-                size="sm"
+                size="xs"
                 tone="danger"
                 color="#C85A3F"
                 onClick={e => { e.stopPropagation(); onRemoveFromKnowledge(entry.path); }}
@@ -1008,7 +1008,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             // Не в знаниях — показать «добавить» при hover (только десктоп)
             onAddToKnowledge && isKnowledgeIndexable(entry.name) && !isMobile && !alwaysShowIcons && hoveredPath === entry.path ? (
               <IconButton
-                size="sm"
+                size="xs"
                 color="#3F7A4F"
                 onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
                 title="Добавить в базу знаний"
@@ -1207,7 +1207,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       )}
 
       {/* Tree / список папки / результаты поиска */}
-      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflow: 'auto', padding: '0 4px 12px' }}>
+      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowX: 'hidden', overflowY: 'auto', padding: '0 4px 12px' }}>
         {searchResults !== null ? (
           searchResults.length === 0 ? (
             <EmptyState

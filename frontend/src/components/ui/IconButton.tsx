@@ -5,12 +5,13 @@ import { C, R, TB, SHADOW } from '../../lib/design';
 // Единая квадратная icon-кнопка (действие-иконка) для всех тулбаров, сайдбаров и шапок.
 // Заменяет ~десяток инлайновых реализаций с размерами 22..44 и радиусами 6..12.
 
-export type IconButtonSize = 'sm' | 'md' | 'lg';
+export type IconButtonSize = 'xs' | 'sm' | 'md' | 'lg';
 export type IconButtonTone = 'muted' | 'accent' | 'danger';
 export type IconButtonVariant = 'ghost' | 'soft';
 
-// Единая шкала: 28 / 32 / 40(тач). Радиус — R.md, для тач-размера R.lg.
+// Единая шкала: 24(плотные строки списков/дерева) / 28 / 32 / 40(тач). Радиус — R.sm/R.md, для тач R.lg.
 const SIZE: Record<IconButtonSize, { box: number; radius: number }> = {
+  xs: { box: 24, radius: R.sm },
   sm: { box: 28, radius: R.md },
   md: { box: 32, radius: R.md },
   lg: { box: 40, radius: R.lg },

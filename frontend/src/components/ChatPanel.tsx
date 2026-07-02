@@ -6,7 +6,7 @@ import { useSession } from '../hooks/useSession';
 import { countFiles, computeTodos, type TodoItem } from '../hooks/useSessionArtifacts';
 import { useOnline } from '../hooks/useOnline';
 import { api, type WorkflowAgentInfo } from '../lib/api';
-import { modelLabel } from '../lib/models';
+import { modelLabel, useModelLabel } from '../lib/models';
 import { effortLabel } from '../lib/effort';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, toRateWindows, worstWindow } from '../lib/rateLimit';
 import { type ContextEstimate, estimateContext } from '../lib/context';
@@ -615,6 +615,7 @@ interface ChatHeaderBarProps {
 }
 
 function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact }: ChatHeaderBarProps) {
+  const sessionModelLabel = useModelLabel(session.model);
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -623,7 +624,7 @@ function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBil
       </div>
       <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
-        {!isMobile && <span>{project ? project.name : 'без проекта'} · </span>}{modelLabel(session.model)}
+        {!isMobile && <span>{project ? project.name : 'без проекта'} · </span>}{sessionModelLabel}
         {session.effort && <span> · {effortLabel(session.effort)}</span>}
       </div>
     </div>

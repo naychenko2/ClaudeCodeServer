@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
-import { MODELS } from '../lib/models';
+import { useModels } from '../lib/models';
 import { EFFORTS } from '../lib/effort';
 import { C, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, SegmentedControl, Toggle } from './ui';
@@ -20,6 +20,7 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
   // Вкладка «Скиллы» доступна только для проектной сессии (SkillsPanel требует projectId)
   const hasSkills = !!session.projectId;
   const [tab, setTab] = useState<Tab>('settings');
+  const models = useModels();
   const [name, setName] = useState(session.name ?? '');
   const [model, setModel] = useState(session.model ?? '');
   const [effort, setEffort] = useState(session.effort ?? '');
@@ -95,7 +96,7 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
           </Field>
 
           <Field label="Модель" hint="Применится со следующего сообщения.">
-            <SegmentedControl value={model} options={MODELS} onChange={setModel} columns={2} />
+            <SegmentedControl value={model} options={models} onChange={setModel} columns={2} />
           </Field>
 
           <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">

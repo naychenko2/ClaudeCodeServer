@@ -507,7 +507,8 @@ public class ClaudeSession : IAsyncDisposable
     }
 
     // На Windows ищем claude.exe напрямую — cmd.exe /c не проксирует stdin корректно
-    private static string FindClaudeExecutable()
+    // (используется также ModelCatalogService для опроса списка моделей)
+    internal static string FindClaudeExecutable()
     {
         if (!OperatingSystem.IsWindows()) return "claude";
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);

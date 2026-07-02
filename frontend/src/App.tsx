@@ -16,6 +16,7 @@ import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
+import { loadModels } from './lib/models'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 const HUB_TAB_KEY = 'cc_hub_tab'
@@ -71,6 +72,7 @@ export default function App() {
       .then(me => {
         if (me?.featureFlags) setAllFlags(me.featureFlags)
         setCtxThresholdsFromServer(me?.contextThresholds)
+        loadModels() // актуальный список моделей Claude (fire-and-forget, есть fallback)
       })
       .catch(() => { /* результат отразится в _online */ })
       .finally(() => {

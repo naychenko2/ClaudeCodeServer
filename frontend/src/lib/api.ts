@@ -57,6 +57,11 @@ export const api = {
     account: (days = 7) => request<FalAccountResponse>(`/fal/account?days=${days}`),
   },
 
+  models: {
+    list: () =>
+      request<{ models: { value: string; displayName: string; description?: string | null }[] }>('/models'),
+  },
+
   featureFlags: {
     get: () => request<{ definitions: FeatureFlagDefinition[]; values: Record<string, boolean> }>('/feature-flags'),
     set: (key: string, enabled: boolean) =>

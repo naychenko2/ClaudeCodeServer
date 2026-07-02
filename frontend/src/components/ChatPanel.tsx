@@ -3,7 +3,7 @@ import { MermaidDiagram } from './MermaidDiagram';
 import { getExplorerCreateInDir } from './FileExplorer';
 import type { Project, Session, ChatItem, FileEntry, SkillInfo, AgentInfo, ClaudeBilling } from '../types';
 import { useSession } from '../hooks/useSession';
-import { countFiles } from '../hooks/useSessionArtifacts';
+import { countFiles, computeTodos, type TodoItem } from '../hooks/useSessionArtifacts';
 import { useOnline } from '../hooks/useOnline';
 import { api, type WorkflowAgentInfo } from '../lib/api';
 import { modelLabel } from '../lib/models';
@@ -1277,6 +1277,18 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return -1;
   }, [items]);
 
+  // Todo через TaskCreate/TaskUpdate инкрементальны (в отличие от TodoWrite с полным
+  // списком) — карточку чек-листа рисуем один раз, на последнем task-вызове ленты:
+  // там агрегат computeTodos отражает актуальное состояние всего списка
+  const lastTaskIdx = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === 'tool_use' && !it.parentToolUseId && (it.name === 'TaskCreate' || it.name === 'TaskUpdate')) return i;
+    }
+    return -1;
+  }, [items]);
+  const taskTodos = useMemo(() => (lastTaskIdx >= 0 ? computeTodos(items) : []), [items, lastTaskIdx]);
+
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке)
   const renderItem = (item: ChatItem, i: number) => (
     <ChatItemView
@@ -1300,6 +1312,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onRevert={project ? (path => api.files.revert(project.id, path)) : undefined}
       onRetry={handleRetry}
       onInterrupt={interrupt}
+      taskPlan={i === lastTaskIdx && taskTodos.length > 0 ? taskTodos : undefined}
     />
   );
 
@@ -1308,8 +1321,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // file_changed между инструментами не разрывал стопку. Контур рисуем только если в
   // блоке есть хотя бы один инструмент; одиночные file_changed остаются обычными карточками.
   const renderItems = () => {
-    const isTool = (it: ChatItem) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow';
-    const inBlock = (it: ChatItem) => isTool(it) || it.kind === 'file_changed';
+    // Последний task-вызов (lastTaskIdx) исключаем из блока действий, как и TodoWrite:
+    // на его месте рисуется отдельная карточка чек-листа, ей не место внутри контура
+    const isTool = (it: ChatItem, idx: number) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && idx !== lastTaskIdx && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow';
+    const inBlock = (it: ChatItem, idx: number) => isTool(it, idx) || it.kind === 'file_changed';
     // Строим карту дочерних tool_use для Workflow-блоков
     const childrenByParentId = new Map<string, ToolUseItem[]>();
     for (const it of items) {
@@ -1391,10 +1406,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           pushNode(subDiv, start);
         }
         prevNodeWasBlock = false;
-      } else if (inBlock(items[i])) {
+      } else if (inBlock(items[i], i)) {
         const start = i;
         const slice: Array<[ChatItem, number]> = [];
-        while (i < items.length && inBlock(items[i])) { slice.push([items[i], i]); i++; }
+        while (i < items.length && inBlock(items[i], i)) { slice.push([items[i], i]); i++; }
         // Один контур: инструменты и изменения файлов — компактными строками (в т.ч. одиночные).
         // Для agent-вызовов с детьми сразу рисуем детей inline под родителем — иначе при параллельных
         // агентах все их инструменты сливаются в один безымянный блок после шапки.
@@ -1762,14 +1777,15 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   );
 }
 
-// Карточка плана задач (TodoWrite) — закреплённый чек-лист с прогрессом
-interface TodoEntry { content: string; status: string; activeForm?: string }
+// Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
+function parseTodoWriteInput(input: unknown): TodoItem[] {
+  const t = (input as { todos?: unknown } | null)?.todos;
+  return Array.isArray(t) ? (t as TodoItem[]) : [];
+}
 
-function TodoPlanView({ input }: { input: unknown }) {
-  const todos = (() => {
-    const t = (input as { todos?: unknown } | null)?.todos;
-    return Array.isArray(t) ? (t as TodoEntry[]) : [];
-  })();
+// Карточка плана задач — закрепленный чек-лист с прогрессом. Источник списка:
+// input TodoWrite либо агрегат TaskCreate/TaskUpdate (computeTodos)
+function TodoPlanView({ todos }: { todos: TodoItem[] }) {
   if (todos.length === 0) return null;
   const done = todos.filter(t => t.status === 'completed').length;
 
@@ -1847,8 +1863,17 @@ function toolMeta(name: string): { color: string; icon: React.ReactNode } {
     return { color: '#B05C38', icon: svg(<><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>) };
   if (n === 'skill')
     return { color: '#8E4A82', icon: svg(<><path d="M12 3l1.9 5.2L19 10l-5.1 1.8L12 17l-1.9-5.2L5 10l5.1-1.8z" /><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" /></>) };
+  // Todo-задачи — та же «галочка в рамке», что у карточки плана
+  if (['taskcreate', 'taskupdate', 'tasklist', 'taskget'].includes(n))
+    return { color: C.accent, icon: svg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>) };
   return { color: C.info, icon: svg(<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6 2 2 6-6a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3z" />) };
 }
+
+// Статусы todo-задач (TaskUpdate) по-русски — для компактной строки в ленте
+const TASK_STATUS_RU: Record<string, string> = {
+  pending: 'в очереди', in_progress: 'в работе', completed: 'готово',
+  cancelled: 'отменена', deleted: 'удалена',
+};
 
 // Русские названия инструментов для ленты чата
 const TOOL_LABELS: Record<string, string> = {
@@ -1857,6 +1882,7 @@ const TOOL_LABELS: Record<string, string> = {
   glob: 'Поиск файлов', grep: 'Поиск', ls: 'Список', task: 'Субагент', agent: 'Субагент',
   websearch: 'Веб-поиск', webfetch: 'Загрузка страницы', skill: 'Навык',
   todowrite: 'План задач', exitplanmode: 'План', toolsearch: 'Поиск инструментов',
+  taskcreate: 'Задача', taskupdate: 'Задача', tasklist: 'Список задач', taskget: 'Задача',
   killshell: 'Остановка команды',
 };
 // Имя инструмента для показа: MCP → «server · tool», известные — по-русски, прочее — как есть
@@ -2362,7 +2388,12 @@ function ToolUseView({ item, online = true, onOpenFile }: { item: Extract<ChatIt
   // Пути показываем относительно корня проекта: file_path/path — целиком, в командах и
   // glob-шаблонах вырезаем абсолютный корень из текста (там путь — часть строки).
   const pathVal = inp.file_path ?? inp.path ?? inp.notebook_path;
-  const toolArg = item.streamingArg ?? String(
+  // Человекочитаемый аргумент для todo-задач: TaskCreate — тема, TaskUpdate — «#id → статус»
+  const taskArg = n === 'taskcreate' && typeof inp.subject === 'string' ? inp.subject
+    : n === 'taskupdate' && inp.taskId != null
+      ? `#${inp.taskId}${typeof inp.status === 'string' ? ` → ${TASK_STATUS_RU[inp.status] ?? inp.status}` : ''}`
+      : null;
+  const toolArg = item.streamingArg ?? taskArg ?? String(
     (inp.command != null ? stripRoot(String(inp.command), project?.rootPath) : null)
     ?? (pathVal != null ? relPath(String(pathVal), project?.rootPath) : null)
     ?? (inp.pattern != null ? stripRoot(String(inp.pattern), project?.rootPath) : null)
@@ -3488,9 +3519,11 @@ interface ItemProps {
   onRevert?: (path: string) => void;
   onRetry: () => void;
   onInterrupt: () => void;
+  // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
+  taskPlan?: TodoItem[];
 }
 
-function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt }: ItemProps) {
+function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan }: ItemProps) {
   const project = useContext(ChatProjectContext);
   switch (item.kind) {
     case 'user_message':
@@ -3607,9 +3640,13 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
     }
 
     case 'tool_use':
-      // План задач рисуем отдельной карточкой-чек-листом. Линию-коннектор для дочерних
-      // вызовов субагента (parentToolUseId) рисует renderItems — единой непрерывной полосой.
-      return item.name === 'TodoWrite' ? <TodoPlanView input={item.input} /> : <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
+      // План задач рисуем отдельной карточкой-чек-листом: TodoWrite несет полный список
+      // в своем input, для инкрементальных TaskCreate/TaskUpdate агрегат (taskPlan)
+      // прокидывает ChatPanel — только на последний task-вызов ленты. Линию-коннектор для
+      // дочерних вызовов субагента (parentToolUseId) рисует renderItems — единой полосой.
+      if (item.name === 'TodoWrite') return <TodoPlanView todos={parseTodoWriteInput(item.input)} />;
+      if (taskPlan) return <TodoPlanView todos={taskPlan} />;
+      return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
 
     case 'ask_question':
       return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} onInterrupt={onInterrupt} />;

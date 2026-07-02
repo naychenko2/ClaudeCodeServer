@@ -6,7 +6,8 @@ import { useSession } from './useSession';
 //  - файлы: измененные (file_changed/Write) + упомянутые путем в тексте ответа,
 //  - планы (из ExitPlanMode) со статусами,
 //  - задачи (TodoWrite либо TaskCreate/TaskUpdate) — актуальный чек-лист прогресса,
-//  - ссылки, упомянутые в ответах и запросах WebFetch.
+//  - ссылки, упомянутые в ответах и запросах WebFetch,
+//  - агенты: субагенты (Task/Agent) + агенты внутри Workflow.
 
 export interface ArtifactFile {
   path: string;       // внутри проекта — относительный (кликабельный); вне — абсолютный (копируется)
@@ -39,11 +40,51 @@ export interface TodoItem {
   activeForm?: string;
 }
 
+// Агент сессии: субагент (tool_use Task/Agent) либо агент внутри Workflow.
+// Статус выводится из ленты: нет result и ход ещё идёт → running; isError → error.
+export type AgentStatus = 'running' | 'done' | 'error';
+
+// Один дочерний вызов инструмента субагента — строка мини-ленты в раскрытой карточке
+export interface AgentToolCall {
+  id: string;
+  name: string;
+  arg?: string;     // человекочитаемый аргумент (команда/путь/паттерн/запрос)
+  running: boolean; // result ещё не пришёл (и ход не завершён)
+  isError?: boolean;
+}
+
+export interface AgentArtifact {
+  id: string;
+  kind: 'subagent' | 'workflow';
+  type?: string;       // subagent_type из input (для workflow не приходит)
+  label: string;       // description либо первая строка prompt/summary
+  status: AgentStatus;
+  background: boolean; // запущен с run_in_background — result приходит сразу, статус завершения неизвестен
+  toolCount: number;   // сколько инструментов вызвал (дочерние tool_use / tools у workflow-агента)
+  lastTool?: string;   // последний дочерний инструмент — «чем занят сейчас»
+  prompt?: string;     // полный промпт, выданный агенту родителем
+  resultText?: string; // финальный ответ агента (у workflow — summary)
+  calls?: AgentToolCall[];                    // дочерние вызовы по порядку (только субагенты)
+  tools?: { name: string; count: number }[];  // сводка инструментов (только workflow)
+  files?: string[];                           // затронутые файлы (только workflow)
+}
+
+// Группа агентов одного запуска Workflow — секция-аккордеон на вкладке «Агенты»
+export interface WorkflowGroup {
+  id: string;         // id tool_use Workflow
+  name: string;       // meta.name из script либо имя сохранённого workflow
+  agents: AgentArtifact[];
+  doneCount: number;
+  settled: boolean;   // workflow целиком завершён
+}
+
 export interface SessionArtifacts {
   files: ArtifactFile[];
   plans: PlanArtifact[];
   todos: TodoItem[];
   links: ArtifactLink[];
+  agents: AgentArtifact[];      // одиночные субагенты (workflow-агенты — в workflows)
+  workflows: WorkflowGroup[];
 }
 
 // Инструменты, которые меняют файл — путь берём из их аргументов как запасной источник
@@ -177,6 +218,143 @@ export function computeTodos(items: ChatItem[]): TodoItem[] {
   return tasks.size ? [...tasks.values()] : todos;
 }
 
+// Имена инструментов запуска субагентов и шеллов (регистр в разных версиях CLI плавает)
+const AGENT_TOOLS = new Set(['task', 'agent']);
+
+// Первая строка длинного текста (prompt/summary) для подписи карточки
+function firstLine(s: string): string {
+  const line = s.split('\n')[0].trim();
+  return line.length > 120 ? line.slice(0, 117) + '…' : line;
+}
+
+// Человекочитаемый аргумент дочернего вызова — по приоритету полей input,
+// как в строке инструмента в ленте чата (команда → путь → паттерн → запрос → …)
+function toolCallArg(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const o = input as Record<string, unknown>;
+  const v = o.command ?? o.file_path ?? o.path ?? o.notebook_path ?? o.pattern
+    ?? o.query ?? o.url ?? o.description ?? o.prompt;
+  return typeof v === 'string' && v ? firstLine(v) : undefined;
+}
+
+// Заголовок группы workflow. Приоритет — человекочитаемый meta.description
+// (пишется обычным языком), kebab-имя meta.name / input.name — фоллбэк.
+// Блок меты вырезаем по балансу скобок, как parseWorkflowMeta в ленте чата,
+// чтобы регекс не зацепил поля из тела скрипта.
+function workflowName(input: Record<string, unknown>): string {
+  const script = typeof input.script === 'string' ? input.script : '';
+  const metaStart = script.indexOf('export const meta');
+  if (metaStart !== -1) {
+    const braceStart = script.indexOf('{', metaStart);
+    if (braceStart !== -1) {
+      let depth = 0, metaEnd = -1;
+      for (let i = braceStart; i < script.length; i++) {
+        if (script[i] === '{') depth++;
+        else if (script[i] === '}') { depth--; if (depth === 0) { metaEnd = i; break; } }
+      }
+      if (metaEnd !== -1) {
+        const metaStr = script.slice(braceStart, metaEnd + 1);
+        const desc = metaStr.match(/description\s*:\s*['"`]([^'"`\n]+)['"`]/)?.[1];
+        if (desc) return desc;
+        const nm = metaStr.match(/name\s*:\s*['"`]([^'"`\n]+)['"`]/)?.[1];
+        if (nm) return nm;
+      }
+    }
+  }
+  // Сохранённый workflow запускается по имени, без script
+  if (typeof input.name === 'string' && input.name) return input.name;
+  return 'Workflow';
+}
+
+// Собрать агентов сессии из ленты чата:
+//  - субагенты: tool_use Task/Agent верхнего уровня; работает, пока нет result
+//    (и ход не завершился — после result/interrupted незакрытые вызовы считаем оборванными);
+//  - workflow-агенты: массив workflowAgents у tool_use Workflow (приходит через workflow_progress).
+export function computeAgents(items: ChatItem[]): { agents: AgentArtifact[]; workflows: WorkflowGroup[] } {
+  // Всё, что до последнего конца хода, уже не может быть running
+  let lastTurnEndIdx = -1;
+  items.forEach((it, i) => {
+    if (it.kind === 'result' || it.kind === 'interrupted' || it.kind === 'session_ended') lastTurnEndIdx = i;
+  });
+
+  // Дочерние tool_use по id родителя — мини-лента действий субагента
+  const children = new Map<string, AgentToolCall[]>();
+  items.forEach((it, i) => {
+    if (it.kind !== 'tool_use' || !it.parentToolUseId) return;
+    const arr = children.get(it.parentToolUseId) ?? [];
+    arr.push({
+      id: it.id,
+      name: it.name,
+      arg: toolCallArg(it.input),
+      running: it.result === undefined && i > lastTurnEndIdx,
+      isError: it.isError,
+    });
+    children.set(it.parentToolUseId, arr);
+  });
+
+  const agents: AgentArtifact[] = [];
+  const workflows: WorkflowGroup[] = [];
+
+  items.forEach((it, i) => {
+    if (it.kind !== 'tool_use' || it.parentToolUseId) return;
+    const name = it.name.toLowerCase();
+    const input = (it.input && typeof it.input === 'object' ? it.input : {}) as Record<string, unknown>;
+
+    if (AGENT_TOOLS.has(name)) {
+      const prompt = typeof input.prompt === 'string' && input.prompt ? input.prompt : undefined;
+      const label = typeof input.description === 'string' && input.description
+        ? input.description
+        : prompt ? firstLine(prompt) : 'Субагент';
+      const isBg = input.run_in_background === true;
+      // Для фоновых result приходит сразу при запуске — о завершении не говорит
+      const settled = it.result !== undefined || i <= lastTurnEndIdx;
+      const calls = children.get(it.id) ?? [];
+      const last = calls[calls.length - 1];
+      agents.push({
+        id: it.id,
+        kind: 'subagent',
+        type: typeof input.subagent_type === 'string' ? input.subagent_type : undefined,
+        label,
+        status: it.isError ? 'error' : settled && !isBg ? 'done' : 'running',
+        background: isBg,
+        toolCount: calls.length,
+        lastTool: !settled || isBg ? last?.name : undefined,
+        prompt,
+        // Для фоновых result — это подтверждение запуска, а не ответ агента
+        resultText: !isBg && !it.isError && it.result?.trim() ? it.result : undefined,
+        calls,
+      });
+    } else if (name === 'workflow') {
+      const wfSettled = it.workflowDone === true || it.result !== undefined || i <= lastTurnEndIdx;
+      const wfAgents: AgentArtifact[] = (it.workflowAgents ?? []).map(a => {
+        const src = a.summary?.trim() || a.prompt;
+        return {
+          id: `${it.id}:${a.id}`,
+          kind: 'workflow',
+          label: src ? firstLine(src) : 'Агент workflow',
+          status: a.isDone || wfSettled ? 'done' : 'running',
+          background: false,
+          toolCount: (a.tools ?? []).reduce((s, t) => s + t.count, 0),
+          prompt: a.prompt || undefined,
+          resultText: a.summary?.trim() || undefined,
+          tools: a.tools,
+          files: a.files,
+        };
+      });
+      // Группу показываем даже пока агенты ещё не появились (workflow только стартовал)
+      workflows.push({
+        id: it.id,
+        name: workflowName(input),
+        agents: wfAgents,
+        doneCount: wfAgents.filter(a => a.status === 'done').length,
+        settled: wfSettled,
+      });
+    }
+  });
+
+  return { agents, workflows };
+}
+
 export function computeArtifacts(items: ChatItem[], rootPath: string): SessionArtifacts {
   // path → агрегированные дельты, порядок последнего касания сохраняем через Map
   const files = new Map<string, ArtifactFile>();
@@ -263,6 +441,7 @@ export function computeArtifacts(items: ChatItem[], rootPath: string): SessionAr
     plans,
     todos: computeTodos(items),
     links: [...links.values()],
+    ...computeAgents(items),
   };
 }
 

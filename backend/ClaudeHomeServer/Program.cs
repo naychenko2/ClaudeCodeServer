@@ -48,6 +48,7 @@ builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<FalAccountService>();
 builder.Services.AddSingleton<UsageService>();
 builder.Services.AddSingleton<SessionManager>();
+builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");
 builder.Services.AddHttpClient("fal");
@@ -111,6 +112,8 @@ var app = builder.Build();
 
 // Прогрев сервисов на старте — UserStore печатает предупреждение если создал admin/admin
 app.Services.GetRequiredService<UserStore>();
+// Фоновый прогрев каталога моделей (опрос claude CLI ~5 с — не задерживаем старт)
+_ = Task.Run(() => app.Services.GetRequiredService<ModelCatalogService>().GetModelsAsync());
 app.Services.GetRequiredService<JwtService>();
 
 // Однократная миграция: переносим DifyDatasetId/DocumentTags из старых Project-записей в WorkspaceKnowledge

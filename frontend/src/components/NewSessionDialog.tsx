@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
-import { MODELS } from '../lib/models';
+import { useModels } from '../lib/models';
 import { EFFORTS } from '../lib/effort';
 import { C, R, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, TextArea, SegmentedControl } from './ui';
@@ -19,6 +19,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
   const [firstMessage, setFirstMessage] = useState('');
   const [mode, setMode] = useState<Mode>('acceptEdits');
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
+  const models = useModels();
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [loading, setLoading] = useState(false);
@@ -90,7 +91,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
       </Field>
 
       <Field label="Модель">
-        <SegmentedControl value={model} options={MODELS} onChange={setModel} columns={2} />
+        <SegmentedControl value={model} options={models} onChange={setModel} columns={2} />
       </Field>
 
       <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">

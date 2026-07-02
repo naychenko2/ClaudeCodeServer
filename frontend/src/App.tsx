@@ -16,6 +16,7 @@ import { navPush, navReplace, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags, useFeature, FLAGS } from './lib/featureFlags'
+import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 const HUB_TAB_KEY = 'cc_hub_tab'
@@ -78,7 +79,10 @@ export default function App() {
     // Если не ответил — показываем приложение в текущем (возможно офлайн) состоянии.
     const timer = setTimeout(() => setAuthChecking(false), 3_000)
     api.auth.me()
-      .then(me => { if (me?.featureFlags) setAllFlags(me.featureFlags) })
+      .then(me => {
+        if (me?.featureFlags) setAllFlags(me.featureFlags)
+        setCtxThresholdsFromServer(me?.contextThresholds)
+      })
       .catch(() => { /* результат отразится в _online */ })
       .finally(() => {
         clearTimeout(timer)

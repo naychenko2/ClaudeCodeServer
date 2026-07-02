@@ -1,5 +1,6 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -39,7 +40,31 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         var username = User.FindFirstValue(ClaimTypes.Name);
         var role = User.FindFirstValue(ClaimTypes.Role);
         var featureFlags = userId is null ? null : flags.GetEffective(userId);
-        return Ok(new { userId, username, role, featureFlags });
+        // Пороги индикатора контекста: override юзера или null (фронт применит дефолты)
+        var contextThresholds = userId is null ? null : users.GetById(userId)?.ContextThresholds;
+        return Ok(new { userId, username, role, featureFlags, contextThresholds });
+    }
+
+    // Пороги индикатора заполнения контекста (per-user). body null/пустой → сброс к дефолтам
+    [Authorize]
+    [HttpPut("context-thresholds")]
+    public IActionResult SetContextThresholds([FromBody] ContextThresholdsRequest req)
+    {
+        var userId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (userId is null) return Unauthorized();
+
+        ContextThresholds? thresholds = null;
+        if (req.WarnPct is not null || req.DangerPct is not null)
+        {
+            if (req.WarnPct is not (>= 1 and <= 99) || req.DangerPct is not (>= 1 and <= 99))
+                return BadRequest(new { error = "Пороги должны быть в диапазоне 1–99" });
+            if (req.WarnPct >= req.DangerPct)
+                return BadRequest(new { error = "Порог предупреждения должен быть меньше порога тревоги" });
+            thresholds = new ContextThresholds(req.WarnPct.Value, req.DangerPct.Value);
+        }
+
+        if (!users.SetContextThresholds(userId, thresholds)) return Unauthorized();
+        return Ok(new { contextThresholds = thresholds });
     }
 
     [Authorize]
@@ -61,3 +86,4 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
 
 public record LoginRequest(string? Username, string? Password);
 public record ChangePasswordRequest(string? CurrentPassword, string NewPassword);
+public record ContextThresholdsRequest(int? WarnPct, int? DangerPct);

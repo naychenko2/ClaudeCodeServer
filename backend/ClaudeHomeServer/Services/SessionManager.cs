@@ -268,43 +268,7 @@ public class SessionManager
             SaveSessions();
         }
 
-        // После перезапуска сервера Process может быть null — восстанавливаем сессию
-        if (entry.Process is null)
-        {
-            var existingHistory = entry.Info.ClaudeSessionId != null
-                ? await _history.LoadAsync(entry.Info.ClaudeSessionId)
-                : [];
-            var accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId,
-                stripMemoryMarkers: entry.Info.RoleId != null);
-            entry.Accumulator = accumulator;
-
-            // Чат вне проекта — рабочая папка Chats, без проектного промпта и правил;
-            // проектная сессия — RootPath/SystemPrompt/PermissionRules из проекта.
-            ClaudeSession claudeSession;
-            if (entry.Info.ProjectId is null)
-            {
-                var rootPath = ResolveChatRoot(entry.Info.OwnerId
-                    ?? throw new InvalidOperationException("У чата не задан владелец"));
-                claudeSession = new ClaudeSession(entry.Info, rootPath,
-                    msg => OnMessageAsync(sessionId, accumulator, msg),
-                    _mcpConfigPath, rawSystemPrompt: null,
-                    _skills, _workspaceStore, permissionRules: null,
-                    roles: _roles, roleMemory: _roleMemory);
-            }
-            else
-            {
-                var project = _projects.GetById(entry.Info.ProjectId)
-                    ?? throw new InvalidOperationException("Проект не найден");
-                claudeSession = new ClaudeSession(entry.Info, project.RootPath,
-                    msg => OnMessageAsync(sessionId, accumulator, msg),
-                    _mcpConfigPath, project.SystemPrompt,
-                    _skills, _workspaceStore,
-                    () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                    _roles, _roleMemory);
-            }
-            entry.Process = claudeSession;
-            await claudeSession.StartAsync();
-        }
+        await EnsureProcessAsync(sessionId, entry);
 
         // Авто-имя сессии по первому сообщению (Claude в --print не отдаёт title/summary).
         // Ставим только если имя ещё не задано — последующие сообщения название не меняют.
@@ -325,7 +289,64 @@ public class SessionManager
             SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
 
         entry.Accumulator?.OnUserMessage(text, attachedPaths);
-        await entry.Process.SendMessageAsync(text, attachedPaths);
+        await entry.Process!.SendMessageAsync(text, attachedPaths);
+    }
+
+    // Ручное сворачивание контекста: /compact в CLI, минуя счётчики и историю user-сообщений
+    public async Task CompactAsync(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry))
+            throw new InvalidOperationException("Сессия не найдена");
+        if (entry.Info.ClaudeSessionId is null) return; // ходов ещё не было — сворачивать нечего
+
+        await EnsureProcessAsync(sessionId, entry);
+
+        entry.Info.Status = SessionStatus.Working;
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        await BroadcastStatusChangeAsync(sessionId, entry.Info,
+            SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
+
+        await entry.Process!.CompactAsync();
+    }
+
+    // После перезапуска сервера Process может быть null — восстанавливаем сессию
+    private async Task EnsureProcessAsync(string sessionId, SessionEntry entry)
+    {
+        if (entry.Process is not null) return;
+
+        var existingHistory = entry.Info.ClaudeSessionId != null
+            ? await _history.LoadAsync(entry.Info.ClaudeSessionId)
+            : [];
+        var accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId,
+            stripMemoryMarkers: entry.Info.RoleId != null);
+        entry.Accumulator = accumulator;
+
+        // Чат вне проекта — рабочая папка Chats, без проектного промпта и правил;
+        // проектная сессия — RootPath/SystemPrompt/PermissionRules из проекта.
+        ClaudeSession claudeSession;
+        if (entry.Info.ProjectId is null)
+        {
+            var rootPath = ResolveChatRoot(entry.Info.OwnerId
+                ?? throw new InvalidOperationException("У чата не задан владелец"));
+            claudeSession = new ClaudeSession(entry.Info, rootPath,
+                msg => OnMessageAsync(sessionId, accumulator, msg),
+                _mcpConfigPath, rawSystemPrompt: null,
+                _skills, _workspaceStore, permissionRules: null,
+                roles: _roles, roleMemory: _roleMemory);
+        }
+        else
+        {
+            var project = _projects.GetById(entry.Info.ProjectId)
+                ?? throw new InvalidOperationException("Проект не найден");
+            claudeSession = new ClaudeSession(entry.Info, project.RootPath,
+                msg => OnMessageAsync(sessionId, accumulator, msg),
+                _mcpConfigPath, project.SystemPrompt,
+                _skills, _workspaceStore,
+                () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
+                _roles, _roleMemory);
+        }
+        entry.Process = claudeSession;
+        await claudeSession.StartAsync();
     }
 
     // Заголовок чата из первого сообщения: первая строка, обрезанная до разумной длины.
@@ -475,6 +496,10 @@ public class SessionManager
                     }
                     break;
                 case FileChangedMessage m:  acc.OnFileChanged(m.Path, m.Added, m.Removed); break;
+                case CompactBoundaryMessage m:
+                    acc.OnCompactBoundary(m.Trigger, m.PreTokens, m.PostTokens);
+                    await acc.SaveSnapshotAsync(_history); // авто-компакт бывает посреди хода — фиксируем сразу
+                    break;
                 case AskQuestionMessage m:
                     acc.OnAskQuestion(m.ToolUseId, m.Input);
                     await acc.SaveSnapshotAsync(_history);

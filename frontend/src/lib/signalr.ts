@@ -117,6 +117,12 @@ export async function interruptSession(sessionId: string): Promise<void> {
   await conn.invoke('Interrupt', sessionId);
 }
 
+// Ручное сворачивание контекста сессии (/compact)
+export async function compactSession(sessionId: string): Promise<void> {
+  const conn = await ensureConnected();
+  await conn.invoke('CompactSession', sessionId);
+}
+
 export async function answerQuestion(sessionId: string, toolUseId: string, answerText: string): Promise<void> {
   const conn = await ensureConnected();
   await conn.invoke('AnswerQuestion', sessionId, toolUseId, answerText);

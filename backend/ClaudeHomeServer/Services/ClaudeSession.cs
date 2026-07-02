@@ -195,7 +195,16 @@ public class ClaudeSession : IAsyncDisposable
         var (imagePaths, otherPaths) = SplitImagePaths(attachedPaths);
         var fullText = BuildMessageText(effectiveText, otherPaths);
 
-        // Запускаем ход в фоне, чтобы не блокировать SignalR-соединение
+        return QueueTurnAsync(fullText, imagePaths);
+    }
+
+    // Ручное сворачивание контекста: /compact как обычный ход,
+    // минуя счётчики сообщений, авто-имя чата и разворачивание скиллов
+    public Task CompactAsync() => QueueTurnAsync("/compact", []);
+
+    // Ставит ход в очередь в фоне, чтобы не блокировать SignalR-соединение
+    private Task QueueTurnAsync(string fullText, List<string> imagePaths)
+    {
         _ = Task.Run(async () =>
         {
             if (_cts.IsCancellationRequested) return;
@@ -667,7 +676,21 @@ public class ClaudeSession : IAsyncDisposable
                         ? tr.GetString() ?? "auto" : "auto";
                     int? preTokens = meta.ValueKind == JsonValueKind.Object
                         && meta.TryGetProperty("pre_tokens", out var pt) && pt.TryGetInt32(out var ptv) ? ptv : null;
-                    await _onMessage(new CompactBoundaryMessage(trigger, preTokens));
+                    int? postTokens = meta.ValueKind == JsonValueKind.Object
+                        && meta.TryGetProperty("post_tokens", out var pst) && pst.TryGetInt32(out var pstv) ? pstv : null;
+                    await _onMessage(new CompactBoundaryMessage(trigger, preTokens, postTokens));
+                }
+                else if (sysSubtype == "status")
+                {
+                    // Ход компакции: status=="compacting" — началась; compact_result — завершилась
+                    var status = root.TryGetProperty("status", out var stv) && stv.ValueKind == JsonValueKind.String
+                        ? stv.GetString() : null;
+                    var compactResult = root.TryGetProperty("compact_result", out var crv) && crv.ValueKind == JsonValueKind.String
+                        ? crv.GetString() : null;
+                    var compactError = root.TryGetProperty("compact_error", out var cev) && cev.ValueKind == JsonValueKind.String
+                        ? cev.GetString() : null;
+                    if (status == "compacting" || compactResult is not null)
+                        await _onMessage(new CompactStatusMessage(status, compactResult, compactError));
                 }
                 break;
 
@@ -790,6 +813,9 @@ public class ClaudeSession : IAsyncDisposable
     {
         if (!root.TryGetProperty("message", out var msg)) return;
         if (!msg.TryGetProperty("content", out var content)) return;
+        // Строковый content — служебные user-сообщения CLI (summary после компакта,
+        // <local-command-stdout>): не tool_result, в ленту не транслируем
+        if (content.ValueKind != JsonValueKind.Array) return;
 
         foreach (var block in content.EnumerateArray())
         {

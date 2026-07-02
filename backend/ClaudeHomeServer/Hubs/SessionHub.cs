@@ -92,6 +92,12 @@ public class SessionHub : Hub
         _sessions.Interrupt(sessionId);
     }
 
+    // Ручное сворачивание контекста сессии (/compact)
+    public async Task CompactSession(string sessionId)
+    {
+        await _sessions.CompactAsync(sessionId);
+    }
+
     public void AnswerQuestion(string sessionId, string toolUseId, string answerText)
     {
         _sessions.AnswerQuestion(sessionId, toolUseId, answerText);

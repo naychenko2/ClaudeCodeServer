@@ -19,11 +19,17 @@ export const api = {
         body: JSON.stringify({ username, password }),
       }),
     me: () =>
-      request<{ userId: string; username: string; role: string; featureFlags?: Record<string, boolean> }>('/auth/me'),
+      request<{ userId: string; username: string; role: string; featureFlags?: Record<string, boolean>; contextThresholds?: { warnPct: number; dangerPct: number } | null }>('/auth/me'),
     changePassword: (currentPassword: string, newPassword: string) =>
       request<void>('/auth/password', {
         method: 'PUT',
         body: JSON.stringify({ currentPassword, newPassword }),
+      }),
+    // Пороги индикатора контекста (per-user); пустой body → сброс к дефолтам
+    setContextThresholds: (t: { warnPct?: number; dangerPct?: number }) =>
+      request<{ contextThresholds: { warnPct: number; dangerPct: number } | null }>('/auth/context-thresholds', {
+        method: 'PUT',
+        body: JSON.stringify(t),
       }),
   },
 

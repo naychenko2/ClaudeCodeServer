@@ -155,7 +155,8 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { type: 'error'; text: string }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean; overageStatus?: string; overageResetsAt?: string }
-  | { type: 'compact_boundary'; trigger: string; preTokens?: number }
+  | { type: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
+  | { type: 'compact_status'; status?: string; compactResult?: string; compactError?: string }
   | { type: 'truncated' }
   | { type: 'redacted_thinking' }
   | { type: 'exited' }
@@ -236,7 +237,7 @@ export type ChatItem =
   | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[] }
   | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }
-  | { kind: 'compact_boundary'; trigger: string; preTokens?: number }
+  | { kind: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
   | { kind: 'truncated' }
   | { kind: 'redacted_thinking' }
   | { kind: 'interrupted' }

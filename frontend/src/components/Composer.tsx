@@ -461,9 +461,9 @@ export function Composer({
       </button>
       {modeMenuOpen && (
         <div style={{
-          // На мобиле кнопка режима слева → раскрываем вправо (left:0), иначе ушла бы за левый край.
-          // На десктопе кнопка справа → раскрываем влево (right:0).
-          position: 'absolute', bottom: 'calc(100% + 6px)', ...(isMobile ? { left: 0 } : { right: 0 }),
+          // Кнопка режима теперь слева в обеих раскладках → раскрываем меню вправо (left:0),
+          // иначе широкое меню ушло бы за левый край.
+          position: 'absolute', bottom: 'calc(100% + 6px)', left: 0,
           minWidth: isMobile ? 260 : 248, maxWidth: 'calc(100vw - 32px)',
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
           boxShadow: SHADOW.dropdown, padding: 5, zIndex: Z.dropdown,
@@ -707,12 +707,12 @@ export function Composer({
       ) : (
         /* Десктоп: всё в одну строку */
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {modeButton}
           {attachButton}
           {slashButton}
           {inputArea}
-          {modeButton}
           {agentSelector}
-          {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
+          {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <><div style={{ width: 12, flexShrink: 0 }} />{micButton}{sendButton}</>}
         </div>
       )}
 

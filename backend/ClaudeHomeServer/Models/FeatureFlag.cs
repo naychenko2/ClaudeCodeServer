@@ -35,7 +35,7 @@ public static class FeatureFlagCatalog
         new FeatureFlagDefinition(
             Key: "session-artifacts",
             Title: "Артефакты сессии",
-            Description: "Панель справа от чата с измененными файлами, планом, задачами и ссылками за текущую сессию.",
+            Description: "Панель справа от чата с измененными файлами, планом, задачами, агентами и ссылками за текущую сессию.",
             Default: false,
             Stage: "beta"),
     ];

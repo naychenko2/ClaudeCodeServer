@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { ChatItem, ServerMessage, RateLimitInfo } from '../types';
-import { joinSession, joinProject, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision } from '../lib/signalr';
+import { joinSession, joinProject, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision } from '../lib/signalr';
 import { api } from '../lib/api';
 
 // --- Модульный персистентный стор ---
@@ -16,6 +16,10 @@ interface SessionState {
   isHistoryLoading: boolean;
   // Лимиты подписки по окнам (five_hour/seven_day/…) — последнее значение, обновляется каждый ход
   rateLimits: Record<string, RateLimitInfo>;
+  // Идёт сворачивание контекста (system/status: compacting → compact_result)
+  isCompacting: boolean;
+  // Мягкое уведомление о последнем компакте (например «нечего сжимать») — не ошибка
+  compactNote?: string;
 }
 
 const _store = new Map<string, SessionState>();
@@ -27,7 +31,7 @@ const loadHistory = (sid: string, projectId?: string) =>
   projectId ? api.sessions.getHistory(projectId, sid) : api.chats.getHistory(sid);
 
 function getState(sid: string): SessionState {
-  if (!_store.has(sid)) _store.set(sid, { items: [], isWaiting: false, isJoined: false, isHistoryLoading: true, rateLimits: {} });
+  if (!_store.has(sid)) _store.set(sid, { items: [], isWaiting: false, isJoined: false, isHistoryLoading: true, rateLimits: {}, isCompacting: false });
   return _store.get(sid)!;
 }
 
@@ -222,7 +226,30 @@ function ensureHandler() {
         }));
         break;
       case 'compact_boundary':
-        updateItems(sid, items => [...items, { kind: 'compact_boundary', trigger: msg.trigger, preTokens: msg.preTokens }]);
+        // Успешное сжатие — сбрасываем note о «нечего сжимать»
+        setState(sid, prev => ({
+          ...prev,
+          isCompacting: false,
+          compactNote: undefined,
+          items: [...prev.items, { kind: 'compact_boundary', trigger: msg.trigger, preTokens: msg.preTokens, postTokens: msg.postTokens }],
+        }));
+        break;
+      case 'compact_status':
+        // Ход компакции: compacting → началась; compact_result — завершилась.
+        // «Not enough messages» — не ошибка, а «сжимать пока нечего»: показываем мягко (note), без красной плашки.
+        if (msg.status === 'compacting') {
+          setState(sid, prev => ({ ...prev, isCompacting: true }));
+        } else if (msg.compactResult) {
+          const soft = msg.compactResult === 'failed' && /not enough/i.test(msg.compactError ?? '');
+          setState(sid, prev => ({
+            ...prev,
+            isCompacting: false,
+            compactNote: soft ? 'Пока нечего сжимать — слишком мало сообщений.' : undefined,
+            items: (msg.compactResult === 'failed' && !soft)
+              ? [...prev.items, { kind: 'error', text: `Не удалось сжать контекст: ${msg.compactError ?? 'неизвестная ошибка'}`, canRetry: false }]
+              : prev.items,
+          }));
+        }
         break;
       case 'error':
         setState(sid, prev => ({
@@ -352,7 +379,7 @@ export function useSession(sessionId: string | null, projectId?: string) {
     };
   }, [sessionId, projectId]);
 
-  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo> };
+  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined };
 
   const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string) => {
     if (!sessionId) return;
@@ -423,6 +450,28 @@ export function useSession(sessionId: string | null, projectId?: string) {
     await respondPermission(sessionId, requestId, 'allow_always');
   }, [sessionId]);
 
+  // Ручное сворачивание контекста (/compact). Оптимистично ставим ожидание —
+  // фактический статус придёт через status_changed и compact_status
+  const compact = useCallback(async () => {
+    if (!sessionId) return;
+    setState(sessionId, prev => ({ ...prev, isWaiting: true, isCompacting: true, compactNote: undefined }));
+    try {
+      await joinSession(sessionId); // гарантируем группу перед отправкой
+      await compactSession(sessionId);
+    } catch (err) {
+      setState(sessionId, prev => ({
+        ...prev,
+        isWaiting: false,
+        isCompacting: false,
+        items: [...prev.items, {
+          kind: 'error' as const,
+          text: `Не удалось сжать контекст: ${err instanceof Error ? err.message : String(err)}`,
+          canRetry: false,
+        }],
+      }));
+    }
+  }, [sessionId]);
+
   const interrupt = useCallback(() => {
     if (!sessionId) return;
     interruptSession(sessionId);
@@ -475,5 +524,5 @@ export function useSession(sessionId: string | null, projectId?: string) {
     ));
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking };
 }

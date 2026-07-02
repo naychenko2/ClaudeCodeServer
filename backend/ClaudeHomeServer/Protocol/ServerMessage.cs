@@ -71,9 +71,15 @@ public record RateLimitMessage(string LimitType, string? ResetsAt, string? Statu
     string? OverageStatus = null, string? OverageResetsAt = null)
     : ServerMessage("rate_limit");
 
-// Граница компакции контекста: Claude свернул часть истории (system/compact_boundary)
-public record CompactBoundaryMessage(string Trigger, int? PreTokens)
+// Граница компакции контекста: Claude свернул часть истории (system/compact_boundary).
+// PostTokens — размер свернутой истории после компакции (из compact_metadata.post_tokens)
+public record CompactBoundaryMessage(string Trigger, int? PreTokens, int? PostTokens = null)
     : ServerMessage("compact_boundary");
+
+// Ход компакции (system/status): Status == "compacting" — началась;
+// CompactResult == "success"/"failed" (+ CompactError) — завершилась
+public record CompactStatusMessage(string? Status, string? CompactResult = null, string? CompactError = null)
+    : ServerMessage("compact_status");
 
 public record ExitedMessage()
     : ServerMessage("exited");

@@ -65,6 +65,12 @@ internal class TurnAccumulator
         _currentTurn.Add(new StoredFileChangedMessage(path, added, removed));
     }
 
+    public void OnCompactBoundary(string trigger, int? preTokens, int? postTokens)
+    {
+        FlushBuffers();
+        _currentTurn.Add(new StoredCompactBoundaryMessage(trigger, preTokens, postTokens));
+    }
+
     public void OnAskQuestion(string toolUseId, object? input)
     {
         FlushBuffers();

@@ -11,6 +11,7 @@ import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ChatList } from '../components/ChatList';
 import { ChatPanel } from '../components/ChatPanel';
+import { RoleStrip } from '../components/RoleStrip';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
@@ -150,6 +151,15 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // Открыть drawer (когда сайдбар не закреплён) — проброс в шапку ChatPanel
   const openSidebar = sidebarMode !== 'pinned' ? () => setSidebarMode('open') : undefined;
 
+  // Полоса сотрудников: тык = существующий чат с ролью либо свежесозданный первый
+  const roleStrip = (
+    <RoleStrip
+      chats={chats}
+      onSelect={selectChat}
+      onCreated={chat => { setChats(prev => [chat, ...prev]); selectChat(chat); }}
+    />
+  );
+
   // Внутренность сайдбара: строка управления (закрепить/свернуть) + список чатов
   const sidebarInner = (
     <>
@@ -170,6 +180,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           </IconButton>
         )}
       </div>
+      {roleStrip}
       <div style={{ flex: 1, minHeight: 0 }}>
         <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} />
       </div>
@@ -194,7 +205,10 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           <>
             <HubHeader value="chats" onTab={onHubTab} auth={auth} onLogout={onLogout} />
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '12px 16px 14px' }}>
-              <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} isMobile />
+              {roleStrip}
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} isMobile />
+              </div>
             </div>
           </>
         )}

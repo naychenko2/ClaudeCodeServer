@@ -38,9 +38,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const [editTarget, setEditTarget] = useState<Session | null>(null);
   const initializedRef = useRef(false);
 
-  // Роли проекта — для аватара на карточке чата (мапим session.roleId → роль)
+  // Роли — для аватара на карточке чата (мапим session.roleId → роль). Берём весь пул,
+  // а не команду проекта: у старых чатов роль могла быть откреплена от проекта.
   useEffect(() => {
-    api.roles.list(project.id).then(setRoles).catch(() => {});
+    api.team.list().then(setRoles).catch(() => {});
   }, [project.id]);
   const roleMap = new Map(roles.map(r => [r.id, r]));
 
@@ -210,7 +211,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, flex: 1, minWidth: 0 }}>
               {(() => {
                 const role = s.roleId ? roleMap.get(s.roleId) : undefined;
-                return role ? <div style={{ marginTop: 1 }}><RoleAvatar name={role.name} avatar={role.avatar} color={role.color} size={26} /></div> : null;
+                return role ? <div style={{ marginTop: 1 }}><RoleAvatar name={role.name} avatar={role.avatar} color={role.color} size={26} title={role.title ? `${role.name} · ${role.title}` : role.name} /></div> : null;
               })()}
               <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>

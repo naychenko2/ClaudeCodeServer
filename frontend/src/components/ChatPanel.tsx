@@ -510,6 +510,12 @@ function ChatHeaderBar({ session, project, role, online, cost, falCost, billing,
         {session.name ?? 'Новый чат'}
       </div>
       <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {/* Сотрудник-собеседник: имя (если не дублирует название чата) и должность */}
+        {role && (() => {
+          const label = [session.name === role.name ? null : role.name, role.title || null]
+            .filter(Boolean).join(' · ');
+          return label ? <span>{label} · </span> : null;
+        })()}
         {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
         {!isMobile && <span>{project ? project.name : 'без проекта'} · </span>}{modelLabel(session.model)}
         {session.effort && <span> · {effortLabel(session.effort)}</span>}
@@ -548,7 +554,7 @@ function ChatHeaderBar({ session, project, role, online, cost, falCost, billing,
   );
   // Аватар роли-собеседника (если чат ведётся с ролью)
   const roleAvatarEl = role && !isMobile ? (
-    <RoleAvatar name={role.name} avatar={role.avatar} color={role.color} size={32} />
+    <RoleAvatar name={role.name} avatar={role.avatar} color={role.color} size={32} title={role.title ? `${role.name} · ${role.title}` : role.name} />
   ) : null;
   const artifactsBtn = onToggleArtifacts ? (
     <ToolbarIconButton onClick={onToggleArtifacts} title="Артефакты сессии" isMobile={isMobile} active={artifactsOpen}>
@@ -937,12 +943,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Роль-собеседник чата (если задана) — для аватара в шапке
   const [role, setRole] = useState<Role | null>(null);
   useEffect(() => {
-    // Роли живут в проекте — для чата вне проекта роли нет
-    if (!session.roleId || !project) { setRole(null); return; }
-    api.roles.list(project.id)
+    // Роль ищем в глобальном пуле — покрывает и проектные чаты, и чаты вне проекта
+    if (!session.roleId) { setRole(null); return; }
+    api.team.list()
       .then(rs => setRole(rs.find(r => r.id === session.roleId) ?? null))
       .catch(() => {});
-  }, [session.roleId, project?.id]);
+  }, [session.roleId]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Внутренний контент-блок ленты — именно он растёт при дорендере (картинки base64,
@@ -3473,9 +3479,25 @@ function FileChangedRow({ item, online, onOpenFile, onRevert }: {
   );
 }
 
+// Служебные строки памяти роли «[MEMORY] …» не показываем: историю чистит бэк,
+// этот фильтр — для живого стрима. Последнюю незавершённую строку, похожую на
+// печатающийся маркер (префикс «[MEMORY]»), тоже прячем — анти-мигание хвоста.
+function stripMemoryLines(text: string, streaming?: boolean): string {
+  if (!text.includes('[')) return text;
+  const lines = text.split('\n');
+  const kept = lines.filter((l, i) => {
+    const t = l.trimStart().toUpperCase();
+    if (t.startsWith('[MEMORY]')) return false;
+    if (streaming && i === lines.length - 1 && t.length > 0 && '[MEMORY]'.startsWith(t)) return false;
+    return true;
+  });
+  return kept.length === lines.length ? text : kept.join('\n');
+}
+
 // Ответ ассистента. Действия «Копировать/Повторить» — иконками в правом верхнем
 // углу: десктоп — fade-in по hover на сообщении, мобайл (тач) — всегда видимы.
-function TextMessageView({ text, online, onRetry, streaming }: { text: string; online: boolean; onRetry: () => void; streaming?: boolean }) {
+function TextMessageView({ text: rawText, online, onRetry, streaming }: { text: string; online: boolean; onRetry: () => void; streaming?: boolean }) {
+  const text = useMemo(() => stripMemoryLines(rawText, streaming), [rawText, streaming]);
   const [copied, setCopied] = useState(false);
   const copy = () => {
     navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {});

@@ -13,14 +13,16 @@ interface Props {
   avatar?: string;   // эмодзи; если пусто — рисуем инициалы
   color?: string;    // фон круга
   size?: number;
+  title?: string;    // нативный тултип («Имя · Должность» в списках)
 }
 
 // Круглый аватар роли: эмодзи на цветном круге, либо инициалы-фолбэк, если эмодзи не задан.
-export function RoleAvatar({ name, avatar, color, size = 32 }: Props) {
+export function RoleAvatar({ name, avatar, color, size = 32, title }: Props) {
   const bg = color || C.accent;
   const hasEmoji = !!avatar && avatar.trim().length > 0;
   return (
     <div
+      title={title}
       style={{
         width: size, height: size, borderRadius: '50%', flexShrink: 0,
         background: bg, color: C.onAccent,

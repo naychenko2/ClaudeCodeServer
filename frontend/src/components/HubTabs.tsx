@@ -8,6 +8,8 @@ export function HubTabs({ value, onChange }: { value: HubTab; onChange: (t: HubT
     <PillSwitch<HubTab>
       value={value}
       onChange={onChange}
+      draggable
+      persistKey="hub-tabs"
       options={[
         { value: 'chats', label: 'Чаты' },
         { value: 'projects', label: 'Проекты' },

@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, Role, InterviewResult, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition } from '../types';
+import type { Project, ProjectGroup, Session, Role, RoleMemoryContext, InterviewResult, FileEntry, SyncMark, WorkflowAgentInfo, AgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -100,13 +100,17 @@ export const api = {
       request<unknown[]>(`/projects/${projectId}/sessions/${sessionId}/history`),
   },
 
+  // Команда проекта: прикомандированные роли. delete = ОТКРЕПЛЕНИЕ от проекта
+  // (роль остаётся в пуле, память о проекте сохраняется), assign = пригласить из пула.
   roles: {
     list: (projectId: string) => request<Role[]>(`/projects/${projectId}/roles`),
     create: (projectId: string, data: Partial<Role>) =>
       request<Role>(`/projects/${projectId}/roles`, { method: 'POST', body: JSON.stringify(data) }),
     update: (projectId: string, roleId: string, data: Partial<Role>) =>
       request<Role>(`/projects/${projectId}/roles/${roleId}`, { method: 'PUT', body: JSON.stringify(data) }),
-    delete: (projectId: string, roleId: string) =>
+    assign: (projectId: string, roleId: string) =>
+      request<Role>(`/projects/${projectId}/roles/${roleId}/assign`, { method: 'POST' }),
+    unassign: (projectId: string, roleId: string) =>
       request<void>(`/projects/${projectId}/roles/${roleId}`, { method: 'DELETE' }),
     getMemory: (projectId: string, roleId: string) =>
       request<{ content: string }>(`/projects/${projectId}/roles/${roleId}/memory`),
@@ -119,13 +123,35 @@ export const api = {
       }),
   },
 
+  // Глобальный пул ролей — вкладка «Команда» в верхнем хабе.
+  // delete = ПОЛНОЕ удаление роли (вместе со всей её памятью по всем контекстам).
+  team: {
+    list: () => request<Role[]>('/roles'),
+    agents: () => request<AgentInfo[]>('/roles/agents'),
+    create: (data: Partial<Role>) =>
+      request<Role>('/roles', { method: 'POST', body: JSON.stringify(data) }),
+    update: (roleId: string, data: Partial<Role>) =>
+      request<Role>(`/roles/${roleId}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (roleId: string) => request<void>(`/roles/${roleId}`, { method: 'DELETE' }),
+    getMemory: (roleId: string) => request<{ content: string }>(`/roles/${roleId}/memory`),
+    saveMemory: (roleId: string, content: string) =>
+      request<void>(`/roles/${roleId}/memory`, { method: 'PUT', body: JSON.stringify({ content }) }),
+    memoryOverview: (roleId: string) =>
+      request<RoleMemoryContext[]>(`/roles/${roleId}/memory/overview`),
+    interview: (messages: { role: string; content: string }[]) =>
+      request<InterviewResult>('/roles/interview', {
+        method: 'POST',
+        body: JSON.stringify({ messages }),
+      }),
+  },
+
   // Чаты вне проекта (project-less)
   chats: {
     list: () => request<Session[]>('/chats'),
-    create: (mode = 'auto', resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
+    create: (mode = 'auto', resumeSessionId?: string, name?: string, model?: string, effort?: string, roleId?: string) =>
       request<Session>('/chats', {
         method: 'POST',
-        body: JSON.stringify({ mode, resumeSessionId, name, model, effort }),
+        body: JSON.stringify({ mode, resumeSessionId, name, model, effort, roleId }),
       }),
     update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean }) =>
       request<Session>(`/chats/${id}`, {

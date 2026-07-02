@@ -3,6 +3,7 @@ import type { Project, AuthState } from './types'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
+import { TeamPage } from './pages/TeamPage'
 import { WorkspacePage } from './pages/WorkspacePage'
 import type { HubTab } from './components/HubTabs'
 import { UpdatePrompt } from './components/UpdatePrompt'
@@ -14,7 +15,7 @@ import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
-import { setAllFlags } from './lib/featureFlags'
+import { setAllFlags, useFeature, FLAGS } from './lib/featureFlags'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 const HUB_TAB_KEY = 'cc_hub_tab'
@@ -46,11 +47,21 @@ export default function App() {
     }
   })
 
-  // Активная вкладка хаба (Чаты | Проекты) — вне открытого проекта.
+  // Активная вкладка хаба (Чаты | Команда | Проекты) — вне открытого проекта.
   // По умолчанию открываются «Чаты» (первая вкладка).
-  const [hubTab, setHubTab] = useState<HubTab>(() =>
-    localStorage.getItem(HUB_TAB_KEY) === 'projects' ? 'projects' : 'chats'
-  )
+  const [hubTab, setHubTab] = useState<HubTab>(() => {
+    const saved = localStorage.getItem(HUB_TAB_KEY)
+    return saved === 'projects' || saved === 'team' ? saved : 'chats'
+  })
+
+  // «Команда» за фич-флагом roles: если флаг выключен, а вкладка сохранена — откат на «Чаты»
+  const rolesEnabled = useFeature(FLAGS.roles)
+  useEffect(() => {
+    if (!rolesEnabled && hubTab === 'team') {
+      localStorage.setItem(HUB_TAB_KEY, 'chats')
+      setHubTab('chats')
+    }
+  }, [rolesEnabled, hubTab])
 
   const online = useOnline()
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
@@ -100,7 +111,7 @@ export default function App() {
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
-    navReplace({ screen: hubTab === 'chats' ? 'chats' : 'projects' })
+    navReplace({ screen: hubTab === 'projects' ? 'projects' : hubTab })
     // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
     // проектом — при hubTab==='chats' проект «спит» и в истории не отражается.
     if (hubTab === 'projects' && project) {
@@ -123,9 +134,9 @@ export default function App() {
           setProject(s.project)
         }
         if (hubTab !== 'projects') { localStorage.setItem(HUB_TAB_KEY, 'projects'); setHubTab('projects') }
-      } else if (s?.screen === 'chats') {
-        // Раздел «Чаты» — открытый проект «спит», его не сбрасываем (навигационная память)
-        if (hubTab !== 'chats') { localStorage.setItem(HUB_TAB_KEY, 'chats'); setHubTab('chats') }
+      } else if (s?.screen === 'chats' || s?.screen === 'team') {
+        // Разделы «Чаты»/«Команда» — открытый проект «спит», его не сбрасываем (навигационная память)
+        if (hubTab !== s.screen) { localStorage.setItem(HUB_TAB_KEY, s.screen); setHubTab(s.screen) }
       } else if (s?.screen === 'projects') {
         // Список проектов — явный выход из проекта
         if (project) { localStorage.removeItem(OPEN_PROJECT_KEY); setProject(null) }
@@ -176,12 +187,18 @@ export default function App() {
     navReplace({ screen: 'projects' })
     setProject(null)
   }
-  // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
-  // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
+  // Переключатель раздела «Чаты | Команда | Проекты». НЕ сбрасывает открытый проект — он
+  // «спит» при уходе из «Проектов» и восстанавливается при возврате (навигационная память).
   const switchHubTab = (t: HubTab) => {
     localStorage.setItem(HUB_TAB_KEY, t)
     setHubTab(t)
-    navReplace({ screen: t === 'chats' ? 'chats' : 'projects' })
+    navReplace({ screen: t === 'projects' ? 'projects' : t })
+  }
+
+  // Тык по роли в «Команде»: чат уже создан TeamPage — делаем его активным в «Чатах» и переходим
+  const openChatFromTeam = (chatId: string) => {
+    localStorage.setItem('cc_open_chat', chatId)
+    switchHubTab('chats')
   }
   const logout = () => {
     localStorage.removeItem('cc_token')
@@ -208,9 +225,11 @@ export default function App() {
           ? <LoginPage onConnect={setAuth} />
           : hubTab === 'chats'
             ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
-            : project
-              ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
-              : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
+            : hubTab === 'team'
+              ? <TeamPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenChat={openChatFromTeam} />
+              : project
+                ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
+                : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
       }
     </>
   )

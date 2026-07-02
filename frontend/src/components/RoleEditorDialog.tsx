@@ -12,6 +12,8 @@ const EMOJI_PRESETS = ['🔧', '🎨', '🧠', '🗄️', '📊', '🧪', '🚀'
 const COLOR_PRESETS = ['#D97757', '#6C5CB0', '#3E7CA6', '#5E8B4E', '#C9923E', '#B4452F', '#7A6A58', '#2A8C82'];
 
 const STEPS = ['Лицо', 'Компетенции', 'Параметры'];
+// Режим редактирования — свободные вкладки вместо пошагового мастера (+ отдельная «Память»)
+const EDIT_TABS = ['Лицо', 'Компетенции', 'Параметры', 'Память'];
 
 // Первое приветствие собеседования — статично (без вызова claude, чтобы не ждать).
 // Случайный вариант для разнообразия; все спрашивают имя, чтобы claude продолжил со 2-го вопроса.
@@ -23,8 +25,9 @@ const GREETINGS = [
   'Хэй! 👋 Будем работать вместе. Для начала скажи, как тебя зовут?',
 ];
 
-// pick — выбор способа (вручную/диалог), interview — чат, wizard — пошаговая форма
-type Phase = 'pick' | 'interview' | 'wizard';
+// pick — выбор способа (вручную/диалог/из пула), interview — чат,
+// wizard — пошаговая форма, invite — найм существующего сотрудника из пула (только в проекте)
+type Phase = 'pick' | 'interview' | 'wizard' | 'invite';
 interface InterviewMsg { role: 'assistant' | 'user'; content: string }
 
 // Лёгкий рендер inline-markdown в сообщениях собеседования: **жирный** → <strong>
@@ -37,7 +40,7 @@ function renderInline(text: string): ReactNode[] {
 }
 
 interface Props {
-  projectId: string;
+  projectId?: string;                // задан → найм/редактирование из проекта; нет → глобальный пул («Команда»)
   role?: Role;                       // задан → режим редактирования
   onSaved: (role: Role) => void;
   onClose: () => void;
@@ -68,19 +71,32 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
+  // Найм существующего: роли пула, которых ещё нет в команде проекта (null — не загружено)
+  const [poolAvailable, setPoolAvailable] = useState<Role[] | null>(null);
+  const [inviting, setInviting] = useState<string | null>(null);
+
   // Автоскролл ленты собеседования вниз при новых сообщениях / индикаторе
   useEffect(() => {
     const el = chatScrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, busy]);
 
+  // Агенты-компетенции: из проекта (глобальные + проектные) либо только глобальные (пул)
   useEffect(() => {
-    api.skills.list(projectId).then(d => setAgents(d.agents)).catch(() => {});
+    const load = projectId
+      ? api.skills.list(projectId).then(d => d.agents)
+      : api.team.agents();
+    load.then(setAgents).catch(() => {});
   }, [projectId]);
 
-  // Память существует только у сохранённой роли — подгружаем при редактировании
+  // Память существует только у сохранённой роли — подгружаем при редактировании.
+  // Контекст: память о проекте либо память внепроектных чатов (глобальный редактор).
   useEffect(() => {
-    if (role) api.roles.getMemory(projectId, role.id).then(d => setMemory(d.content)).catch(() => {});
+    if (!role) return;
+    const load = projectId
+      ? api.roles.getMemory(projectId, role.id)
+      : api.team.getMemory(role.id);
+    load.then(d => setMemory(d.content)).catch(() => {});
   }, [projectId, role]);
 
   const toggleAgent = (fileName: string) => {
@@ -107,7 +123,9 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const res = await api.roles.interview(projectId, history);
+      const res = projectId
+        ? await api.roles.interview(projectId, history)
+        : await api.team.interview(history);
       if (res.role) {
         applyDraft(res.role);
         setStep(0);
@@ -141,6 +159,36 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
     runInterview(next);
   };
 
+  // --- Найм существующего сотрудника из пула (только в проекте) ---
+
+  const openInvite = async () => {
+    if (!projectId) return;
+    setError(null);
+    try {
+      const [pool, team] = await Promise.all([api.team.list(), api.roles.list(projectId)]);
+      const teamIds = new Set(team.map(r => r.id));
+      setPoolAvailable(pool.filter(r => !teamIds.has(r.id)));
+      setPhase('invite');
+    } catch {
+      setError('Не удалось загрузить пул сотрудников');
+    }
+  };
+
+  const invite = async (r: Role) => {
+    if (!projectId || inviting) return;
+    setInviting(r.id);
+    setError(null);
+    try {
+      const assigned = await api.roles.assign(projectId, r.id);
+      onSaved(assigned);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось нанять сотрудника');
+    } finally {
+      setInviting(null);
+    }
+  };
+
   // --- Сохранение ---
 
   const isLast = step === STEPS.length - 1;
@@ -162,9 +210,12 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
     };
     try {
       const saved = role
-        ? await api.roles.update(projectId, role.id, payload)
-        : await api.roles.create(projectId, payload);
-      if (role && memoryDirty) await api.roles.saveMemory(projectId, saved.id, memory);
+        ? (projectId ? await api.roles.update(projectId, role.id, payload) : await api.team.update(role.id, payload))
+        : (projectId ? await api.roles.create(projectId, payload) : await api.team.create(payload));
+      if (role && memoryDirty) {
+        if (projectId) await api.roles.saveMemory(projectId, saved.id, memory);
+        else await api.team.saveMemory(saved.id, memory);
+      }
       onSaved(saved);
       onClose();
     } catch (err) {
@@ -179,16 +230,31 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
   const title_ = role ? 'Редактировать сотрудника'
     : phase === 'pick' ? 'Новый член команды'
     : phase === 'interview' ? 'Собеседование'
+    : phase === 'invite' ? 'Нанять существующего'
     : 'Новый член команды';
 
   let footer: ReactNode;
   if (phase === 'pick') {
     footer = <Button variant="secondary" fullWidth onClick={onClose}>Отмена</Button>;
-  } else if (phase === 'interview') {
+  } else if (phase === 'interview' || phase === 'invite') {
     footer = (
       <Button variant="secondary" fullWidth onClick={() => { setPhase('pick'); setMessages([]); setError(null); }}>
         ← Назад к выбору
       </Button>
+    );
+  } else if (role) {
+    // Редактирование: вкладки со свободной навигацией, «Сохранить» доступна всегда
+    footer = (
+      <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+        <div style={{ flex: 1 }}>
+          <Button variant="secondary" fullWidth onClick={onClose}>Отмена</Button>
+        </div>
+        <div style={{ flex: 1.5 }}>
+          <Button variant="primary" fullWidth loading={loading} onClick={handleSubmit}>
+            {loading ? 'Сохраняем…' : 'Сохранить'}
+          </Button>
+        </div>
+      </div>
     );
   } else {
     footer = (
@@ -210,7 +276,7 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
     );
   }
 
-  // Степпер мастера
+  // Степпер мастера (создание — пошагово)
   const stepper = (
     <div style={{ display: 'flex', gap: 6 }}>
       {STEPS.map((label, i) => (
@@ -227,6 +293,26 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
     </div>
   );
 
+  // Вкладки редактирования — свободное переключение разделов
+  const editTabs = (
+    <div style={{ display: 'flex', gap: 2, borderBottom: `1px solid ${C.border}` }}>
+      {EDIT_TABS.map((label, i) => (
+        <button key={label} type="button"
+          onClick={() => { setStep(i); setError(null); }}
+          style={{
+            padding: '7px 10px', border: 'none', background: 'none', cursor: 'pointer',
+            fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+            color: step === i ? C.accent : C.textMuted,
+            borderBottom: `2px solid ${step === i ? C.accent : 'transparent'}`,
+            marginBottom: -1,
+          }}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <Modal title={title_} width={MODAL_W.form} onClose={onClose} footer={footer}>
 
@@ -239,7 +325,52 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
           <PickCard emoji="💬" title="Провести собеседование"
             desc="Отвечу на пару вопросов — оформим нового сотрудника, дальше поправлю."
             onClick={() => setPhase('interview')} />
+          {projectId && (
+            <PickCard emoji="👥" title="Нанять существующего сотрудника"
+              desc="Пригласить сотрудника из общего пула в команду проекта."
+              onClick={openInvite} />
+          )}
         </div>
+      )}
+
+      {/* === Фаза: найм существующего из пула === */}
+      {phase === 'invite' && (
+        poolAvailable === null || poolAvailable.length === 0 ? (
+          <div style={{ padding: '14px 4px', textAlign: 'center', color: C.textMuted, fontSize: 13, lineHeight: 1.5 }}>
+            В пуле нет свободных сотрудников.<br />Нанять нового можно вручную или через собеседование.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {poolAvailable.map(r => (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => invite(r)}
+                disabled={!!inviting}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', width: '100%',
+                  textAlign: 'left', cursor: 'pointer', borderRadius: R.lg,
+                  border: `1px solid ${C.border}`, background: C.bgWhite,
+                  opacity: inviting === r.id ? 0.6 : 1,
+                }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.background = C.accentLight; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.bgWhite; }}
+              >
+                <RoleAvatar name={r.name} avatar={r.avatar} color={r.color} size={32} />
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {r.name || 'Без имени'}
+                  </span>
+                  {r.title && (
+                    <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.title}
+                    </span>
+                  )}
+                </span>
+              </button>
+            ))}
+          </div>
+        )
       )}
 
       {/* === Фаза: интервью === */}
@@ -282,10 +413,10 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
         </div>
       )}
 
-      {/* === Фаза: мастер === */}
+      {/* === Фаза: мастер (создание) / вкладки (редактирование) === */}
       {phase === 'wizard' && (
         <>
-          {stepper}
+          {role ? editTabs : stepper}
 
           {/* Шаг 1: Лицо */}
           {step === 0 && (
@@ -400,7 +531,7 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
             </>
           )}
 
-          {/* Шаг 3: Параметры */}
+          {/* Шаг/вкладка 3: Параметры */}
           {step === 2 && (
             <>
               <Field label="Модель по умолчанию">
@@ -410,14 +541,16 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
               <Field label="Усилие рассуждения">
                 <SegmentedControl value={effort} options={EFFORTS} onChange={setEffort} columns={3} />
               </Field>
-
-              {role && (
-                <Field label="Память сотрудника" hint="Факты и договорённости из прошлых бесед. Сотрудник пополняет её сам ([MEMORY] + авто-summary); можно править вручную.">
-                  <TextArea value={memory} onChange={v => { setMemory(v); setMemoryDirty(true); }} autoGrow minHeight={60}
-                    placeholder="Память пока пуста — появится по мере общения с сотрудником." />
-                </Field>
-              )}
             </>
+          )}
+
+          {/* Вкладка 4: Память — только при редактировании */}
+          {step === 3 && role && (
+            <Field label={projectId ? 'Память сотрудника (этот проект)' : 'Память сотрудника (чаты вне проектов)'}
+              hint="Факты и договорённости из прошлых бесед. Сотрудник пополняет её сам; можно править вручную. Память контекстная: у каждого проекта — своя.">
+              <TextArea value={memory} onChange={v => { setMemory(v); setMemoryDirty(true); }} autoGrow minHeight={120}
+                placeholder="Память пока пуста — появится по мере общения с сотрудником." />
+            </Field>
           )}
         </>
       )}

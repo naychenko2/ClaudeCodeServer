@@ -69,10 +69,11 @@ export interface Session {
   roleId?: string;
 }
 
-// Роль-собеседник проекта: «лицо» (имя/аватар/характер) + компетенции (агенты)
+// Роль-собеседник: «лицо» (имя/аватар/характер) + компетенции (агенты).
+// Роль глобальная (общий пул — «Команда»), к проектам прикомандирована через projectIds.
 export interface Role {
   id: string;
-  projectId: string;
+  projectIds: string[];
   name: string;
   title: string;
   avatar: string;        // эмодзи; пусто → инициалы-фолбэк
@@ -84,6 +85,13 @@ export interface Role {
   effort?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// Контекст памяти сотрудника (обзор для списка «Сотрудники»): проект либо внепроектные чаты
+export interface RoleMemoryContext {
+  context: string;   // projectId | "chats-<ownerId>"
+  title: string;     // «Проект: X» | «Чаты»
+  facts: string[];
 }
 
 // Черновик роли из диалога-интервью (заполняет мастер; без id/дат — роль ещё не создана)

@@ -12,25 +12,41 @@ interface Props {
   isMobile?: boolean;
 }
 
-// Панель «Команда»: список ролей-собеседников проекта. Тык по роли = новый чат с ней.
+// Панель «Команда» проекта: роли, прикомандированные к проекту. Тык по роли = открыть
+// существующий чат проекта с ней (или создать первый). Найм — через попап нового члена
+// команды (вручную / собеседование / нанять существующего из пула);
+// удаление = ОТКРЕПЛЕНИЕ (роль остаётся в пуле, её память о проекте сохраняется).
 export function RolesPanel({ project, onStartChat, isMobile = false }: Props) {
   const [roles, setRoles] = useState<Role[]>([]);
   const [creating, setCreating] = useState(false);
   const [editTarget, setEditTarget] = useState<Role | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Role | null>(null);
+  const [unassignTarget, setUnassignTarget] = useState<Role | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
 
   useEffect(() => {
     api.roles.list(project.id).then(setRoles).catch(() => {});
   }, [project.id]);
 
-  const startChat = async (role: Role) => {
+  // mode 'auto' как у обычного нового чата; имя сессии = имя роли; roleId — последним
+  const createChat = (role: Role) =>
+    api.sessions.create(project.id, 'auto', undefined, role.name, undefined, undefined, undefined, role.id);
+
+  // Тык по сотруднику = продолжить существующий разговор с ним (как в мессенджере).
+  // Новый чат создаётся, только если чатов с этой ролью в проекте ещё нет;
+  // ещё один разговор — иконкой «Новый чат» на карточке.
+  const startChat = async (role: Role, forceNew = false) => {
     if (starting) return;
     setStarting(role.id);
     try {
-      // mode 'auto' как у обычного нового чата; имя сессии = имя роли; roleId — последним
-      const s = await api.sessions.create(project.id, 'auto', undefined, role.name, undefined, undefined, undefined, role.id);
-      onStartChat(s);
+      if (!forceNew) {
+        const sessions = await api.sessions.list(project.id);
+        const existing = sessions.find(s => s.roleId === role.id);   // список отсортирован по свежести
+        if (existing) {
+          onStartChat(existing);
+          return;
+        }
+      }
+      onStartChat(await createChat(role));
     } catch {
       /* офлайн/сбой — ничего не меняем */
     } finally {
@@ -46,16 +62,16 @@ export function RolesPanel({ project, onStartChat, isMobile = false }: Props) {
     setEditTarget(null);
   };
 
-  const handleDelete = async () => {
-    if (!deleteTarget) return;
+  const handleUnassign = async () => {
+    if (!unassignTarget) return;
     try {
-      await api.roles.delete(project.id, deleteTarget.id);
+      await api.roles.unassign(project.id, unassignTarget.id);
     } catch {
-      setDeleteTarget(null);
+      setUnassignTarget(null);
       return;
     }
-    setRoles(prev => prev.filter(r => r.id !== deleteTarget.id));
-    setDeleteTarget(null);
+    setRoles(prev => prev.filter(r => r.id !== unassignTarget.id));
+    setUnassignTarget(null);
   };
 
   const iconBtn = (onClick: (e: React.MouseEvent) => void, title: string, danger: boolean, path: React.ReactNode) => (
@@ -93,13 +109,13 @@ export function RolesPanel({ project, onStartChat, isMobile = false }: Props) {
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
         {roles.length === 0 ? (
           <div style={{ padding: '28px 18px', textAlign: 'center', color: C.textMuted, fontSize: 13, lineHeight: 1.5 }}>
-            В команде пока никого.<br />Проведите собеседование — например «Игорь, бэкендер».
+            В команде проекта пока никого.<br />Наймите сотрудника — нового или из общего пула.
           </div>
         ) : roles.map(role => (
           <div
             key={role.id}
             onClick={() => startChat(role)}
-            title="Начать чат с сотрудником"
+            title="Открыть чат с сотрудником"
             style={{
               position: 'relative', display: 'flex', alignItems: 'center', gap: 10,
               paddingTop: isMobile ? 12 : 10, paddingBottom: isMobile ? 12 : 10,
@@ -121,18 +137,23 @@ export function RolesPanel({ project, onStartChat, isMobile = false }: Props) {
               )}
             </div>
             <div style={{ display: 'flex', flexShrink: 0 }}>
+              {iconBtn(e => { e.stopPropagation(); startChat(role, true); }, 'Новый чат с сотрудником', false, (
+                <>
+                  <path d="M21 11.5a8.5 8.5 0 0 1-12 7.7L3 21l1.8-6A8.5 8.5 0 1 1 21 11.5z" />
+                  <path d="M12 8v6M9 11h6" />
+                </>
+              ))}
               {iconBtn(e => { e.stopPropagation(); setEditTarget(role); }, 'Редактировать', false, (
                 <>
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                 </>
               ))}
-              {iconBtn(e => { e.stopPropagation(); setDeleteTarget(role); }, 'Удалить из команды', true, (
+              {iconBtn(e => { e.stopPropagation(); setUnassignTarget(role); }, 'Убрать из команды проекта', true, (
                 <>
-                  <polyline points="3 6 5 6 21 6" />
-                  <path d="M19 6l-1 14H6L5 6" />
-                  <path d="M10 11v6M14 11v6" />
-                  <path d="M9 6V4h6v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M2 21v-2a4 4 0 0 1 4-4h6" />
+                  <path d="M17 8l5 5M22 8l-5 5" />
                 </>
               ))}
             </div>
@@ -149,26 +170,28 @@ export function RolesPanel({ project, onStartChat, isMobile = false }: Props) {
         />
       )}
 
-      {deleteTarget && (
+      {unassignTarget && (
         <Modal
-          title="Удалить из команды?"
+          title="Убрать из команды проекта?"
           width={MODAL_W.confirm}
-          onClose={() => setDeleteTarget(null)}
+          onClose={() => setUnassignTarget(null)}
           subtitle={
             <>
-              Сотрудник «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{deleteTarget.name}</strong>» будет удалён из команды. Существующие чаты с ним останутся.
+              Сотрудник «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{unassignTarget.name}</strong>» будет откреплён от проекта.
+              Он останется в общем пуле («Сотрудники»), его память об этом проекте и существующие чаты сохранятся.
             </>
           }
           footer={
             <ModalActions
-              confirmLabel="Удалить"
+              confirmLabel="Убрать"
               confirmVariant="danger"
-              onConfirm={handleDelete}
-              onCancel={() => setDeleteTarget(null)}
+              onConfirm={handleUnassign}
+              onCancel={() => setUnassignTarget(null)}
             />
           }
         />
       )}
+
     </div>
   );
 }

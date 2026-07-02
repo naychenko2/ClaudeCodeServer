@@ -8,6 +8,7 @@ import { Modal, ModalActions, Field, TextField, TextArea, SegmentedControl } fro
 import { RoleAvatar } from './RoleAvatar';
 import { type Mode, MODES, MODE_META, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 
 interface NewSessionDialogProps {
   projectId: string;
@@ -26,10 +27,13 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
   const [roleId, setRoleId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Фича «Команда» за фич-флагом — без него выбор члена команды не показываем и не грузим
+  const rolesEnabled = useFeature(FLAGS.roles);
 
   useEffect(() => {
+    if (!rolesEnabled) { setRoles([]); return; }
     api.roles.list(projectId).then(setRoles).catch(() => {});
-  }, [projectId]);
+  }, [projectId, rolesEnabled]);
 
   const selectedRole = roles.find(r => r.id === roleId);
 

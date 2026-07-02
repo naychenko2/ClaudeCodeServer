@@ -58,7 +58,7 @@
 | Файловые операции, diff/revert | ✅ | спец-рендер diff + подсветка |
 | Субагенты (вложенность `parent_tool_use_id`), workflow-прогресс | ✅ | `WorkflowWatcher.cs`, дерево агентов |
 | MCP-результаты (картинки/видео/метаданные генерации) | ✅ | `ChatPanel.tsx:1435-1490` |
-| Todo-лист (TodoWrite) | ✅ | `TodoPlanView` — чек-лист с прогрессом и статусами |
+| Todo-лист (TodoWrite и TaskCreate/TaskUpdate) | ✅ | `TodoPlanView` — чек-лист с прогрессом; Task*-агрегация — `computeTodos` в `useSessionArtifacts.ts`, карточка на последнем task-вызове ленты |
 | Web search / web fetch | 🟡 | только через MCP, встроенной интеграции нет |
 
 ## Файловый менеджер (полнее, чем у CLI)

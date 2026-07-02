@@ -19,7 +19,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         var basePath = appSettings.Get().DefaultProjectsPath;
         var relativePath = string.IsNullOrEmpty(basePath) ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
     }
 
     [HttpGet("builtin-prompt")]
@@ -42,7 +42,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         try
         {
             var username = User.FindFirstValue(ClaimTypes.Name) ?? UserId;
-            var p = projects.Create(req.Name, req.RootPath, UserId, username, req.CreateDirectory);
+            var p = projects.Create(req.Name, req.RootPath, UserId, username, req.CreateDirectory, req.GroupId);
             return CreatedAtAction(nameof(GetById), new { id = p.Id }, WithCount(p));
         }
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
@@ -56,7 +56,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         if (p is null || p.OwnerId != UserId) return NotFound();
         try
         {
-            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles, req.PermissionRules);
+            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles, req.PermissionRules, req.GroupId);
             return Ok(WithCount(updated));
         }
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
@@ -72,5 +72,5 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 }
 
-public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false);
-public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, List<PermissionRule>? PermissionRules = null);
+public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null);
+public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, List<PermissionRule>? PermissionRules = null, string? GroupId = null);

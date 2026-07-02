@@ -1,13 +1,19 @@
-# Прод-оверрайд для naychenko.me. Применять поверх базового файла:
+# Прод-оверрайд для naychenko.me. Применять поверх базового файла, с отдельным env-файлом:
 #
-#   docker compose -f docker-compose.claude.yml -f docker-compose.claude.prod.yml up -d --build
+#   docker compose --env-file .env.prod -f docker-compose.claude.yml -f docker-compose.claude.prod.yml up -d --build
 #
 # Тот же образ, но окружение Production: Kestrel слушает 80/443 с TLS-сертом
 # (см. appsettings.Production.json). Серты монтируются из C:\certs\naychenko как volume.
+#
+# Контур разведён с dev: COMPOSE_PROJECT_NAME=claude-prod (отдельные volume claude-prod_*),
+# container_name claude-server-prod, папка проектов C:\ClaudeHome. Задаётся в .env.prod.
 
 services:
   claude-server:
-    ports:
+    container_name: claude-server-prod
+    # !override — заменить (а не дополнить) ports базового файла: прод НЕ публикует 5000,
+    # иначе конфликт с dev claude-server, который держит 5000.
+    ports: !override
       - "80:80"
       - "443:443"
     environment:
@@ -15,5 +21,14 @@ services:
       # Переопределяем пути сертов на контейнерные (в appsettings.Production.json — C:\certs\...)
       Kestrel__Endpoints__Https__Certificate__Path: /certs/fullchain.pem
       Kestrel__Endpoints__Https__Certificate__KeyPath: /certs/privkey.pem
+      # OnlyOffice: базовый compose выставляет host.docker.internal:5000 (порт dev),
+      # которого в проде нет. ServerUrl уходит в браузер; BackendUrl — адрес, по которому
+      # контейнер onlyoffice-ds (соседний compose-проект) скачивает документ и шлёт callback.
+      # host.docker.internal из onlyoffice-ds резолвится в кривой IPv6 → 503; LAN-IP хоста
+      # 192.168.7.65:80 (порт проброшен в claude-server-prod) достижим и отдаёт 200.
+      OnlyOffice__ServerUrl: https://naychenko.me
+      OnlyOffice__BackendUrl: http://192.168.7.65:80
     volumes:
+      # Прод-папка проектов (переопределяет dev-mount /projects из базового файла)
+      - ${CLAUDE_PROJECTS_DIR:-C:/ClaudeHome}:/projects
       - ${CLAUDE_CERTS_DIR:-C:/certs/naychenko}:/certs:ro

@@ -544,6 +544,12 @@ public class ClaudeSession : IAsyncDisposable
         // ArgumentList экранирует каждый аргумент корректно (важно для многострочного системного промпта)
         foreach (var a in args) psi.ArgumentList.Add(a);
 
+        // claude --print по умолчанию ждёт фоновые задачи (субагентов workflow) не дольше 600с,
+        // затем принудительно завершается: «Background tasks still running after 600s; terminating».
+        // Из-за этого длинные workflow обрывались на 10-й минуте, не доходя до конца. 0 = ждать без
+        // ограничения по времени; нас страхует watchdog IdleTimeout (если claude замолчит дольше — прервём сами).
+        psi.Environment["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] = "0";
+
         var process = new Process { StartInfo = psi };
 
         process.Start();

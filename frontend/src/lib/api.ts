@@ -1,4 +1,4 @@
-import type { Project, Session, Role, InterviewResult, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition } from '../types';
+import type { Project, ProjectGroup, Session, Role, InterviewResult, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -62,12 +62,24 @@ export const api = {
 
   projects: {
     list: () => request<Project[]>('/projects'),
-    create: (name: string, rootPath: string | null, createDirectory = false) =>
-      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[] }) =>
+    create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null) =>
+      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId }) }),
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
     getBuiltinPrompt: () => request<{ content: string }>('/projects/builtin-prompt'),
+  },
+
+  // Группы проектов
+  projectGroups: {
+    list: () => request<ProjectGroup[]>('/project-groups'),
+    create: (name: string, color: string) =>
+      request<ProjectGroup>('/project-groups', { method: 'POST', body: JSON.stringify({ name, color }) }),
+    update: (id: string, data: { name?: string; color?: string }) =>
+      request<ProjectGroup>(`/project-groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    reorder: (orderedIds: string[]) =>
+      request<ProjectGroup[]>('/project-groups/reorder', { method: 'POST', body: JSON.stringify({ orderedIds }) }),
+    delete: (id: string) => request<void>(`/project-groups/${id}`, { method: 'DELETE' }),
   },
 
   sessions: {
@@ -105,6 +117,41 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ messages }),
       }),
+  },
+
+  // Чаты вне проекта (project-less)
+  chats: {
+    list: () => request<Session[]>('/chats'),
+    create: (mode = 'auto', resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
+      request<Session>('/chats', {
+        method: 'POST',
+        body: JSON.stringify({ mode, resumeSessionId, name, model, effort }),
+      }),
+    update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean }) =>
+      request<Session>(`/chats/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
+    getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
+    uploadFile: async (id: string, file: File): Promise<{ path: string }> => {
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(`/api/chats/${id}/files/upload`,
+        { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form });
+      if (res.status === 401) {
+        if (token && typeof window !== 'undefined') window.dispatchEvent(new Event('cc-unauthorized'));
+        throw new Error('Нет доступа');
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error ?? res.statusText);
+      }
+      return res.json();
+    },
   },
 
   files: {

@@ -22,6 +22,10 @@ const _store = new Map<string, SessionState>();
 const _listeners = new Map<string, Set<() => void>>();
 const _joining = new Map<string, Promise<void>>();
 
+// История чата: у проектной сессии — через /projects/{id}/sessions, у чата вне проекта — через /chats
+const loadHistory = (sid: string, projectId?: string) =>
+  projectId ? api.sessions.getHistory(projectId, sid) : api.chats.getHistory(sid);
+
 function getState(sid: string): SessionState {
   if (!_store.has(sid)) _store.set(sid, { items: [], isWaiting: false, isJoined: false, isHistoryLoading: true, rateLimits: {} });
   return _store.get(sid)!;
@@ -67,9 +71,9 @@ function ensureHandler() {
       try {
         await joinSession(sid);
         // Для сессий что ждали — подтягиваем историю (пропущенные сообщения)
-        if (wasWaiting.has(sid) && s.projectId) {
+        if (wasWaiting.has(sid)) {
           try {
-            const raw = await api.sessions.getHistory(s.projectId, sid);
+            const raw = await loadHistory(sid, s.projectId);
             const items = (raw as any[]).map((msg: any): ChatItem => {
               if (msg.kind === 'thinking') return { ...msg, expanded: false };
               if (msg.kind === 'error') return { ...msg, canRetry: false };
@@ -253,19 +257,17 @@ function ensureHandler() {
         // клиент мог пропустить text_delta/tool_use пока был оффлайн или не в группе
         if (msg.status === 'active') {
           const projectId = getState(sid).projectId;
-          if (projectId) {
-            api.sessions.getHistory(projectId, sid).then(raw => {
-              const serverItems = (raw as any[]).map((m: any): ChatItem => {
-                if (m.kind === 'thinking') return { ...m, expanded: false };
-                if (m.kind === 'error') return { ...m, canRetry: false };
-                return m as ChatItem;
-              });
-              setState(sid, prev => {
-                if (serverItems.length <= prev.items.length) return prev;
-                return { ...prev, items: serverItems };
-              });
-            }).catch(() => {});
-          }
+          loadHistory(sid, projectId).then(raw => {
+            const serverItems = (raw as any[]).map((m: any): ChatItem => {
+              if (m.kind === 'thinking') return { ...m, expanded: false };
+              if (m.kind === 'error') return { ...m, canRetry: false };
+              return m as ChatItem;
+            });
+            setState(sid, prev => {
+              if (serverItems.length <= prev.items.length) return prev;
+              return { ...prev, items: serverItems };
+            });
+          }).catch(() => {});
         }
         break;
       }
@@ -286,25 +288,21 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
 
   // История — приоритет и грузится НЕЗАВИСИМО от SignalR. Офлайн соединение
   // может «зависнуть» в Reconnecting, поэтому join не должен блокировать историю.
-  if (projectId) {
-    try {
-      const raw = await api.sessions.getHistory(projectId, sid);
-      const items = (raw as any[]).map((msg: any): ChatItem => {
-        if (msg.kind === 'thinking') return { ...msg, expanded: false };
-        if (msg.kind === 'error') return { ...msg, canRetry: false };
-        return msg as ChatItem;
-      });
-      setState(sid, prev => {
-        // Сервер — источник истины: используем его данные если их больше.
-        // Иначе оставляем живые сообщения от стриминга (race condition при активном ходе).
-        if (items.length <= prev.items.length) return { ...prev, isHistoryLoading: false };
-        return { ...prev, items, isHistoryLoading: false };
-      });
-    } catch {
-      // История недоступна — не блокируем работу
-      setState(sid, prev => ({ ...prev, isHistoryLoading: false }));
-    }
-  } else {
+  try {
+    const raw = await loadHistory(sid, projectId);
+    const items = (raw as any[]).map((msg: any): ChatItem => {
+      if (msg.kind === 'thinking') return { ...msg, expanded: false };
+      if (msg.kind === 'error') return { ...msg, canRetry: false };
+      return msg as ChatItem;
+    });
+    setState(sid, prev => {
+      // Сервер — источник истины: используем его данные если их больше.
+      // Иначе оставляем живые сообщения от стриминга (race condition при активном ходе).
+      if (items.length <= prev.items.length) return { ...prev, isHistoryLoading: false };
+      return { ...prev, items, isHistoryLoading: false };
+    });
+  } catch {
+    // История недоступна — не блокируем работу
     setState(sid, prev => ({ ...prev, isHistoryLoading: false }));
   }
 
@@ -334,8 +332,8 @@ export function useSession(sessionId: string | null, projectId?: string) {
     // При переключении на уже-присоединённую сессию подтягиваем историю с сервера.
     // Нужно чтобы после завершённых ходов (пока был открыт другой чат) данные были актуальны.
     const st = getState(sessionId);
-    if (st.isJoined && projectId && !st.isWaiting) {
-      api.sessions.getHistory(projectId, sessionId).then(raw => {
+    if (st.isJoined && !st.isWaiting) {
+      loadHistory(sessionId, projectId).then(raw => {
         const serverItems = (raw as any[]).map((m: any): ChatItem => {
           if (m.kind === 'thinking') return { ...m, expanded: false };
           if (m.kind === 'error') return { ...m, canRetry: false };

@@ -7,8 +7,17 @@ import { isOnline } from '../lib/offline';
 import { StatusBadge } from './StatusBadge';
 import { EditSessionDialog } from './EditSessionDialog';
 import { RoleAvatar } from './RoleAvatar';
-import { C, R, SHADOW, MODAL_W } from '../lib/design';
-import { Modal, ModalActions } from './ui';
+import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
+import { Modal, ModalActions, Button, IconButton } from './ui';
+
+// Время создания сессии: сегодня — часы:минуты, иначе — дата
+function sessTime(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString())
+    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+}
 
 interface Props {
   project: Project;
@@ -153,17 +162,15 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {online && (
         <div style={{ padding: '10px 12px', borderBottom: `1px solid ${C.divider}` }}>
-          <button
-            onClick={createNew}
-            style={{
-              width: '100%', padding: 11, borderRadius: R.xl,
-              border: `1.5px dashed ${C.dashed}`, background: 'none', cursor: 'pointer',
-              fontSize: 13, color: C.accent, fontWeight: 600,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-            }}
+          <Button variant="dashed" size="md" fullWidth onClick={createNew}
+            leftIcon={
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            }
           >
-            + Новый чат
-          </button>
+            Новый чат
+          </Button>
         </div>
       )}
 
@@ -238,45 +245,27 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               )}
               </div>
             </div>
-            <div style={{ display: 'flex', flexShrink: 0, paddingLeft: 6 }}>
-              {online && (<>
-              <button
-                onClick={e => { e.stopPropagation(); setEditTarget(s); }}
-                title="Настройки чата"
-                style={{
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  color: C.textMuted, padding: 0, flexShrink: 0,
-                  width: 24, height: 24, borderRadius: R.sm,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.color = C.textPrimary; e.currentTarget.style.background = C.bgPanel; }}
-                onMouseLeave={e => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.background = 'none'; }}
-              >
+            {/* Правая колонка: время создания (сверху, вправо) + действия */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0, paddingLeft: 6 }}>
+              <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, lineHeight: 1, whiteSpace: 'nowrap' }}>
+                {sessTime(s.createdAt)}
+              </span>
+              {online && (<div style={{ display: 'flex' }}>
+              <IconButton onClick={e => { e.stopPropagation(); setEditTarget(s); }} title="Настройки чата" size="xs">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                 </svg>
-              </button>
-              <button
-                onClick={e => { e.stopPropagation(); setDeleteTarget(s); }}
-                title="Удалить чат"
-                style={{
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  color: C.textMuted, padding: 0, flexShrink: 0,
-                  width: 24, height: 24, borderRadius: R.sm,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.color = C.danger; e.currentTarget.style.background = C.dangerBg; }}
-                onMouseLeave={e => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.background = 'none'; }}
-              >
+              </IconButton>
+              <IconButton onClick={e => { e.stopPropagation(); setDeleteTarget(s); }} title="Удалить чат" size="xs" tone="danger">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="3 6 5 6 21 6" />
                   <path d="M19 6l-1 14H6L5 6" />
                   <path d="M10 11v6M14 11v6" />
                   <path d="M9 6V4h6v2" />
                 </svg>
-              </button>
-              </>)}
+              </IconButton>
+              </div>)}
             </div>
           </div>
           );

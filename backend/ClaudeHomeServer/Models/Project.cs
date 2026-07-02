@@ -8,6 +8,8 @@ public class Project
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public string? OwnerId { get; set; }
+    // Группа проектов; null = проект вне групп (см. ProjectGroup)
+    public string? GroupId { get; set; }
     public string? DifyDatasetId { get; set; }
     public string? SystemPrompt { get; set; }
     public bool ShowHiddenFiles { get; set; } = false;

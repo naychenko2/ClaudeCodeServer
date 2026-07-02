@@ -23,7 +23,7 @@ import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { C, R, FONT, MODAL_W, TB } from '../lib/design';
-import { Modal, ModalActions, TextField } from './ui';
+import { Modal, ModalActions, TextField, IconButton, Button } from './ui';
 
 interface Props {
   project: Project;
@@ -169,17 +169,15 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
           <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>Здесь пока нет файлов</div>
         </div>
         {onCreateFile && (
-          <button
+          <Button
+            variant="primary"
+            size="md"
+            glow
+            leftIcon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>}
             onClick={onCreateFile}
-            style={{
-              background: C.accent, color: '#fff', border: 'none', borderRadius: R.lg,
-              padding: '9px 20px', fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
-              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
-            }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
             Создать первый файл
-          </button>
+          </Button>
         )}
       </div>
 
@@ -849,7 +847,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           paddingLeft: 8 + depth * 16, paddingRight: 8,
           paddingTop: isMobile || alwaysShowIcons ? 10 : 6,
           paddingBottom: isMobile || alwaysShowIcons ? 10 : 6,
-          minHeight: isMobile || alwaysShowIcons ? 44 : undefined,
+          // фикс высоты: hover-иконки (24) чуть выше контента строки — держим 36, чтобы строка не «прыгала»
+          minHeight: isMobile || alwaysShowIcons ? 44 : 36,
           borderRadius: 8, cursor: isDragging ? 'grabbing' : 'pointer',
           width: '100%', boxSizing: 'border-box',
           opacity: isDragging ? 0.4 : pressingPath === entry.path ? 0.6 : 1,
@@ -945,34 +944,37 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {/* Hover-иконки: переименовать + удалить — только десктоп при hover */}
         {online && !isRenaming && !isMobile && hoveredPath === entry.path && (
           <>
-            <button
+            <IconButton
+              size="xs"
               onClick={e => { e.stopPropagation(); startRename(entry); }}
               title="Переименовать (F2)"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.textMuted }}
             >
               <RenameIcon />
-            </button>
-            <button
+            </IconButton>
+            <IconButton
+              size="xs"
+              tone="danger"
+              color="#C85A3F"
               onClick={e => { e.stopPropagation(); setDeleteConfirm(entry); }}
               title="Удалить"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#C85A3F' }}
             >
               <TrashIcon />
-            </button>
+            </IconButton>
           </>
         )}
         {/* Кнопка «добавить в чат» — десктоп hover; мобила/планшет — через long-press меню */}
         {!entry.isDirectory && onAttachToChat && !isMobile && !alwaysShowIcons && (
           hoveredPath === entry.path ? (
-            <button
+            <IconButton
+              size="xs"
+              tone="accent"
               onClick={e => { e.stopPropagation(); onAttachToChat(entry.path); }}
               title="Добавить в чат"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.accent }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
               </svg>
-            </button>
+            </IconButton>
           ) : null
         )}
         {/* Иконка знаний: спиннер при индексации; при hover — добавить или удалить */}
@@ -986,13 +988,15 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             </span>
           ) : indexedFileNames?.has(entry.name) ? (
             !isMobile && !alwaysShowIcons && hoveredPath === entry.path && onRemoveFromKnowledge ? (
-              <button
+              <IconButton
+                size="xs"
+                tone="danger"
+                color="#C85A3F"
                 onClick={e => { e.stopPropagation(); onRemoveFromKnowledge(entry.path); }}
                 title="Удалить из знаний"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#C85A3F' }}
               >
                 <BookMinusIcon />
-              </button>
+              </IconButton>
             ) : (
               <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1004,16 +1008,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           ) : (
             // Не в знаниях — показать «добавить» при hover (только десктоп)
             onAddToKnowledge && isKnowledgeIndexable(entry.name) && !isMobile && !alwaysShowIcons && hoveredPath === entry.path ? (
-              <button
+              <IconButton
+                size="xs"
+                color="#3F7A4F"
                 onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
                 title="Добавить в базу знаний"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
                   <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
                 </svg>
-              </button>
+              </IconButton>
             ) : null
           )
         )}
@@ -1112,16 +1117,18 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {online && (
           <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
             {/* Новый файл */}
-            <div
+            <Button
+              variant="dashed"
+              size="md"
+              leftIcon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>}
               onClick={() => {
                 if (isMobile) setCreateInDir(mobileDir);
                 setShowCreateFile(true);
               }}
-              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 36, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}
+              style={{ flex: 1 }}
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>
               Новый файл
-            </div>
+            </Button>
             {/* Новая папка */}
             <div
               onClick={() => {
@@ -1129,14 +1136,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 setShowCreateDir(true);
               }}
               title="Новая папка"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, cursor: 'pointer', flexShrink: 0 }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, cursor: 'pointer', flexShrink: 0 }}
             >
               <FolderPlusIcon />
             </div>
             {/* Загрузить */}
             <label
               title="Загрузить файлы"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: uploading ? C.textMuted : C.accent, cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1, flexShrink: 0 }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: uploading ? C.textMuted : C.accent, cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1, flexShrink: 0 }}
             >
               <input
                 ref={uploadInputRef}
@@ -1201,7 +1208,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       )}
 
       {/* Tree / список папки / результаты поиска */}
-      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflow: 'auto', padding: '0 4px 12px' }}>
+      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowX: 'hidden', overflowY: 'auto', padding: '0 4px 12px' }}>
         {searchResults !== null ? (
           searchResults.length === 0 ? (
             <EmptyState

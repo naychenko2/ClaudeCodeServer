@@ -3,8 +3,9 @@ import type { ChatItem } from '../types';
 import { useSession } from './useSession';
 
 // Артефакты, собранные за сессию из ленты чата:
-//  - файлы: изменённые (file_changed/Write) + упомянутые путём в тексте ответа,
+//  - файлы: измененные (file_changed/Write) + упомянутые путем в тексте ответа,
 //  - планы (из ExitPlanMode) со статусами,
+//  - задачи (TodoWrite либо TaskCreate/TaskUpdate) — актуальный чек-лист прогресса,
 //  - ссылки, упомянутые в ответах и запросах WebFetch.
 
 export interface ArtifactFile {
@@ -28,9 +29,20 @@ export interface PlanArtifact {
   status: PlanStatus;
 }
 
+// Пункт todo-списка. Источника два (зависит от версии CLI):
+//  - старый TodoWrite — каждый вызов шлет полный список, последний побеждает;
+//  - новые TaskCreate/TaskUpdate — инкрементальные: create заводит задачу
+//    (id из результата "Task #N created…"), update меняет статус/текст по taskId.
+export interface TodoItem {
+  content: string;
+  status: string; // 'pending' | 'in_progress' | 'completed'
+  activeForm?: string;
+}
+
 export interface SessionArtifacts {
   files: ArtifactFile[];
   plans: PlanArtifact[];
+  todos: TodoItem[];
   links: ArtifactLink[];
 }
 
@@ -108,6 +120,61 @@ function classifyTextPath(raw: string, rootPath: string): { path: string; extern
   if (rel) return { path: rel, external: false };
   if (isAbs) return { path: raw.replace(/\\/g, '/'), external: true };
   return null; // относительный, но вне корня — мусор
+}
+
+// Собрать актуальный todo-список сессии из ленты чата. Понимает оба механизма CLI:
+// старый TodoWrite (каждый вызов несет полный список — последний побеждает) и новые
+// TaskCreate/TaskUpdate (инкрементальные). Экспортируется отдельно от computeArtifacts:
+// по нему же ChatPanel рисует карточку чек-листа в ленте.
+export function computeTodos(items: ChatItem[]): TodoItem[] {
+  let todos: TodoItem[] = [];          // из TodoWrite (полный список, последний побеждает)
+  const tasks = new Map<string, TodoItem>(); // из TaskCreate/TaskUpdate, ключ — taskId
+  let taskAutoId = 0; // запасная нумерация, если id не удалось достать из результата
+
+  for (const it of items) {
+    if (it.kind !== 'tool_use') continue;
+    if (it.name === 'TodoWrite') {
+      const t = (it.input as { todos?: unknown } | null)?.todos;
+      if (Array.isArray(t)) {
+        const parsed = t.filter((x): x is TodoItem =>
+          !!x && typeof x === 'object' && typeof (x as TodoItem).content === 'string');
+        if (parsed.length) todos = parsed;
+      }
+    } else if (it.name === 'TaskCreate') {
+      const o = it.input as { subject?: unknown; description?: unknown; activeForm?: unknown } | null;
+      const subject = typeof o?.subject === 'string' && o.subject
+        ? o.subject
+        : typeof o?.description === 'string' ? o.description : '';
+      if (subject) {
+        taskAutoId += 1;
+        // Сервер отвечает "Task #N created successfully: …" — берем id оттуда;
+        // пока результата нет (стрим) — порядковый номер (в свежей сессии совпадает)
+        const m = typeof it.result === 'string' ? it.result.match(/#(\d+)/) : null;
+        const id = m ? m[1] : String(taskAutoId);
+        tasks.set(id, {
+          content: subject,
+          status: 'pending',
+          activeForm: typeof o?.activeForm === 'string' ? o.activeForm : undefined,
+        });
+      }
+    } else if (it.name === 'TaskUpdate') {
+      const o = it.input as { taskId?: unknown; status?: unknown; subject?: unknown } | null;
+      const id = typeof o?.taskId === 'string' ? o.taskId
+        : typeof o?.taskId === 'number' ? String(o.taskId) : null;
+      const ex = id ? tasks.get(id) : undefined;
+      if (id && ex) {
+        if (o?.status === 'cancelled' || o?.status === 'deleted') {
+          tasks.delete(id);
+        } else {
+          if (typeof o?.subject === 'string' && o.subject) ex.content = o.subject;
+          if (typeof o?.status === 'string' && o.status) ex.status = o.status;
+        }
+      }
+    }
+  }
+
+  // Механизмы не смешиваются в одной сессии; если вдруг оба — Task* новее и точнее
+  return tasks.size ? [...tasks.values()] : todos;
 }
 
 export function computeArtifacts(items: ChatItem[], rootPath: string): SessionArtifacts {
@@ -194,6 +261,7 @@ export function computeArtifacts(items: ChatItem[], rootPath: string): SessionAr
   return {
     files: arr,
     plans,
+    todos: computeTodos(items),
     links: [...links.values()],
   };
 }

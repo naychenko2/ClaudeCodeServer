@@ -151,6 +151,18 @@ export async function leaveProject(projectId: string): Promise<void> {
     await conn.invoke('LeaveProject', projectId);
 }
 
+// Группа для realtime-обновления списка чатов вне проекта (статусы)
+export async function joinUser(userId: string): Promise<void> {
+  const conn = await ensureConnected();
+  await conn.invoke('JoinUser', userId);
+}
+
+export async function leaveUser(userId: string): Promise<void> {
+  const conn = getConnection();
+  if (conn.state === signalR.HubConnectionState.Connected)
+    await conn.invoke('LeaveUser', userId);
+}
+
 // Подписка на reconnected. Возвращает функцию отписки — обязательно вызывать при unmount.
 export function onReconnected(callback: () => void): () => void {
   _reconnectedCallbacks.add(callback);

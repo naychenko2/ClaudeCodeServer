@@ -2,7 +2,9 @@ import { useState, useEffect, useRef } from 'react'
 import type { Project, AuthState } from './types'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
+import { ChatsPage } from './pages/ChatsPage'
 import { WorkspacePage } from './pages/WorkspacePage'
+import type { HubTab } from './components/HubTabs'
 import { UpdatePrompt } from './components/UpdatePrompt'
 import { initConnectivity } from './lib/offline'
 import { useOnline } from './hooks/useOnline'
@@ -15,6 +17,7 @@ import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
+const HUB_TAB_KEY = 'cc_hub_tab'
 
 export default function App() {
   // Авторизация — из localStorage (постоянно) или sessionStorage (saveKey=false)
@@ -42,6 +45,12 @@ export default function App() {
       return null
     }
   })
+
+  // Активная вкладка хаба (Чаты | Проекты) — вне открытого проекта.
+  // По умолчанию открываются «Чаты» (первая вкладка).
+  const [hubTab, setHubTab] = useState<HubTab>(() =>
+    localStorage.getItem(HUB_TAB_KEY) === 'projects' ? 'projects' : 'chats'
+  )
 
   const online = useOnline()
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
@@ -91,8 +100,10 @@ export default function App() {
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
-    navReplace({ screen: 'projects' })
-    if (project) {
+    navReplace({ screen: hubTab === 'chats' ? 'chats' : 'projects' })
+    // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
+    // проектом — при hubTab==='chats' проект «спит» и в истории не отражается.
+    if (hubTab === 'projects' && project) {
       navPush({ screen: 'project', project, view: 'sidebar', file: null })
       const ws = loadWorkspaceState(project.id)
       if (ws?.openFile) navPush({ screen: 'project', project, view: 'sidebar', file: ws.openFile })
@@ -106,18 +117,24 @@ export default function App() {
     const onPop = (e: PopStateEvent) => {
       const s = e.state as NavSnapshot | null
       if (s?.screen === 'project' && s.project) {
+        // Возврат в открытый проект
         if (project?.id !== s.project.id) {
           localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(s.project))
           setProject(s.project)
         }
-      } else if (project) {
-        localStorage.removeItem(OPEN_PROJECT_KEY)
-        setProject(null)
+        if (hubTab !== 'projects') { localStorage.setItem(HUB_TAB_KEY, 'projects'); setHubTab('projects') }
+      } else if (s?.screen === 'chats') {
+        // Раздел «Чаты» — открытый проект «спит», его не сбрасываем (навигационная память)
+        if (hubTab !== 'chats') { localStorage.setItem(HUB_TAB_KEY, 'chats'); setHubTab('chats') }
+      } else if (s?.screen === 'projects') {
+        // Список проектов — явный выход из проекта
+        if (project) { localStorage.removeItem(OPEN_PROJECT_KEY); setProject(null) }
+        if (hubTab !== 'projects') { localStorage.setItem(HUB_TAB_KEY, 'projects'); setHubTab('projects') }
       }
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [project])
+  }, [project, hubTab])
 
   // Прогрев/синхронизация: при входе и при возврате в онлайн — все проекты, начиная с текущего
   useEffect(() => {
@@ -151,10 +168,20 @@ export default function App() {
     navPush({ screen: 'project', project: p, view: 'sidebar', file: null })
     setProject(p)
   }
+  // Явный выход из открытого проекта к списку проектов (кнопка «К проектам» в сайдбаре)
   const goToProjects = () => {
     localStorage.removeItem(OPEN_PROJECT_KEY)
+    localStorage.setItem(HUB_TAB_KEY, 'projects')
+    setHubTab('projects')
     navReplace({ screen: 'projects' })
     setProject(null)
+  }
+  // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
+  // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
+  const switchHubTab = (t: HubTab) => {
+    localStorage.setItem(HUB_TAB_KEY, t)
+    setHubTab(t)
+    navReplace({ screen: t === 'chats' ? 'chats' : 'projects' })
   }
   const logout = () => {
     localStorage.removeItem('cc_token')
@@ -179,9 +206,11 @@ export default function App() {
         ? <div style={{ minHeight: '100vh', background: '#F4F0E8' }} />
         : !auth
           ? <LoginPage onConnect={setAuth} />
-          : project
-            ? <WorkspacePage project={project} onGoToProjects={goToProjects} />
-            : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} />
+          : hubTab === 'chats'
+            ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+            : project
+              ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
+              : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
       }
     </>
   )

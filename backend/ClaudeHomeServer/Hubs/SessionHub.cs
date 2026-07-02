@@ -63,6 +63,13 @@ public class SessionHub : Hub
         _watcher.Unwatch(projectId, Context.ConnectionId);
     }
 
+    // Группа для realtime-обновления списка чатов вне проекта (без файлового watcher)
+    public Task JoinUser(string userId) =>
+        Groups.AddToGroupAsync(Context.ConnectionId, "user_" + userId);
+
+    public Task LeaveUser(string userId) =>
+        Groups.RemoveFromGroupAsync(Context.ConnectionId, "user_" + userId);
+
     public override Task OnDisconnectedAsync(Exception? exception)
     {
         _watcher.RemoveConnection(Context.ConnectionId);

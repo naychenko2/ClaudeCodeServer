@@ -27,6 +27,7 @@ import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
+import { MermaidDiagram } from './MermaidDiagram';
 import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
 import { base64ToBytes } from '../lib/binary';
@@ -493,6 +494,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
 
   const fileName = filePath.split('/').pop() ?? filePath;
   const isMarkdown = /\.(md|mdx)$/i.test(fileName);
+  const isMermaid = /\.mmd$/i.test(fileName);
   const diffStats = diff ? {
     added: diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
     removed: diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length,
@@ -911,7 +913,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                     />
                   </Suspense>
                 )
-                : isMarkdown
+                : isMermaid
+                  ? <div style={{ padding: 16 }}><MermaidDiagram code={content} /></div>
+                  : isMarkdown
                   ? <MarkdownViewer content={content} />
                   : <SyntaxHighlighter
                       language={getLanguage(filePath)}

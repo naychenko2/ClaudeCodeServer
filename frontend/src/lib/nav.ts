@@ -4,9 +4,10 @@ import type { Project } from '../types';
 // «назад/вперёд» браузера могли восстановить экран. URL не меняем — навигация
 // идёт по записям истории (popstate), без серверного роутинга под пути.
 export interface NavSnapshot {
-  screen: 'projects' | 'project';
+  screen: 'projects' | 'project' | 'chats';
   project?: Project;              // когда screen === 'project'
-  view?: 'sidebar' | 'chat';     // мобильный вид внутри проекта
+  chatId?: string;                // активный чат вне проекта (screen === 'chats')
+  view?: 'sidebar' | 'chat';     // мобильный вид внутри проекта / чатов
   file?: string | null;          // открытый файл (путь) или null
 }
 

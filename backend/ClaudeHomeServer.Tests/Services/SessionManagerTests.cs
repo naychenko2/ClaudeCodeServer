@@ -48,7 +48,11 @@ public class SessionManagerTests : IDisposable
 
         var skills = new SkillsService();
         var workspaceStore = new WorkspaceKnowledgeStore(config);
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, skills, workspaceStore);
+        var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
+        var usage = new UsageService(config);
+        var roles = new RoleManager(config);
+        var roleMemory = new RoleMemoryService(config);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, skills, roles, roleMemory, workspaceStore, falCost, usage, appSettings, userStore);
     }
 
     public void Dispose()

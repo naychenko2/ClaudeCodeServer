@@ -37,6 +37,7 @@ mcp/tasks-server/dist/
 # Среда
 .env
 .env.local
+.env.prod
 *.env
 
 # Локальный override-конфиг (машинно-специфичные пути/секреты), у каждого свой
@@ -55,4 +56,5 @@ Thumbs.db
 !frontend/public/pwa-*.png
 !frontend/public/maskable-icon-*.png
 !frontend/public/apple-touch-icon-*.png
+!docs/screenshots/*.png
 onlyoffice/local.json

@@ -17,8 +17,13 @@ public sealed class WorkflowWatcher : IDisposable
     private volatile bool _disposed;
 
     private static readonly TimeSpan DebounceDelay = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan StableDelay = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan MaxDuration = TimeSpan.FromMinutes(20);
+    // Тишина после завершения ВСЕХ агентов, после которой считаем workflow стабильным.
+    private static readonly TimeSpan StableDelay = TimeSpan.FromSeconds(5);
+    // Периодический перечёт директории, пока агенты работают (они могут долго молчать
+    // в файлах, выполняя длинную команду — FileSystemWatcher тогда не сработает).
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
+    // Аварийный потолок: длинные workflow (после снятия 600с-лимита) могут идти долго.
+    private static readonly TimeSpan MaxDuration = TimeSpan.FromMinutes(60);
 
     public WorkflowWatcher(string wfPath, string toolUseId, Func<ServerMessage, Task> onMessage)
     {
@@ -86,13 +91,15 @@ public sealed class WorkflowWatcher : IDisposable
 
             var agents = WorkflowAgentParser.ParseDirectory(_wfPath);
             var allDone = agents.Count > 0 && agents.All(a => a.IsDone);
-            // Если все агенты завершились — достаточно 5с тишины; иначе ждём 30с
-            var effectiveStableDelay = allDone ? TimeSpan.FromSeconds(5) : StableDelay;
-            var stable = agents.Count > 0 && (DateTime.UtcNow - _lastChange) >= effectiveStableDelay;
+            // Завершаем (stable=true) ТОЛЬКО когда все агенты done и файлы дописаны (тишина ≥5с).
+            // Пока хоть один агент работает — НЕ завершаемся, даже если файлы молчат: агент может
+            // выполнять длинную команду без вывода в jsonl (иначе рвали статус на промежуточном).
+            var stable = allDone && (DateTime.UtcNow - _lastChange) >= StableDelay;
             await _onMessage(new WorkflowProgressMessage(_toolUseId, agents, stable));
             if (stable) { Dispose(); return; }
-            // Планируем следующую проверку, чтобы не зависнуть если файлы больше не меняются
-            ScheduleDebounce(effectiveStableDelay);
+            // Продолжаем периодически перечитывать директорию — даже если FileSystemWatcher молчит
+            // (агент в долгой команде), чтобы поймать финальные result и не зависнуть на спиннере.
+            ScheduleDebounce(PollInterval);
         }
         catch { /* не роняем */ }
     }

@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useMemo, useCallback, createContext, useContext, Fragment } from 'react';
+import { MermaidDiagram } from './MermaidDiagram';
 import { getExplorerCreateInDir } from './FileExplorer';
 import type { Project, Session, ChatItem, FileEntry, SkillInfo, AgentInfo, ClaudeBilling, Role } from '../types';
 import { RoleAvatar } from './RoleAvatar';
 import { useSession } from '../hooks/useSession';
-import { countFiles } from '../hooks/useSessionArtifacts';
+import { countFiles, computeTodos, type TodoItem } from '../hooks/useSessionArtifacts';
 import { useOnline } from '../hooks/useOnline';
 import { api, type WorkflowAgentInfo } from '../lib/api';
 import { modelLabel } from '../lib/models';
@@ -13,7 +14,7 @@ import { notify } from '../lib/notify';
 import { type Mode, MODE_META, ModeIcon } from '../lib/modes';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
-import { C, FONT, R, MODAL_W, SHADOW } from '../lib/design';
+import { C, FONT, R, MODAL_W, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { Toolbar, ToolbarIconButton } from './Toolbar';
 import { BackButton, Modal, ModalActions } from './ui';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
@@ -23,8 +24,9 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface Props {
   session: Session;
-  project: Project;
-  onOpenFile: (path: string) => void;
+  // Отсутствует для чата вне проекта (project-less) — тогда скрываем файловые возможности
+  project?: Project;
+  onOpenFile?: (path: string) => void;
   pendingMessage?: string;
   onPendingMessageSent?: () => void;
   onSessionUpdated?: (session: Session) => void;
@@ -438,9 +440,51 @@ function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boo
   );
 }
 
+// Мобильный объединённый бейдж: Claude и fal.ai одной компактной пилюлей с разделителем.
+// Сжимается (minWidth:0 + ellipsis), не распирает узкий тулбар. Клик открывает окно «Использование».
+function CombinedCostBadge({ cost, falCost, billing, windows }: {
+  cost: CostStats; falCost: FalCostStats; billing: ClaudeBilling; windows: RateWindow[];
+}) {
+  const worst = worstWindow(windows);
+  const hasClaude = cost.cost > 0 || !!worst;
+  const hasFal = falCost.total > 0;
+  if (!hasClaude && !hasFal) return null;
+  const sub = billing === 'subscription';
+  const tone = worst && worst.level !== 'normal' ? worst.level : undefined;
+  const toneBg = tone === 'danger' ? RATE_COLORS.danger.bg : tone === 'warn' ? RATE_COLORS.warn.bg : C.bgWhite;
+  const toneBorder = tone === 'danger' ? RATE_COLORS.danger.border : tone === 'warn' ? RATE_COLORS.warn.border : C.border;
+  return (
+    <button
+      type="button"
+      onClick={() => window.dispatchEvent(new Event('open-fal-stats'))}
+      title="Использование Claude + fal.ai — открыть статистику"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5, padding: '3px 9px', minWidth: 0, flexShrink: 1,
+        overflow: 'hidden', whiteSpace: 'nowrap',
+        background: toneBg, border: `1px solid ${toneBorder}`, borderRadius: R.lg,
+        cursor: 'pointer', fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: '#B05C38',
+      }}
+    >
+      {hasClaude && (
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {cost.cost > 0 ? (sub ? '≈' : '') + fmtUsd(cost.cost) : '—'}
+          {tone && worst && <span style={{ marginLeft: 4, color: RATE_COLORS[worst.level].text }}>{worst.pct}%</span>}
+        </span>
+      )}
+      {hasClaude && hasFal && <span style={{ color: C.textMuted, flexShrink: 0 }}>·</span>}
+      {hasFal && (
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <span style={{ fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.3, marginRight: 3 }}>fal</span>
+          {fmtUsd(falCost.total)}
+        </span>
+      )}
+    </button>
+  );
+}
+
 interface ChatHeaderBarProps {
   session: Session;
-  project: Project;
+  project?: Project;
   role?: Role | null;
   online: boolean;
   cost: CostStats;
@@ -467,73 +511,76 @@ function ChatHeaderBar({ session, project, role, online, cost, falCost, billing,
       </div>
       <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
-        {!isMobile && <span>{project.name} · </span>}{modelLabel(session.model)}
+        {!isMobile && <span>{project ? project.name : 'без проекта'} · </span>}{modelLabel(session.model)}
         {session.effort && <span> · {effortLabel(session.effort)}</span>}
       </div>
     </div>
   );
-  return (
-    <Toolbar isMobile={isMobile}>
-      {/* Кнопка открытия сайдбара — только когда он свёрнут (не на мобиле) */}
-      {onOpenSidebar && !isMobile && (
-        <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-            <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-          </svg>
-        </ToolbarIconButton>
-      )}
-      {/* Аватар роли-собеседника (если чат ведётся с ролью) */}
-      {role && !isMobile && (
-        <RoleAvatar name={role.name} avatar={role.avatar} color={role.color} size={32} />
-      )}
-      {/* На мобиле стрелка + название кликабельны как «назад» в сайдбар; на десктопе — просто заголовок */}
-      {isMobile && onBack
-        ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
-        : titleBlock}
-      {activeWorkflow && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          padding: '3px 8px',
-          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
-          flexShrink: 0,
-        }}>
-          <div className="tool-spinner" style={{ width: 10, height: 10, flexShrink: 0 }} />
-          <span style={{ fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, whiteSpace: 'nowrap' }}>
-            {activeWorkflow.phasesTotal > 0
-              ? `${activeWorkflow.phasesDone}/${activeWorkflow.phasesTotal}`
-              : 'Workflow'}
-          </span>
-        </div>
-      )}
+  // Элементы шапки — выносим, чтобы отрендерить в двух раскладках (с центр. переключателем и без)
+  const openBtn = onOpenSidebar && !isMobile ? (
+    <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+        <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+      </svg>
+    </ToolbarIconButton>
+  ) : null;
+  const titleEl = isMobile && onBack
+    ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
+    : titleBlock;
+  const workflowBadge = activeWorkflow ? (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
+      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, flexShrink: 0,
+    }}>
+      <div className="tool-spinner" style={{ width: 10, height: 10, flexShrink: 0 }} />
+      <span style={{ fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, whiteSpace: 'nowrap' }}>
+        {activeWorkflow.phasesTotal > 0 ? `${activeWorkflow.phasesDone}/${activeWorkflow.phasesTotal}` : 'Workflow'}
+      </span>
+    </div>
+  ) : null;
+  const costBadges = isMobile ? (
+    <CombinedCostBadge cost={cost} falCost={falCost} billing={billing} windows={rateWindows} />
+  ) : (
+    <>
       <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />
       <FalCostBadge stats={falCost} isMobile={isMobile} />
-      {onToggleArtifacts && (
-        <ToolbarIconButton onClick={onToggleArtifacts} title="Артефакты сессии" isMobile={isMobile} active={artifactsOpen}>
-          <div style={{ position: 'relative', display: 'flex' }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <path d="M14 2v6h6M9 13h6M9 17h3" />
-            </svg>
-            {artifactFileCount !== undefined && artifactFileCount > 0 && (
-              <span style={{
-                position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
-                borderRadius: 7, background: C.accent, color: C.onAccent,
-                fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
-              }}>
-                {artifactFileCount}
-              </span>
-            )}
-          </div>
-        </ToolbarIconButton>
-      )}
-      {online && (
-        <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-        </ToolbarIconButton>
-      )}
+    </>
+  );
+  // Аватар роли-собеседника (если чат ведётся с ролью)
+  const roleAvatarEl = role && !isMobile ? (
+    <RoleAvatar name={role.name} avatar={role.avatar} color={role.color} size={32} />
+  ) : null;
+  const artifactsBtn = onToggleArtifacts ? (
+    <ToolbarIconButton onClick={onToggleArtifacts} title="Артефакты сессии" isMobile={isMobile} active={artifactsOpen}>
+      <div style={{ position: 'relative', display: 'flex' }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6M9 13h6M9 17h3" />
+        </svg>
+        {artifactFileCount !== undefined && artifactFileCount > 0 && (
+          <span style={{
+            position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
+            borderRadius: 7, background: C.accent, color: C.onAccent,
+            fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
+          }}>
+            {artifactFileCount}
+          </span>
+        )}
+      </div>
+    </ToolbarIconButton>
+  ) : null;
+  const settingsBtn = online ? (
+    <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+    </ToolbarIconButton>
+  ) : null;
+
+  return (
+    <Toolbar isMobile={isMobile}>
+      {openBtn}{roleAvatarEl}{titleEl}{workflowBadge}{costBadges}{artifactsBtn}{settingsBtn}
     </Toolbar>
   );
 }
@@ -613,6 +660,9 @@ function MarkdownContent({ text }: { text: string }) {
         code: ({ className, children, ...props }) => {
           const language = /language-(\w+)/.exec(className || '')?.[1];
           const text = String(children).replace(/\n$/, '');
+          if (language === 'mermaid') {
+            return <MermaidDiagram code={text} />;
+          }
           if (language) {
             return (
               <SyntaxHighlighter
@@ -676,8 +726,11 @@ function MarkdownContent({ text }: { text: string }) {
   );
 }
 
-// Чипы-подсказки для empty state
+// Чипы-подсказки для empty state проектного чата
 const HINTS = ['Объясни структуру проекта', 'Найди и почини падающие тесты'];
+
+// Чипы-подсказки для чата вне проекта — универсальный ассистент (тексты, поиск, генерация медиа)
+const CHAT_HINTS = ['Найди информацию в интернете', 'Напиши пост для соцсетей', 'Сгенерируй картинку'];
 
 // Модальный пикер вложений
 interface AttachPickerProps {
@@ -819,7 +872,7 @@ function ToolGroupBlock({ isGroupDone, toolCount, children }: {
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project.id);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project?.id);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
   const worstRate = useMemo(() => worstWindow(rateWindows), [rateWindows]);
@@ -827,16 +880,18 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
   // Число изменённых файлов — для бейджа на кнопке «Артефакты» (только когда тумблер проброшен)
   const artifactFileCount = useMemo(
-    () => onToggleArtifacts ? countFiles(items, project.rootPath) : 0,
-    [onToggleArtifacts, items, project.rootPath]
+    () => onToggleArtifacts && project ? countFiles(items, project.rootPath) : 0,
+    [onToggleArtifacts, items, project]
   );
 
   const [hasCLAUDEmd, setHasCLAUDEmd] = useState<boolean | null>(null);
   useEffect(() => {
+    // Для чата вне проекта файлов нет — баннер CLAUDE.md не показываем
+    if (!project) { setHasCLAUDEmd(false); return; }
     api.files.list(project.id)
       .then(files => setHasCLAUDEmd(files.some(f => !f.isDirectory && f.name === 'CLAUDE.md')))
       .catch(() => setHasCLAUDEmd(true)); // при ошибке не показываем баннер
-  }, [project.id]);
+  }, [project?.id]);
 
   // Точная стоимость генераций fal.ai: requestId → списанная сумма (для подписи под медиа).
   // Источник — fal_cost-элементы ленты (backend опрашивает billing-events). Дедуп по requestId.
@@ -882,11 +937,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Роль-собеседник чата (если задана) — для аватара в шапке
   const [role, setRole] = useState<Role | null>(null);
   useEffect(() => {
-    if (!session.roleId) { setRole(null); return; }
+    // Роли живут в проекте — для чата вне проекта роли нет
+    if (!session.roleId || !project) { setRole(null); return; }
     api.roles.list(project.id)
       .then(rs => setRole(rs.find(r => r.id === session.roleId) ?? null))
       .catch(() => {});
-  }, [session.roleId, project.id]);
+  }, [session.roleId, project?.id]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Внутренний контент-блок ленты — именно он растёт при дорендере (картинки base64,
@@ -906,7 +962,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Показывать плавающую кнопку «вниз», когда пользователь отлистал вверх
   const [showScrollDown, setShowScrollDown] = useState(false);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
-  const projectCtx = useMemo(() => ({ id: project.id, rootPath: project.rootPath }), [project.id, project.rootPath]);
+  const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);
 
   // Накопительная стоимость/токены сессии — сумма по всем result-элементам ленты.
   // Источник правды — история (грузится с бэка), поэтому переживает перезагрузку.
@@ -1097,6 +1153,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Загрузка вставленных/перетащенных картинок в проект → относительные пути в attachedFiles.
   // Бэкенд по расширению отправит их claude как image-блоки base64.
   const handleAttachImages = useCallback(async (files: File[]) => {
+    // Вне проекта файлы никуда не грузим — вложения недоступны
+    if (!project) return;
     const dir = '.cc-attachments';
     try { await api.files.mkdir(project.id, dir); } catch { /* папка уже есть */ }
     const added: string[] = [];
@@ -1111,7 +1169,21 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       } catch { /* пропускаем неудачную загрузку */ }
     }
     if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
-  }, [project.id, attachedFiles, onAttachedFilesChange]);
+  }, [project, attachedFiles, onAttachedFilesChange]);
+
+  // Загрузка файла с устройства для чата вне проекта — грузим в рабочую папку чата,
+  // относительный путь добавляем во вложения. Используется и кнопкой «прикрепить», и paste/drop.
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+  const handleChatUpload = useCallback(async (files: File[]) => {
+    const added: string[] = [];
+    for (const file of files) {
+      try {
+        const { path } = await api.chats.uploadFile(session.id, file);
+        added.push(path);
+      } catch { /* пропускаем неудачную загрузку */ }
+    }
+    if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
+  }, [session.id, attachedFiles, onAttachedFilesChange]);
 
   const handleHint = (hint: string) => {
     atBottomRef.current = true;
@@ -1220,6 +1292,18 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return -1;
   }, [items]);
 
+  // Todo через TaskCreate/TaskUpdate инкрементальны (в отличие от TodoWrite с полным
+  // списком) — карточку чек-листа рисуем один раз, на последнем task-вызове ленты:
+  // там агрегат computeTodos отражает актуальное состояние всего списка
+  const lastTaskIdx = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === 'tool_use' && !it.parentToolUseId && (it.name === 'TaskCreate' || it.name === 'TaskUpdate')) return i;
+    }
+    return -1;
+  }, [items]);
+  const taskTodos = useMemo(() => (lastTaskIdx >= 0 ? computeTodos(items) : []), [items, lastTaskIdx]);
+
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке)
   const renderItem = (item: ChatItem, i: number) => (
     <ChatItemView
@@ -1240,9 +1324,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       planShowSwitch={i === lastApprovedPlanIdx && mode === 'plan'}
       onSwitchMode={setMode}
       onOpenFile={onOpenFile}
-      onRevert={path => api.files.revert(project.id, path)}
+      onRevert={project ? (path => api.files.revert(project.id, path)) : undefined}
       onRetry={handleRetry}
       onInterrupt={interrupt}
+      taskPlan={i === lastTaskIdx && taskTodos.length > 0 ? taskTodos : undefined}
     />
   );
 
@@ -1251,8 +1336,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // file_changed между инструментами не разрывал стопку. Контур рисуем только если в
   // блоке есть хотя бы один инструмент; одиночные file_changed остаются обычными карточками.
   const renderItems = () => {
-    const isTool = (it: ChatItem) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow';
-    const inBlock = (it: ChatItem) => isTool(it) || it.kind === 'file_changed';
+    // Последний task-вызов (lastTaskIdx) исключаем из блока действий, как и TodoWrite:
+    // на его месте рисуется отдельная карточка чек-листа, ей не место внутри контура
+    const isTool = (it: ChatItem, idx: number) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && idx !== lastTaskIdx && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow';
+    const inBlock = (it: ChatItem, idx: number) => isTool(it, idx) || it.kind === 'file_changed';
     // Строим карту дочерних tool_use для Workflow-блоков
     const childrenByParentId = new Map<string, ToolUseItem[]>();
     for (const it of items) {
@@ -1300,7 +1387,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       // Workflow-блок рендерим специальным компонентом
       if (items[i].kind === 'tool_use' && (items[i] as ToolUseItem).name.toLowerCase() === 'workflow') {
         const wf = items[i] as ToolUseItem;
-        pushNode(<WorkflowBlockView key={`wf-${i}`} workflow={wf} agents={childrenByParentId.get(wf.id) ?? []} childrenByParentId={childrenByParentId} />, i);
+        pushNode(<WorkflowBlockView key={`wf-${i}`} workflow={wf} agents={childrenByParentId.get(wf.id) ?? []} childrenByParentId={childrenByParentId} onOpenFile={onOpenFile} />, i);
         i++; prevNodeWasBlock = false; continue;
       }
       // Субагенты Workflow и их инструменты рендерятся внутри WorkflowBlockView
@@ -1334,10 +1421,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           pushNode(subDiv, start);
         }
         prevNodeWasBlock = false;
-      } else if (inBlock(items[i])) {
+      } else if (inBlock(items[i], i)) {
         const start = i;
         const slice: Array<[ChatItem, number]> = [];
-        while (i < items.length && inBlock(items[i])) { slice.push([items[i], i]); i++; }
+        while (i < items.length && inBlock(items[i], i)) { slice.push([items[i], i]); i++; }
         // Один контур: инструменты и изменения файлов — компактными строками (в т.ч. одиночные).
         // Для agent-вызовов с детьми сразу рисуем детей inline под родителем — иначе при параллельных
         // агентах все их инструменты сливаются в один безымянный блок после шапки.
@@ -1357,7 +1444,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
                 <Fragment key={idx}>
                   <div style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
                     {it.kind === 'file_changed'
-                      ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={path => api.files.revert(project.id, path)} />
+                      ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={project ? (path => api.files.revert(project.id, path)) : undefined} />
                       : renderItem(it, idx)}
                   </div>
                   {inlineChildren.length > 0 && (
@@ -1439,7 +1526,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
         {/* Спиннер загрузки истории */}
         {items.length === 0 && isHistoryLoading && (
           <div style={{
@@ -1467,7 +1554,41 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               }} />
             </div>
 
-            {hasCLAUDEmd === false ? (
+            {!project ? (
+              <>
+                {/* Приветствие чата вне проекта — general-purpose ассистент */}
+                <div style={{
+                  fontFamily: '"PT Serif", Georgia, serif',
+                  fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
+                }}>
+                  Чем помочь?
+                </div>
+
+                <div style={{ fontSize: 13, color: '#8A8070', textAlign: 'center', maxWidth: 320 }}>
+                  Спросите что угодно — тексты и идеи, поиск в интернете, генерация картинок
+                </div>
+
+                {/* Чипы */}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
+                  {CHAT_HINTS.map(hint => (
+                    <button
+                      key={hint}
+                      onClick={() => handleHint(hint)}
+                      style={{
+                        background: '#FFF', border: `1px solid ${C.borderLight}`,
+                        borderRadius: 10, padding: '9px 12px',
+                        fontSize: 13, color: C.textPrimary, cursor: 'pointer',
+                        fontFamily: 'inherit',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = C.accentLight)}
+                      onMouseLeave={e => (e.currentTarget.style.background = '#FFF')}
+                    >
+                      {hint}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : hasCLAUDEmd === false ? (
               <>
                 {/* Заголовок */}
                 <div style={{
@@ -1606,7 +1727,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         padding: isMobile ? '0 12px 12px' : '0 24px 18px',
         pointerEvents: 'none',
       }}>
-        <div style={{ maxWidth: 760, margin: '0 auto', pointerEvents: 'auto' }}>
+        <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
           {mode === 'bypass' && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6, padding: '6px 12px',
@@ -1619,17 +1740,25 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           {/* Вариант В: строка-предупреждение о лимите подписки у места отправки (warning/rejected) */}
           {worstRate && worstRate.level !== 'normal' && <RateLimitBar w={worstRate} />}
           <div style={{ borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
+          <input
+            ref={chatFileInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) handleChatUpload(fs); }}
+          />
           <Composer
             offline={!online}
             onSend={handleSend}
             onStop={interrupt}
-            onAttach={() => setShowAttachPicker(true)}
+            // В проекте — пикер файлов проекта; вне проекта — загрузка файла с устройства
+            onAttach={project ? (() => setShowAttachPicker(true)) : (() => chatFileInputRef.current?.click())}
             isGenerating={isWaiting}
             mode={mode}
             onModeChange={setMode}
             attachments={attachedFiles}
             onRemoveAttachment={path => onAttachedFilesChange(attachedFiles.filter(p => p !== path))}
-            onAttachImages={handleAttachImages}
+            onAttachImages={project ? handleAttachImages : handleChatUpload}
             isMobile={isMobile}
             skills={skills}
             agents={agents}
@@ -1640,8 +1769,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         </div>
       </div>
 
-      {/* Пикер вложений */}
-      {showAttachPicker && (
+      {/* Пикер вложений — только при наличии проекта */}
+      {project && showAttachPicker && (
         <AttachPicker
           projectId={project.id}
           selected={attachedFiles}
@@ -1664,14 +1793,15 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   );
 }
 
-// Карточка плана задач (TodoWrite) — закреплённый чек-лист с прогрессом
-interface TodoEntry { content: string; status: string; activeForm?: string }
+// Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
+function parseTodoWriteInput(input: unknown): TodoItem[] {
+  const t = (input as { todos?: unknown } | null)?.todos;
+  return Array.isArray(t) ? (t as TodoItem[]) : [];
+}
 
-function TodoPlanView({ input }: { input: unknown }) {
-  const todos = (() => {
-    const t = (input as { todos?: unknown } | null)?.todos;
-    return Array.isArray(t) ? (t as TodoEntry[]) : [];
-  })();
+// Карточка плана задач — закрепленный чек-лист с прогрессом. Источник списка:
+// input TodoWrite либо агрегат TaskCreate/TaskUpdate (computeTodos)
+function TodoPlanView({ todos }: { todos: TodoItem[] }) {
   if (todos.length === 0) return null;
   const done = todos.filter(t => t.status === 'completed').length;
 
@@ -1749,8 +1879,17 @@ function toolMeta(name: string): { color: string; icon: React.ReactNode } {
     return { color: '#B05C38', icon: svg(<><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>) };
   if (n === 'skill')
     return { color: '#8E4A82', icon: svg(<><path d="M12 3l1.9 5.2L19 10l-5.1 1.8L12 17l-1.9-5.2L5 10l5.1-1.8z" /><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" /></>) };
+  // Todo-задачи — та же «галочка в рамке», что у карточки плана
+  if (['taskcreate', 'taskupdate', 'tasklist', 'taskget'].includes(n))
+    return { color: C.accent, icon: svg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>) };
   return { color: C.info, icon: svg(<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6 2 2 6-6a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3z" />) };
 }
+
+// Статусы todo-задач (TaskUpdate) по-русски — для компактной строки в ленте
+const TASK_STATUS_RU: Record<string, string> = {
+  pending: 'в очереди', in_progress: 'в работе', completed: 'готово',
+  cancelled: 'отменена', deleted: 'удалена',
+};
 
 // Русские названия инструментов для ленты чата
 const TOOL_LABELS: Record<string, string> = {
@@ -1759,6 +1898,7 @@ const TOOL_LABELS: Record<string, string> = {
   glob: 'Поиск файлов', grep: 'Поиск', ls: 'Список', task: 'Субагент', agent: 'Субагент',
   websearch: 'Веб-поиск', webfetch: 'Загрузка страницы', skill: 'Навык',
   todowrite: 'План задач', exitplanmode: 'План', toolsearch: 'Поиск инструментов',
+  taskcreate: 'Задача', taskupdate: 'Задача', tasklist: 'Список задач', taskget: 'Задача',
   killshell: 'Остановка команды',
 };
 // Имя инструмента для показа: MCP → «server · tool», известные — по-русски, прочее — как есть
@@ -2254,7 +2394,7 @@ function MediaBlock({
 }
 
 // Строка инструмента с раскрываемым телом результата (вывод Bash/Read и т.п.)
-function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 'tool_use' }>; online?: boolean }) {
+function ToolUseView({ item, online = true, onOpenFile }: { item: Extract<ChatItem, { kind: 'tool_use' }>; online?: boolean; onOpenFile?: (path: string) => void }) {
   const meta = toolMeta(item.name);
   const [open, setOpen] = useState(false);
   const project = useContext(ChatProjectContext);
@@ -2264,7 +2404,12 @@ function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 
   // Пути показываем относительно корня проекта: file_path/path — целиком, в командах и
   // glob-шаблонах вырезаем абсолютный корень из текста (там путь — часть строки).
   const pathVal = inp.file_path ?? inp.path ?? inp.notebook_path;
-  const toolArg = item.streamingArg ?? String(
+  // Человекочитаемый аргумент для todo-задач: TaskCreate — тема, TaskUpdate — «#id → статус»
+  const taskArg = n === 'taskcreate' && typeof inp.subject === 'string' ? inp.subject
+    : n === 'taskupdate' && inp.taskId != null
+      ? `#${inp.taskId}${typeof inp.status === 'string' ? ` → ${TASK_STATUS_RU[inp.status] ?? inp.status}` : ''}`
+      : null;
+  const toolArg = item.streamingArg ?? taskArg ?? String(
     (inp.command != null ? stripRoot(String(inp.command), project?.rootPath) : null)
     ?? (pathVal != null ? relPath(String(pathVal), project?.rootPath) : null)
     ?? (inp.pattern != null ? stripRoot(String(inp.pattern), project?.rootPath) : null)
@@ -2328,7 +2473,20 @@ function ToolUseView({ item, online = true }: { item: Extract<ChatItem, { kind: 
           <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>{displayName}</span>
         </span>
         {toolArg
-          ? <span className={argIsPath ? 'cc-trunc-left' : undefined} style={{ fontFamily: FONT.mono, fontSize: 11, flex: 1, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{toolArg}</span>
+          ? (() => {
+              // Путь к файлу делаем кликабельным — открывает файл на просмотр (десктоп: split справа от чата).
+              const clickable = argIsPath && !!onOpenFile && pathVal != null;
+              return (
+                <span
+                  className={argIsPath ? 'cc-trunc-left' : undefined}
+                  onClick={clickable ? (e) => { e.stopPropagation(); onOpenFile!(relPath(String(pathVal), project?.rootPath)); } : undefined}
+                  title={clickable ? 'Открыть файл' : undefined}
+                  style={{ fontFamily: FONT.mono, fontSize: 11, flex: 1, color: clickable ? C.accent : C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: clickable ? 'pointer' : 'inherit' }}
+                >
+                  {toolArg}
+                </span>
+              );
+            })()
           : <span style={{ flex: 1 }} />}
         {item.result !== undefined && (
           <span style={{ fontSize: 11, color: item.isError ? '#C0392B' : C.textMuted, flexShrink: 0 }}>
@@ -2463,10 +2621,11 @@ function parseWorkflowMeta(input: unknown): { description?: string; phases?: { t
   return { description, phases: phases.length > 0 ? phases : undefined };
 }
 
-function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
+function WorkflowBlockView({ workflow, agents, childrenByParentId, onOpenFile }: {
   workflow: ToolUseItem;
   agents: ToolUseItem[];
   childrenByParentId: Map<string, ToolUseItem[]>;
+  onOpenFile?: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
@@ -2679,7 +2838,7 @@ function WorkflowBlockView({ workflow, agents, childrenByParentId }: {
                       <div style={{ paddingLeft: 22, paddingRight: 14, paddingBottom: 4, borderTop: `1px solid ${C.bgInset}` }}>
                         {tools.map((tool, ti) => (
                           <div key={tool.id} style={ti > 0 ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
-                            <ToolUseView item={tool} />
+                            <ToolUseView item={tool} onOpenFile={onOpenFile} />
                           </div>
                         ))}
                       </div>
@@ -3285,8 +3444,8 @@ function PlanReviewView({ item, online, onRespond, version, showBadge, showSwitc
 function FileChangedRow({ item, online, onOpenFile, onRevert }: {
   item: Extract<ChatItem, { kind: 'file_changed' }>;
   online: boolean;
-  onOpenFile: (path: string) => void;
-  onRevert: (path: string) => void;
+  onOpenFile?: (path: string) => void;
+  onRevert?: (path: string) => void;
 }) {
   const project = useContext(ChatProjectContext);
   const relativePath = relPath(item.path, project?.rootPath);
@@ -3298,13 +3457,13 @@ function FileChangedRow({ item, online, onOpenFile, onRevert }: {
           <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
         </svg>
       </span>
-      <span onClick={() => onOpenFile(item.path)}
-        style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', direction: 'rtl', textAlign: 'left' }}>
+      <span onClick={() => onOpenFile?.(item.path)}
+        style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: onOpenFile ? 'pointer' : 'default', direction: 'rtl', textAlign: 'left' }}>
         {relativePath}
       </span>
       <span style={{ fontSize: 11.5, color: '#27AE60', fontFamily: FONT.mono, flexShrink: 0 }}>+{item.added}</span>
       <span style={{ fontSize: 11.5, color: '#C0392B', fontFamily: FONT.mono, flexShrink: 0 }}>-{item.removed}</span>
-      {online && (
+      {online && onRevert && (
         <button onClick={() => onRevert(item.path)}
           style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid #E0D8CC', background: '#FFF', cursor: 'pointer', color: '#C0392B', flexShrink: 0 }}>
           Откатить
@@ -3372,13 +3531,15 @@ interface ItemProps {
   planShowBadge?: boolean;
   planShowSwitch?: boolean;
   onSwitchMode: (mode: Mode) => void;
-  onOpenFile: (path: string) => void;
-  onRevert: (path: string) => void;
+  onOpenFile?: (path: string) => void;
+  onRevert?: (path: string) => void;
   onRetry: () => void;
   onInterrupt: () => void;
+  // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
+  taskPlan?: TodoItem[];
 }
 
-function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt }: ItemProps) {
+function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan }: ItemProps) {
   const project = useContext(ChatProjectContext);
   switch (item.kind) {
     case 'user_message':
@@ -3396,7 +3557,8 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
                   background: 'rgba(90,51,34,0.1)', borderRadius: 5,
                   padding: '1px 6px', fontSize: 11,
                 }}>
-                  {relPath(p, project?.rootPath)}
+                  {/* В проекте — путь относительно корня; в чате без проекта — только имя файла */}
+                  {project ? relPath(p, project.rootPath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
                 </span>
               ))}
             </div>
@@ -3494,9 +3656,13 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
     }
 
     case 'tool_use':
-      // План задач рисуем отдельной карточкой-чек-листом. Линию-коннектор для дочерних
-      // вызовов субагента (parentToolUseId) рисует renderItems — единой непрерывной полосой.
-      return item.name === 'TodoWrite' ? <TodoPlanView input={item.input} /> : <ToolUseView item={item} online={online} />;
+      // План задач рисуем отдельной карточкой-чек-листом: TodoWrite несет полный список
+      // в своем input, для инкрементальных TaskCreate/TaskUpdate агрегат (taskPlan)
+      // прокидывает ChatPanel — только на последний task-вызов ленты. Линию-коннектор для
+      // дочерних вызовов субагента (parentToolUseId) рисует renderItems — единой полосой.
+      if (item.name === 'TodoWrite') return <TodoPlanView todos={parseTodoWriteInput(item.input)} />;
+      if (taskPlan) return <TodoPlanView todos={taskPlan} />;
+      return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
 
     case 'ask_question':
       return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} onInterrupt={onInterrupt} />;
@@ -3590,10 +3756,10 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
         }}>
           <div style={{
             display: 'flex', alignItems: 'center', gap: 11,
-            padding: '12px 13px', cursor: 'pointer',
+            padding: '12px 13px', cursor: onOpenFile ? 'pointer' : 'default',
             borderBottom: '1px solid #EFE9DD',
           }}
-            onClick={() => onOpenFile(item.path)}
+            onClick={() => onOpenFile?.(item.path)}
           >
             <div style={{
               width: 28, height: 28, borderRadius: 8,
@@ -3617,16 +3783,18 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
             </span>
           </div>
           <div style={{ padding: '8px 13px', display: 'flex', gap: 6 }}>
-            <button
-              onClick={() => onOpenFile(item.path)}
-              style={{
-                fontSize: 12, padding: '4px 10px', borderRadius: 6,
-                border: `1px solid ${C.borderLight}`, background: '#FFF', cursor: 'pointer', color: C.textPrimary,
-              }}
-            >
-              Открыть
-            </button>
-            {online && (
+            {onOpenFile && (
+              <button
+                onClick={() => onOpenFile(item.path)}
+                style={{
+                  fontSize: 12, padding: '4px 10px', borderRadius: 6,
+                  border: `1px solid ${C.borderLight}`, background: '#FFF', cursor: 'pointer', color: C.textPrimary,
+                }}
+              >
+                Открыть
+              </button>
+            )}
+            {online && onRevert && (
               <button
                 onClick={() => onRevert(item.path)}
                 style={{

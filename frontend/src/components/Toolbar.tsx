@@ -1,6 +1,6 @@
-import { useState } from 'react';
 import type { CSSProperties, ReactNode, MouseEvent } from 'react';
 import { C, TB } from '../lib/design';
+import { IconButton } from './ui/IconButton';
 
 // Компактные текстовые кнопки тулбара (выравниваются по 32px-линии icon-кнопок)
 export const tbBtnPrimary: CSSProperties = {
@@ -37,7 +37,8 @@ export function Toolbar({ isMobile, noBorder, bg, children, style }: {
   );
 }
 
-// === Icon-кнопка тулбара: единый тач-таргет, hover-подложка, svg 16 ===
+// === Icon-кнопка тулбара — тонкая обёртка над общим ui/IconButton ===
+// Сохранена для обратной совместимости API (isMobile → размер тач-таргета).
 export function ToolbarIconButton({ onClick, title, isMobile, color, disabled, active, children }: {
   onClick?: (e: MouseEvent) => void;
   title?: string;
@@ -47,23 +48,13 @@ export function ToolbarIconButton({ onClick, title, isMobile, color, disabled, a
   active?: boolean;
   children: ReactNode;
 }) {
-  const [hover, setHover] = useState(false);
-  const hit = isMobile ? TB.iconHitMobile : TB.iconHitDesktop;
   return (
-    <button
-      onClick={onClick} title={title} disabled={disabled}
-      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{
-        width: hit, height: hit, flexShrink: 0,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        border: 'none', borderRadius: TB.iconRadius, cursor: disabled ? 'default' : 'pointer',
-        background: active ? C.accentMuted : (hover && !disabled ? TB.iconHoverBg : 'transparent'),
-        color: disabled ? C.border : (color ?? (active ? C.accent : (hover ? TB.iconColorHover : TB.iconColor))),
-        transition: 'background 0.12s, color 0.12s',
-      }}
+    <IconButton
+      onClick={onClick} title={title} disabled={disabled} active={active} color={color}
+      size={isMobile ? 'lg' : 'md'}
     >
       {children}
-    </button>
+    </IconButton>
   );
 }
 

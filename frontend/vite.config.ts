@@ -21,7 +21,7 @@ export default defineConfig({
         navigateFallbackDenylist: [/^\/api\//, /^\/\d/, /^\/web-apps\//, /^\/sdkjs\//, /^\/doceditor\//, /^\/doc\//, /^\/coauthoring\//, /^\/cache\//],
       },
       manifest: {
-        name: 'Claude Home Server',
+        name: 'Claude Home',
         short_name: 'ClaudeHome',
         description: 'Веб-интерфейс для Claude Code CLI',
         theme_color: '#D97757',

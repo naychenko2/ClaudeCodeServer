@@ -39,6 +39,7 @@ builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<RoleManager>();
 builder.Services.AddSingleton<RoleGeneratorService>();
 builder.Services.AddSingleton<RoleMemoryService>();
+builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<FileService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();

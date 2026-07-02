@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, type CSSProperties } from 'react';
 import { C, FONT, R } from '../lib/design';
 import { PillSwitch } from './Toolbar';
 import { MarkdownViewer } from './MarkdownViewer';
-import { useSessionArtifacts, type ArtifactFile, type ArtifactLink, type PlanStatus } from '../hooks/useSessionArtifacts';
+import { useSessionArtifacts, type ArtifactFile, type ArtifactLink, type PlanStatus, type TodoItem } from '../hooks/useSessionArtifacts';
 
 interface Props {
   sessionId: string | null;
@@ -13,7 +13,7 @@ interface Props {
   isMobile?: boolean;
 }
 
-type TabKey = 'plan' | 'files' | 'links';
+type TabKey = 'plan' | 'todos' | 'files' | 'links';
 
 function basename(p: string): string {
   const norm = p.replace(/\\/g, '/');
@@ -114,6 +114,43 @@ function FileRow({ file, onOpen }: { file: ArtifactFile; onOpen: () => void }) {
   );
 }
 
+// Пункт todo-списка — те же иконки статусов, что у TodoPlanView в чате,
+// чтобы прогресс в панели и в ленте выглядел одинаково.
+function TodoRow({ todo }: { todo: TodoItem }) {
+  const isDone = todo.status === 'completed';
+  const isActive = todo.status === 'in_progress';
+  const label = isActive && todo.activeForm ? todo.activeForm : todo.content;
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '5px 14px' }}>
+      <span style={{ flexShrink: 0, marginTop: 2, display: 'flex' }}>
+        {isDone ? (
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="8" fill="#5E8B4E" />
+            <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : isActive ? (
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="7" fill="#D97757" />
+            <circle cx="8" cy="8" r="2.6" fill="#FBF1EA" />
+          </svg>
+        ) : (
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="6.5" stroke="#C9BFAD" strokeWidth="1.5" />
+          </svg>
+        )}
+      </span>
+      <span style={{
+        fontFamily: FONT.sans, fontSize: 13, lineHeight: 1.4,
+        color: isDone ? C.textMuted : isActive ? C.textHeading : C.textSecondary,
+        textDecoration: isDone ? 'line-through' : 'none',
+        fontWeight: isActive ? 600 : 400,
+      }}>
+        {label}
+      </span>
+    </div>
+  );
+}
+
 function LinkRow({ link }: { link: ArtifactLink }) {
   const [hover, setHover] = useState(false);
   return (
@@ -161,11 +198,13 @@ function NavArrow({ dir, disabled, onClick }: { dir: 'prev' | 'next'; disabled: 
 }
 
 export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onClose, isMobile }: Props) {
-  const { files, plans, links } = useSessionArtifacts(sessionId, projectId, rootPath);
+  const { files, plans, todos, links } = useSessionArtifacts(sessionId, projectId, rootPath);
 
-  // Вкладки — только непустые, в порядке: План → Файлы → Ссылки
+  // Вкладки — только непустые, в порядке: План → Задачи → Файлы → Ссылки
+  const todosDone = todos.filter(t => t.status === 'completed').length;
   const tabs: { value: TabKey; label: string }[] = [];
   if (plans.length) tabs.push({ value: 'plan', label: 'План' });
+  if (todos.length) tabs.push({ value: 'todos', label: `Задачи · ${todosDone}/${todos.length}` });
   if (files.length) tabs.push({ value: 'files', label: `Файлы · ${files.length}` });
   if (links.length) tabs.push({ value: 'links', label: `Ссылки · ${links.length}` });
 
@@ -231,7 +270,7 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
             <path d="M14 2v6h6M9 13h6M9 17h3" />
           </svg>
           <span style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textMuted, lineHeight: 1.5 }}>
-            Пока ничего не менялось.<br />Здесь появятся план, файлы и ссылки.
+            Пока ничего не менялось.<br />Здесь появятся план, задачи, файлы и ссылки.
           </span>
         </div>
       ) : (
@@ -330,6 +369,12 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
                   <MarkdownViewer content={curPlan.plan} />
                 </div>
               </>
+            )}
+
+            {activeKey === 'todos' && (
+              <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+                {todos.map((t, i) => <TodoRow key={i} todo={t} />)}
+              </div>
             )}
 
             {activeKey === 'files' && (

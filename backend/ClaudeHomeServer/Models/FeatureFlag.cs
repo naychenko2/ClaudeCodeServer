@@ -24,11 +24,11 @@ public static class FeatureFlagCatalog
     public static readonly IReadOnlyList<FeatureFlagDefinition> All =
     [
         // Панель «Артефакты сессии» — сводка по активной сессии справа от чата:
-        // изменённые файлы (с дельтами строк), план (из ExitPlanMode) и ссылки.
+        // измененные файлы (с дельтами строк), план (из ExitPlanMode), задачи (TodoWrite) и ссылки.
         new FeatureFlagDefinition(
             Key: "session-artifacts",
             Title: "Артефакты сессии",
-            Description: "Панель справа от чата с изменёнными файлами, планом и ссылками за текущую сессию.",
+            Description: "Панель справа от чата с измененными файлами, планом, задачами и ссылками за текущую сессию.",
             Default: false,
             Stage: "beta"),
     ];

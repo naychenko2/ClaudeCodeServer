@@ -6,9 +6,10 @@ import { useSessionArtifacts, type AgentArtifact, type AgentToolCall, type Artif
 
 interface Props {
   sessionId: string | null;
-  projectId: string;
-  rootPath: string;
-  onOpenFile: (path: string) => void;
+  // В чат-режиме проекта нет: projectId/rootPath/onOpenFile отсутствуют, вкладка «Файлы» скрывается.
+  projectId?: string;
+  rootPath?: string;
+  onOpenFile?: (path: string) => void;
   onClose: () => void;
   isMobile?: boolean;
 }
@@ -520,6 +521,8 @@ function NavArrow({ dir, disabled, onClick }: { dir: 'prev' | 'next'; disabled: 
 
 export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onClose, isMobile }: Props) {
   const { files, plans, todos, links, agents, workflows } = useSessionArtifacts(sessionId, projectId, rootPath);
+  // Чат-режим (без проекта): файлы открывать некуда — вкладку «Файлы» не показываем.
+  const isChat = !projectId;
 
   // Вкладки — только непустые, в порядке: План → Задачи → Агенты → Файлы → Ссылки
   const todosDone = todos.filter(t => t.status === 'completed').length;
@@ -538,7 +541,7 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
     // доходил до N/N, когда никто не пашет; активные — в сводке словами внутри.
     tabs.push({ value: 'agents', label: `Агенты · ${agentsTotal - agentsRunning}/${agentsTotal}` });
   }
-  if (files.length) tabs.push({ value: 'files', label: `Файлы · ${files.length}` });
+  if (files.length && !isChat) tabs.push({ value: 'files', label: `Файлы · ${files.length}` });
   if (links.length) tabs.push({ value: 'links', label: `Ссылки · ${links.length}` });
 
   const [active, setActive] = useState<TabKey>('plan');
@@ -743,7 +746,7 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
 
             {activeKey === 'files' && (
               <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
-                {files.map(f => <FileRow key={f.path} file={f} onOpen={() => onOpenFile(f.path)} />)}
+                {files.map(f => <FileRow key={f.path} file={f} onOpen={() => onOpenFile?.(f.path)} />)}
               </div>
             )}
 

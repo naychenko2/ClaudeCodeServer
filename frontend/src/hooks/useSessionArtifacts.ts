@@ -468,7 +468,10 @@ export function countFiles(items: ChatItem[], rootPath: string): number {
 }
 
 // Хук: подписывается на ленту активной сессии и мемоизует артефакты.
-export function useSessionArtifacts(sessionId: string | null, projectId: string, rootPath: string): SessionArtifacts {
+// projectId/rootPath опциональны: в чат-режиме проекта нет, лента едет через
+// api.chats.getHistory, а с пустым rootPath файлы из абсолютных путей отсекаются
+// сами (toRelative → null) — план/задачи/агенты/ссылки собираются без проекта.
+export function useSessionArtifacts(sessionId: string | null, projectId?: string, rootPath = ''): SessionArtifacts {
   const { items } = useSession(sessionId, projectId);
   return useMemo(() => computeArtifacts(items, rootPath), [items, rootPath]);
 }

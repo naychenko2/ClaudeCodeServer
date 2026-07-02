@@ -1,12 +1,14 @@
 namespace ClaudeHomeServer.Models;
 
-// Роль — «персонаж-собеседник» проекта: человеческое лицо (имя/аватар/характер)
+// Роль — «персонаж-собеседник»: человеческое лицо (имя/аватар/характер)
 // плюс набор компетенций (прикреплённые агенты из .claude/agents).
-// Системный промпт роли = Persona + тела агентов (AgentNames) + опц. SystemPrompt.
+// Роль ГЛОБАЛЬНАЯ (живёт в общем пуле — «команде»), к проектам прикомандировывается
+// через ProjectIds. Системный промпт роли = Persona + тела агентов (AgentNames) + опц. SystemPrompt.
 public class Role
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
-    public string ProjectId { get; init; } = "";
+    // Проекты, к которым роль прикомандирована (пустой список — роль только в пуле)
+    public List<string> ProjectIds { get; set; } = [];
     // Человеческое имя ("Игорь")
     public string Name { get; set; } = "";
     // Должность ("Backend-разработчик")

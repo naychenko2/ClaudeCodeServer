@@ -36,13 +36,16 @@ public class RoleGeneratorService
     private static readonly string[] Colors =
         ["#D97757", "#6C5CB0", "#3E7CA6", "#5E8B4E", "#C9923E", "#B4452F", "#7A6A58", "#2A8C82"];
 
-    public async Task<InterviewResult> InterviewAsync(string projectRootPath,
+    // projectRootPath == null — глобальный найм (вкладка «Команда»): доступны только
+    // глобальные агенты ~/.claude/agents, рабочая папка — папка приложения.
+    public async Task<InterviewResult> InterviewAsync(string? projectRootPath,
         IReadOnlyList<InterviewMessage> history, CancellationToken ct = default)
     {
-        var agents = _skills.GetProjectAgents(projectRootPath);
+        var rootPath = projectRootPath ?? AppContext.BaseDirectory;
+        var agents = _skills.GetProjectAgents(rootPath);
         var systemPrompt = BuildSystemPrompt(agents);
         var conversation = BuildConversation(history);
-        var raw = await RunClaudeAsync(projectRootPath, systemPrompt, conversation, ct);
+        var raw = await RunClaudeAsync(rootPath, systemPrompt, conversation, ct);
         return ParseReply(raw);
     }
 

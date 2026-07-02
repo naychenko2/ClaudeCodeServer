@@ -14,15 +14,32 @@ internal class TurnAccumulator
     private readonly Dictionary<string, StoredPlanReviewMessage> _pendingPlans = [];
     private readonly StringBuilder _textBuf = new();
     private readonly StringBuilder _thinkingBuf = new();
+    // Сессия с ролью: служебные строки-маркеры "[MEMORY] …" не должны попадать в историю
+    private readonly bool _stripMemory;
     // Защищает _history/_currentTurn от гонки: стоимость fal.ai добавляется из фонового
     // потока опроса billing-events, параллельно с пампом сообщений и GetAll() из HTTP-потоков.
     private readonly object _lock = new();
 
-    public TurnAccumulator(List<StoredMessage> history, string? saveKey = null)
+    public TurnAccumulator(List<StoredMessage> history, string? saveKey = null, bool stripMemoryMarkers = false)
     {
         _history = history;
         _saveKey = saveKey;
+        _stripMemory = stripMemoryMarkers;
     }
+
+    // Убирает из текста ответа строки-маркеры памяти роли (строка начинается с "[MEMORY]").
+    // Маркеры обрабатываются отдельным каналом (RoleMemoryService) и юзеру не показываются.
+    internal static string StripMemoryLines(string text)
+    {
+        if (!text.Contains("[MEMORY]", StringComparison.OrdinalIgnoreCase)) return text;
+        var kept = text.Split('\n')
+            .Where(l => !l.TrimStart().StartsWith("[MEMORY]", StringComparison.OrdinalIgnoreCase));
+        return string.Join('\n', kept).TrimEnd();
+    }
+
+    // Текст ответа для истории: для сессий с ролью — без [MEMORY]-строк
+    private string TextForStore() =>
+        _stripMemory ? StripMemoryLines(_textBuf.ToString()) : _textBuf.ToString();
 
     public void SetSaveKey(string claudeSessionId) => _saveKey = claudeSessionId;
 
@@ -132,7 +149,10 @@ internal class TurnAccumulator
             if (_thinkingBuf.Length > 0)
                 result.Add(new StoredThinkingMessage(_thinkingBuf.ToString()));
             if (_textBuf.Length > 0)
-                result.Add(new StoredTextMessage(_textBuf.ToString()));
+            {
+                var text = TextForStore();
+                if (text.Length > 0) result.Add(new StoredTextMessage(text));
+            }
             return result;
         }
     }
@@ -150,7 +170,8 @@ internal class TurnAccumulator
     {
         if (_textBuf.Length > 0)
         {
-            _currentTurn.Add(new StoredTextMessage(_textBuf.ToString()));
+            var text = TextForStore();
+            if (text.Length > 0) _currentTurn.Add(new StoredTextMessage(text));
             _textBuf.Clear();
         }
         if (_thinkingBuf.Length > 0)

@@ -120,6 +120,11 @@ app.Services.GetRequiredService<JwtService>();
 app.Services.GetRequiredService<WorkspaceKnowledgeStore>()
     .MigrateFromProjects(app.Services.GetRequiredService<ProjectManager>().GetAll());
 
+// Однократная миграция памяти ролей: <roleId>.md → <roleId>/<projectId>.md
+// (по ролям, у которых RoleManager сконвертировал старый per-project формат)
+app.Services.GetRequiredService<RoleMemoryService>()
+    .MigrateLegacy(app.Services.GetRequiredService<RoleManager>().MigratedLegacyProjects);
+
 app.UseForwardedHeaders();
 
 

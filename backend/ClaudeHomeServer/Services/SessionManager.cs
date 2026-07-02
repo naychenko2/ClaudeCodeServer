@@ -201,10 +201,17 @@ public class SessionManager
 
     // Создание чата вне проекта: рабочая папка — {DefaultProjectsPath}/{username}/Chats,
     // системный промпт — только встроенная часть (rawSystemPrompt=null), без проектных правил.
+    // roleId — чат с ролью-собеседником (роль задаёт дефолтные модель/effort и свой промпт).
     public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
-        string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null)
+        string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,
+        string? roleId = null)
     {
         var rootPath = ResolveChatRoot(ownerId);
+
+        // Роль (если выбрана) задаёт дефолтную модель/effort, когда они не указаны явно
+        var role = string.IsNullOrWhiteSpace(roleId) ? null : _roles.GetById(roleId);
+        var effectiveModel = !string.IsNullOrWhiteSpace(model) ? model : role?.Model;
+        var effectiveEffort = !string.IsNullOrWhiteSpace(effort) ? effort : role?.Effort;
 
         var session = new Session
         {
@@ -213,8 +220,9 @@ public class SessionManager
             Mode = mode,
             ClaudeSessionId = resumeSessionId,
             Name = name,
-            Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
-            Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
+            Model = string.IsNullOrWhiteSpace(effectiveModel) ? null : effectiveModel.Trim(),
+            Effort = string.IsNullOrWhiteSpace(effectiveEffort) ? null : effectiveEffort.Trim(),
+            RoleId = role?.Id,
         };
 
         await StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);
@@ -228,7 +236,8 @@ public class SessionManager
         var existingHistory = session.ClaudeSessionId != null
             ? await _history.LoadAsync(session.ClaudeSessionId)
             : [];
-        var accumulator = new TurnAccumulator(existingHistory, session.ClaudeSessionId);
+        var accumulator = new TurnAccumulator(existingHistory, session.ClaudeSessionId,
+            stripMemoryMarkers: session.RoleId != null);
 
         var entry = new SessionEntry { Info = session, Accumulator = accumulator };
         _sessions[session.Id] = entry;
@@ -265,7 +274,8 @@ public class SessionManager
             var existingHistory = entry.Info.ClaudeSessionId != null
                 ? await _history.LoadAsync(entry.Info.ClaudeSessionId)
                 : [];
-            var accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
+            var accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId,
+                stripMemoryMarkers: entry.Info.RoleId != null);
             entry.Accumulator = accumulator;
 
             // Чат вне проекта — рабочая папка Chats, без проектного промпта и правил;

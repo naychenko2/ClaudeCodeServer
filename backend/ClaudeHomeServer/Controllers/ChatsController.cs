@@ -32,7 +32,7 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
         var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
         try
         {
-            var chat = await sessions.CreateChatAsync(UserId, mode, req.ResumeSessionId, req.Name, req.Model, req.Effort);
+            var chat = await sessions.CreateChatAsync(UserId, mode, req.ResumeSessionId, req.Name, req.Model, req.Effort, req.RoleId);
             return CreatedAtAction(nameof(GetAll), new { }, chat);
         }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
@@ -91,6 +91,6 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
     }
 }
 
-public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? Effort = null);
+public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? Effort = null, string? RoleId = null);
 
 public record UpdateChatRequest(string? Name = null, string? Model = null, string? Effort = null, bool? Pinned = null);

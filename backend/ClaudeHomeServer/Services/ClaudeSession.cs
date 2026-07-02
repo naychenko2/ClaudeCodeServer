@@ -51,11 +51,9 @@ public class ClaudeSession : IAsyncDisposable
     // Провайдер правил разрешений проекта — резолвим каждый запрос (правила могут меняться)
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
 
-    // Память роли (Фаза 2): накопитель текста ответа за ход (для извлечения [MEMORY])
-    // и счётчик ходов с ролью (авто-summary каждые N ходов).
+    // Память роли: накопитель текста ответа за ход — по завершении хода передаётся
+    // в RoleMemoryService (извлечение [MEMORY]-маркеров и триггер авто-summary — там).
     private readonly System.Text.StringBuilder _turnText = new();
-    private int _roleTurnCount;
-    private const int MemorySummaryEveryNTurns = 5;
 
     public ClaudeSession(Session info, string rootPath, Func<ServerMessage, Task> onMessage,
         string? mcpConfigPath = null, string? rawSystemPrompt = null,
@@ -99,8 +97,9 @@ public class ClaudeSession : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(role.SystemPrompt))
             parts.Add(role.SystemPrompt);
 
-        // Память роли — устойчивые факты/договорённости из прошлых бесед
-        var memory = _roleMemory?.Read(role.Id);
+        // Память роли — устойчивые факты/договорённости из прошлых бесед этого контекста
+        // (проект или внепроектные чаты владельца)
+        var memory = _roleMemory?.Read(role.Id, RoleMemoryService.ContextFor(Info));
         if (!string.IsNullOrWhiteSpace(memory))
             parts.Add("## Твоя память о проекте и договорённостях\n\n" + memory.Trim());
 
@@ -113,54 +112,16 @@ public class ClaudeSession : IAsyncDisposable
         return parts.Count > 0 ? string.Join("\n\n---\n\n", parts) : null;
     }
 
-    // Обработка памяти роли по завершении хода: маркеры [MEMORY] (реалтайм) + авто-summary раз в N ходов.
+    // Обработка памяти роли по завершении хода — целиком в RoleMemoryService
+    // (маркеры [MEMORY], триггер и генерация авто-summary, защита от гонок).
     private async Task ProcessRoleMemoryAsync(Role role)
     {
         try
         {
-            // Канал 1: явные факты из маркеров [MEMORY] в ответе роли
-            var facts = ExtractMemoryMarkers(_turnText.ToString());
-            if (facts.Count > 0) _roleMemory!.Append(role.Id, facts);
-
-            // Канал 2: периодически компактим память лёгким вызовом claude
-            _roleTurnCount++;
-            if (_roleTurnCount % MemorySummaryEveryNTurns == 0)
-                await SummarizeMemoryAsync(role);
+            await _roleMemory!.ProcessTurnAsync(role, RoleMemoryService.ContextFor(Info),
+                _turnText.ToString(), RunOneShotClaudeAsync);
         }
         catch { /* память — не критичный путь, ход уже завершён */ }
-    }
-
-    // Извлекает факты из строк вида "[MEMORY] текст" (маркер может быть в любом месте строки)
-    private static List<string> ExtractMemoryMarkers(string text)
-    {
-        var facts = new List<string>();
-        foreach (var line in text.Split('\n'))
-        {
-            var idx = line.IndexOf("[MEMORY]", StringComparison.OrdinalIgnoreCase);
-            if (idx < 0) continue;
-            var fact = line[(idx + "[MEMORY]".Length)..].Trim().TrimStart(':', '-', ' ', '\t').Trim();
-            if (fact.Length > 0) facts.Add(fact);
-        }
-        return facts;
-    }
-
-    // Авто-summary: лёгкий claude (haiku) компактит память с учётом последнего диалога
-    private async Task SummarizeMemoryAsync(Role role)
-    {
-        var currentMemory = _roleMemory!.Read(role.Id);
-        if (string.IsNullOrWhiteSpace(currentMemory)) return;   // нечего компактить
-
-        var prompt =
-            $"Ты ведёшь память роли «{role.Name}» о проекте. Вот её текущая память:\n\n{currentMemory}\n\n" +
-            "Вот последний фрагмент диалога роли с пользователем:\n\n" +
-            Truncate(_turnText.ToString(), 4000) + "\n\n" +
-            "Перепиши память компактно: объедини дубли, убери устаревшее и сиюминутное, добавь важные " +
-            "устойчивые факты и договорённости из диалога. Верни ТОЛЬКО обновлённый markdown-список " +
-            "фактов (строки вида «- …»), без преамбул, заголовков и комментариев.";
-
-        var summary = await RunOneShotClaudeAsync(prompt, "claude-haiku-4-5-20251001");
-        if (!string.IsNullOrWhiteSpace(summary))
-            _roleMemory.Overwrite(role.Id, summary.Trim() + "\n");
     }
 
     // Разовый текстовый прогон claude (--print) без stream/инструментов — для авто-summary памяти
@@ -198,8 +159,6 @@ public class ClaudeSession : IAsyncDisposable
         }
         catch { return null; }
     }
-
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
 
     private static string? CreateSessionMcpConfig(string? basePath, string? datasetId)
     {

@@ -101,12 +101,23 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
     return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
   };
 
+  // Маска «чч:мм»: только цифры, двоеточие подставляется само, значения зажимаются
+  // в валидный диапазон по мере ввода (9→09, часы ≤23, десятки минут ≤5)
+  const maskTime = (raw: string): string => {
+    let d = raw.replace(/\D/g, '').slice(0, 4);
+    if (d.length >= 1 && Number(d[0]) > 2) d = '0' + d;              // «9…» → «09…»
+    if (d.length >= 2 && Number(d.slice(0, 2)) > 23) d = '23' + d.slice(2);
+    if (d.length >= 3 && Number(d[2]) > 5) d = d.slice(0, 2) + '5' + d.slice(3);
+    d = d.slice(0, 4);
+    return d.length <= 2 ? d : `${d.slice(0, 2)}:${d.slice(2)}`;
+  };
+
   const [viewYear, viewMonth] = viewYm;
   const cells = monthGrid(viewYear, viewMonth);
 
   // Позиция поповера: под якорем; если снизу не помещается — над ним
   const POPOVER_W = 268;
-  const POPOVER_H = 430;
+  const POPOVER_H = 340;
   const popoverPos = (): React.CSSProperties => {
     if (!anchor) return {};
     const left = Math.max(12, Math.min(anchor.left, window.innerWidth - POPOVER_W - 12));
@@ -118,6 +129,7 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
 
   return (
     <div>
+      {/* Дата: быстрые чипы + произвольная через календарик */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {quick.map(q => (
           <button key={q.key} onClick={() => onChange(q.date, dueTime)} style={chipStyle(dueDate === q.date)}>
@@ -128,7 +140,6 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
         <button onClick={() => onChange(null, null)} style={chipStyle(!dueDate)}>
           Без срока
         </button>
-        {/* Произвольная дата/время */}
         <button
           data-due-popover
           onClick={e => {
@@ -143,9 +154,59 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
         >
           <CalendarIcon size={12} />
           {isCustom ? customLabel(dueDate) : 'Дата…'}
-          {dueTime && (isCustom || isQuick) ? ` · ${dueTime}` : ''}
         </button>
       </div>
+
+      {/* Время — отдельно от даты: видно всегда, когда дата задана, без лишних кликов */}
+      {dueDate && (
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+          <span style={{
+            fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted,
+            textTransform: 'uppercase', letterSpacing: '0.05em', marginRight: 2,
+          }}>
+            Время
+          </span>
+          {[null, '09:00', '12:00', '14:00', '16:00', '18:00', '20:00'].map(t => {
+            const active = (dueTime ?? null) === t;
+            return (
+              <button
+                key={t ?? 'none'}
+                onClick={() => onChange(dueDate, t)}
+                style={{
+                  padding: '4px 9px', cursor: 'pointer',
+                  border: `1px solid ${active ? C.accent : C.border}`,
+                  borderRadius: R.md,
+                  background: active ? C.accentLight : C.bgWhite,
+                  color: active ? C.accent : C.textSecondary,
+                  fontFamily: t ? FONT.mono : FONT.sans, fontSize: 11.5,
+                  fontWeight: active ? 700 : 500,
+                }}
+              >
+                {t ?? 'Нет'}
+              </button>
+            );
+          })}
+          <input
+            value={timeDraft}
+            onChange={e => setTimeDraft(maskTime(e.target.value))}
+            onBlur={() => {
+              const t = applyTime(timeDraft);
+              if (t) onChange(dueDate, t);
+              else if (timeDraft.trim() === '') onChange(dueDate, null);
+              else setTimeDraft(dueTime ?? '');
+            }}
+            placeholder="чч:мм"
+            inputMode="numeric"
+            maxLength={5}
+            style={{
+              width: 66, boxSizing: 'border-box', padding: '4px 8px',
+              border: `1px solid ${C.border}`, borderRadius: R.md,
+              background: C.bgWhite, fontFamily: FONT.mono, fontSize: 11.5,
+              color: C.textPrimary, outline: 'none', textAlign: 'center',
+            }}
+          />
+        </div>
+      )}
 
       {anchor && createPortal(
         <div data-due-popover style={{
@@ -201,7 +262,8 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
               return (
                 <button
                   key={i}
-                  onClick={() => onChange(iso, dueTime)}
+                  // Выбор дня сразу закрывает календарик — время задаётся отдельной строкой
+                  onClick={() => { onChange(iso, dueTime); setAnchor(null); }}
                   style={{
                     height: 30, padding: 0, cursor: 'pointer', borderRadius: R.md,
                     border: 'none',
@@ -214,68 +276,6 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
                 </button>
               );
             })}
-          </div>
-
-          {/* Время: пресеты одним тапом + произвольный ввод */}
-          <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.borderLight}` }}>
-            <div style={{
-              fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted,
-              textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 7,
-            }}>
-              Время
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 9 }}>
-              {[null, '09:00', '12:00', '14:00', '16:00', '18:00', '20:00'].map(t => {
-                const active = (dueTime ?? null) === t;
-                return (
-                  <button
-                    key={t ?? 'none'}
-                    onClick={() => onChange(t ? (dueDate ?? today) : dueDate, t)}
-                    style={{
-                      padding: '4px 9px', cursor: 'pointer',
-                      border: `1px solid ${active ? C.accent : C.border}`,
-                      borderRadius: R.md,
-                      background: active ? C.accentLight : C.bgWhite,
-                      color: active ? C.accent : C.textSecondary,
-                      fontFamily: t ? FONT.mono : FONT.sans, fontSize: 11.5,
-                      fontWeight: active ? 700 : 500,
-                    }}
-                  >
-                    {t ?? 'Нет'}
-                  </button>
-                );
-              })}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input
-                value={timeDraft}
-                onChange={e => setTimeDraft(e.target.value)}
-                onBlur={() => {
-                  const t = applyTime(timeDraft);
-                  if (t) onChange(dueDate ?? today, t);
-                  else if (timeDraft.trim() === '') onChange(dueDate, null);
-                  else setTimeDraft(dueTime ?? '');
-                }}
-                placeholder="Своё…"
-                style={{
-                  width: 76, boxSizing: 'border-box', padding: '6px 9px',
-                  border: `1px solid ${C.border}`, borderRadius: R.md,
-                  background: C.bgWhite, fontFamily: FONT.mono, fontSize: 12.5,
-                  color: C.textPrimary, outline: 'none', textAlign: 'center',
-                }}
-              />
-              <div style={{ flex: 1 }} />
-              <button
-                onClick={() => setAnchor(null)}
-                style={{
-                  padding: '6px 13px', border: 'none', borderRadius: R.md, cursor: 'pointer',
-                  background: C.accent, color: C.onAccent,
-                  fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
-                }}
-              >
-                Готово
-              </button>
-            </div>
           </div>
         </div>,
         document.body,

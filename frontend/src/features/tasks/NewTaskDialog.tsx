@@ -1,10 +1,10 @@
 // Диалог быстрого создания задачи: название, проект, срок, приоритет, исполнитель.
 // Остальные поля задаются позже в редактировании.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Project, Task, TaskAssignee, TaskPriority } from '../../types';
 import { C, FONT, R } from '../../lib/design';
-import { Button, FieldLabel, Modal, TextField } from '../../components/ui';
+import { Button, FieldLabel, Modal, TextField, useIsMobileModal } from '../../components/ui';
 import { api } from '../../lib/api';
 import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, createTask, projectColor } from '../../lib/tasks';
 import { ClaudeBadge, PriorityFlag } from './bits';
@@ -38,6 +38,22 @@ export function NewTaskDialog({ defaultProjectId, defaultDueDate, configureLabel
   useEffect(() => {
     api.projects.list().then(setProjects).catch(() => {});
   }, []);
+
+  // Мобила: проектов может быть много — чипы одной горизонтальной лентой,
+  // проект контекста первым, выбранный подъезжает в видимую зону
+  const isMobile = useIsMobileModal();
+  const chipsRef = useRef<HTMLDivElement>(null);
+  const orderedProjects = useMemo(() => {
+    if (!defaultProjectId) return projects;
+    const def = projects.find(p => p.id === defaultProjectId);
+    return def ? [def, ...projects.filter(p => p.id !== defaultProjectId)] : projects;
+  }, [projects, defaultProjectId]);
+
+  useEffect(() => {
+    if (!isMobile || projects.length === 0) return;
+    chipsRef.current?.querySelector('[data-active="true"]')
+      ?.scrollIntoView({ inline: 'center', block: 'nearest' });
+  }, [isMobile, projects.length]);
 
   const canCreate = title.trim().length > 0 && !saving;
 
@@ -83,12 +99,20 @@ export function NewTaskDialog({ defaultProjectId, defaultDueDate, configureLabel
       {/* Проект */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <FieldLabel>Проект</FieldLabel>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {/* Мобила: одна горизонтальная лента (проектов может быть 10+), десктоп — перенос строк */}
+        <div
+          ref={chipsRef}
+          className={isMobile ? 'cc-hide-scrollbar' : undefined}
+          style={isMobile
+            ? { display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }
+            : { display: 'flex', flexWrap: 'wrap', gap: 8 }}
+        >
           {/* «Личное» — нейтральная опция первой (задача вне проекта) */}
           <button
+            data-active={projectId === null}
             onClick={() => setProjectId(null)}
             style={{
-              display: 'inline-flex', alignItems: 'center', gap: 7,
+              display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
               padding: '7px 13px', cursor: 'pointer',
               border: `1px solid ${projectId === null ? C.accent : C.border}`,
               borderRadius: 999,
@@ -101,15 +125,16 @@ export function NewTaskDialog({ defaultProjectId, defaultDueDate, configureLabel
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: NO_PROJECT_COLOR.main, flexShrink: 0 }} />
             {NO_PROJECT_LABEL}
           </button>
-          {projects.map(p => {
+          {orderedProjects.map(p => {
             const active = p.id === projectId;
             const color = projectColor(p.id);
             return (
               <button
                 key={p.id}
+                data-active={active}
                 onClick={() => setProjectId(p.id)}
                 style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 7,
+                  display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
                   padding: '7px 13px', cursor: 'pointer',
                   border: `1px solid ${active ? C.accent : C.border}`,
                   borderRadius: 999,

@@ -61,6 +61,13 @@ export function getExplorerCreateInDir(projectId: string): string {
 
 const normPath = (p?: string | null) => (p ?? '').replace(/\\/g, '/');
 
+// Единая сортировка записей: папки сверху, затем по имени без учёта регистра
+const sortEntries = (entries: FileEntry[]): FileEntry[] =>
+  [...entries].sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+  });
+
 // Возвращает [parentDir, name] из пути
 const splitPath = (p: string): [string, string] => {
   const norm = normPath(p);
@@ -762,7 +769,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const flatTree = useMemo((): TreeNode[] => {
     const walk = (path: string, depth: number): TreeNode[] => {
-      const entries = dirCache.get(path) ?? [];
+      const entries = sortEntries(dirCache.get(path) ?? []);
       const result: TreeNode[] = [];
       for (const entry of entries) {
         result.push({ entry, depth });
@@ -780,10 +787,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const mobileEntries = useMemo((): FileEntry[] => {
     const entries = dirCache.get(mobileDir);
     if (!entries) return [];
-    return [...entries].sort((a, b) => {
-      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+    return sortEntries(entries);
   }, [dirCache, mobileDir]);
 
   const breadcrumbs = useMemo(() => {
@@ -813,6 +817,16 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     const isDropTgt = dropTarget === entry.path;
     const isDragging = dragPath === entry.path;
     const isRenaming = renamingPath === entry.path;
+
+    const rowBg = isDropTgt
+      ? '#F1DDD1'
+      : isActive ? '#F1DDD1'
+      : hoveredPath === entry.path ? '#E8E1D4'
+      : normPath(entry.path) === newlyCreatedPath ? 'rgba(217,119,87,0.13)'
+      : (sstate || folderSyncing) ? '#F4ECE3'
+      : 'transparent';
+    // Десктоп: кластер иконок липнет к правому краю видимой области при горизонтальном скролле
+    const stickyIcons = !isMobile;
 
     const handleRowClick = () => {
       if (isRenaming) return;
@@ -844,7 +858,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         onTouchCancel={isMobile || alwaysShowIcons ? handleTouchCancel : undefined}
         style={{
           display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 6,
-          paddingLeft: 8 + depth * 16, paddingRight: 8,
+          paddingLeft: 8 + depth * 16, paddingRight: stickyIcons ? 0 : 8,
           paddingTop: isMobile || alwaysShowIcons ? 10 : 6,
           paddingBottom: isMobile || alwaysShowIcons ? 10 : 6,
           // фикс высоты: hover-иконки (24) чуть выше контента строки — держим 36, чтобы строка не «прыгала»
@@ -853,13 +867,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           width: '100%', boxSizing: 'border-box',
           opacity: isDragging ? 0.4 : pressingPath === entry.path ? 0.6 : 1,
           transform: pressingPath === entry.path ? 'scale(0.98)' : 'none',
-          background: isDropTgt
-            ? '#F1DDD1'
-            : isActive ? '#F1DDD1'
-            : hoveredPath === entry.path ? '#E8E1D4'
-            : normPath(entry.path) === newlyCreatedPath ? 'rgba(217,119,87,0.13)'
-            : (sstate || folderSyncing) ? '#F4ECE3'
-            : 'transparent',
+          background: rowBg,
           boxShadow: isDropTgt
             ? `inset 0 0 0 2px ${C.accent}`
             : isActive ? 'inset 2px 0 0 #D97757'
@@ -935,6 +943,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             }}>{parentDir}</span>
           )}
         </span>
+        {/* Кластер правых иконок: на десктопе — sticky, не уезжает при горизонтальном скролле */}
+        <span style={{
+          display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+          ...(stickyIcons ? {
+            position: 'sticky' as const, right: 0,
+            alignSelf: 'stretch',
+            paddingLeft: 4, paddingRight: 8,
+            background: rowBg === 'transparent' ? C.bgPanel : rowBg,
+            borderRadius: '0 8px 8px 0',
+          } : {}),
+        }}>
         {entry.isModified && (
           <span style={{ fontSize: 9, fontWeight: 700, color: '#C2693B', background: '#FBEBE0', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
         )}
@@ -1050,6 +1069,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         })()}
         {/* Намёк «войти в папку» — только мобильная навигация */}
         {mobileNav && entry.isDirectory && <ChevronRight />}
+        </span>
       </div>
     );
   };
@@ -1208,7 +1228,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       )}
 
       {/* Tree / список папки / результаты поиска */}
-      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowX: 'hidden', overflowY: 'auto', padding: '0 4px 12px' }}>
+      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowX: isMobile ? 'hidden' : 'auto', overflowY: 'auto', padding: '0 4px 12px' }}>
         {searchResults !== null ? (
           searchResults.length === 0 ? (
             <EmptyState
@@ -1238,7 +1258,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         ) : flatTree.length === 0 ? (
           <FilesRootEmptyState onCreateFile={online ? () => { setCreateInDir(''); setShowCreateFile(true); } : undefined} />
         ) : (
-          flatTree.map(({ entry, depth }) => renderFileRow(entry, depth))
+          // width: max-content — строки растягиваются под самое длинное имя,
+          // контейнер даёт горизонтальный скролл вместо обрезания
+          <div style={{ minWidth: '100%', width: 'max-content' }}>
+            {flatTree.map(({ entry, depth }) => renderFileRow(entry, depth))}
+          </div>
         )}
       </div>
 

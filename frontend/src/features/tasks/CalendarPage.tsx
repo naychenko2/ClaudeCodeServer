@@ -71,13 +71,20 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
     void ensureTasksLoaded();
     api.projects.list().then(setProjects).catch(() => {});
     api.projectGroups.list().then(setGroups).catch(() => {});
-    // Диплинк #/calendar/task/{id} (из тоста/push) — открываем модал личной задачи
-    const pending = sessionStorage.getItem('cc_pending_calendar_task');
-    if (pending) {
-      sessionStorage.removeItem('cc_pending_calendar_task');
-      setPersonalEdit(false);
-      setPersonalTaskId(pending);
-    }
+    // Диплинк #/calendar/task/{id} (из тоста/push) — открываем модал личной задачи.
+    // Проверяем при монтировании и по событию cc-pending-task (клик по тосту,
+    // когда календарь уже на экране)
+    const consumePendingTask = () => {
+      const pending = sessionStorage.getItem('cc_pending_calendar_task');
+      if (pending) {
+        sessionStorage.removeItem('cc_pending_calendar_task');
+        setPersonalEdit(false);
+        setPersonalTaskId(pending);
+      }
+    };
+    consumePendingTask();
+    window.addEventListener('cc-pending-task', consumePendingTask);
+    return () => window.removeEventListener('cc-pending-task', consumePendingTask);
   }, []);
 
   const projectsById = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);

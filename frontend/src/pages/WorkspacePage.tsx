@@ -202,29 +202,38 @@ const windowWidth = useWindowWidth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Переход из календаря / диплинк задачи: App положил «projectId|taskId» в sessionStorage
+  // Переход из календаря / диплинк задачи: App положил «projectId|taskId» в sessionStorage.
+  // Забираем при монтировании и по событию cc-pending-task (клик по тосту уведомления,
+  // когда проект уже открыт — ремонта страницы не происходит).
   useEffect(() => {
-    const raw = sessionStorage.getItem('cc_pending_task');
-    if (!raw) return;
-    const sep = raw.indexOf('|');
-    const [pid, pending] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
-    if (pid !== project.id) return;
-    sessionStorage.removeItem('cc_pending_task');
-    // Флаг «сразу в редактирование» (свежесозданная из календаря)
-    const edit = sessionStorage.getItem('cc_pending_task_edit') === '1';
-    sessionStorage.removeItem('cc_pending_task_edit');
-    setLeftTab('tasks');
-    setSelectedTaskId(pending);
-    if (edit) setAutoEditTaskId(pending);
-    // Пишем запись истории с задачей — hash-URL сохраняет /task/… и после перезагрузки
-    if (window.matchMedia('(max-width: 767px)').matches) {
-      setMobileView('chat');
-      navPush({ screen: 'project', project, view: 'chat', file: null, task: pending });
-    } else {
-      navPush({ screen: 'project', project, view: 'sidebar', file: null, task: pending });
-    }
+    const consumePendingTask = () => {
+      const raw = sessionStorage.getItem('cc_pending_task');
+      if (!raw) return;
+      const sep = raw.indexOf('|');
+      const [pid, pending] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
+      if (pid !== project.id) return;
+      sessionStorage.removeItem('cc_pending_task');
+      // Флаг «сразу в редактирование» (свежесозданная из календаря)
+      const edit = sessionStorage.getItem('cc_pending_task_edit') === '1';
+      sessionStorage.removeItem('cc_pending_task_edit');
+      setLeftTab('tasks');
+      setSelectedTaskId(pending);
+      if (edit) setAutoEditTaskId(pending);
+      // Открытый файл уступает место карточке задачи
+      setOpenFile(null);
+      // Пишем запись истории с задачей — hash-URL сохраняет /task/… и после перезагрузки
+      if (window.matchMedia('(max-width: 767px)').matches) {
+        setMobileView('chat');
+        navPush({ screen: 'project', project, view: 'chat', file: null, task: pending });
+      } else {
+        navPush({ screen: 'project', project, view: 'sidebar', file: null, task: pending });
+      }
+    };
+    consumePendingTask();
+    window.addEventListener('cc-pending-task', consumePendingTask);
+    return () => window.removeEventListener('cc-pending-task', consumePendingTask);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [project.id]);
   // Ширина сайдбара — общая для всех областей (перетаскиваемая, персистится)
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
 

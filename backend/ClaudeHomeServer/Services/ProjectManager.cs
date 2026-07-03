@@ -9,6 +9,7 @@ public class ProjectManager
 {
     // Встроенная часть системного промпта — всегда добавляется, пользователь не редактирует
     public const string BuiltInSystemPrompt =
+        "Всегда общайся с пользователем на русском языке. Все сообщения, пояснения, вопросы и итоговые ответы пиши исключительно по-русски, независимо от языка запроса. Технические термины, идентификаторы кода, названия инструментов и команды оставляй в оригинальном виде.\n\n" +
         "Если пользователь просит сгенерировать, нарисовать, создать или изобразить что-либо визуальное (изображение, картинку, рисунок, арт, фото, иллюстрацию), видео, аудио или музыку — используй MCP-сервер fal-ai: подбери модель (recommend_model или search_models), запусти задачу (submit_job / run_model) и верни результат. Никогда не рисуй ASCII-арт вместо настоящей генерации.\n\n";
 
     private readonly ConcurrentDictionary<string, Project> _projects = new();
@@ -98,29 +99,37 @@ public class ProjectManager
         if (changed) Save();
     }
 
-    public static string BuildSystemPrompt(string? userPrompt, bool hasDify,
+    // Части эффективного системного промпта в порядке отправки:
+    // builtin — встроенная константа, user — промпт проекта, auto — автодополнения (Dify, теги).
+    // Единственный источник состава промпта: и реальная отправка (BuildSystemPrompt),
+    // и просмотр на UI (/effective-prompt) собираются отсюда.
+    public static List<SystemPromptPart> GetSystemPromptParts(string? userPrompt, bool hasDify,
         Dictionary<string, List<string>>? documentTags = null)
     {
-        var parts = new List<string> { BuiltInSystemPrompt };
+        var parts = new List<SystemPromptPart> { new("builtin", BuiltInSystemPrompt) };
 
         if (!string.IsNullOrWhiteSpace(userPrompt))
-            parts.Add(userPrompt);
+            parts.Add(new("user", userPrompt));
 
         if (hasDify)
         {
-            var combined = string.Join("\n\n", parts);
+            var combined = string.Join("\n\n", parts.Select(p => p.Content));
             if (!combined.Contains("mcp__dify__search_knowledge"))
-                parts.Add(
+                parts.Add(new("auto",
                     "В этом проекте настроена база знаний Dify. Используй инструмент mcp__dify__search_knowledge для поиска по ней при ответе на вопросы о документации проекта. dataset_id уже настроен — указывать его не нужно.\n\n" +
-                    "Если пользователь просит найти, поискать или проверить информацию — используй MCP-сервер Dify (search_knowledge) в первую очередь, до ответа из памяти.");
+                    "Если пользователь просит найти, поискать или проверить информацию — используй MCP-сервер Dify (search_knowledge) в первую очередь, до ответа из памяти."));
 
             var tagInstruction = BuildTagInstruction(documentTags);
             if (!string.IsNullOrEmpty(tagInstruction))
-                parts.Add(tagInstruction);
+                parts.Add(new("auto", tagInstruction));
         }
 
-        return string.Join("\n\n", parts);
+        return parts;
     }
+
+    public static string BuildSystemPrompt(string? userPrompt, bool hasDify,
+        Dictionary<string, List<string>>? documentTags = null) =>
+        string.Join("\n\n", GetSystemPromptParts(userPrompt, hasDify, documentTags).Select(p => p.Content));
 
     private static string BuildTagInstruction(Dictionary<string, List<string>>? documentTags)
     {
@@ -231,3 +240,6 @@ public class ProjectManager
         }
     }
 }
+
+// Kind: builtin | user | auto
+public record SystemPromptPart(string Kind, string Content);

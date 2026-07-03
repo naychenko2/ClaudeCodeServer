@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { Project, ProjectGroup, PermissionRule } from '../../../types';
+import { useEffect, useState } from 'react';
+import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '../../../types';
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
 import { C, R } from '../../../lib/design';
@@ -25,8 +25,19 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
   const [rules, setRules] = useState<PermissionRule[]>(project.permissionRules ?? []);
   const [draftPrompt, setDraftPrompt] = useState('');
-  const builtinPrompt = project.builtInSystemPrompt ?? '';
+  const [promptParts, setPromptParts] = useState<SystemPromptPart[] | null>(null);
+  const builtinPrompt = promptParts?.find(p => p.kind === 'builtin')?.content
+    ?? project.builtInSystemPrompt ?? '';
+  const autoParts = promptParts?.filter(p => p.kind === 'auto') ?? [];
   const [error, setError] = useState('');
+
+  // Эффективный промпт с сервера — ровно те части, что реально уходят в claude
+  useEffect(() => {
+    if (view !== 'prompt' || promptParts) return;
+    api.projects.getEffectivePrompt(project.id)
+      .then(r => setPromptParts(r.parts))
+      .catch(() => {});
+  }, [view, promptParts, project.id]);
 
   const handleConfirm = async () => {
     setError('');
@@ -106,6 +117,43 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
             style={{ maxHeight: 320 }}
           />
         </div>
+
+        {/* Автодополнения (база знаний, теги) — read-only, добавляются сервером после ваших инструкций */}
+        {autoParts.length > 0 && (
+          <>
+            <div style={{ borderBottom: `1px dashed ${C.border}`, margin: '2px 0' }} />
+            <div>
+              <div style={{
+                fontSize: 12, fontWeight: 600, color: C.textSecondary,
+                fontFamily: 'Hanken Grotesk, sans-serif',
+                textTransform: 'uppercase', letterSpacing: '0.05em',
+                marginBottom: 6,
+              }}>
+                Добавляется автоматически
+              </div>
+              <div style={{
+                display: 'flex', alignItems: 'flex-start', gap: 10,
+                padding: '12px 14px',
+                background: C.bgPanel,
+                border: `1px dashed ${C.border}`,
+                borderRadius: R.xl,
+              }}>
+                <span style={{ fontSize: 14, lineHeight: 1, marginTop: 1, flexShrink: 0 }}>🔒</span>
+                <div style={{
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 12,
+                  color: 'rgba(60, 45, 30, 0.55)',
+                  lineHeight: 1.6,
+                  whiteSpace: 'pre-wrap',
+                  maxHeight: 160,
+                  overflowY: 'auto',
+                }}>
+                  {autoParts.map(p => p.content).join('\n\n')}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
       </Modal>
     );
   }

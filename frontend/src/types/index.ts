@@ -22,6 +22,12 @@ export interface Project {
   builtInSystemPrompt?: string;
 }
 
+// Часть эффективного системного промпта (в порядке отправки в claude)
+export interface SystemPromptPart {
+  kind: 'builtin' | 'user' | 'auto';
+  content: string;
+}
+
 // Группа проектов на вкладке «Проекты»
 export interface ProjectGroup {
   id: string;

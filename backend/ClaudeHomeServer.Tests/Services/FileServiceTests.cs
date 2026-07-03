@@ -37,6 +37,78 @@ public class FileServiceTests : IDisposable
         act.Should().Throw<UnauthorizedAccessException>();
     }
 
+    [Fact]
+    public void SafeJoin_SiblingWithCommonPrefix_ThrowsUnauthorizedAccess()
+    {
+        // root "...\proj" не должен пропускать "...\proj2\secret" (общий префикс имени)
+        var act = () => FileService.SafeJoin(_root, ".." + Path.DirectorySeparatorChar +
+            Path.GetFileName(_root) + "2" + Path.DirectorySeparatorChar + "secret.txt");
+        act.Should().Throw<UnauthorizedAccessException>();
+    }
+
+    [Fact]
+    public void SafeJoin_RootItself_ReturnsRoot()
+    {
+        var result = FileService.SafeJoin(_root, "");
+        result.TrimEnd(Path.DirectorySeparatorChar).Should().Be(_root.TrimEnd(Path.DirectorySeparatorChar));
+    }
+
+    [Fact]
+    public void SafeJoin_CaseInsensitive_ReEnterRootInDifferentCase_Allowed()
+    {
+        // Сравнение в SafeJoin регистронезависимое (OrdinalIgnoreCase):
+        // выход из root и возврат в него же другим регистром — не traversal
+        var upperName = Path.GetFileName(_root).ToUpperInvariant();
+        var result = FileService.SafeJoin(_root,
+            ".." + Path.DirectorySeparatorChar + upperName + Path.DirectorySeparatorChar + "file.txt");
+
+        result.Should().EndWith("file.txt");
+        result.Should().StartWithEquivalentOf(_root); // регистронезависимое сравнение префикса
+    }
+
+    [Fact]
+    public void SafeJoin_AbsoluteSiblingWithCommonPrefix_ThrowsUnauthorizedAccess()
+    {
+        // root "...\proj" не должен пропускать абсолютный путь "...\proj2\secret"
+        var act = () => FileService.SafeJoin(_root, _root + "2" + Path.DirectorySeparatorChar + "secret.txt");
+        act.Should().Throw<UnauthorizedAccessException>();
+    }
+
+    // Свойство безопасности: любой хитрый относительный путь либо отклоняется,
+    // либо нормализуется внутрь root. Trailing dots/spaces и смесь слэшей
+    // нормализуются по-разному на Windows/Linux — проверяем инвариант, а не точный вид.
+    [Theory]
+    [InlineData("sub/../file.txt. ")]     // trailing dot + space
+    [InlineData("sub/..././file.txt")]    // сегмент "..." + "."
+    [InlineData("sub\\..\\file.txt")]     // backslash-траверс внутри root
+    [InlineData("sub/inner\\file.txt")]   // смесь разделителей
+    [InlineData(".. \\.. \\secret")]      // ".. " с пробелом
+    [InlineData("..\\../..\\secret")]     // смесь слэшей в траверсе наружу
+    public void SafeJoin_TrickyPaths_EitherRejectedOrStayUnderRoot(string tricky)
+    {
+        var rootFull = Path.GetFullPath(_root).TrimEnd(Path.DirectorySeparatorChar);
+        try
+        {
+            var result = FileService.SafeJoin(_root, tricky);
+            // Не бросило — результат обязан остаться внутри root
+            (result.Equals(rootFull, StringComparison.OrdinalIgnoreCase) ||
+             result.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                .Should().BeTrue($"путь «{tricky}» нормализовался в «{result}» вне root");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Отклонён — тоже корректный исход
+        }
+    }
+
+    [Fact]
+    public void SafeJoin_ForwardSlashes_NormalizedUnderRoot()
+    {
+        var result = FileService.SafeJoin(_root, "a/b/c.txt");
+        result.Should().StartWith(_root);
+        result.Should().EndWith("c.txt");
+    }
+
     // ─── List ────────────────────────────────────────────────────────────────
 
     [Fact]

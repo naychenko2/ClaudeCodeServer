@@ -19,7 +19,10 @@ public class FileService
     internal static string SafeJoin(string root, string relativePath)
     {
         var full = Path.GetFullPath(Path.Combine(root, relativePath.TrimStart('/', '\\')));
-        if (!full.StartsWith(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase))
+        var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        // Сравнение с разделителем на конце: иначе root "C:\Data\Proj" пропускает "C:\Data\Proj2\..."
+        if (!full.Equals(rootFull, StringComparison.OrdinalIgnoreCase) &&
+            !full.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException("Доступ за пределы проекта запрещён");
         return full;
     }
@@ -231,11 +234,13 @@ public class FileService
         if (!IsGitRepo(rootPath)) return null;
         try
         {
+            // Путь через SafeJoin — валидация до передачи в git
+            SafeJoin(rootPath, relativePath);
             // diff рабочего дерева vs HEAD (покрывает изменённые отслеживаемые файлы)
-            var output = GitRun(rootPath, $"diff HEAD -- \"{relativePath}\"");
+            var output = GitRun(rootPath, "diff", "HEAD", "--", relativePath);
             // Если пусто — файл может быть новым в индексе (git add, но ещё не commit)
             if (string.IsNullOrWhiteSpace(output))
-                output = GitRun(rootPath, $"diff --cached -- \"{relativePath}\"");
+                output = GitRun(rootPath, "diff", "--cached", "--", relativePath);
             return string.IsNullOrWhiteSpace(output) ? null : output;
         }
         catch
@@ -244,18 +249,22 @@ public class FileService
         }
     }
 
-    private static string GitRun(string rootPath, string args)
+    private static string GitRun(string rootPath, params string[] args)
     {
-        var psi = new System.Diagnostics.ProcessStartInfo("git", args)
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
         {
             WorkingDirectory = rootPath,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false
         };
+        foreach (var a in args) psi.ArgumentList.Add(a);
         using var proc = System.Diagnostics.Process.Start(psi)!;
+        // stderr читаем асинхронно, чтобы многословный git не забил буфер и не подвесил ReadToEnd
+        proc.BeginErrorReadLine();
         var output = proc.StandardOutput.ReadToEnd();
-        proc.WaitForExit(3000);
+        if (!proc.WaitForExit(3000))
+            try { proc.Kill(entireProcessTree: true); } catch { /* уже завершился */ }
         return output;
     }
 
@@ -265,14 +274,21 @@ public class FileService
         // git checkout HEAD -- file
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("git", $"checkout HEAD -- \"{relativePath}\"")
+            SafeJoin(rootPath, relativePath);
+            var psi = new System.Diagnostics.ProcessStartInfo("git")
             {
                 WorkingDirectory = rootPath,
                 UseShellExecute = false,
                 RedirectStandardError = true
             };
+            foreach (var a in new[] { "checkout", "HEAD", "--", relativePath }) psi.ArgumentList.Add(a);
             using var proc = System.Diagnostics.Process.Start(psi)!;
-            proc.WaitForExit(3000);
+            proc.BeginErrorReadLine();
+            if (!proc.WaitForExit(3000))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                return false;
+            }
             return proc.ExitCode == 0;
         }
         catch { return false; }

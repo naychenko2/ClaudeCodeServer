@@ -11,7 +11,7 @@ import { useOnline } from './hooks/useOnline'
 import { runOfflineSnapshot, syncProjectFiles } from './lib/sync'
 import { onFilesChanged } from './lib/signalr'
 import { loadWorkspaceState } from './lib/workspaceState'
-import { navPush, navReplace, type NavSnapshot } from './lib/nav'
+import { navPush, navReplace, parseHash, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags, useFeature, FLAGS } from './lib/featureFlags'
@@ -20,6 +20,14 @@ import { CalendarPage } from './features/tasks/CalendarPage'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 const HUB_TAB_KEY = 'cc_hub_tab'
+
+// Диплинк из hash-URL (#/calendar, #/project/{id}/task/{tid}…) — читаем один раз
+// при загрузке страницы, до первого рендера (WorkspacePage заберёт pending-значения)
+const initialHash = parseHash()
+if (initialHash?.screen === 'project') {
+  if (initialHash.taskId) sessionStorage.setItem('cc_pending_task', initialHash.taskId)
+  if (initialHash.file) sessionStorage.setItem('cc_pending_file', initialHash.file)
+}
 
 export default function App() {
   // Авторизация — из localStorage (постоянно) или sessionStorage (saveKey=false)
@@ -51,6 +59,10 @@ export default function App() {
   // Активная вкладка хаба (Чаты | Проекты | Календарь) — вне открытого проекта.
   // По умолчанию открываются «Чаты» (первая вкладка).
   const [hubTab, setHubTab] = useState<HubTab>(() => {
+    // Hash-диплинк приоритетнее сохранённой вкладки
+    if (initialHash?.screen === 'calendar') return 'calendar'
+    if (initialHash?.screen === 'chats') return 'chats'
+    if (initialHash?.screen === 'projects' || initialHash?.screen === 'project') return 'projects'
     const saved = localStorage.getItem(HUB_TAB_KEY)
     return saved === 'projects' || saved === 'calendar' ? saved : 'chats'
   })
@@ -148,6 +160,23 @@ export default function App() {
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [project, hubTab])
+
+  // Диплинк #/project/{id}: открываем указанный проект после авторизации
+  // (если он отличается от восстановленного из localStorage)
+  useEffect(() => {
+    if (!auth || initialHash?.screen !== 'project' || !initialHash.projectId) return
+    if (project?.id === initialHash.projectId) return
+    api.projects.list()
+      .then(list => {
+        const p = list.find(x => x.id === initialHash.projectId)
+        if (p) {
+          localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
+          setProject(p)
+        }
+      })
+      .catch(() => { /* офлайн/нет доступа — остаёмся на восстановленном состоянии */ })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth?.serverUrl])
 
   // Прогрев/синхронизация: при входе и при возврате в онлайн — все проекты, начиная с текущего
   useEffect(() => {

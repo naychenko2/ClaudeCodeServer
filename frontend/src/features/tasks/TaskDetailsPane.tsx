@@ -25,6 +25,9 @@ interface Props {
   // null/undefined — личная задача (вне проекта): секции сессии/файлов скрыты
   project?: Project | null;
   isMobile?: boolean;
+  // Открыть сразу в режиме редактирования (свежесозданная задача).
+  // Работает через key={task.id} у родителя — состояние инициализируется при монтировании.
+  startInEdit?: boolean;
   onBack?: () => void;                          // мобила: ‹ назад
   onClose?: () => void;                         // модальный режим (личная задача из календаря): ✕
   onOpenSession?: (sessionId: string) => void;  // переход в связанный диалог
@@ -50,8 +53,8 @@ function HeaderChip({ children, urgent }: { children: React.ReactNode; urgent?: 
   );
 }
 
-export function TaskDetailsPane({ task, project, isMobile, onBack, onClose, onOpenSession, onOpenFile, onDeleted }: Props) {
-  const [editing, setEditing] = useState(false);
+export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, onClose, onOpenSession, onOpenFile, onDeleted }: Props) {
+  const [editing, setEditing] = useState(!!startInEdit);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);

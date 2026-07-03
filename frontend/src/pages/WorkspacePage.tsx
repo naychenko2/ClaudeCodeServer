@@ -151,18 +151,23 @@ const windowWidth = useWindowWidth();
   const tasksEnabled = useFeature(FLAGS.tasks);
   const allTasks = useTasks();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Свежесозданная задача — её карточка открывается сразу в режиме редактирования
+  const [autoEditTaskId, setAutoEditTaskId] = useState<string | null>(null);
   const tasksMode = tasksEnabled && leftTab === 'tasks';
   const selectedTask = tasksEnabled && selectedTaskId
     ? allTasks.find(t => t.id === selectedTaskId && t.projectId === project.id) ?? null
     : null;
 
-  const handleSelectTask = (task: Task) => {
+  const handleSelectTask = (task: Task, autoEdit?: boolean) => {
     setSelectedTaskId(task.id);
+    setAutoEditTaskId(autoEdit ? task.id : null);
     // Открытый файл уступает место карточке задачи
     setOpenFile(null);
     if (isMobile) {
       setMobileView('chat');
-      navPush({ screen: 'project', project, view: 'chat', file: null });
+      navPush({ screen: 'project', project, view: 'chat', file: null, task: task.id });
+    } else {
+      navPush({ screen: 'project', project, view: mobileView, file: null, task: task.id });
     }
   };
 
@@ -183,16 +188,33 @@ const windowWidth = useWindowWidth();
     ...(tasksEnabled ? [{ value: 'tasks' as const, label: 'Задачи' }] : []),
   ];
 
-  // Переход из календаря: App положил id задачи в sessionStorage перед открытием проекта
+  // Диплинк #/project/{id}/file/…: App положил путь файла в sessionStorage
+  useEffect(() => {
+    const pendingFile = sessionStorage.getItem('cc_pending_file');
+    if (!pendingFile) return;
+    sessionStorage.removeItem('cc_pending_file');
+    setOpenFile(pendingFile);
+    setFileFullscreen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Переход из календаря / диплинк задачи: App положил id задачи в sessionStorage
   useEffect(() => {
     const pending = sessionStorage.getItem('cc_pending_task');
     if (!pending) return;
     sessionStorage.removeItem('cc_pending_task');
+    // Флаг «сразу в редактирование» (свежесозданная из календаря)
+    const edit = sessionStorage.getItem('cc_pending_task_edit') === '1';
+    sessionStorage.removeItem('cc_pending_task_edit');
     setLeftTab('tasks');
     setSelectedTaskId(pending);
+    if (edit) setAutoEditTaskId(pending);
+    // Пишем запись истории с задачей — hash-URL сохраняет /task/… и после перезагрузки
     if (window.matchMedia('(max-width: 767px)').matches) {
       setMobileView('chat');
-      navPush({ screen: 'project', project, view: 'chat', file: null });
+      navPush({ screen: 'project', project, view: 'chat', file: null, task: pending });
+    } else {
+      navPush({ screen: 'project', project, view: 'sidebar', file: null, task: pending });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -348,6 +370,7 @@ const windowWidth = useWindowWidth();
       const f = s.file ?? null;
       setOpenFile(f);
       if (f === null) setFileFullscreen(false);
+      setSelectedTaskId(s.task ?? null);
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -593,7 +616,7 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {tasksMode
             ? (selectedTask
-                ? <TaskDetailsPane task={selectedTask} project={project} isMobile onBack={() => window.history.back()} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
+                ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={() => window.history.back()} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
                 : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>Выберите задачу</div>)
             : activeSession
             ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} onWorkflowRunning={handleWorkflowRunning} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined} />
@@ -705,7 +728,7 @@ const windowWidth = useWindowWidth();
             {/* Открытая задача — карточка в основной зоне (как открытый файл), ✕ возвращает чат */}
             {!openFile && selectedTask && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                <TaskDetailsPane task={selectedTask} project={project} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onClose={() => setSelectedTaskId(null)} onDeleted={() => setSelectedTaskId(null)} />
+                <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} startInEdit={selectedTask.id === autoEditTaskId} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onClose={() => window.history.back()} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
               </div>
             )}
 

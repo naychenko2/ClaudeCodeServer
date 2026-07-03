@@ -4,12 +4,41 @@
 import { useState } from 'react';
 import type { Task, TaskAssignee, TaskPriority, TaskSubtask, UpdateTaskDto } from '../../types';
 import { C, FONT, R } from '../../lib/design';
-import { IconButton, TextArea } from '../../components/ui';
+import { IconButton } from '../../components/ui';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
+import { api } from '../../lib/api';
 import { PRIORITY_LABEL, PRIORITY_ORDER } from '../../lib/tasks';
 import { ClaudeBadge, MeBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
+import { MarkdownEditor } from './MarkdownEditor';
+
+// Кнопка-чип «сгенерировать с Claude» (описание/подзадачи)
+function AiButton({ label, loading, disabled, onClick }: {
+  label: string; loading: boolean; disabled?: boolean; onClick: () => void;
+}) {
+  const inactive = loading || disabled;
+  return (
+    <button
+      onClick={onClick}
+      disabled={inactive}
+      title={disabled ? 'Сначала заполните название и описание' : `${label} с помощью Claude`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        padding: '4px 11px', cursor: inactive ? 'default' : 'pointer',
+        border: `1px solid ${C.accentMuted}`, borderRadius: 999,
+        background: C.accentLight, color: C.accent,
+        fontFamily: FONT.sans, fontSize: 12, fontWeight: 600,
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {loading
+        ? <span className="tool-spinner" style={{ width: 11, height: 11, flexShrink: 0 }} />
+        : <ClaudeBadge size={14} />}
+      {loading ? 'Claude думает…' : label}
+    </button>
+  );
+}
 
 interface Props {
   task: Task;
@@ -39,6 +68,42 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
   const [labels, setLabels] = useState<string[]>(task.labels);
   const [newLabel, setNewLabel] = useState('');
   const [saving, setSaving] = useState(false);
+  const [aiDescLoading, setAiDescLoading] = useState(false);
+  const [aiSubsLoading, setAiSubsLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  // Описание от Claude: по названию + контекст проекта (личная — только название)
+  const generateDescription = async () => {
+    if (!title.trim() || aiDescLoading) return;
+    setAiDescLoading(true);
+    setAiError(null);
+    try {
+      const r = await api.tasks.aiDescription(title.trim(), task.projectId ?? null);
+      setDescription(r.description);
+      setDescEditing(false);   // сразу показываем результат в превью
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'Не удалось сгенерировать описание');
+    } finally {
+      setAiDescLoading(false);
+    }
+  };
+
+  // Подзадачи от Claude: по названию и заполненному описанию
+  const generateSubtasks = async () => {
+    if (!title.trim() || !description.trim() || aiSubsLoading) return;
+    setAiSubsLoading(true);
+    setAiError(null);
+    try {
+      const r = await api.tasks.aiSubtasks(title.trim(), description, task.projectId ?? null);
+      const existing = new Set(subtasks.map(s => s.title.toLowerCase()));
+      const fresh = r.subtasks.filter(t => !existing.has(t.toLowerCase()));
+      setSubtasks(prev => [...prev, ...fresh.map(t => ({ id: '', title: t, isDone: false }))]);
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'Не удалось сгенерировать подзадачи');
+    } finally {
+      setAiSubsLoading(false);
+    }
+  };
 
   const addSubtask = () => {
     const t = newSubtask.trim();
@@ -204,8 +269,15 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
           </div>
 
           {/* Описание */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 9 }}>
             <div style={{ ...fieldLabelStyle(), marginBottom: 0 }}>Описание</div>
+            <AiButton
+              label={description.trim() ? 'Переписать' : 'Создать описание'}
+              loading={aiDescLoading}
+              disabled={!title.trim()}
+              onClick={generateDescription}
+            />
+            <div style={{ flex: 1 }} />
             <button
               onClick={() => setDescEditing(v => !v)}
               style={{
@@ -231,12 +303,11 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
           </div>
           <div style={{ marginBottom: 22 }}>
             {descEditing ? (
-              <TextArea
+              <MarkdownEditor
                 value={description}
                 onChange={setDescription}
                 placeholder="Описание задачи (markdown)…"
-                autoGrow
-                minHeight={120}
+                minHeight={150}
               />
             ) : (
               <div style={{
@@ -250,8 +321,22 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
             )}
           </div>
 
+          {aiError && (
+            <div style={{ fontFamily: FONT.sans, fontSize: 12.5, color: C.danger, margin: '-12px 0 18px' }}>
+              {aiError}
+            </div>
+          )}
+
           {/* Подзадачи */}
-          <div style={fieldLabelStyle()}>Подзадачи</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 9 }}>
+            <div style={{ ...fieldLabelStyle(), marginBottom: 0 }}>Подзадачи</div>
+            <AiButton
+              label="Предложить подзадачи"
+              loading={aiSubsLoading}
+              disabled={!title.trim() || !description.trim()}
+              onClick={generateSubtasks}
+            />
+          </div>
           <div style={{
             background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl,
             overflow: 'hidden', marginBottom: 22,

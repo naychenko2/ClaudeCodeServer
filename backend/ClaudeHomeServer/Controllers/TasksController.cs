@@ -50,9 +50,42 @@ public class ProjectTasksController(
 [Authorize]
 [Route("api/tasks")]
 public class TasksController(
-    TaskManager tasks, IHubContext<SessionHub> hub) : ControllerBase
+    TaskManager tasks, IHubContext<SessionHub> hub, TaskAiService ai, ProjectManager projects) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    // Проект генерации: только свой; чужой/несуществующий → личный контекст
+    private string? OwnProjectId(string? projectId) =>
+        projectId is not null && projects.GetById(projectId)?.OwnerId == UserId ? projectId : null;
+
+    // Сгенерировать описание задачи (Claude): по названию + контекст проекта (личная — только название)
+    [HttpPost("ai/description")]
+    public async Task<IActionResult> GenerateDescription([FromBody] GenerateDescriptionRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Title))
+            return BadRequest(new { error = "Нужно название задачи" });
+        try
+        {
+            var description = await ai.GenerateDescriptionAsync(req.Title.Trim(), OwnProjectId(req.ProjectId), ct);
+            return Ok(new { description });
+        }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
+
+    // Сгенерировать подзадачи (Claude) по названию и описанию
+    [HttpPost("ai/subtasks")]
+    public async Task<IActionResult> GenerateSubtasks([FromBody] GenerateSubtasksRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Title))
+            return BadRequest(new { error = "Нужно название задачи" });
+        try
+        {
+            var subtasks = await ai.GenerateSubtasksAsync(
+                req.Title.Trim(), req.Description ?? "", OwnProjectId(req.ProjectId), ct);
+            return Ok(new { subtasks });
+        }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
 
     // Личная задача — без привязки к проекту
     [HttpPost]
@@ -128,6 +161,9 @@ public class TasksController(
         return NoContent();
     }
 }
+
+public record GenerateDescriptionRequest(string Title, string? ProjectId = null);
+public record GenerateSubtasksRequest(string Title, string? Description = null, string? ProjectId = null);
 
 public static class TaskHubExtensions
 {

@@ -104,6 +104,15 @@ export const api = {
     update: (taskId: string, dto: UpdateTaskDto) =>
       request<Task>(`/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(dto) }),
     delete: (taskId: string) => request<void>(`/tasks/${taskId}`, { method: 'DELETE' }),
+    // Генерация Claude: описание по названию (+контекст проекта), подзадачи по описанию
+    aiDescription: (title: string, projectId?: string | null) =>
+      request<{ description: string }>('/tasks/ai/description', {
+        method: 'POST', body: JSON.stringify({ title, projectId: projectId ?? null }),
+      }),
+    aiSubtasks: (title: string, description: string, projectId?: string | null) =>
+      request<{ subtasks: string[] }>('/tasks/ai/subtasks', {
+        method: 'POST', body: JSON.stringify({ title, description, projectId: projectId ?? null }),
+      }),
   },
 
   sessions: {

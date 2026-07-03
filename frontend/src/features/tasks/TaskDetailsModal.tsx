@@ -11,10 +11,12 @@ import { TaskDetailsPane } from './TaskDetailsPane';
 interface Props {
   task: Task;
   isMobile?: boolean;
+  // Открыть сразу в редактировании (свежесозданная личная задача)
+  startInEdit?: boolean;
   onClose: () => void;
 }
 
-export function TaskDetailsModal({ task, isMobile, onClose }: Props) {
+export function TaskDetailsModal({ task, isMobile, startInEdit, onClose }: Props) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', handler);
@@ -44,9 +46,11 @@ export function TaskDetailsModal({ task, isMobile, onClose }: Props) {
     <div style={overlay} onPointerDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div style={card}>
         <TaskDetailsPane
+          key={task.id}
           task={task}
           project={null}
           isMobile={isMobile}
+          startInEdit={startInEdit}
           onBack={onClose}
           onClose={onClose}
           onDeleted={onClose}

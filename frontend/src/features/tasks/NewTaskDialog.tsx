@@ -12,7 +12,8 @@ import { ClaudeBadge, PriorityFlag } from './bits';
 interface Props {
   // Проект, выбранный по умолчанию (контекст воркспейса или фильтра календаря)
   defaultProjectId?: string;
-  onCreated: (task: Task) => void;
+  // configure=true — «Создать и настроить»: открыть карточку сразу в редактировании
+  onCreated: (task: Task, configure: boolean) => void;
   onClose: () => void;
 }
 
@@ -23,7 +24,8 @@ export function NewTaskDialog({ defaultProjectId, onCreated, onClose }: Props) {
   const [projectId, setProjectId] = useState<string | null>(defaultProjectId ?? null);
   const [priority, setPriority] = useState<TaskPriority>('medium');
   const [assignee, setAssignee] = useState<TaskAssignee>('me');
-  const [saving, setSaving] = useState(false);
+  // Какая из кнопок создаёт: 'plain' — просто создать, 'configure' — создать и настроить
+  const [saving, setSaving] = useState<null | 'plain' | 'configure'>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -32,16 +34,16 @@ export function NewTaskDialog({ defaultProjectId, onCreated, onClose }: Props) {
 
   const canCreate = title.trim().length > 0 && !saving;
 
-  const handleCreate = async () => {
+  const handleCreate = async (configure: boolean) => {
     if (!canCreate) return;
-    setSaving(true);
+    setSaving(configure ? 'configure' : 'plain');
     setError(null);
     try {
       const task = await createTask(projectId, { title: title.trim(), priority, assignee });
-      onCreated(task);
+      onCreated(task, configure);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось создать задачу');
-      setSaving(false);
+      setSaving(null);
     }
   };
 
@@ -53,8 +55,11 @@ export function NewTaskDialog({ defaultProjectId, onCreated, onClose }: Props) {
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>Отмена</Button>
-          <Button variant="primary" disabled={!canCreate} loading={saving} onClick={handleCreate}>
-            Создать задачу
+          <Button variant="secondary" disabled={!canCreate} loading={saving === 'configure'} onClick={() => handleCreate(true)}>
+            Создать и настроить
+          </Button>
+          <Button variant="primary" disabled={!canCreate} loading={saving === 'plain'} onClick={() => handleCreate(false)}>
+            Создать
           </Button>
         </>
       }
@@ -62,7 +67,7 @@ export function NewTaskDialog({ defaultProjectId, onCreated, onClose }: Props) {
       {/* Название */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <FieldLabel>Название</FieldLabel>
-        <TextField value={title} onChange={setTitle} placeholder="Что нужно сделать?" autoFocus onEnter={handleCreate} />
+        <TextField value={title} onChange={setTitle} placeholder="Что нужно сделать?" autoFocus onEnter={() => handleCreate(false)} />
       </div>
 
       {/* Проект */}

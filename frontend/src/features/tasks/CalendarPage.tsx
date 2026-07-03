@@ -63,6 +63,8 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   // Личная задача, открытая в модале (id — чтобы карточка жила и обновлялась из стора)
   const [personalTaskId, setPersonalTaskId] = useState<string | null>(null);
+  // Открыть модал сразу в редактировании (после «Создать и настроить»)
+  const [personalEdit, setPersonalEdit] = useState(false);
 
   useEffect(() => {
     void ensureTasksLoaded();
@@ -88,11 +90,29 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   const handleOpenTask = (task: Task) => {
     // Личная задача — детали в модале поверх календаря (воркспейса у неё нет)
     if (!task.projectId) {
+      setPersonalEdit(false);
       setPersonalTaskId(task.id);
       return;
     }
     const project = projectsById.get(task.projectId);
     if (project) onOpenTask(project, task.id);
+  };
+
+  // «Создать и настроить» из календаря: личная — модал в редактировании,
+  // проектная — переход в проект с открытым редактором (флаг через sessionStorage)
+  const handleCreated = (task: Task, configure: boolean) => {
+    setShowCreate(false);
+    if (!configure) return;
+    if (!task.projectId) {
+      setPersonalEdit(true);
+      setPersonalTaskId(task.id);
+      return;
+    }
+    const project = projectsById.get(task.projectId);
+    if (project) {
+      sessionStorage.setItem('cc_pending_task_edit', '1');
+      onOpenTask(project, task.id);
+    }
   };
 
   const personalTask = personalTaskId
@@ -231,7 +251,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
 
       {showCreate && (
         <NewTaskDialog
-          onCreated={() => setShowCreate(false)}
+          onCreated={handleCreated}
           onClose={() => setShowCreate(false)}
         />
       )}
@@ -240,7 +260,8 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
         <TaskDetailsModal
           task={personalTask}
           isMobile={isMobile}
-          onClose={() => setPersonalTaskId(null)}
+          startInEdit={personalEdit}
+          onClose={() => { setPersonalTaskId(null); setPersonalEdit(false); }}
         />
       )}
     </div>

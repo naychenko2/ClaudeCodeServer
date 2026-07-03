@@ -15,7 +15,8 @@ import { ByDateIcon, IconViewSwitcher, ListIcon } from './bits';
 interface Props {
   project: Project;
   selectedTaskId: string | null;
-  onSelect: (task: Task) => void;
+  // autoEdit — открыть карточку сразу в редактировании (свежесозданная задача)
+  onSelect: (task: Task, autoEdit?: boolean) => void;
   isMobile?: boolean;
 }
 
@@ -175,7 +176,12 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile }: Prop
       {showCreate && (
         <NewTaskDialog
           defaultProjectId={project.id}
-          onCreated={task => { setShowCreate(false); onSelect(task); }}
+          onCreated={(task, configure) => {
+            setShowCreate(false);
+            // «Создать и настроить» — открыть карточку сразу в редактировании;
+            // просто «Создать» — остаёмся на месте, задача появляется в списке
+            if (configure) onSelect(task, true);
+          }}
           onClose={() => setShowCreate(false)}
         />
       )}

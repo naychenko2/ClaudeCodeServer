@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { Project, Session, AgentInfo, SkillsData, AuthState } from '../types';
+import type { Project, Session, AgentInfo, SkillsData, AuthState, Task } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
@@ -19,6 +19,9 @@ import { BackButton, IconButton, Splitter } from '../components/ui';
 import { navPush, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { useFeature, FLAGS } from '../lib/featureFlags';
+import { TasksPanel } from '../features/tasks/TasksPanel';
+import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
+import { useTasks } from '../lib/tasks';
 
 interface Props {
   project: Project;
@@ -29,7 +32,7 @@ interface Props {
   onLogout: () => void;
 }
 
-type LeftTab = 'sessions' | 'files';
+type LeftTab = 'sessions' | 'files' | 'tasks';
 type FileSubTab = 'files' | 'knowledge';
 
 function useWindowWidth() {
@@ -67,7 +70,7 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
     const saved = loadWorkspaceState(project.id)?.leftTab;
-    return saved === 'sessions' || saved === 'files' ? saved : 'sessions';
+    return saved === 'sessions' || saved === 'files' || saved === 'tasks' ? saved : 'sessions';
   });
   const [fileSubTab, setFileSubTab] = useState<FileSubTab>(() => loadWorkspaceState(project.id)?.fileSubTab ?? 'files');
   const [activeSession, setActiveSession] = useState<Session | null>(() => loadWorkspaceState(project.id)?.activeSession ?? null);
@@ -141,6 +144,40 @@ const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth < 768;
   const isTablet = windowWidth >= 768 && windowWidth < 1200;
+
+  // Задачи (за фич-флагом): вкладка «Задачи» в сайдбаре + карточка задачи в центре
+  const tasksEnabled = useFeature(FLAGS.tasks);
+  const allTasks = useTasks();
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const tasksMode = tasksEnabled && leftTab === 'tasks';
+  const selectedTask = tasksMode && selectedTaskId
+    ? allTasks.find(t => t.id === selectedTaskId && t.projectId === project.id) ?? null
+    : null;
+
+  const handleSelectTask = (task: Task) => {
+    setSelectedTaskId(task.id);
+    if (isMobile) {
+      setMobileView('chat');
+      navPush({ screen: 'project', project, view: 'chat', file: null });
+    }
+  };
+
+  // Переход из карточки задачи в связанный диалог
+  const handleOpenTaskSession = async (sessionId: string) => {
+    try {
+      const sessions = await api.sessions.list(project.id);
+      const s = sessions.find(x => x.id === sessionId);
+      if (!s) return;
+      setLeftTab('sessions');
+      handleSelectSession(s);
+    } catch { /* офлайн — остаёмся на задаче */ }
+  };
+
+  const leftTabOptions: { value: LeftTab; label: string }[] = [
+    { value: 'sessions', label: 'Чаты' },
+    { value: 'files', label: 'Файлы' },
+    ...(tasksEnabled ? [{ value: 'tasks' as const, label: 'Задачи' }] : []),
+  ];
   // Ширина сайдбара — общая для всех областей (перетаскиваемая, персистится)
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
 
@@ -465,10 +502,7 @@ const windowWidth = useWindowWidth();
           </div>
           <PillSwitch<LeftTab>
             value={leftTab}
-            options={[
-              { value: 'sessions', label: 'Чаты' },
-              { value: 'files', label: 'Файлы' },
-            ]}
+            options={leftTabOptions}
             onChange={handleTabSwitch}
             fill
           />
@@ -477,6 +511,8 @@ const windowWidth = useWindowWidth();
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {leftTab === 'sessions' ? (
           <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
+        ) : leftTab === 'tasks' ? (
+          <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} />
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
@@ -501,10 +537,7 @@ const windowWidth = useWindowWidth();
             </BackButton>
             <PillSwitch<LeftTab>
               value={leftTab}
-              options={[
-                { value: 'sessions', label: 'Чаты' },
-                { value: 'files', label: 'Файлы' },
-              ]}
+              options={leftTabOptions}
               onChange={handleTabSwitch}
               isMobile
             />
@@ -524,6 +557,8 @@ const windowWidth = useWindowWidth();
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
               ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
+              : leftTab === 'tasks'
+              ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'
@@ -535,9 +570,13 @@ const windowWidth = useWindowWidth();
             }
           </div>
         </div>
-        {/* Чат — ВСЕГДА в DOM */}
+        {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
-          {activeSession
+          {tasksMode
+            ? (selectedTask
+                ? <TaskDetailsPane task={selectedTask} project={project} isMobile onBack={() => window.history.back()} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
+                : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>Выберите задачу</div>)
+            : activeSession
             ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} onWorkflowRunning={handleWorkflowRunning} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined} />
             : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>Выберите или создайте чат</div>
           }
@@ -644,8 +683,21 @@ const windowWidth = useWindowWidth();
 
         return (
           <>
+            {/* Режим «Задачи»: карточка задачи вместо чата */}
+            {!openFile && tasksMode && (
+              <div style={{ flex: 1, overflow: 'hidden' }}>
+                {selectedTask
+                  ? <TaskDetailsPane task={selectedTask} project={project} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => setSelectedTaskId(null)} />
+                  : (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>
+                      Выберите или создайте задачу
+                    </div>
+                  )}
+              </div>
+            )}
+
             {/* Нет открытого файла — только чат */}
-            {!openFile && (
+            {!openFile && !tasksMode && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 {activeSession
                   ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined} />

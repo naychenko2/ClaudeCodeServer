@@ -4,6 +4,7 @@ import type { Task } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { projectColor } from '../../lib/tasks';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
+import { useTaskHover } from './TaskHoverCard';
 
 interface Props {
   task: Task;
@@ -19,10 +20,13 @@ export function TaskCard({ task, selected, onClick, compact, projectName }: Prop
   const color = projectColor(task.projectId);
   const done = task.status === 'done';
   const doneSubs = task.subtasks.filter(s => s.isDone).length;
+  // Богатый hover-тултип с управлением (только устройства с hover)
+  const hover = useTaskHover();
 
   return (
     <div
       onClick={onClick}
+      {...hover.bind(task, projectName)}
       style={{
         display: 'flex', gap: 10,
         background: C.bgWhite,
@@ -75,6 +79,7 @@ export function TaskCard({ task, selected, onClick, compact, projectName }: Prop
           </div>
         )}
       </div>
+      {hover.popover}
     </div>
   );
 }

@@ -6,12 +6,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Project, Session, Task, TaskStatus, UpdateTaskDto } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
-import { Button, IconButton, Modal } from '../../components/ui';
+import { Button, IconButton, Modal, BackButton } from '../../components/ui';
+import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import {
   NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
-  deleteTask, projectColor, projectInitial, updateTask,
+  deleteTask, dueLabel, projectColor, projectInitial, updateTask,
 } from '../../lib/tasks';
 import {
   ClaudeBadge, DueChip, ExtBadge, LabelChip, MeBadge,
@@ -92,6 +93,44 @@ export function TaskDetailsPane({ task, project, isMobile, onBack, onClose, onOp
       setConfirmDelete(false);
     }
   };
+
+  // Блок «название + мета» в шапке — как в тулбаре чата (название чата + модель/режим)
+  const headerTitleBlock = (
+    <div style={{ minWidth: 0, flex: 1 }}>
+      <div style={{
+        fontSize: 17, fontWeight: 600, color: C.textHeading,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        textDecoration: task.status === 'done' ? 'line-through' : 'none',
+      }}>
+        {task.title}
+      </div>
+      <div style={{
+        fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {project ? project.name : NO_PROJECT_LABEL} · {STATUS_LABEL[task.status]} · {PRIORITY_LABEL[task.priority]}
+        {task.dueDate && ` · ${dueLabel(task.dueDate)}${task.dueTime ? ` ${task.dueTime}` : ''}`}
+      </div>
+    </div>
+  );
+
+  const editButton = (
+    <button
+      onClick={() => setEditing(true)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+        padding: '0 14px', height: 32, cursor: 'pointer',
+        border: `1px solid ${C.border}`, borderRadius: R.md,
+        background: C.bgCard, color: C.textPrimary,
+        fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
+      }}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+      </svg>
+      Изменить
+    </button>
+  );
 
   const deleteConfirmModal = confirmDelete && (
     <Modal
@@ -325,34 +364,13 @@ export function TaskDetailsPane({ task, project, isMobile, onBack, onClose, onOp
   if (isMobile) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: C.bgMain }}>
-        {/* Шапка: назад + изменить */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
-          height: 56, padding: '0 10px', boxSizing: 'border-box',
-          borderBottom: `1px solid ${C.divider}`,
-        }}>
-          <IconButton size="lg" onClick={onBack} title="Назад">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 6l-6 6 6 6" />
-            </svg>
-          </IconButton>
-          <div style={{ flex: 1 }} />
-          <button
-            onClick={() => setEditing(true)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '0 14px', height: 36, cursor: 'pointer',
-              border: 'none', borderRadius: R.md,
-              background: C.bgSelected, color: C.textPrimary,
-              fontFamily: FONT.sans, fontSize: 13.5, fontWeight: 600,
-            }}
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-            </svg>
-            Изменить
-          </button>
-        </div>
+        {/* Шапка — как тулбар чата: назад + название/мета + изменить */}
+        <Toolbar isMobile>
+          <BackButton onClick={onBack ?? (() => {})} style={{ flex: 1, minWidth: 0 }} title="Назад к списку">
+            {headerTitleBlock}
+          </BackButton>
+          {editButton}
+        </Toolbar>
 
         <div style={{ flex: 1, overflowY: 'auto' }}>{content}</div>
 
@@ -396,43 +414,26 @@ export function TaskDetailsPane({ task, project, isMobile, onBack, onClose, onOp
     );
   }
 
-  // === Десктоп/планшет: шапка + центр + правая колонка «Статус» ===
+  // === Десктоп/планшет: шапка-тулбар (как в чате) + центр + правая колонка «Статус» ===
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: C.bgMain }}>
-      {/* Шапка: Изменить + корзина справа */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, flexShrink: 0,
-        height: 52, padding: '0 20px', boxSizing: 'border-box',
-        borderBottom: `1px solid ${C.divider}`,
-      }}>
-        <button
-          onClick={() => setEditing(true)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '0 14px', height: 32, cursor: 'pointer',
-            border: `1px solid ${C.border}`, borderRadius: R.md,
-            background: C.bgCard, color: C.textPrimary,
-            fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
-          }}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-          </svg>
-          Изменить
-        </button>
-        <IconButton size="sm" tone="danger" onClick={() => setConfirmDelete(true)} title="Удалить задачу">
+      {/* Шапка — как тулбар чата: название/мета слева, действия справа */}
+      <Toolbar>
+        {headerTitleBlock}
+        {editButton}
+        <IconButton size="md" tone="danger" onClick={() => setConfirmDelete(true)} title="Удалить задачу">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14" />
           </svg>
         </IconButton>
         {onClose && (
-          <IconButton size="sm" onClick={onClose} title="Закрыть">
+          <IconButton size="md" onClick={onClose} title="Закрыть">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
             </svg>
           </IconButton>
         )}
-      </div>
+      </Toolbar>
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         {/* Центральная колонка */}

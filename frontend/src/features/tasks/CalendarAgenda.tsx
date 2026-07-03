@@ -6,6 +6,7 @@ import type { Project, Task } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { NO_PROJECT_LABEL, daysFromToday, projectColor } from '../../lib/tasks';
 import { AssigneeBadge } from './bits';
+import { useTaskHover } from './TaskHoverCard';
 
 interface Props {
   tasks: Task[];
@@ -35,6 +36,9 @@ function groupSubtitle(iso: string): string {
 }
 
 export function CalendarAgenda({ tasks, projectsById, onOpenTask, isMobile }: Props) {
+  const hover = useTaskHover();
+  const nameOf = (t: Task) =>
+    t.projectId ? projectsById.get(t.projectId)?.name ?? '' : NO_PROJECT_LABEL;
   // Незавершённые просроченные — отдельной группой сверху, дальше дни с задачами по возрастанию
   const groups = useMemo(() => {
     const dated = tasks.filter(t => t.dueDate);
@@ -61,6 +65,7 @@ export function CalendarAgenda({ tasks, projectsById, onOpenTask, isMobile }: Pr
       <div
         key={t.id}
         onClick={() => onOpenTask(t)}
+        {...hover.bind(t, nameOf(t))}
         style={{
           display: 'flex', alignItems: 'center', gap: 12,
           background: C.bgWhite, border: `1px solid ${C.borderLight}`,
@@ -86,7 +91,7 @@ export function CalendarAgenda({ tasks, projectsById, onOpenTask, isMobile }: Pr
             {t.title}
           </div>
           <div style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, marginTop: 2 }}>
-            {t.projectId ? projectsById.get(t.projectId)?.name ?? '' : NO_PROJECT_LABEL}
+            {nameOf(t)}
           </div>
         </div>
         {t.assignee === 'claude' && <AssigneeBadge assignee="claude" size={22} />}
@@ -130,6 +135,8 @@ export function CalendarAgenda({ tasks, projectsById, onOpenTask, isMobile }: Pr
           </div>
         </div>
       ))}
+
+      {hover.popover}
     </div>
   );
 }

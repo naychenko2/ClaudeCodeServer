@@ -5,6 +5,7 @@ import { useState } from 'react';
 import type { Task, TaskAssignee, TaskPriority, TaskSubtask, UpdateTaskDto } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { IconButton, TextArea } from '../../components/ui';
+import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { PRIORITY_LABEL, PRIORITY_ORDER } from '../../lib/tasks';
 import { ClaudeBadge, MeBadge, PriorityFlag, SubtaskCheck } from './bits';
@@ -95,16 +96,16 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: C.bgMain }}>
-      {/* Шапка */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
-        height: isMobile ? 56 : 52, padding: `0 ${isMobile ? 14 : 20}px`,
-        borderBottom: `1px solid ${C.divider}`, boxSizing: 'border-box',
-      }}>
-        <span style={{ fontFamily: FONT.sans, fontSize: 15, fontWeight: 700, color: C.textHeading }}>
-          {isMobile ? 'Редактирование' : 'Редактирование задачи'}
-        </span>
-        <div style={{ flex: 1 }} />
+      {/* Шапка — как тулбар чата */}
+      <Toolbar isMobile={isMobile}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {isMobile ? 'Редактирование' : 'Редактирование задачи'}
+          </div>
+          <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {task.title}
+          </div>
+        </div>
         <button
           onClick={onCancel}
           style={{
@@ -133,12 +134,12 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
           </svg>
           Готово
         </button>
-        <IconButton size="sm" tone="danger" onClick={onDelete} title="Удалить задачу">
+        <IconButton size="md" tone="danger" onClick={onDelete} title="Удалить задачу">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14" />
           </svg>
         </IconButton>
-      </div>
+      </Toolbar>
 
       {/* Форма */}
       <div style={{ flex: 1, overflowY: 'auto' }}>

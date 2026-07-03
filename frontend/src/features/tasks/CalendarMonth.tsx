@@ -7,6 +7,7 @@ import type { Project, Task } from '../../types';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import { NO_PROJECT_LABEL, projectColor, todayIso, toIsoDate } from '../../lib/tasks';
 import { TaskCard } from './TaskCard';
+import { useTaskHover } from './TaskHoverCard';
 
 interface Props {
   tasks: Task[];
@@ -161,6 +162,9 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
   const [selectedDay, setSelectedDay] = useState(today);
   // Раскрытый через «+N ещё» день (десктоп): дата + прямоугольник ячейки для позиционирования
   const [overflowDay, setOverflowDay] = useState<{ iso: string; rect: DOMRect } | null>(null);
+  const hover = useTaskHover();
+  const nameOf = (t: Task) =>
+    t.projectId ? projectsById.get(t.projectId)?.name ?? '' : NO_PROJECT_LABEL;
 
   const cells = useMemo(() => monthCells(year, month), [year, month]);
 
@@ -344,7 +348,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
                     <div
                       key={t.id}
                       onClick={() => onOpenTask(t)}
-                      title={t.title}
+                      {...hover.bind(t, nameOf(t))}
                       style={{
                         display: 'flex', alignItems: 'center', gap: 5,
                         background: color.soft, borderRadius: 6,
@@ -401,6 +405,8 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
           onClose={() => setOverflowDay(null)}
         />
       )}
+
+      {hover.popover}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import type { Project, Task } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { NO_PROJECT_LABEL, addDaysIso, projectColor, todayIso } from '../../lib/tasks';
 import { NavArrow } from './CalendarMonth';
+import { useTaskHover } from './TaskHoverCard';
 
 interface Props {
   tasks: Task[];
@@ -43,6 +44,7 @@ function weekTitle(startIso: string): string {
 
 export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenTask, isMobile }: Props) {
   const today = todayIso();
+  const hover = useTaskHover();
   const nameOf = (t: Task) =>
     t.projectId ? projectsById.get(t.projectId)?.name ?? '' : NO_PROJECT_LABEL;
   const start = weekStart(navDate);
@@ -153,6 +155,7 @@ export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenT
               <div
                 key={t.id}
                 onClick={() => onOpenTask(t)}
+                {...hover.bind(t, nameOf(t))}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8,
                   background: color.soft, borderRadius: 10, padding: '8px 12px 8px 9px', cursor: 'pointer',
@@ -194,6 +197,7 @@ export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenT
             <div
               key={t.id}
               onClick={() => onOpenTask(t)}
+              {...hover.bind(t, nameOf(t))}
               style={{
                 position: 'absolute', top: eventTop(t.dueTime!), left: 56, right: 4,
                 minHeight: 40, boxSizing: 'border-box',
@@ -219,6 +223,8 @@ export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenT
           );
         })}
       </div>
+
+      {hover.popover}
     </div>
   );
 }

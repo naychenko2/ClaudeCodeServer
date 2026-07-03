@@ -342,7 +342,8 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                     <div style={{ flex: 1, height: 1, background: '#E4DDCE' }} />
                   </div>
                   <div style={twoCol
-                    ? { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }
+                    // minmax(0,1fr): длинный nowrap-путь в карточке не распирает колонки за экран
+                    ? { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }
                     : { display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {sec.items.map(p => (
                       <ProjectRow

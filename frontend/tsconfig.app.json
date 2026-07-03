@@ -21,7 +21,9 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  // sw.ts — отдельный проект tsconfig.sw.json (lib WebWorker конфликтует с DOM)
+  // sw.ts — отдельный проект tsconfig.sw.json (lib WebWorker конфликтует с DOM).
+  // Тесты (*.test.ts) собирает и проверяет vitest — из сборки исключены
+  // (используют node:fs, которого нет в браузерном окружении).
   "include": ["src"],
-  "exclude": ["src/sw.ts"]
+  "exclude": ["src/sw.ts", "src/**/*.test.ts", "src/**/__tests__/**"]
 }

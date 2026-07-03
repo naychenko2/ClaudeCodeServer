@@ -8,7 +8,8 @@ import { IconButton } from '../../components/ui';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
-import { PRIORITY_LABEL, PRIORITY_ORDER } from '../../lib/tasks';
+import { PRIORITY_LABEL, PRIORITY_ORDER, REMINDER_PRESETS, reminderLabel } from '../../lib/tasks';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { ClaudeBadge, MeBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
 import { MarkdownEditor } from './MarkdownEditor';
@@ -55,11 +56,32 @@ function fieldLabelStyle(): React.CSSProperties {
   };
 }
 
+// Чипы напоминания — визуально как быстрые чипы срока (DueDatePicker)
+function reminderChipStyle(active: boolean): React.CSSProperties {
+  return {
+    display: 'inline-flex', alignItems: 'center', gap: 6,
+    padding: '7px 13px', cursor: 'pointer',
+    border: `1px solid ${active ? C.accent : C.border}`,
+    borderRadius: R.lg,
+    background: active ? C.accentLight : C.bgWhite,
+    fontFamily: FONT.sans, fontSize: 13, fontWeight: active ? 600 : 500,
+    color: active ? C.accent : C.textPrimary,
+    transition: 'border-color 0.12s, background 0.12s',
+    whiteSpace: 'nowrap',
+  };
+}
+
 export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Props) {
   const [title, setTitle] = useState(task.title);
   const [priority, setPriority] = useState<TaskPriority>(task.priority);
   const [dueDate, setDueDate] = useState<string | null>(task.dueDate ?? null);
   const [dueTime, setDueTime] = useState<string | null>(task.dueTime ?? null);
+  const [reminder, setReminder] = useState<number | null>(task.reminderMinutes ?? null);
+  // Кастомный офсет: значение + единица (перемножаются в минуты)
+  const [customReminderOpen, setCustomReminderOpen] = useState(false);
+  const [customReminderValue, setCustomReminderValue] = useState('2');
+  const [customReminderUnit, setCustomReminderUnit] = useState<1 | 60 | 1440>(60);
+  const remindersEnabled = useFeature(FLAGS.taskReminders);
   const [assignee, setAssignee] = useState<TaskAssignee>(task.assignee ?? 'me');
   const [description, setDescription] = useState(task.description);
   const [descEditing, setDescEditing] = useState(!task.description);
@@ -128,6 +150,8 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
         priority,
         dueDate: dueDate ?? '',
         dueTime: dueTime ?? '',
+        // Без срока напоминание не имеет смысла; -1 = очистить на бэке
+        reminderMinutes: dueDate && reminder !== null ? reminder : -1,
         assignee,
         description,
         subtasks: subtasks.filter(s => s.title.trim()),
@@ -260,6 +284,78 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
               onChange={(d, t) => { setDueDate(d); setDueTime(t); }}
             />
           </div>
+
+          {/* Напоминание — только при заданном сроке (за фич-флагом) */}
+          {remindersEnabled && dueDate && (
+            <>
+              <div style={fieldLabelStyle()}>Напоминание</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+                <button
+                  onClick={() => { setReminder(null); setCustomReminderOpen(false); }}
+                  style={reminderChipStyle(reminder === null)}
+                >
+                  Без напоминания
+                </button>
+                {REMINDER_PRESETS.map(m => (
+                  <button
+                    key={m}
+                    onClick={() => { setReminder(m); setCustomReminderOpen(false); }}
+                    style={reminderChipStyle(reminder === m)}
+                  >
+                    {reminderLabel(m)}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setCustomReminderOpen(v => !v)}
+                  style={reminderChipStyle(
+                    customReminderOpen || (reminder !== null && !REMINDER_PRESETS.includes(reminder as never)))}
+                >
+                  {reminder !== null && !REMINDER_PRESETS.includes(reminder as never)
+                    ? reminderLabel(reminder)
+                    : 'Свой…'}
+                </button>
+              </div>
+              {customReminderOpen && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textSecondary }}>За</span>
+                  <input
+                    value={customReminderValue}
+                    onChange={e => setCustomReminderValue(e.target.value.replace(/\D/g, '').slice(0, 3))}
+                    inputMode="numeric"
+                    style={{
+                      width: 52, boxSizing: 'border-box', padding: '7px 10px', textAlign: 'center',
+                      border: `1px solid ${C.border}`, borderRadius: R.lg, outline: 'none',
+                      background: C.bgWhite, fontFamily: FONT.sans, fontSize: 13, color: C.textPrimary,
+                    }}
+                  />
+                  {([[1, 'мин'], [60, 'ч'], [1440, 'дн']] as const).map(([mult, label]) => (
+                    <button
+                      key={mult}
+                      onClick={() => setCustomReminderUnit(mult)}
+                      style={reminderChipStyle(customReminderUnit === mult)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => {
+                      const n = parseInt(customReminderValue, 10);
+                      if (!n) return;
+                      setReminder(n * customReminderUnit);
+                      setCustomReminderOpen(false);
+                    }}
+                    style={{
+                      border: 'none', background: 'none', cursor: 'pointer', padding: 0,
+                      fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.accent,
+                    }}
+                  >
+                    Применить
+                  </button>
+                </div>
+              )}
+              <div style={{ marginBottom: 14 }} />
+            </>
+          )}
 
           {/* Исполнитель */}
           <div style={fieldLabelStyle()}>Исполнитель</div>

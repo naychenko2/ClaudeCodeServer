@@ -219,3 +219,16 @@ export function dueLabel(dueDate: string): string {
 export function isDueUrgent(task: Task): boolean {
   return task.status !== 'done' && !!task.dueDate && daysFromToday(task.dueDate) <= 0;
 }
+
+// === Напоминания ===
+
+// Пресеты офсета напоминания (минуты до срока) для чипов формы
+export const REMINDER_PRESETS = [0, 15, 60, 1440] as const;
+
+// «В момент срока», «За 15 мин», «За 2 ч», «За 3 дн»
+export function reminderLabel(minutes: number): string {
+  if (minutes === 0) return 'В момент срока';
+  if (minutes % 1440 === 0) return `За ${minutes / 1440} дн`;
+  if (minutes % 60 === 0) return `За ${minutes / 60} ч`;
+  return `За ${minutes} мин`;
+}

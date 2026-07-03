@@ -60,6 +60,8 @@ export interface Task {
   priority: TaskPriority;
   dueDate?: string;          // YYYY-MM-DD
   dueTime?: string;          // HH:MM
+  reminderMinutes?: number;  // офсет напоминания до срока в минутах (0 = в момент срока)
+  reminderSentAt?: string;   // UTC-отметка отправленного напоминания
   assignee?: TaskAssignee;
   linkedSessionId?: string;
   linkedFiles: string[];
@@ -76,6 +78,7 @@ export interface CreateTaskDto {
   priority?: TaskPriority;
   dueDate?: string;
   dueTime?: string;
+  reminderMinutes?: number;
   assignee?: TaskAssignee;
   linkedSessionId?: string;
   linkedFiles?: string[];
@@ -91,6 +94,8 @@ export interface UpdateTaskDto {
   priority?: TaskPriority;
   dueDate?: string;
   dueTime?: string;
+  // Отрицательное значение = убрать напоминание, undefined = не менять
+  reminderMinutes?: number;
   assignee?: TaskAssignee;
   linkedSessionId?: string;
   linkedFiles?: string[];
@@ -186,6 +191,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
+  | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' }
 );
 
 export interface UsageInfo {

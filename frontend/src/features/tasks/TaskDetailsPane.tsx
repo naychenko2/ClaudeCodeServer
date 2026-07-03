@@ -12,7 +12,7 @@ import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import {
   NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
-  deleteTask, dueLabel, projectColor, projectInitial, updateTask,
+  deleteTask, dueLabel, projectColor, projectInitial, reminderLabel, updateTask,
 } from '../../lib/tasks';
 import {
   ClaudeBadge, DueChip, ExtBadge, LabelChip, MeBadge,
@@ -234,6 +234,15 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           {PRIORITY_LABEL[task.priority]}
         </HeaderChip>
         {task.dueDate && <DueChip task={task} withTime fontSize={12.5} />}
+        {task.dueDate && task.reminderMinutes != null && (
+          <HeaderChip>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.warning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+              <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+            </svg>
+            {reminderLabel(task.reminderMinutes)}
+          </HeaderChip>
+        )}
         {task.assignee && (
           <HeaderChip>
             {task.assignee === 'claude' ? <ClaudeBadge size={17} /> : <MeBadge size={17} />}

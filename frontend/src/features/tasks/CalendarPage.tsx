@@ -60,7 +60,8 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [groupFilter, setGroupFilter] = useState<string>('all');   // 'all' | groupId | 'none'
-  const [showCreate, setShowCreate] = useState(false);
+  // Диалог создания: null — закрыт; date — предзаполненный срок (быстрое создание на день)
+  const [createDialog, setCreateDialog] = useState<null | { date?: string }>(null);
   // Личная задача, открытая в модале (id — чтобы карточка жила и обновлялась из стора)
   const [personalTaskId, setPersonalTaskId] = useState<string | null>(null);
   // Открыть модал сразу в редактировании (после «Создать и настроить»)
@@ -101,7 +102,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   // «Создать и настроить» из календаря: личная — модал в редактировании,
   // проектная — переход в проект с открытым редактором (флаг через sessionStorage)
   const handleCreated = (task: Task, configure: boolean) => {
-    setShowCreate(false);
+    setCreateDialog(null);
     if (!configure) return;
     if (!task.projectId) {
       setPersonalEdit(true);
@@ -162,7 +163,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   );
 
   const currentView = view === 'month' ? (
-    <CalendarMonth tasks={tasks} projectsById={projectsById} navDate={navDate} onNavigate={setNavDate} onOpenTask={handleOpenTask} isMobile={isMobile} />
+    <CalendarMonth tasks={tasks} projectsById={projectsById} navDate={navDate} onNavigate={setNavDate} onOpenTask={handleOpenTask} onQuickCreate={iso => setCreateDialog({ date: iso })} isMobile={isMobile} />
   ) : view === 'week' ? (
     <CalendarWeek tasks={tasks} projectsById={projectsById} navDate={navDate} onNavigate={setNavDate} onOpenTask={handleOpenTask} isMobile={isMobile} />
   ) : (
@@ -208,7 +209,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
                   onChange={setView}
                 />
                 <button
-                  onClick={() => setShowCreate(true)}
+                  onClick={() => setCreateDialog({})}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 7,
                     padding: '0 18px', height: 38, cursor: 'pointer',
@@ -235,7 +236,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
       {/* Мобила: FAB «+» */}
       {isMobile && (
         <button
-          onClick={() => setShowCreate(true)}
+          onClick={() => setCreateDialog({})}
           title="Новая задача"
           style={{
             position: 'fixed', right: 18, bottom: 'calc(20px + env(safe-area-inset-bottom))', zIndex: 20,
@@ -251,11 +252,12 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
         </button>
       )}
 
-      {showCreate && (
+      {createDialog && (
         <NewTaskDialog
           configureLabel="Подробнее"
+          defaultDueDate={createDialog.date}
           onCreated={handleCreated}
-          onClose={() => setShowCreate(false)}
+          onClose={() => setCreateDialog(null)}
         />
       )}
 

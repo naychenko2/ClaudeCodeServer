@@ -1,5 +1,5 @@
-// Диалог быстрого создания задачи: название, проект, приоритет, исполнитель.
-// Срок и остальные поля задаются позже в редактировании (как в макете).
+// Диалог быстрого создания задачи: название, проект, срок, приоритет, исполнитель.
+// Остальные поля задаются позже в редактировании.
 
 import { useEffect, useState } from 'react';
 import type { Project, Task, TaskAssignee, TaskPriority } from '../../types';
@@ -8,10 +8,13 @@ import { Button, FieldLabel, Modal, TextField } from '../../components/ui';
 import { api } from '../../lib/api';
 import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, createTask, projectColor } from '../../lib/tasks';
 import { ClaudeBadge, PriorityFlag } from './bits';
+import { DueDatePicker } from './DueDatePicker';
 
 interface Props {
   // Проект, выбранный по умолчанию (контекст воркспейса или фильтра календаря)
   defaultProjectId?: string;
+  // Срок по умолчанию (быстрое создание на день из календаря)
+  defaultDueDate?: string;
   // Подпись кнопки «создать и открыть редактор» (в календаре — «Подробнее»)
   configureLabel?: string;
   // configure=true — открыть карточку сразу в редактировании
@@ -19,13 +22,15 @@ interface Props {
   onClose: () => void;
 }
 
-export function NewTaskDialog({ defaultProjectId, configureLabel = 'Создать и настроить', onCreated, onClose }: Props) {
+export function NewTaskDialog({ defaultProjectId, defaultDueDate, configureLabel = 'Создать и настроить', onCreated, onClose }: Props) {
   const [title, setTitle] = useState('');
   const [projects, setProjects] = useState<Project[]>([]);
   // null = «Личное» (задача вне проекта) — дефолт, когда открыто не из проекта
   const [projectId, setProjectId] = useState<string | null>(defaultProjectId ?? null);
   const [priority, setPriority] = useState<TaskPriority>('medium');
   const [assignee, setAssignee] = useState<TaskAssignee>('me');
+  const [dueDate, setDueDate] = useState<string | null>(defaultDueDate ?? null);
+  const [dueTime, setDueTime] = useState<string | null>(null);
   // Какая из кнопок создаёт: 'plain' — просто создать, 'configure' — создать и настроить
   const [saving, setSaving] = useState<null | 'plain' | 'configure'>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +46,10 @@ export function NewTaskDialog({ defaultProjectId, configureLabel = 'Создат
     setSaving(configure ? 'configure' : 'plain');
     setError(null);
     try {
-      const task = await createTask(projectId, { title: title.trim(), priority, assignee });
+      const task = await createTask(projectId, {
+        title: title.trim(), priority, assignee,
+        dueDate: dueDate ?? undefined, dueTime: dueTime ?? undefined,
+      });
       onCreated(task, configure);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось создать задачу');
@@ -117,6 +125,16 @@ export function NewTaskDialog({ defaultProjectId, configureLabel = 'Создат
             );
           })}
         </div>
+      </div>
+
+      {/* Срок — как в редакторе: чипы + календарик с временем */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <FieldLabel>Срок</FieldLabel>
+        <DueDatePicker
+          dueDate={dueDate}
+          dueTime={dueTime}
+          onChange={(d, t) => { setDueDate(d); setDueTime(t); }}
+        />
       </div>
 
       {/* Приоритет + исполнитель в одну строку */}

@@ -1,7 +1,9 @@
 // Выбор срока: быстрые чипы (Сегодня/Завтра/+7 дней/Без срока) как в макете,
 // плюс произвольная дата и время через мини-календарь в поповере.
+// Поповер — portal с fixed-позиционированием: не обрезается модалами со скроллом.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import { addDaysIso, todayIso, toIsoDate } from '../../lib/tasks';
 import { CalendarIcon } from './bits';
@@ -55,8 +57,8 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
   const tomorrow = addDaysIso(today, 1);
   const week = addDaysIso(today, 7);
 
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
+  // Якорь открытого поповера (rect кнопки «Дата…») или null
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
 
   // Позиция календаря в поповере: месяц выбранной даты или текущий
   const [viewYm, setViewYm] = useState<[number, number]>(() => {
@@ -68,15 +70,20 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
 
   useEffect(() => { setTimeDraft(dueTime ?? ''); }, [dueTime]);
 
-  // Клик вне поповера — закрыть
+  // Клик вне поповера — закрыть (portal: проверяем по data-атрибуту)
   useEffect(() => {
-    if (!pickerOpen) return;
+    if (!anchor) return;
     const handler = (e: PointerEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setPickerOpen(false);
+      if (!(e.target as HTMLElement).closest('[data-due-popover]')) setAnchor(null);
     };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setAnchor(null); };
     document.addEventListener('pointerdown', handler);
-    return () => document.removeEventListener('pointerdown', handler);
-  }, [pickerOpen]);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', handler);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [anchor]);
 
   const quick = [
     { key: 'today', label: 'Сегодня', date: today },
@@ -97,8 +104,20 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
   const [viewYear, viewMonth] = viewYm;
   const cells = monthGrid(viewYear, viewMonth);
 
+  // Позиция поповера: под якорем; если снизу не помещается — над ним
+  const POPOVER_W = 268;
+  const POPOVER_H = 430;
+  const popoverPos = (): React.CSSProperties => {
+    if (!anchor) return {};
+    const left = Math.max(12, Math.min(anchor.left, window.innerWidth - POPOVER_W - 12));
+    const openUp = window.innerHeight - anchor.bottom < POPOVER_H + 20 && anchor.top > POPOVER_H;
+    return openUp
+      ? { left, top: anchor.top - 6, transform: 'translateY(-100%)' }
+      : { left, top: anchor.bottom + 6 };
+  };
+
   return (
-    <div ref={wrapRef} style={{ position: 'relative' }}>
+    <div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {quick.map(q => (
           <button key={q.key} onClick={() => onChange(q.date, dueTime)} style={chipStyle(dueDate === q.date)}>
@@ -111,13 +130,16 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
         </button>
         {/* Произвольная дата/время */}
         <button
-          onClick={() => {
+          data-due-popover
+          onClick={e => {
+            // rect читаем синхронно: в асинхронном updater e.currentTarget уже null
+            const rect = e.currentTarget.getBoundingClientRect();
             const base = dueDate ?? today;
             const [y, m] = base.split('-').map(Number);
             setViewYm([y, m - 1]);
-            setPickerOpen(v => !v);
+            setAnchor(prev => prev ? null : rect);
           }}
-          style={chipStyle(isCustom || pickerOpen)}
+          style={chipStyle(isCustom || !!anchor)}
         >
           <CalendarIcon size={12} />
           {isCustom ? customLabel(dueDate) : 'Дата…'}
@@ -125,10 +147,11 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
         </button>
       </div>
 
-      {pickerOpen && (
-        <div style={{
-          position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: Z.dropdown,
-          width: 268, boxSizing: 'border-box',
+      {anchor && createPortal(
+        <div data-due-popover style={{
+          position: 'fixed', zIndex: Z.modal + 1, ...popoverPos(),
+          width: POPOVER_W, boxSizing: 'border-box',
+          maxHeight: 'calc(100vh - 24px)', overflowY: 'auto',
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
           boxShadow: SHADOW.dropdown, padding: 14,
         }}>
@@ -193,39 +216,69 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
             })}
           </div>
 
-          {/* Время */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.borderLight}` }}>
-            <span style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary, flexShrink: 0 }}>Время</span>
-            <input
-              value={timeDraft}
-              onChange={e => setTimeDraft(e.target.value)}
-              onBlur={() => {
-                const t = applyTime(timeDraft);
-                if (t) onChange(dueDate ?? today, t);
-                else if (timeDraft.trim() === '') onChange(dueDate, null);
-                else setTimeDraft(dueTime ?? '');
-              }}
-              placeholder="14:00"
-              style={{
-                width: 72, boxSizing: 'border-box', padding: '6px 9px',
-                border: `1px solid ${C.border}`, borderRadius: R.md,
-                background: C.bgWhite, fontFamily: FONT.mono, fontSize: 12.5,
-                color: C.textPrimary, outline: 'none', textAlign: 'center',
-              }}
-            />
-            <div style={{ flex: 1 }} />
-            <button
-              onClick={() => setPickerOpen(false)}
-              style={{
-                padding: '6px 13px', border: 'none', borderRadius: R.md, cursor: 'pointer',
-                background: C.accent, color: C.onAccent,
-                fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
-              }}
-            >
-              Готово
-            </button>
+          {/* Время: пресеты одним тапом + произвольный ввод */}
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.borderLight}` }}>
+            <div style={{
+              fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted,
+              textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 7,
+            }}>
+              Время
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 9 }}>
+              {[null, '09:00', '12:00', '14:00', '16:00', '18:00', '20:00'].map(t => {
+                const active = (dueTime ?? null) === t;
+                return (
+                  <button
+                    key={t ?? 'none'}
+                    onClick={() => onChange(t ? (dueDate ?? today) : dueDate, t)}
+                    style={{
+                      padding: '4px 9px', cursor: 'pointer',
+                      border: `1px solid ${active ? C.accent : C.border}`,
+                      borderRadius: R.md,
+                      background: active ? C.accentLight : C.bgWhite,
+                      color: active ? C.accent : C.textSecondary,
+                      fontFamily: t ? FONT.mono : FONT.sans, fontSize: 11.5,
+                      fontWeight: active ? 700 : 500,
+                    }}
+                  >
+                    {t ?? 'Нет'}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                value={timeDraft}
+                onChange={e => setTimeDraft(e.target.value)}
+                onBlur={() => {
+                  const t = applyTime(timeDraft);
+                  if (t) onChange(dueDate ?? today, t);
+                  else if (timeDraft.trim() === '') onChange(dueDate, null);
+                  else setTimeDraft(dueTime ?? '');
+                }}
+                placeholder="Своё…"
+                style={{
+                  width: 76, boxSizing: 'border-box', padding: '6px 9px',
+                  border: `1px solid ${C.border}`, borderRadius: R.md,
+                  background: C.bgWhite, fontFamily: FONT.mono, fontSize: 12.5,
+                  color: C.textPrimary, outline: 'none', textAlign: 'center',
+                }}
+              />
+              <div style={{ flex: 1 }} />
+              <button
+                onClick={() => setAnchor(null)}
+                style={{
+                  padding: '6px 13px', border: 'none', borderRadius: R.md, cursor: 'pointer',
+                  background: C.accent, color: C.onAccent,
+                  fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
+                }}
+              >
+                Готово
+              </button>
+            </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

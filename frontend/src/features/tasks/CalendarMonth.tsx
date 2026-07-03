@@ -1,7 +1,7 @@
 // Вид «Месяц»: десктоп/планшет — крупная сетка с чипами задач,
 // мобила — компактная сетка с точками + список задач выбранного дня.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Project, Task } from '../../types';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
@@ -15,6 +15,8 @@ interface Props {
   navDate: string;                 // якорная дата YYYY-MM-DD (месяц берётся из неё)
   onNavigate: (iso: string) => void;
   onOpenTask: (task: Task) => void;
+  // Быстрое создание задачи на день: даблклик/контекстное меню (десктоп), длинное нажатие (мобила)
+  onQuickCreate?: (iso: string) => void;
   isMobile?: boolean;
 }
 
@@ -156,15 +158,48 @@ function DayOverflowPopover({ iso, rect, tasks, onOpenTask, onClose }: {
   );
 }
 
-export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpenTask, isMobile }: Props) {
+export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpenTask, onQuickCreate, isMobile }: Props) {
   const today = todayIso();
   const [year, month] = [Number(navDate.slice(0, 4)), Number(navDate.slice(5, 7)) - 1];
   const [selectedDay, setSelectedDay] = useState(today);
   // Раскрытый через «+N ещё» день (десктоп): дата + прямоугольник ячейки для позиционирования
   const [overflowDay, setOverflowDay] = useState<{ iso: string; rect: DOMRect } | null>(null);
+  // Контекстное меню дня (десктоп): «+ Задача на …»
+  const [ctxMenu, setCtxMenu] = useState<{ iso: string; x: number; y: number } | null>(null);
+  // Длинное нажатие по дню (мобила): таймер + флаг, гасящий последующий click
+  const longPress = useRef<{ timer: ReturnType<typeof setTimeout> | null; fired: boolean }>({ timer: null, fired: false });
   const hover = useTaskHover();
   const nameOf = (t: Task) =>
     t.projectId ? projectsById.get(t.projectId)?.name ?? '' : NO_PROJECT_LABEL;
+
+  // Закрытие контекстного меню: клик мимо, Esc, скролл
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    document.addEventListener('pointerdown', close);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [ctxMenu]);
+
+  const startLongPress = (iso: string) => {
+    if (!onQuickCreate) return;
+    longPress.current.fired = false;
+    longPress.current.timer = setTimeout(() => {
+      longPress.current.fired = true;
+      if ('vibrate' in navigator) navigator.vibrate?.(15);
+      onQuickCreate(iso);
+    }, 550);
+  };
+
+  const cancelLongPress = () => {
+    if (longPress.current.timer) { clearTimeout(longPress.current.timer); longPress.current.timer = null; }
+  };
 
   const cells = useMemo(() => monthCells(year, month), [year, month]);
 
@@ -221,12 +256,23 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
             return (
               <button
                 key={iso}
-                onClick={() => setSelectedDay(iso)}
+                // Тап — выбрать день; длинное нажатие — новая задача на этот день
+                onClick={() => {
+                  if (longPress.current.fired) { longPress.current.fired = false; return; }
+                  setSelectedDay(iso);
+                }}
+                onPointerDown={() => startLongPress(iso)}
+                onPointerUp={cancelLongPress}
+                onPointerLeave={cancelLongPress}
+                onPointerCancel={cancelLongPress}
+                onContextMenu={e => e.preventDefault()}
                 style={{
                   height: 46, padding: 0, border: 'none', cursor: 'pointer',
                   background: selected ? C.textHeading : 'transparent',
                   borderRadius: 12,
                   display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3,
+                  WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none',
+                  touchAction: 'pan-y',
                 }}
               >
                 <span style={{
@@ -316,6 +362,12 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
             <div
               key={iso}
               data-day-cell
+              // Даблклик по ячейке — новая задача на день; правый клик — контекстное меню
+              onDoubleClick={onQuickCreate ? () => onQuickCreate(iso) : undefined}
+              onContextMenu={onQuickCreate ? e => {
+                e.preventDefault();
+                setCtxMenu({ iso, x: e.clientX, y: e.clientY });
+              } : undefined}
               style={{
                 minHeight: 86, minWidth: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '7px 8px',
                 background: isToday ? '#FBEBE0' : inMonth ? C.bgWhite : 'transparent',
@@ -404,6 +456,38 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
           onOpenTask={onOpenTask}
           onClose={() => setOverflowDay(null)}
         />
+      )}
+
+      {/* Контекстное меню дня: «+ Задача на …» */}
+      {ctxMenu && (
+        <div
+          onPointerDown={e => e.stopPropagation()}
+          style={{
+            position: 'fixed', zIndex: Z.dropdown,
+            left: Math.min(ctxMenu.x, window.innerWidth - 240),
+            top: Math.min(ctxMenu.y, window.innerHeight - 60),
+            background: C.bgWhite, border: `1px solid ${C.border}`,
+            borderRadius: R.lg, boxShadow: SHADOW.dropdown, padding: 4,
+          }}
+        >
+          <button
+            onClick={() => { onQuickCreate?.(ctxMenu.iso); setCtxMenu(null); }}
+            onMouseEnter={e => { e.currentTarget.style.background = C.accentLight; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '8px 14px', border: 'none', borderRadius: R.md,
+              background: 'transparent', cursor: 'pointer',
+              fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textPrimary,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2.5" strokeLinecap="round">
+              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            Задача на {fullDayLabel(ctxMenu.iso)}
+          </button>
+        </div>
       )}
 
       {hover.popover}

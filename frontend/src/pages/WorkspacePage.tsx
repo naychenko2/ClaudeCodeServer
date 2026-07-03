@@ -178,6 +178,20 @@ const windowWidth = useWindowWidth();
     { value: 'files', label: 'Файлы' },
     ...(tasksEnabled ? [{ value: 'tasks' as const, label: 'Задачи' }] : []),
   ];
+
+  // Переход из календаря: App положил id задачи в sessionStorage перед открытием проекта
+  useEffect(() => {
+    const pending = sessionStorage.getItem('cc_pending_task');
+    if (!pending) return;
+    sessionStorage.removeItem('cc_pending_task');
+    setLeftTab('tasks');
+    setSelectedTaskId(pending);
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      setMobileView('chat');
+      navPush({ screen: 'project', project, view: 'chat', file: null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Ширина сайдбара — общая для всех областей (перетаскиваемая, персистится)
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
 

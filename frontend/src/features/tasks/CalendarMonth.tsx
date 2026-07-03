@@ -1,0 +1,278 @@
+// Вид «Месяц»: десктоп/планшет — крупная сетка с чипами задач,
+// мобила — компактная сетка с точками + список задач выбранного дня.
+
+import { useMemo, useState } from 'react';
+import type { Project, Task } from '../../types';
+import { C, FONT } from '../../lib/design';
+import { projectColor, todayIso, toIsoDate } from '../../lib/tasks';
+import { TaskCard } from './TaskCard';
+
+interface Props {
+  tasks: Task[];
+  projectsById: Map<string, Project>;
+  navDate: string;                 // якорная дата YYYY-MM-DD (месяц берётся из неё)
+  onNavigate: (iso: string) => void;
+  onOpenTask: (task: Task) => void;
+  isMobile?: boolean;
+}
+
+const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
+// 6 фиксированных недель, покрывающих месяц (как в макете — стабильная высота)
+function monthCells(year: number, month: number): { iso: string; inMonth: boolean }[] {
+  const first = new Date(year, month, 1);
+  const offset = (first.getDay() + 6) % 7;   // Пн = 0
+  const start = new Date(year, month, 1 - offset);
+  return Array.from({ length: 42 }, (_, i) => {
+    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+    return { iso: toIsoDate(d), inMonth: d.getMonth() === month };
+  });
+}
+
+// Круглая кнопка навигации ‹ ›
+export function NavArrow({ dir, onClick }: { dir: -1 | 1; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        width: 34, height: 34, padding: 0, cursor: 'pointer', flexShrink: 0,
+        border: `1px solid ${C.border}`, borderRadius: '50%', background: C.bgWhite,
+        color: C.textSecondary, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        {dir < 0 ? <path d="M15 18l-6-6 6-6" /> : <path d="M9 6l6 6-6 6" />}
+      </svg>
+    </button>
+  );
+}
+
+function fullDayLabel(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+}
+
+function taskCountLabel(n: number): string {
+  const mod10 = n % 10, mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${n} задача`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return `${n} задачи`;
+  return `${n} задач`;
+}
+
+export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpenTask, isMobile }: Props) {
+  const today = todayIso();
+  const [year, month] = [Number(navDate.slice(0, 4)), Number(navDate.slice(5, 7)) - 1];
+  const [selectedDay, setSelectedDay] = useState(today);
+
+  const cells = useMemo(() => monthCells(year, month), [year, month]);
+
+  const byDay = useMemo(() => {
+    const map = new Map<string, Task[]>();
+    for (const t of tasks) {
+      if (!t.dueDate) continue;
+      const list = map.get(t.dueDate) ?? [];
+      list.push(t);
+      map.set(t.dueDate, list);
+    }
+    for (const list of map.values())
+      list.sort((a, b) => (a.dueTime ?? '99:99').localeCompare(b.dueTime ?? '99:99'));
+    return map;
+  }, [tasks]);
+
+  const shiftMonth = (dir: -1 | 1) => {
+    const d = new Date(year, month + dir, 1);
+    onNavigate(toIsoDate(d));
+  };
+
+  const monthTitle = `${MONTHS[month]} ${year}`;
+
+  // === Мобила: компактная сетка с точками + список задач выбранного дня ===
+  if (isMobile) {
+    const dayTasks = byDay.get(selectedDay) ?? [];
+    return (
+      <div>
+        {/* Заголовок месяца + навигация */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '14px 0 10px' }}>
+          <span style={{ fontFamily: FONT.serif, fontSize: 19, fontWeight: 500, color: C.textHeading }}>{monthTitle}</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <NavArrow dir={-1} onClick={() => shiftMonth(-1)} />
+            <NavArrow dir={1} onClick={() => shiftMonth(1)} />
+          </div>
+        </div>
+
+        {/* Дни недели */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', marginBottom: 2 }}>
+          {WEEKDAYS.map(w => (
+            <div key={w} style={{ textAlign: 'center', fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 600, color: C.textMuted, padding: '4px 0' }}>
+              {w}
+            </div>
+          ))}
+        </div>
+
+        {/* Сетка: число + точки задач */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', rowGap: 4 }}>
+          {cells.map(({ iso, inMonth }) => {
+            const dayTasksHere = byDay.get(iso) ?? [];
+            const selected = iso === selectedDay;
+            const day = Number(iso.split('-')[2]);
+            return (
+              <button
+                key={iso}
+                onClick={() => setSelectedDay(iso)}
+                style={{
+                  height: 46, padding: 0, border: 'none', cursor: 'pointer',
+                  background: selected ? C.textHeading : 'transparent',
+                  borderRadius: 12,
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3,
+                }}
+              >
+                <span style={{
+                  fontFamily: FONT.sans, fontSize: 14, fontWeight: selected || iso === today ? 700 : 400,
+                  color: selected ? '#fff' : !inMonth ? C.textMuted + '80' : iso === today ? C.accent : C.textPrimary,
+                }}>
+                  {day}
+                </span>
+                {/* Точки задач (до 3), у выбранного дня — белые */}
+                {dayTasksHere.length > 0 && (
+                  <span style={{ display: 'flex', gap: 3, height: 4 }}>
+                    {dayTasksHere.slice(0, 3).map((t, i) => (
+                      <span key={i} style={{
+                        width: 4, height: 4, borderRadius: '50%',
+                        background: selected ? '#fff' : projectColor(t.projectId).main,
+                      }} />
+                    ))}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Список задач выбранного дня */}
+        <div style={{ marginTop: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10 }}>
+            <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading }}>
+              {selectedDay === today ? 'Сегодня' : ''}{selectedDay === today ? ' · ' : ''}{fullDayLabel(selectedDay)}
+            </span>
+            {dayTasks.length > 0 && (
+              <span style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textMuted }}>{taskCountLabel(dayTasks.length)}</span>
+            )}
+          </div>
+          {dayTasks.length === 0 ? (
+            <div style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textMuted, padding: '10px 0 20px' }}>
+              Нет задач на этот день
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingBottom: 20 }}>
+              {dayTasks.map(t => (
+                <TaskCard
+                  key={t.id}
+                  task={t}
+                  onClick={() => onOpenTask(t)}
+                  projectName={projectsById.get(t.projectId)?.name}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // === Десктоп/планшет: крупная сетка с чипами ===
+  const MAX_CHIPS = 3;
+  return (
+    <div>
+      {/* Заголовок месяца + навигация */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '18px 0 14px' }}>
+        <span style={{ fontFamily: FONT.serif, fontSize: 23, fontWeight: 500, color: C.textHeading }}>{monthTitle}</span>
+        <div style={{ display: 'flex', gap: 9 }}>
+          <NavArrow dir={-1} onClick={() => shiftMonth(-1)} />
+          <NavArrow dir={1} onClick={() => shiftMonth(1)} />
+        </div>
+      </div>
+
+      {/* Дни недели */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8, marginBottom: 6 }}>
+        {WEEKDAYS.map(w => (
+          <div key={w} style={{ fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, padding: '0 2px' }}>
+            {w}
+          </div>
+        ))}
+      </div>
+
+      {/* Сетка */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8, paddingBottom: 28 }}>
+        {cells.map(({ iso, inMonth }) => {
+          const dayTasksHere = byDay.get(iso) ?? [];
+          const isToday = iso === today;
+          const day = Number(iso.split('-')[2]);
+          const overflow = dayTasksHere.length - MAX_CHIPS;
+          return (
+            <div
+              key={iso}
+              style={{
+                minHeight: 86, boxSizing: 'border-box', padding: '7px 8px',
+                background: isToday ? '#FBEBE0' : inMonth ? C.bgWhite : 'transparent',
+                border: `1px solid ${isToday ? C.accentMuted : inMonth ? C.borderLight : C.borderLight + '90'}`,
+                borderRadius: 10,
+                opacity: inMonth ? 1 : 0.55,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+                <span style={{
+                  fontFamily: FONT.sans, fontSize: 12, fontWeight: isToday ? 700 : 500,
+                  color: inMonth ? C.textPrimary : C.textMuted,
+                }}>
+                  {day}
+                </span>
+                {isToday && (
+                  <span style={{
+                    fontFamily: FONT.sans, fontSize: 9.5, fontWeight: 700, color: C.onAccent,
+                    background: C.accent, borderRadius: 999, padding: '2px 7px',
+                    textTransform: 'lowercase', letterSpacing: '0.02em',
+                  }}>
+                    сегодня
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {dayTasksHere.slice(0, MAX_CHIPS).map(t => {
+                  const color = projectColor(t.projectId);
+                  return (
+                    <div
+                      key={t.id}
+                      onClick={() => onOpenTask(t)}
+                      title={t.title}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 5,
+                        background: color.soft, borderRadius: 6,
+                        padding: '3px 6px 3px 4px', cursor: 'pointer',
+                      }}
+                    >
+                      <span style={{ width: 3, height: 12, borderRadius: 2, background: color.main, flexShrink: 0 }} />
+                      <span style={{
+                        fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 600, color: C.textPrimary,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        textDecoration: t.status === 'done' ? 'line-through' : 'none',
+                        opacity: t.status === 'done' ? 0.6 : 1,
+                      }}>
+                        {t.title}
+                      </span>
+                    </div>
+                  );
+                })}
+                {overflow > 0 && (
+                  <span style={{ fontFamily: FONT.sans, fontSize: 10, color: C.textMuted, paddingLeft: 4 }}>
+                    +{overflow} ещё
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

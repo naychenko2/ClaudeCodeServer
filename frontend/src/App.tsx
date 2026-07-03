@@ -14,8 +14,9 @@ import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
-import { setAllFlags } from './lib/featureFlags'
+import { setAllFlags, useFeature, FLAGS } from './lib/featureFlags'
 import { loadModels } from './lib/models'
+import { CalendarPage } from './features/tasks/CalendarPage'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 const HUB_TAB_KEY = 'cc_hub_tab'
@@ -47,11 +48,16 @@ export default function App() {
     }
   })
 
-  // Активная вкладка хаба (Чаты | Проекты) — вне открытого проекта.
+  // Активная вкладка хаба (Чаты | Проекты | Календарь) — вне открытого проекта.
   // По умолчанию открываются «Чаты» (первая вкладка).
-  const [hubTab, setHubTab] = useState<HubTab>(() =>
-    localStorage.getItem(HUB_TAB_KEY) === 'projects' ? 'projects' : 'chats'
-  )
+  const [hubTab, setHubTab] = useState<HubTab>(() => {
+    const saved = localStorage.getItem(HUB_TAB_KEY)
+    return saved === 'projects' || saved === 'calendar' ? saved : 'chats'
+  })
+  // «Календарь» доступен только при включённом флаге tasks; если флаг выключен
+  // (или ещё не загружен), сохранённая вкладка «календарь» откатывается на «Чаты»
+  const tasksEnabled = useFeature(FLAGS.tasks)
+  const effectiveHubTab: HubTab = hubTab === 'calendar' && !tasksEnabled ? 'chats' : hubTab
 
   const online = useOnline()
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
@@ -104,7 +110,7 @@ export default function App() {
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
-    navReplace({ screen: hubTab === 'chats' ? 'chats' : 'projects' })
+    navReplace({ screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : 'projects' })
     // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
     // проектом — при hubTab==='chats' проект «спит» и в истории не отражается.
     if (hubTab === 'projects' && project) {
@@ -130,6 +136,9 @@ export default function App() {
       } else if (s?.screen === 'chats') {
         // Раздел «Чаты» — открытый проект «спит», его не сбрасываем (навигационная память)
         if (hubTab !== 'chats') { localStorage.setItem(HUB_TAB_KEY, 'chats'); setHubTab('chats') }
+      } else if (s?.screen === 'calendar') {
+        // Раздел «Календарь» — проект тоже «спит»
+        if (hubTab !== 'calendar') { localStorage.setItem(HUB_TAB_KEY, 'calendar'); setHubTab('calendar') }
       } else if (s?.screen === 'projects') {
         // Список проектов — явный выход из проекта
         if (project) { localStorage.removeItem(OPEN_PROJECT_KEY); setProject(null) }
@@ -185,7 +194,15 @@ export default function App() {
   const switchHubTab = (t: HubTab) => {
     localStorage.setItem(HUB_TAB_KEY, t)
     setHubTab(t)
-    navReplace({ screen: t === 'chats' ? 'chats' : 'projects' })
+    navReplace({ screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : 'projects' })
+  }
+  // Из календаря: открыть задачу во вкладке «Задачи» её проекта.
+  // Задача передаётся через sessionStorage — WorkspacePage подхватывает при монтировании.
+  const openTaskInProject = (p: Project, taskId: string) => {
+    sessionStorage.setItem('cc_pending_task', taskId)
+    localStorage.setItem(HUB_TAB_KEY, 'projects')
+    setHubTab('projects')
+    openProject(p)
   }
   const logout = () => {
     localStorage.removeItem('cc_token')
@@ -210,11 +227,13 @@ export default function App() {
         ? <div style={{ minHeight: '100vh', background: '#F4F0E8' }} />
         : !auth
           ? <LoginPage onConnect={setAuth} />
-          : hubTab === 'chats'
+          : effectiveHubTab === 'chats'
             ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
-            : project
-              ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
-              : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
+            : effectiveHubTab === 'calendar'
+              ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
+              : project
+                ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
+                : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
       }
     </>
   )

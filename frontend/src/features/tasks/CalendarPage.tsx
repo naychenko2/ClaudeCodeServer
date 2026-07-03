@@ -9,7 +9,7 @@ import { PillSwitch } from '../../components/Toolbar';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { ensureTasksLoaded, todayIso, useTasks } from '../../lib/tasks';
-import { AgendaIcon, MonthIcon, WeekIcon } from './bits';
+import { AgendaIcon, IconViewSwitcher, MonthIcon, WeekIcon } from './bits';
 import { TaskDetailsModal } from './TaskDetailsModal';
 import { CalendarMonth } from './CalendarMonth';
 import { CalendarWeek } from './CalendarWeek';
@@ -158,28 +158,14 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
           {isMobile ? (
             <>
               {/* Мобильный переключатель вида: иконка + подпись */}
-              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                {(['month', 'week', 'agenda'] as CalView[]).map(v => {
-                  const active = view === v;
-                  return (
-                    <button
-                      key={v}
-                      onClick={() => setView(v)}
-                      style={{
-                        flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
-                        padding: '11px 0 9px', cursor: 'pointer',
-                        border: 'none', borderRadius: R.xl,
-                        background: active ? C.accentLight : 'transparent',
-                        color: active ? C.accent : C.textSecondary,
-                        fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
-                        transition: 'background 0.15s, color 0.15s',
-                      }}
-                    >
-                      <ViewIcon view={v} />
-                      {VIEW_LABEL[v]}
-                    </button>
-                  );
-                })}
+              <div style={{ marginBottom: 12 }}>
+                <IconViewSwitcher<CalView>
+                  value={view}
+                  options={(['month', 'week', 'agenda'] as CalView[]).map(v => ({
+                    value: v, label: VIEW_LABEL[v], icon: <ViewIcon view={v} />,
+                  }))}
+                  onChange={setView}
+                />
               </div>
               {filters}
             </>

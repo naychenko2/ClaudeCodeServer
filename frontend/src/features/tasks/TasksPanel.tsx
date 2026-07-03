@@ -10,7 +10,7 @@ import {
 } from '../../lib/tasks';
 import { TaskCard } from './TaskCard';
 import { NewTaskDialog } from './NewTaskDialog';
-import { ByDateIcon, ListIcon } from './bits';
+import { ByDateIcon, IconViewSwitcher, ListIcon } from './bits';
 
 interface Props {
   project: Project;
@@ -101,18 +101,29 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile }: Prop
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Подвкладки «Список | По дате» */}
+      {/* Подвкладки «Список | По дате»: на мобиле — сегменты с иконкой сверху
+          (как Месяц/Неделя/Агенда в календаре), на десктопе — pill-переключатель */}
       <div style={{ padding: isMobile ? '10px 14px 4px' : '0 16px 4px', flexShrink: 0 }}>
-        <PillSwitch<GroupTab>
-          value={groupTab}
-          options={[
-            { value: 'status', label: 'Список', icon: <ListIcon /> },
-            { value: 'date', label: 'По дате', icon: <ByDateIcon /> },
-          ]}
-          onChange={setGroupTab}
-          fill
-          isMobile={isMobile}
-        />
+        {isMobile ? (
+          <IconViewSwitcher<GroupTab>
+            value={groupTab}
+            options={[
+              { value: 'status', label: 'Список', icon: <ListIcon size={16} /> },
+              { value: 'date', label: 'По дате', icon: <ByDateIcon size={16} /> },
+            ]}
+            onChange={setGroupTab}
+          />
+        ) : (
+          <PillSwitch<GroupTab>
+            value={groupTab}
+            options={[
+              { value: 'status', label: 'Список', icon: <ListIcon /> },
+              { value: 'date', label: 'По дате', icon: <ByDateIcon /> },
+            ]}
+            onChange={setGroupTab}
+            fill
+          />
+        )}
       </div>
 
       {/* Список */}

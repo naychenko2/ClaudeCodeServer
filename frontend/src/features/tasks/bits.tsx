@@ -105,6 +105,40 @@ export function ByDateIcon({ size = 14 }: { size?: number }) {
   );
 }
 
+// Мобильный переключатель видов: сегменты «иконка сверху, подпись снизу»,
+// активный — подложка accentLight (как Месяц/Неделя/Агенда в календаре)
+export function IconViewSwitcher<T extends string>({ value, options, onChange }: {
+  value: T;
+  options: { value: T; label: string; icon: ReactNode }[];
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div style={{ display: 'flex', gap: 8 }}>
+      {options.map(opt => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            onClick={() => onChange(opt.value)}
+            style={{
+              flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
+              padding: '11px 0 9px', cursor: 'pointer',
+              border: 'none', borderRadius: R.xl,
+              background: active ? C.accentLight : 'transparent',
+              color: active ? C.accent : C.textSecondary,
+              fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
+              transition: 'background 0.15s, color 0.15s',
+            }}
+          >
+            {opt.icon}
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // Иконка календаря для чипов срока
 export function CalendarIcon({ size = 11 }: { size?: number }) {
   return (

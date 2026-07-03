@@ -23,6 +23,9 @@ public class Role
     public List<string> AgentNames { get; set; } = [];
     // Опциональный свободный текст поверх агентов (доп. инструкции конкретно этой роли)
     public string? SystemPrompt { get; set; }
+    // Стартовые подсказки пустого чата с сотрудником («что ему можно поручить»);
+    // генерируются собеседованием, при пустом списке UI показывает общие подсказки
+    public List<string> Suggestions { get; set; } = [];
     // Модель по умолчанию для чатов с ролью (псевдоним/полный id для --model)
     public string? Model { get; set; }
     // Reasoning effort по умолчанию (low/medium/high/xhigh/max)

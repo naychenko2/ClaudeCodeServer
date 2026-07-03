@@ -44,7 +44,7 @@ public class GlobalRolesController(RoleManager roles, RoleMemoryService roleMemo
     public IActionResult Create([FromBody] CreateRoleRequest req)
     {
         var role = roles.Create(null, req.Name, req.Title, req.Avatar, req.Color,
-            req.Persona, req.AgentNames, req.SystemPrompt, req.Model, req.Effort);
+            req.Persona, req.AgentNames, req.SystemPrompt, req.Model, req.Effort, req.Suggestions);
         return CreatedAtAction(nameof(GetAll), null, role);
     }
 
@@ -52,7 +52,7 @@ public class GlobalRolesController(RoleManager roles, RoleMemoryService roleMemo
     public IActionResult Update(string roleId, [FromBody] UpdateRoleRequest req)
     {
         var updated = roles.Update(roleId, req.Name, req.Title, req.Avatar, req.Color,
-            req.Persona, req.AgentNames, req.SystemPrompt, req.Model, req.Effort);
+            req.Persona, req.AgentNames, req.SystemPrompt, req.Model, req.Effort, req.Suggestions);
         return updated is null ? NotFound() : Ok(updated);
     }
 
@@ -147,7 +147,7 @@ public class RolesController(RoleManager roles, ProjectManager projects, RoleMem
     {
         if (projects.GetById(projectId) is null) return NotFound();
         var role = roles.Create(projectId, req.Name, req.Title, req.Avatar, req.Color,
-            req.Persona, req.AgentNames, req.SystemPrompt, req.Model, req.Effort);
+            req.Persona, req.AgentNames, req.SystemPrompt, req.Model, req.Effort, req.Suggestions);
         return CreatedAtAction(nameof(GetAll), new { projectId }, role);
     }
 
@@ -167,7 +167,7 @@ public class RolesController(RoleManager roles, ProjectManager projects, RoleMem
     {
         if (AssignedRole(projectId, roleId) is null) return NotFound();
         var updated = roles.Update(roleId, req.Name, req.Title, req.Avatar, req.Color,
-            req.Persona, req.AgentNames, req.SystemPrompt, req.Model, req.Effort);
+            req.Persona, req.AgentNames, req.SystemPrompt, req.Model, req.Effort, req.Suggestions);
         return updated is null ? NotFound() : Ok(updated);
     }
 
@@ -212,7 +212,8 @@ public record CreateRoleRequest(
     List<string>? AgentNames = null,
     string? SystemPrompt = null,
     string? Model = null,
-    string? Effort = null);
+    string? Effort = null,
+    List<string>? Suggestions = null);
 
 public record UpdateRoleRequest(
     string? Name = null,
@@ -223,4 +224,5 @@ public record UpdateRoleRequest(
     List<string>? AgentNames = null,
     string? SystemPrompt = null,
     string? Model = null,
-    string? Effort = null);
+    string? Effort = null,
+    List<string>? Suggestions = null);

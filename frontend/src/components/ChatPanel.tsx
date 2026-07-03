@@ -1693,17 +1693,54 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             alignItems: 'center', justifyContent: 'center',
             gap: 12, paddingTop: 40,
           }}>
-            {/* Логотип */}
-            <div style={{
-              width: 46, height: 46, borderRadius: 13, background: C.accent,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
+            {/* Аватар сотрудника (чат с ролью) либо логотип */}
+            {role ? (
+              <RoleAvatar name={role.name} avatar={role.avatar} color={role.color} size={52} />
+            ) : (
               <div style={{
-                width: 22, height: 22, borderRadius: '50%', background: '#FFF',
-              }} />
-            </div>
+                width: 46, height: 46, borderRadius: 13, background: C.accent,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <div style={{
+                  width: 22, height: 22, borderRadius: '50%', background: '#FFF',
+                }} />
+              </div>
+            )}
 
-            {!project ? (
+            {role ? (
+              <>
+                {/* Приветствие сотрудника: имя, должность и его личные подсказки-поручения */}
+                <div style={{
+                  fontFamily: '"PT Serif", Georgia, serif',
+                  fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
+                }}>
+                  {role.name} на связи
+                </div>
+
+                <div style={{ fontSize: 13, color: '#8A8070', textAlign: 'center', maxWidth: 340 }}>
+                  {role.title || 'Сотрудник'}{project ? ` · проект «${project.name}»` : ''} — опишите задачу или выберите поручение
+                </div>
+
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4, maxWidth: 520 }}>
+                  {(role.suggestions?.length ? role.suggestions : (project ? HINTS : CHAT_HINTS)).map(hint => (
+                    <button
+                      key={hint}
+                      onClick={() => handleHint(hint)}
+                      style={{
+                        background: '#FFF', border: `1px solid ${C.borderLight}`,
+                        borderRadius: 10, padding: '9px 12px',
+                        fontSize: 13, color: C.textPrimary, cursor: 'pointer',
+                        fontFamily: 'inherit',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = C.accentLight)}
+                      onMouseLeave={e => (e.currentTarget.style.background = '#FFF')}
+                    >
+                      {hint}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : !project ? (
               <>
                 {/* Приветствие чата вне проекта — general-purpose ассистент */}
                 <div style={{

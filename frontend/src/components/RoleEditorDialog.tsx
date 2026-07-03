@@ -59,6 +59,8 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
   const [systemPrompt, setSystemPrompt] = useState(role?.systemPrompt ?? '');
   const [model, setModel] = useState(role?.model ?? '');
   const [effort, setEffort] = useState(role?.effort ?? '');
+  // Подсказки пустого чата: генерятся собеседованием, проносятся при сохранении
+  const [suggestions, setSuggestions] = useState<string[]>(role?.suggestions ?? []);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [memory, setMemory] = useState('');
   const [memoryDirty, setMemoryDirty] = useState(false);
@@ -117,6 +119,7 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
     setSystemPrompt(d.systemPrompt || '');
     setModel(d.model || '');
     setEffort(d.effort || '');
+    setSuggestions(d.suggestions || []);
   };
 
   const runInterview = async (history: InterviewMsg[]) => {
@@ -207,6 +210,7 @@ export function RoleEditorDialog({ projectId, role, onSaved, onClose }: Props) {
       name: name.trim(), title: title.trim(), avatar: avatar.trim(), color,
       persona, agentNames, systemPrompt: systemPrompt.trim() || undefined,
       model: model || undefined, effort: effort || undefined,
+      suggestions,
     };
     try {
       const saved = role

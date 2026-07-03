@@ -41,7 +41,8 @@ public class RoleManager
     // projectId != null — найм из проекта (роль сразу прикомандировывается);
     // null — глобальный найм из вкладки «Команда» (роль только в пуле).
     public Role Create(string? projectId, string name, string title, string avatar, string color,
-        string persona, List<string>? agentNames, string? systemPrompt, string? model, string? effort)
+        string persona, List<string>? agentNames, string? systemPrompt, string? model, string? effort,
+        List<string>? suggestions = null)
     {
         var role = new Role
         {
@@ -55,6 +56,7 @@ public class RoleManager
             SystemPrompt = string.IsNullOrWhiteSpace(systemPrompt) ? null : systemPrompt,
             Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
+            Suggestions = suggestions ?? [],
         };
         _roles[role.Id] = role;
         Save();
@@ -62,7 +64,8 @@ public class RoleManager
     }
 
     public Role? Update(string id, string? name, string? title, string? avatar, string? color,
-        string? persona, List<string>? agentNames, string? systemPrompt, string? model, string? effort)
+        string? persona, List<string>? agentNames, string? systemPrompt, string? model, string? effort,
+        List<string>? suggestions = null)
     {
         if (!_roles.TryGetValue(id, out var role)) return null;
 
@@ -76,6 +79,7 @@ public class RoleManager
         if (systemPrompt is not null) role.SystemPrompt = string.IsNullOrWhiteSpace(systemPrompt) ? null : systemPrompt;
         if (model is not null) role.Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
         if (effort is not null) role.Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim();
+        if (suggestions is not null) role.Suggestions = suggestions;
         role.UpdatedAt = DateTime.UtcNow;
         Save();
         return role;
@@ -170,6 +174,7 @@ public class RoleManager
             SystemPrompt = SystemPrompt,
             Model = Model,
             Effort = Effort,
+            Suggestions = Suggestions,
             CreatedAt = CreatedAt,
             UpdatedAt = UpdatedAt,
         };

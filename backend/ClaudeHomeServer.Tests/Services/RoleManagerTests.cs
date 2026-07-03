@@ -90,7 +90,7 @@ public class RoleManagerTests : IDisposable
     public void Roles_SurviveReload()
     {
         var role = Create().Create("proj-1", "Игорь", "Бэкендер", "🔧", "#D97757", "дотошный",
-            ["backend-dev"], "доп", "haiku", "low");
+            ["backend-dev"], "доп", "haiku", "low", ["Почини сборку", "Проверь тесты"]);
 
         var reloaded = Create().GetById(role.Id);
 
@@ -99,6 +99,7 @@ public class RoleManagerTests : IDisposable
         reloaded.ProjectIds.Should().BeEquivalentTo(["proj-1"]);
         reloaded.AgentNames.Should().BeEquivalentTo(["backend-dev"]);
         reloaded.Model.Should().Be("haiku");
+        reloaded.Suggestions.Should().BeEquivalentTo(["Почини сборку", "Проверь тесты"]);
     }
 
     [Fact]

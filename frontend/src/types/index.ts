@@ -83,6 +83,7 @@ export interface Role {
   systemPrompt?: string; // опц. свободный промпт поверх агентов
   model?: string;
   effort?: string;
+  suggestions?: string[]; // стартовые подсказки пустого чата («что поручить сотруднику»)
   createdAt: string;
   updatedAt: string;
 }
@@ -105,6 +106,7 @@ export interface RoleDraft {
   systemPrompt?: string;
   model?: string;
   effort?: string;
+  suggestions?: string[];
 }
 
 // Ход интервью: либо следующий вопрос, либо готовый черновик роли

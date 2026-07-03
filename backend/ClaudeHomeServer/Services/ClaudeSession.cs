@@ -73,19 +73,38 @@ public class ClaudeSession : IAsyncDisposable
         _permissionRules = permissionRules;
     }
 
-    // Собирает системный промпт роли: самоидентификация + характер (Persona) +
-    // тела прикреплённых агентов (компетенции) + опц. свободный промпт роли.
+    // Собирает системный промпт роли: вживание в образ + характер (Persona) +
+    // компетенции (человеческий список + тела прикреплённых агентов) + опц. свободный промпт.
     private string? BuildRolePrompt(Role role)
     {
         var parts = new List<string>();
 
-        var identity = $"Тебя зовут {role.Name}.";
-        if (!string.IsNullOrWhiteSpace(role.Title))
-            identity += $" Твоя роль в команде: {role.Title}.";
-        parts.Add(identity);
+        // Рамка вживания: сотрудник — личность со специализацией, а не безликий ассистент
+        var identity = new System.Text.StringBuilder();
+        identity.Append($"Ты — {role.Name}");
+        if (!string.IsNullOrWhiteSpace(role.Title)) identity.Append($", {role.Title}");
+        identity.AppendLine(", виртуальный сотрудник команды пользователя. Полностью оставайся в этом образе:");
+        identity.AppendLine("- Ты не безликий ассистент, а коллега со своей специализацией, вкусом и профессиональным мнением — опирайся на них, предлагай своё и спорь, когда не согласен.");
+        identity.AppendLine("- Держи свой характер и манеру речи (описаны ниже) во всех ответах, от приветствия до разбора задач. Не ломай образ и не переключайся на нейтральный тон ассистента.");
+        identity.Append("- Смотри на задачи глазами своей профессии: замечай то, что заметил бы такой специалист, и честно говори, когда вопрос вне твоей компетенции.");
+        parts.Add(identity.ToString());
 
         if (!string.IsNullOrWhiteSpace(role.Persona))
-            parts.Add(role.Persona);
+            parts.Add("## Твой характер и стиль речи\n\n" + role.Persona);
+
+        // Человеческое перечисление компетенций — сотрудник осознаёт свои специализации
+        if (role.AgentNames.Count > 0 && _skills is not null)
+        {
+            var known = _skills.GetProjectAgents(_rootPath).ToDictionary(a => a.FileName, StringComparer.OrdinalIgnoreCase);
+            var titles = role.AgentNames
+                .Select(n => known.TryGetValue(n, out var a)
+                    ? (string.IsNullOrWhiteSpace(a.Description) ? a.Name : $"{a.Name} — {a.Description}")
+                    : n)
+                .ToList();
+            if (titles.Count > 0)
+                parts.Add("## Твои компетенции\n\n" + string.Join("\n", titles.Select(t => "- " + t)) +
+                    "\n\nНиже — подробные рабочие инструкции по каждой из них.");
+        }
 
         foreach (var agentName in role.AgentNames)
         {

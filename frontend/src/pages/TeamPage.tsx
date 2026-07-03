@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AuthState, Role, RoleMemoryContext, Session } from '../types';
+import type { AuthState, Role, RoleMemoryContext, Session, AgentInfo } from '../types';
 import { api } from '../lib/api';
 import { C, FONT, R, SHADOW, MODAL_W } from '../lib/design';
 import { Button, IconButton, Modal, ModalActions } from '../components/ui';
@@ -40,6 +40,8 @@ export function TeamPage({ auth, onLogout, onHubTab }: Props) {
   // Обзор памяти per role (для колонки «Память» и разворота строки)
   const [memory, setMemory] = useState<Record<string, RoleMemoryContext[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Каталог глобальных агентов: fileName → инфо (человеческое имя и описание компетенций)
+  const [agentMap, setAgentMap] = useState<Map<string, AgentInfo>>(new Map());
   // Открытый чат с сотрудником (поверх таблицы, в этом же разделе)
   const [activeChat, setActiveChat] = useState<Session | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
@@ -58,10 +60,17 @@ export function TeamPage({ auth, onLogout, onHubTab }: Props) {
           .catch(() => {});
       });
     }).catch(() => {}).finally(() => setLoaded(true));
+    api.team.agents()
+      .then(list => setAgentMap(new Map(list.map(a => [a.fileName, a]))))
+      .catch(() => {});
   }, []);
 
   const factCount = (roleId: string) =>
     (memory[roleId] ?? []).reduce((n, c) => n + c.facts.length, 0);
+
+  // Человеческое имя компетенции (агента); фолбэк — сам fileName (например, проектный агент)
+  const agentTitle = (fileName: string) => agentMap.get(fileName)?.name || fileName;
+  const agentDesc = (fileName: string) => agentMap.get(fileName)?.description || '';
 
   const toggleExpand = (roleId: string) => {
     setExpanded(prev => {
@@ -262,20 +271,20 @@ export function TeamPage({ auth, onLogout, onHubTab }: Props) {
                           </div>
                         )}
 
-                        {/* Компетенции (только десктоп): до 2 чипов + счётчик */}
+                        {/* Компетенции (только десктоп): до 2 чипов с человеческими именами + счётчик */}
                         {!isMobile && (
                           <div style={{ width: 170, flexShrink: 0, display: 'flex', gap: 4, overflow: 'hidden', alignItems: 'center' }}
-                            title={role.agentNames.join(', ') || undefined}>
+                            title={role.agentNames.map(agentTitle).join(', ') || undefined}>
                             {role.agentNames.length === 0 ? (
                               <span style={{ fontSize: 12, color: C.textMuted }}>—</span>
                             ) : (
                               <>
                                 {role.agentNames.slice(0, 2).map(a => (
-                                  <span key={a} style={{
+                                  <span key={a} title={agentDesc(a) || agentTitle(a)} style={{
                                     fontSize: 10.5, fontWeight: 600, color: C.textSecondary, background: C.bgPanel,
                                     borderRadius: 5, padding: '2px 7px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 76,
                                   }}>
-                                    {a}
+                                    {agentTitle(a)}
                                   </span>
                                 ))}
                                 {role.agentNames.length > 2 && (
@@ -331,7 +340,7 @@ export function TeamPage({ auth, onLogout, onHubTab }: Props) {
                         </div>
                       </div>
 
-                      {/* Разворот: характер (мобилка) + компетенции (мобилка) + память по контекстам */}
+                      {/* Разворот: характер (мобилка) + компетенции с описаниями + память по контекстам */}
                       {isOpen && (
                         <div style={{ borderTop: `1px solid ${C.divider}`, padding: '10px 14px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
                           {isMobile && role.persona && (
@@ -340,14 +349,18 @@ export function TeamPage({ auth, onLogout, onHubTab }: Props) {
                               <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.45 }}>{role.persona}</div>
                             </div>
                           )}
-                          {isMobile && role.agentNames.length > 0 && (
+                          {/* Компетенции — что сотрудник умеет (описания агентов), на всех раскладках */}
+                          {role.agentNames.length > 0 && (
                             <div>
                               <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: C.textMuted, marginBottom: 3 }}>Компетенции</div>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                              <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 }}>
                                 {role.agentNames.map(a => (
-                                  <span key={a} style={{ fontSize: 10.5, fontWeight: 600, color: C.textSecondary, background: C.bgPanel, borderRadius: 5, padding: '2px 7px' }}>{a}</span>
+                                  <li key={a} style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.45 }}>
+                                    <strong style={{ fontWeight: 600, color: C.textHeading }}>{agentTitle(a)}</strong>
+                                    {agentDesc(a) && <> — {agentDesc(a)}</>}
+                                  </li>
                                 ))}
-                              </div>
+                              </ul>
                             </div>
                           )}
                           {(memory[role.id] ?? []).length === 0 ? (

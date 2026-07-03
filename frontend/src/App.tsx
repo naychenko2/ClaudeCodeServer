@@ -250,6 +250,46 @@ export default function App() {
     setHubTab('projects')
     openProject(p)
   }
+  // Клик по тосту уведомления: SPA-переход по hash-диплинку без перезагрузки страницы.
+  // Пишем pending в sessionStorage (тот же канал, что и диплинк при загрузке) и либо
+  // переключаем экран (страница заберёт pending при монтировании), либо — если целевой
+  // экран уже смонтирован — будим его событием cc-pending-task.
+  const openNotificationUrl = (url: string) => {
+    const hashIdx = url.indexOf('#')
+    const target = hashIdx === -1 ? null : parseHash(url.slice(hashIdx))
+    if (target?.screen === 'calendar' && target.taskId) {
+      sessionStorage.setItem('cc_pending_calendar_task', target.taskId)
+      if (effectiveHubTab === 'calendar') window.dispatchEvent(new Event('cc-pending-task'))
+      else switchHubTab('calendar')
+      return
+    }
+    if (target?.screen === 'project' && target.projectId && target.taskId) {
+      const pid = target.projectId
+      sessionStorage.setItem('cc_pending_task', `${pid}|${target.taskId}`)
+      if (effectiveHubTab === 'projects' && project?.id === pid) {
+        // WorkspacePage этого проекта уже на экране
+        window.dispatchEvent(new Event('cc-pending-task'))
+      } else if (project?.id === pid) {
+        // Проект «спит» в другой вкладке — возврат в «Проекты» смонтирует WorkspacePage
+        localStorage.setItem(HUB_TAB_KEY, 'projects')
+        setHubTab('projects')
+      } else {
+        api.projects.list()
+          .then(list => {
+            const p = list.find(x => x.id === pid)
+            if (p) {
+              localStorage.setItem(HUB_TAB_KEY, 'projects')
+              setHubTab('projects')
+              openProject(p)
+            }
+          })
+          .catch(() => {})
+      }
+      return
+    }
+    // Не задачный диплинк — фолбэк на полную загрузку, как раньше
+    window.location.assign(url)
+  }
   const logout = () => {
     localStorage.removeItem('cc_token')
     localStorage.removeItem('cc_username')
@@ -269,7 +309,7 @@ export default function App() {
   return (
     <>
       <UpdatePrompt />
-      {auth && !authChecking && <NotificationToasts />}
+      {auth && !authChecking && <NotificationToasts onNavigate={openNotificationUrl} />}
       {authChecking
         ? <div style={{ minHeight: '100vh', background: '#F4F0E8' }} />
         : !auth

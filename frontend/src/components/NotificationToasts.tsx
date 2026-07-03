@@ -1,7 +1,7 @@
 // Тосты пользовательских уведомлений (напоминания о задачах, события Claude-исполнителя).
 // Слушает NotificationMessage (группа user_*) через SignalR и показывает стек в правом
-// верхнем углу. Клик по тосту переходит по hash-диплинку (полная загрузка — диплинк
-// обрабатывается существующей машинерией App/WorkspacePage).
+// верхнем углу. Клик по тосту открывает диплинк через onNavigate (SPA-переход в App
+// без перезагрузки); без обработчика — фолбэк на полную загрузку по hash-URL.
 
 import { useEffect, useState } from 'react';
 import { C, FONT, R, SHADOW, Z } from '../lib/design';
@@ -42,8 +42,15 @@ function joinUserGroup() {
   if (uid) joinUser(uid).catch(() => {});
 }
 
-export function NotificationToasts() {
+export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) => void }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+
+  const openToast = (t: ToastItem) => {
+    if (!t.url) return;
+    setToasts(prev => prev.filter(x => x.id !== t.id));
+    if (onNavigate) onNavigate(t.url);
+    else window.location.assign(t.url);
+  };
 
   useEffect(() => {
     joinUserGroup();
@@ -68,7 +75,7 @@ export function NotificationToasts() {
       {toasts.map(t => (
         <div
           key={t.id}
-          onClick={() => { if (t.url) window.location.assign(t.url); }}
+          onClick={() => openToast(t)}
           style={{
             display: 'flex', gap: 11, alignItems: 'flex-start',
             padding: '13px 15px', cursor: t.url ? 'pointer' : 'default',

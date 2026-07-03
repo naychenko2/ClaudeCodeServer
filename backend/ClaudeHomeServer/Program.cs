@@ -108,19 +108,38 @@ builder.Services.AddRateLimiter(options =>
     });
 });
 
+// CORS: только белый список origin'ов из конфига (Cors:AllowedOrigins).
+// Фронт раздаётся same-origin из wwwroot, поэтому пустой список ничего не ломает.
+var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
-    p.SetIsOriginAllowed(_ => true)
+    p.WithOrigins(corsOrigins)
      .AllowAnyHeader()
      .AllowAnyMethod()
      .AllowCredentials()));
 
 var app = builder.Build();
 
+// Логгер статического парсера workflow-транскриптов (DI туда не дотягивается)
+WorkflowAgentParser.Log = app.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger(nameof(WorkflowAgentParser));
+
 // Прогрев сервисов на старте — UserStore печатает предупреждение если создал admin/admin
 app.Services.GetRequiredService<UserStore>();
 // Фоновый прогрев каталога моделей (опрос claude CLI ~5 с — не задерживаем старт)
 _ = Task.Run(() => app.Services.GetRequiredService<ModelCatalogService>().GetModelsAsync());
 app.Services.GetRequiredService<JwtService>();
+
+// Чистка осиротевших temp-конфигов MCP: содержат сервисный токен и могли
+// остаться после крэша (штатно удаляются в finally каждого хода)
+_ = Task.Run(() =>
+{
+    try
+    {
+        foreach (var f in Directory.EnumerateFiles(Path.GetTempPath(), "claude-mcp-*.json"))
+            try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddHours(-6)) File.Delete(f); } catch { }
+    }
+    catch { /* нет доступа к temp — не критично */ }
+});
 
 // Однократная миграция: переносим DifyDatasetId/DocumentTags из старых Project-записей в WorkspaceKnowledge
 app.Services.GetRequiredService<WorkspaceKnowledgeStore>()
@@ -262,6 +281,11 @@ if (Directory.Exists(distPath))
 app.MapReverseProxy();
 app.MapControllers();
 app.MapHub<SessionHub>("/hubs/session");
+
+// Graceful shutdown: гасим все живые процессы claude (и их дочерние node MCP-серверы),
+// иначе после остановки сервера они остаются зомби
+app.Lifetime.ApplicationStopping.Register(() =>
+    app.Services.GetRequiredService<SessionManager>().KillAllProcesses());
 
 app.Run();
 

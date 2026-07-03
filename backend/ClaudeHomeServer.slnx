@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="ClaudeHomeServer/ClaudeHomeServer.csproj" />
+  <Project Path="ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj" />
 </Solution>

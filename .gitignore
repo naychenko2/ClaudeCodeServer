@@ -7,6 +7,9 @@ data/
 
 # Артефакты публикации и TLS-сертификаты
 publish/
+backend/publish_out/
+backend/publish_out.bak/
+backend/publish_staging/
 certs/
 domain/
 
@@ -57,4 +60,6 @@ Thumbs.db
 !frontend/public/maskable-icon-*.png
 !frontend/public/apple-touch-icon-*.png
 !docs/screenshots/*.png
+*.jpg
+*.log
 onlyoffice/local.json

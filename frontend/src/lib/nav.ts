@@ -42,7 +42,12 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
   if (parts.length === 0) return null;
   switch (parts[0]) {
     case 'chats': return { screen: 'chats' };
-    case 'calendar': return { screen: 'calendar' };
+    case 'calendar': {
+      const target: HashTarget = { screen: 'calendar' };
+      // #/calendar/task/{id} — диплинк на личную задачу (модал в календаре)
+      if (parts[1] === 'task' && parts[2]) target.taskId = parts[2];
+      return target;
+    }
     case 'projects': return { screen: 'projects' };
     case 'project': {
       if (!parts[1]) return { screen: 'projects' };

@@ -12,13 +12,14 @@ import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import {
   NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
-  deleteTask, dueLabel, projectColor, projectInitial, updateTask,
+  deleteTask, dueLabel, projectColor, projectInitial, recurrenceLabel, reminderLabel, updateTask,
 } from '../../lib/tasks';
 import {
   ClaudeBadge, DueChip, ExtBadge, LabelChip, MeBadge,
   PriorityFlag, SectionLabel, SubtaskCheck,
 } from './bits';
 import { TaskEditForm } from './TaskEditForm';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 
 interface Props {
   task: Task;
@@ -58,6 +59,9 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const claudeExecEnabled = useFeature(FLAGS.taskClaudeExec);
+  const [executing, setExecuting] = useState(false);
+  const [execError, setExecError] = useState<string | null>(null);
 
   // Имя связанной сессии (только у проектных задач)
   useEffect(() => {
@@ -115,6 +119,47 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         {task.dueDate && ` · ${dueLabel(task.dueDate)}${task.dueTime ? ` ${task.dueTime}` : ''}`}
       </div>
     </div>
+  );
+
+  // Запуск Claude-исполнителя: сессия создаётся на бэке, стор обновится по task_changed
+  const handleExecute = async () => {
+    if (executing) return;
+    setExecuting(true);
+    setExecError(null);
+    try {
+      await api.tasks.execute(task.id);
+    } catch (e) {
+      setExecError(e instanceof Error ? e.message : 'Не удалось запустить выполнение');
+    } finally {
+      setExecuting(false);
+    }
+  };
+
+  // Живая сессия по задаче уже идёт — не показываем кнопку повторного запуска
+  const claudeRunning = !!task.claudeStartedAt && !task.claudeResult && task.status !== 'done';
+  const executeButton = claudeExecEnabled && task.assignee === 'claude' && task.status !== 'done' && !claudeRunning && (
+    <button
+      onClick={handleExecute}
+      disabled={executing}
+      title="Создать чат и поручить задачу Claude"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+        padding: '0 14px', height: 32, cursor: executing ? 'default' : 'pointer',
+        border: 'none', borderRadius: R.md,
+        background: C.accent, color: C.onAccent,
+        fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
+        opacity: executing ? 0.6 : 1,
+      }}
+    >
+      {executing
+        ? <span className="tool-spinner" style={{ width: 12, height: 12, flexShrink: 0 }} />
+        : (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+            <polygon points="6 3 20 12 6 21" />
+          </svg>
+        )}
+      {executing ? 'Запуск…' : 'Выполнить с Claude'}
+    </button>
   );
 
   const editButton = (
@@ -223,6 +268,25 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         {task.title}
       </h1>
 
+      {execError && (
+        <div style={{ fontFamily: FONT.sans, fontSize: 12.5, color: C.danger, marginBottom: 12 }}>
+          {execError}
+        </div>
+      )}
+
+      {/* Claude сейчас работает над задачей */}
+      {claudeRunning && (
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 12,
+          padding: '6px 12px', borderRadius: 999,
+          border: `1px solid ${C.accentMuted}`, background: C.accentLight,
+          fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, color: C.accent,
+        }}>
+          <span className="tool-spinner" style={{ width: 11, height: 11, flexShrink: 0 }} />
+          Claude работает над задачей
+        </div>
+      )}
+
       {/* Ряд чипов */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 22 }}>
         <HeaderChip>
@@ -234,6 +298,26 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           {PRIORITY_LABEL[task.priority]}
         </HeaderChip>
         {task.dueDate && <DueChip task={task} withTime fontSize={12.5} />}
+        {task.dueDate && task.reminderMinutes != null && (
+          <HeaderChip>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.warning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+              <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+            </svg>
+            {reminderLabel(task.reminderMinutes)}
+          </HeaderChip>
+        )}
+        {task.recurrence && (
+          <HeaderChip>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.info} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <path d="M17 1l4 4-4 4" />
+              <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+              <path d="M7 23l-4-4 4-4" />
+              <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+            </svg>
+            {recurrenceLabel(task.recurrence)}
+          </HeaderChip>
+        )}
         {task.assignee && (
           <HeaderChip>
             {task.assignee === 'claude' ? <ClaudeBadge size={17} /> : <MeBadge size={17} />}
@@ -372,6 +456,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           <BackButton onClick={onBack ?? (() => {})} style={{ flex: 1, minWidth: 0 }} title="Назад к списку">
             {headerTitleBlock}
           </BackButton>
+          {executeButton}
           {editButton}
         </Toolbar>
 
@@ -423,6 +508,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
       {/* Шапка — как тулбар чата: название/мета слева, действия справа */}
       <Toolbar>
         {headerTitleBlock}
+        {executeButton}
         {editButton}
         <IconButton size="md" tone="danger" onClick={() => setConfirmDelete(true)} title="Удалить задачу">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

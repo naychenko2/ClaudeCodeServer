@@ -6,6 +6,7 @@ import { ChatsPage } from './pages/ChatsPage'
 import { WorkspacePage } from './pages/WorkspacePage'
 import type { HubTab } from './components/HubTabs'
 import { UpdatePrompt } from './components/UpdatePrompt'
+import { NotificationToasts } from './components/NotificationToasts'
 import { initConnectivity } from './lib/offline'
 import { useOnline } from './hooks/useOnline'
 import { runOfflineSnapshot, syncProjectFiles } from './lib/sync'
@@ -29,6 +30,10 @@ if (initialHash?.screen === 'project' && initialHash.projectId) {
   // Формат «projectId|taskId» — WorkspacePage чужого проекта не заберёт значение
   if (initialHash.taskId) sessionStorage.setItem('cc_pending_task', `${initialHash.projectId}|${initialHash.taskId}`)
   if (initialHash.file) sessionStorage.setItem('cc_pending_file', `${initialHash.projectId}|${initialHash.file}`)
+}
+// Диплинк #/calendar/task/{id} — личная задача, модал деталей поверх календаря
+if (initialHash?.screen === 'calendar' && initialHash.taskId) {
+  sessionStorage.setItem('cc_pending_calendar_task', initialHash.taskId)
 }
 
 export default function App() {
@@ -92,6 +97,9 @@ export default function App() {
         if (me?.featureFlags) setAllFlags(me.featureFlags)
         setCtxThresholdsFromServer(me?.contextThresholds)
         loadModels() // актуальный список моделей Claude (fire-and-forget, есть fallback)
+        // Таймзона устройства — серверу для напоминаний (fire-and-forget)
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+        if (tz) api.auth.setTimeZone(tz).catch(() => {})
       })
       .catch(() => { /* результат отразится в _online */ })
       .finally(() => {
@@ -261,6 +269,7 @@ export default function App() {
   return (
     <>
       <UpdatePrompt />
+      {auth && !authChecking && <NotificationToasts />}
       {authChecking
         ? <div style={{ minHeight: '100vh', background: '#F4F0E8' }} />
         : !auth

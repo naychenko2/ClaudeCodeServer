@@ -125,6 +125,10 @@ POST                /api/projects/{id}/files/rename   { oldPath, newPath }
 DELETE              /api/projects/{id}/files          ?path=
 GET                 /api/feature-flags                → { definitions[], values{} }  (реестр + эффективные значения юзера)
 PUT                 /api/feature-flags/{key}          { enabled } → { values{} }      (override per-user; ключ валидируется по каталогу)
+PUT                 /api/auth/timezone                { timeZone }  (IANA-зона устройства — для напоминаний)
+POST                /api/tasks/{id}/execute           → Task  (запуск Claude-исполнителя, флаг task-claude-exec)
+GET                 /api/push/vapid-public-key        → { publicKey }
+POST                /api/push/subscribe|unsubscribe   { endpoint, p256dh?, auth? }  (web-push подписки устройств)
 ```
 
 Эффективные значения флагов также возвращаются в `GET /api/auth/me` (поле `featureFlags`),
@@ -150,6 +154,11 @@ PUT                 /api/feature-flags/{key}          { enabled } → { values{}
 - Несохранённые изменения: диалог при закрытии файла
 - Артефакты сессии (за фич-флагом `session-artifacts`): панель справа от чата с вкладками — план (ExitPlanMode), задачи (Todo/Task), агенты (субагенты Task/Agent + workflow-группы с раскрытием деталей: промпт, лента вызовов, результат), изменённые/упомянутые файлы, ссылки. Всё derived из ленты чата ([useSessionArtifacts.ts](frontend/src/hooks/useSessionArtifacts.ts)), без участия бэкенда
 - Фич-флаги: per-user тогглы (dark launch), реестр в коде (`FeatureFlagCatalog`), UI-тумблеры в меню аватара («Экспериментальные функции»). См. раздел «Фич-флаги»
+- Задачи v3 (флаги `task-reminders`/`task-recurrence`/`task-claude-exec`):
+  - Напоминания: `TaskItem.ReminderMinutes` (офсет от срока), `TaskSchedulerService` (BackgroundService, тик 30 с) шлёт `NotificationMessage` в группу user_* (тост [NotificationToasts.tsx](frontend/src/components/NotificationToasts.tsx)) + web push. Сроки локальные: `User.TimeZone` (IANA, фронт шлёт при старте), конверсия в UTC — [TaskDueCalculator.cs](backend/ClaudeHomeServer/Services/TaskDueCalculator.cs), без времени — 09:00
+  - Web push: VAPID-ключи автогенерация в `data/vapid-keys.json`, подписки в `data/push-subscriptions.json` (несколько устройств per-user, авточистка 404/410). SW — свой `frontend/src/sw.ts` (vite-plugin-pwa `injectManifest`, отдельный tsconfig.sw.json), обработчики push/notificationclick с hash-диплинками
+  - Регулярные задачи: `TaskRecurrence` + `SeriesId`; при переводе экземпляра в done PUT /api/tasks/{id} спавнит следующий ([TaskRecurrenceCalculator.cs](backend/ClaudeHomeServer/Services/TaskRecurrenceCalculator.cs) — отсчёт от срока, не от завершения)
+  - Claude-исполнитель: [TaskExecutionService.cs](backend/ClaudeHomeServer/Services/TaskExecutionService.cs) — сессия acceptEdits в проекте задачи (личная — чат вне проекта), промпт с правилами ведения статуса через MCP tasks_*; наблюдение через событие `SessionManager.OnSessionMessage` (result → отметка + уведомление, permission → «ждёт ответа»); триггеры: кнопка «Выполнить с Claude» и автозапуск планировщиком в момент срока (окно 24 ч)
 
 ## Фич-флаги (feature toggles)
 

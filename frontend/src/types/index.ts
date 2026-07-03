@@ -43,6 +43,16 @@ export type TaskStatus = 'todo' | 'inProgress' | 'done';
 export type TaskPriority = 'urgent' | 'high' | 'medium' | 'low';
 export type TaskAssignee = 'me' | 'claude';
 
+// Повторение задачи. weekdays — ISO-дни (1=Пн … 7=Вс), только для weekly.
+// type 'none' — wire-сентинел в UpdateTaskDto: убрать повторение
+export type TaskRecurrenceType = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
+export interface TaskRecurrence {
+  type: TaskRecurrenceType;
+  interval: number;          // каждые N периодов
+  weekdays?: number[];
+  until?: string;            // YYYY-MM-DD включительно
+}
+
 export interface TaskSubtask {
   id: string;
   title: string;
@@ -60,8 +70,14 @@ export interface Task {
   priority: TaskPriority;
   dueDate?: string;          // YYYY-MM-DD
   dueTime?: string;          // HH:MM
+  reminderMinutes?: number;  // офсет напоминания до срока в минутах (0 = в момент срока)
+  reminderSentAt?: string;   // UTC-отметка отправленного напоминания
   assignee?: TaskAssignee;
+  recurrence?: TaskRecurrence;
+  seriesId?: string;         // общий id серии регулярной задачи
   linkedSessionId?: string;
+  claudeStartedAt?: string;  // отметка запуска Claude-исполнителя
+  claudeResult?: 'success' | 'error';  // итог последнего запуска (null — выполняется/не запускалась)
   linkedFiles: string[];
   subtasks: TaskSubtask[];
   labels: string[];
@@ -76,7 +92,9 @@ export interface CreateTaskDto {
   priority?: TaskPriority;
   dueDate?: string;
   dueTime?: string;
+  reminderMinutes?: number;
   assignee?: TaskAssignee;
+  recurrence?: TaskRecurrence;
   linkedSessionId?: string;
   linkedFiles?: string[];
   subtasks?: { title: string }[];
@@ -91,7 +109,11 @@ export interface UpdateTaskDto {
   priority?: TaskPriority;
   dueDate?: string;
   dueTime?: string;
+  // Отрицательное значение = убрать напоминание, undefined = не менять
+  reminderMinutes?: number;
   assignee?: TaskAssignee;
+  // type 'none' = убрать повторение, undefined = не менять
+  recurrence?: TaskRecurrence;
   linkedSessionId?: string;
   linkedFiles?: string[];
   subtasks?: TaskSubtask[];
@@ -186,6 +208,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
+  | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' }
 );
 
 export interface UsageInfo {

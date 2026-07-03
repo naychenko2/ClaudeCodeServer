@@ -31,6 +31,20 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(t),
       }),
+    // Таймзона устройства (IANA) — серверу для расчёта напоминаний по локальным срокам
+    setTimeZone: (timeZone: string) =>
+      request<void>('/auth/timezone', {
+        method: 'PUT',
+        body: JSON.stringify({ timeZone }),
+      }),
+  },
+
+  push: {
+    vapidPublicKey: () => request<{ publicKey: string }>('/push/vapid-public-key'),
+    subscribe: (sub: { endpoint: string; p256dh: string; auth: string }) =>
+      request<void>('/push/subscribe', { method: 'POST', body: JSON.stringify(sub) }),
+    unsubscribe: (endpoint: string) =>
+      request<void>('/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint }) }),
   },
 
   users: {
@@ -111,6 +125,8 @@ export const api = {
     update: (taskId: string, dto: UpdateTaskDto) =>
       request<Task>(`/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(dto) }),
     delete: (taskId: string) => request<void>(`/tasks/${taskId}`, { method: 'DELETE' }),
+    // Запустить выполнение задачи Claude-ом (отдельная сессия)
+    execute: (taskId: string) => request<Task>(`/tasks/${taskId}/execute`, { method: 'POST' }),
     // Генерация Claude: описание по названию (+контекст проекта), подзадачи по описанию
     aiDescription: (title: string, projectId?: string | null) =>
       request<{ description: string }>('/tasks/ai/description', {

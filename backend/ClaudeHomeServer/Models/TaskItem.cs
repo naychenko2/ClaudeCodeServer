@@ -13,8 +13,21 @@ public class TaskItem
     public TaskItemPriority Priority { get; set; } = TaskItemPriority.Medium;
     public string? DueDate { get; set; }   // ISO: YYYY-MM-DD
     public string? DueTime { get; set; }   // HH:MM
+    // Напоминание: офсет до срока в минутах (0 = в момент срока); null — без напоминания
+    public int? ReminderMinutes { get; set; }
+    // UTC-отметка отправленного напоминания (идемпотентность планировщика);
+    // сбрасывается при изменении срока или офсета
+    public DateTime? ReminderSentAt { get; set; }
     public TaskItemAssignee? Assignee { get; set; }
+    // Правило повторения; при завершении экземпляра создаётся следующий (см. TaskManager)
+    public TaskRecurrence? Recurrence { get; set; }
+    // Общий id серии повторяющейся задачи (= id первого экземпляра)
+    public string? SeriesId { get; set; }
     public string? LinkedSessionId { get; set; }
+    // Claude-исполнитель: отметка запуска (идемпотентность автозапуска, переживает рестарт)
+    public DateTime? ClaudeStartedAt { get; set; }
+    // Итог последнего запуска: success | error; null — ещё выполняется или не запускалась
+    public string? ClaudeResult { get; set; }
     public List<string> LinkedFiles { get; set; } = [];
     public List<TaskSubtask> Subtasks { get; set; } = [];
     public List<string> Labels { get; set; } = [];
@@ -32,3 +45,16 @@ public class TaskSubtask
 public enum TaskItemStatus { Todo, InProgress, Done }
 public enum TaskItemPriority { Low, Medium, High, Urgent }
 public enum TaskItemAssignee { Me, Claude }
+
+// Правило повторения задачи. Weekdays — ISO-дни недели (1=Пн … 7=Вс), только для Weekly.
+// Until — последняя допустимая дата серии (YYYY-MM-DD, включительно).
+public class TaskRecurrence
+{
+    public TaskRecurrenceType Type { get; set; } = TaskRecurrenceType.Daily;
+    public int Interval { get; set; } = 1;   // каждые N дней/недель/месяцев/лет
+    public List<int>? Weekdays { get; set; }
+    public string? Until { get; set; }
+}
+
+// None — wire-сентинел в UpdateTaskRequest: «убрать повторение» (аналог "" у строк)
+public enum TaskRecurrenceType { None, Daily, Weekly, Monthly, Yearly }

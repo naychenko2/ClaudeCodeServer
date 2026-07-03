@@ -103,6 +103,12 @@ public record WorkflowProgressMessage(string ToolUseId, IReadOnlyList<WorkflowAg
 public record TaskChangedMessage(string Action, Models.TaskItem Task)
     : ServerMessage("task_changed");
 
+// Пользовательское уведомление (напоминание о задаче, событие Claude-исполнителя и т.п.) —
+// в группу user_{userId}: открытое приложение показывает тост, клик ведёт по Url (hash-диплинк).
+// Kind — семантика для иконки/цвета: reminder | claude | info
+public record NotificationMessage(string Title, string Body, string? Url = null, string Kind = "info")
+    : ServerMessage("notification");
+
 // Сообщения от клиента к серверу
 public record ClientMessage([property: JsonPropertyName("type")] string Type);
 

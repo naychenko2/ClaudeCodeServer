@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Modal, Toggle } from './ui';
 import { api } from '../lib/api';
 import { setAllFlags, setFlagLocal, getAllFlags } from '../lib/featureFlags';
+import { disablePush, enablePush, isPushEnabled, isPushSupported } from '../lib/push';
 import { C, MODAL_W } from '../lib/design';
 import type { FeatureFlagDefinition } from '../types';
 
@@ -36,6 +37,30 @@ export function FeatureFlagsModal({ onClose }: Props) {
       .catch(() => { if (!cancelled) setLoadState('error'); });
     return () => { cancelled = true; };
   }, []);
+
+  // Push-подписка текущего устройства (настройка per-device, не per-user)
+  const [pushOn, setPushOn] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isPushSupported()) void isPushEnabled().then(setPushOn);
+  }, []);
+
+  const togglePush = async (next: boolean) => {
+    setPushBusy(true);
+    setPushError(null);
+    try {
+      if (next) await enablePush();
+      else await disablePush();
+      setPushOn(next);
+    } catch (e) {
+      setPushError(e instanceof Error ? e.message : 'Не удалось изменить push-подписку');
+      setPushOn(await isPushEnabled().catch(() => false));
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   const toggle = async (key: string, next: boolean) => {
     // Запоминаем прежнее значение для точного отката (не полагаемся на !next)
@@ -107,6 +132,30 @@ export function FeatureFlagsModal({ onClose }: Props) {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Push — настройка этого устройства (браузера), не аккаунта */}
+      {isPushSupported() && (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 14, padding: '12px 0 2px',
+          borderTop: `1px solid ${C.border}`, marginTop: 10,
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.textHeading, marginBottom: 3 }}>
+              Push-уведомления на этом устройстве
+            </div>
+            <div style={{ fontSize: 12.5, lineHeight: 1.45, color: C.textSecondary }}>
+              Напоминания о задачах и события Claude приходят, даже когда вкладка закрыта.
+              Настройка действует только для этого браузера.
+            </div>
+            {pushError && (
+              <div style={{ fontSize: 12, color: C.danger, marginTop: 4 }}>{pushError}</div>
+            )}
+          </div>
+          <div style={{ flexShrink: 0, paddingTop: 2 }}>
+            <Toggle checked={pushOn} onChange={togglePush} disabled={pushBusy} />
+          </div>
         </div>
       )}
     </Modal>

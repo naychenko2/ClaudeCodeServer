@@ -21,6 +21,10 @@ public class TaskManager
 
     public TaskItem? GetById(string id) => _tasks.GetValueOrDefault(id);
 
+    // Задача, к которой привязана сессия (Claude-исполнитель)
+    public TaskItem? GetBySession(string sessionId) =>
+        _tasks.Values.FirstOrDefault(t => t.LinkedSessionId == sessionId);
+
     public IReadOnlyCollection<TaskItem> GetByOwner(string userId) =>
         _tasks.Values.Where(t => t.OwnerId == userId)
             .OrderBy(t => t.DueDate ?? "9999").ThenBy(t => t.CreatedAt).ToList();
@@ -41,12 +45,16 @@ public class TaskManager
             Priority = req.Priority ?? TaskItemPriority.Medium,
             DueDate = string.IsNullOrEmpty(req.DueDate) ? null : req.DueDate,
             DueTime = string.IsNullOrEmpty(req.DueTime) ? null : req.DueTime,
+            ReminderMinutes = req.ReminderMinutes is < 0 ? null : req.ReminderMinutes,
+            Recurrence = req.Recurrence is { Type: not TaskRecurrenceType.None } ? req.Recurrence : null,
             Assignee = req.Assignee,
             LinkedSessionId = req.LinkedSessionId,
             LinkedFiles = req.LinkedFiles ?? [],
             Subtasks = req.Subtasks?.Select(s => new TaskSubtask { Title = s.Title }).ToList() ?? [],
             Labels = req.Labels ?? [],
         };
+        // Серия регулярной задачи начинается с её первого экземпляра
+        if (task.Recurrence is not null) task.SeriesId = task.Id;
         _tasks[task.Id] = task;
         Save();
         return task;
@@ -62,9 +70,22 @@ public class TaskManager
         if (req.Status is not null) task.Status = req.Status.Value;
         if (req.Priority is not null) task.Priority = req.Priority.Value;
         // Пустая строка = очистить поле, null = не менять
+        var dueBefore = (task.DueDate, task.DueTime, task.ReminderMinutes);
         if (req.DueDate is not null) task.DueDate = req.DueDate == "" ? null : req.DueDate;
         if (req.DueTime is not null) task.DueTime = req.DueTime == "" ? null : req.DueTime;
+        // Для int-поля семантика очистки — отрицательное значение (аналог "" у строк)
+        if (req.ReminderMinutes is not null)
+            task.ReminderMinutes = req.ReminderMinutes < 0 ? null : req.ReminderMinutes;
+        // Срок или офсет поменялись — напоминание должно сработать заново
+        if (dueBefore != (task.DueDate, task.DueTime, task.ReminderMinutes))
+            task.ReminderSentAt = null;
         if (req.Assignee is not null) task.Assignee = req.Assignee;
+        // Type=None — убрать повторение (сентинел), null — не менять
+        if (req.Recurrence is not null)
+        {
+            task.Recurrence = req.Recurrence.Type == TaskRecurrenceType.None ? null : req.Recurrence;
+            if (task.Recurrence is not null) task.SeriesId ??= task.Id;
+        }
         if (req.LinkedSessionId is not null)
             task.LinkedSessionId = req.LinkedSessionId == "" ? null : req.LinkedSessionId;
         if (req.LinkedFiles is not null) task.LinkedFiles = req.LinkedFiles;
@@ -77,6 +98,72 @@ public class TaskManager
                 IsDone = s.IsDone,
             }).ToList();
 
+        task.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return task;
+    }
+
+    // Следующий экземпляр регулярной задачи после завершения текущего.
+    // Подзадачи копируются со сброшенными галочками; напоминание и правило переносятся.
+    // null — серия закончена (Until), нет срока/правила.
+    public TaskItem? SpawnNextOccurrence(TaskItem completed)
+    {
+        if (completed.Recurrence is null || completed.DueDate is null) return null;
+        var nextDate = TaskRecurrenceCalculator.NextDueDate(completed.DueDate, completed.Recurrence);
+        if (nextDate is null) return null;
+
+        var task = new TaskItem
+        {
+            ProjectId = completed.ProjectId,
+            OwnerId = completed.OwnerId,
+            Title = completed.Title,
+            Description = completed.Description,
+            Priority = completed.Priority,
+            DueDate = nextDate,
+            DueTime = completed.DueTime,
+            ReminderMinutes = completed.ReminderMinutes,
+            Assignee = completed.Assignee,
+            Recurrence = completed.Recurrence,
+            SeriesId = completed.SeriesId ?? completed.Id,
+            LinkedFiles = [.. completed.LinkedFiles],
+            Subtasks = completed.Subtasks.Select(s => new TaskSubtask { Title = s.Title }).ToList(),
+            Labels = [.. completed.Labels],
+        };
+        _tasks[task.Id] = task;
+        Save();
+        return task;
+    }
+
+    // Отметка планировщика об отправленном напоминании (идемпотентность между тиками и рестартами)
+    public TaskItem? MarkReminderSent(string id, DateTime atUtc)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.ReminderSentAt = atUtc;
+        Save();
+        return task;
+    }
+
+    // Запуск Claude-исполнителя: связка с сессией + перевод в работу
+    public TaskItem? MarkClaudeStarted(string id, string sessionId, DateTime atUtc)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.LinkedSessionId = sessionId;
+        task.ClaudeStartedAt = atUtc;
+        task.ClaudeResult = null;
+        if (task.Status == TaskItemStatus.Todo) task.Status = TaskItemStatus.InProgress;
+        task.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return task;
+    }
+
+    // Итог хода Claude-исполнителя (success/error)
+    public TaskItem? MarkClaudeResult(string id, string result)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.ClaudeResult = result;
         task.UpdatedAt = DateTime.UtcNow;
         Save();
         return task;
@@ -131,7 +218,9 @@ public record CreateTaskRequest(
     TaskItemPriority? Priority = null,
     string? DueDate = null,
     string? DueTime = null,
+    int? ReminderMinutes = null,
     TaskItemAssignee? Assignee = null,
+    TaskRecurrence? Recurrence = null,
     string? LinkedSessionId = null,
     List<string>? LinkedFiles = null,
     List<CreateSubtaskRequest>? Subtasks = null,
@@ -146,7 +235,11 @@ public record UpdateTaskRequest(
     TaskItemPriority? Priority = null,
     string? DueDate = null,
     string? DueTime = null,
+    // null = не менять, отрицательное = убрать напоминание
+    int? ReminderMinutes = null,
     TaskItemAssignee? Assignee = null,
+    // null = не менять, Type=None = убрать повторение
+    TaskRecurrence? Recurrence = null,
     string? LinkedSessionId = null,
     List<string>? LinkedFiles = null,
     List<UpdateSubtaskRequest>? Subtasks = null,

@@ -50,7 +50,8 @@ public class ProjectTasksController(
 [Authorize]
 [Route("api/tasks")]
 public class TasksController(
-    TaskManager tasks, IHubContext<SessionHub> hub, TaskAiService ai, ProjectManager projects) : ControllerBase
+    TaskManager tasks, IHubContext<SessionHub> hub, TaskAiService ai, ProjectManager projects,
+    FeatureFlagService flags, TaskExecutionService executor) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -145,9 +146,40 @@ public class TasksController(
         var task = tasks.GetById(taskId);
         if (task is null || task.OwnerId != UserId) return NotFound();
 
+        var wasDone = task.Status == TaskItemStatus.Done;
         var updated = tasks.Update(taskId, req)!;
         await hub.BroadcastTaskChangedAsync(UserId, "updated", updated);
+
+        // Завершение экземпляра регулярной задачи → следующий экземпляр серии.
+        // Покрывает и UI, и MCP (tasks_complete/tasks_update идут через этот PUT)
+        if (!wasDone && updated.Status == TaskItemStatus.Done && updated.Recurrence is not null &&
+            flags.GetEffective(UserId).GetValueOrDefault("task-recurrence"))
+        {
+            var next = tasks.SpawnNextOccurrence(updated);
+            if (next is not null)
+                await hub.BroadcastTaskChangedAsync(UserId, "created", next);
+        }
+
         return Ok(updated);
+    }
+
+    // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)
+    [HttpPost("{taskId}/execute")]
+    public async Task<IActionResult> Execute(string taskId)
+    {
+        var task = tasks.GetById(taskId);
+        if (task is null || task.OwnerId != UserId) return NotFound();
+        if (!flags.GetEffective(UserId).GetValueOrDefault("task-claude-exec"))
+            return BadRequest(new { error = "Функция «Claude-исполнитель задач» выключена" });
+
+        try
+        {
+            return Ok(await executor.ExecuteAsync(task, auto: false));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [HttpDelete("{taskId}")]

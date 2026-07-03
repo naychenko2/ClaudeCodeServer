@@ -49,6 +49,10 @@ public class SessionManager
     // Сервисные токены MCP tasks-server — по одному на владельца, на жизнь процесса
     private readonly ConcurrentDictionary<string, string> _tasksTokens = new();
 
+    // Наблюдатель сообщений сессий (Claude-исполнитель задач слушает result/permission).
+    // Вызывается после обновления статуса и broadcast; его ошибки не роняют пайплайн
+    public event Func<Session, ServerMessage, Task>? OnSessionMessage;
+
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, SkillsService skills,
         WorkspaceKnowledgeStore workspaceStore, FalCostService falCost, UsageService usage,
@@ -567,6 +571,15 @@ public class SessionManager
         }
 
         await BroadcastAsync(sessionId, msg);
+
+        if (entry is not null && OnSessionMessage is { } observers)
+        {
+            try { await observers(entry.Info, msg); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Ошибка наблюдателя сессии ({sessionId}): {ex.Message}");
+            }
+        }
     }
 
     // Извлекает request_id из результата вызова, если это генерация fal.ai. Признак fal —

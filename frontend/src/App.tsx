@@ -199,11 +199,6 @@ export default function App() {
     navReplace({ screen: t === 'projects' ? 'projects' : t })
   }
 
-  // Тык по роли в «Команде»: чат уже создан TeamPage — делаем его активным в «Чатах» и переходим
-  const openChatFromTeam = (chatId: string) => {
-    localStorage.setItem('cc_open_chat', chatId)
-    switchHubTab('chats')
-  }
   const logout = () => {
     localStorage.removeItem('cc_token')
     localStorage.removeItem('cc_username')
@@ -230,7 +225,7 @@ export default function App() {
           : hubTab === 'chats'
             ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : hubTab === 'team'
-              ? <TeamPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenChat={openChatFromTeam} />
+              ? <TeamPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : project
                 ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
                 : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />

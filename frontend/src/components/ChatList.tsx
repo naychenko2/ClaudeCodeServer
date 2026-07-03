@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react';
-import type { Session, Role } from '../types';
+import { useState } from 'react';
+import type { Session } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { StatusBadge } from './StatusBadge';
 import { EditSessionDialog } from './EditSessionDialog';
-import { RoleAvatar } from './RoleAvatar';
 import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
 import { groupChats } from '../lib/chatGroups';
@@ -35,14 +34,6 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const online = useOnline();
   const [editTarget, setEditTarget] = useState<Session | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
-  // Роли пула — для аватара на карточке чата с ролью. Грузим только если такие чаты есть.
-  const [roles, setRoles] = useState<Role[]>([]);
-  const hasRoleChats = chats.some(c => c.roleId);
-  useEffect(() => {
-    if (!hasRoleChats) return;
-    api.team.list().then(setRoles).catch(() => {});
-  }, [hasRoleChats]);
-  const roleMap = new Map(roles.map(r => [r.id, r]));
 
   const togglePin = async (chat: Session) => {
     try {
@@ -121,11 +112,6 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                   )}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                      {(() => {
-                        // Аватар роли-собеседника (чат с членом команды)
-                        const role = chat.roleId ? roleMap.get(chat.roleId) : undefined;
-                        return role ? <RoleAvatar name={role.name} avatar={role.avatar} color={role.color} size={22} title={role.title ? `${role.name} · ${role.title}` : role.name} /> : null;
-                      })()}
                       {chat.status === 'active' && (
                         <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.success, flexShrink: 0 }} />
                       )}

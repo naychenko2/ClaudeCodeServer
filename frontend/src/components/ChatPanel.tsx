@@ -644,6 +644,15 @@ function ChatHeaderBar({ session, project, role, online, cost, falCost, billing,
       </svg>
     </ToolbarIconButton>
   ) : null;
+  // Десктоп: кнопка «назад» (когда есть onBack и нет сайдбар-кнопки) — для чата,
+  // открытого поверх раздела (напр. чат с сотрудником в разделе «Сотрудники»).
+  const desktopBackBtn = !isMobile && onBack && !onOpenSidebar ? (
+    <ToolbarIconButton onClick={onBack} title="Назад" isMobile={isMobile}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M19 12H5M12 19l-7-7 7-7" />
+      </svg>
+    </ToolbarIconButton>
+  ) : null;
   const titleEl = isMobile && onBack
     ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
     : titleBlock;
@@ -709,7 +718,7 @@ function ChatHeaderBar({ session, project, role, online, cost, falCost, billing,
 
   return (
     <Toolbar isMobile={isMobile}>
-      {openBtn}{roleAvatarEl}{titleEl}{workflowBadge}{costBadges}{artifactsBtn}{settingsBtn}
+      {openBtn}{desktopBackBtn}{roleAvatarEl}{titleEl}{workflowBadge}{costBadges}{artifactsBtn}{settingsBtn}
     </Toolbar>
   );
 }

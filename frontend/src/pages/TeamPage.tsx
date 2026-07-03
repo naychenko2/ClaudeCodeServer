@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AuthState, Role, RoleMemoryContext } from '../types';
+import type { AuthState, Role, RoleMemoryContext, Session } from '../types';
 import { api } from '../lib/api';
 import { C, FONT, R, SHADOW, MODAL_W } from '../lib/design';
 import { Button, IconButton, Modal, ModalActions } from '../components/ui';
@@ -7,12 +7,12 @@ import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { RoleAvatar } from '../components/RoleAvatar';
 import { RoleEditorDialog } from '../components/RoleEditorDialog';
+import { ChatPanel } from '../components/ChatPanel';
 
 interface Props {
   auth: AuthState;
   onLogout: () => void;
   onHubTab: (t: HubTab) => void;
-  onOpenChat: (chatId: string) => void;   // созданный чат с ролью → открыть в разделе «Чаты»
 }
 
 function useWindowWidth() {
@@ -28,9 +28,9 @@ function useWindowWidth() {
 // Вкладка «Сотрудники» верхнего хаба: глобальный пул ролей-собеседников списком-таблицей
 // (имя, характер, компетенции, проекты, память). Разворот строки — факты из памяти
 // по контекстам (проекты + внепроектные чаты текущего пользователя).
-// Тык по строке = открыть существующий внепроектный чат с сотрудником (или создать первый);
-// открывается в разделе «Чаты». Найм здесь — без привязки к проекту.
-export function TeamPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
+// Тык по строке = открыть чат с сотрудником прямо здесь (мессенджер: один непрерывный
+// внепроектный диалог на сотрудника). Найм здесь — без привязки к проекту.
+export function TeamPage({ auth, onLogout, onHubTab }: Props) {
   const [roles, setRoles] = useState<Role[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -40,7 +40,13 @@ export function TeamPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
   // Обзор памяти per role (для колонки «Память» и разворота строки)
   const [memory, setMemory] = useState<Record<string, RoleMemoryContext[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Открытый чат с сотрудником (поверх таблицы, в этом же разделе)
+  const [activeChat, setActiveChat] = useState<Session | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const isMobile = useWindowWidth() < 768;
+
+  // Вложения относятся к конкретному чату — сбрасываем при смене активного
+  useEffect(() => { setAttachedFiles([]); }, [activeChat?.id]);
 
   useEffect(() => {
     api.team.list().then(list => {
@@ -65,25 +71,17 @@ export function TeamPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
     });
   };
 
-  // Тык по сотруднику = продолжить существующий разговор с ним (как в мессенджере).
-  // Новый чат создаётся, только если внепроектных чатов с этой ролью ещё нет;
-  // ещё один разговор — иконкой «Новый чат» на строке.
-  const startChat = async (role: Role, forceNew = false) => {
+  // Тык по сотруднику = открыть чат с ним (мессенджер-модель): один непрерывный
+  // внепроектный диалог. Если чата с этим сотрудником ещё нет — создаём, иначе открываем.
+  const openChat = async (role: Role) => {
     if (starting) return;
     setStarting(role.id);
     try {
-      if (!forceNew) {
-        const chats = await api.chats.list();
-        const existing = chats.find(c => c.roleId === role.id);   // список отсортирован по свежести
-        if (existing) {
-          onOpenChat(existing.id);
-          return;
-        }
-      }
-      const chat = await api.chats.create('auto', undefined, role.name, undefined, undefined, role.id);
-      onOpenChat(chat.id);
+      const chats = await api.chats.list();
+      const existing = chats.find(c => c.roleId === role.id);   // список отсортирован по свежести
+      setActiveChat(existing ?? await api.chats.create('auto', undefined, role.name, undefined, undefined, role.id));
     } catch {
-      /* офлайн/сбой — остаёмся на странице */
+      /* офлайн/сбой — остаёмся на таблице */
     } finally {
       setStarting(null);
     }
@@ -138,6 +136,35 @@ export function TeamPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
       </div>
     );
 
+  // Открытый чат с сотрудником — поверх раздела. На мобиле — полноэкранно (кнопка «назад»
+  // в шапке чата); на десктопе — под общей шапкой хаба (можно переключить раздел),
+  // с кнопкой «назад к таблице» слева в шапке чата.
+  if (activeChat) {
+    const chatPanel = (
+      <ChatPanel
+        key={activeChat.id}
+        session={activeChat}
+        isMobile={isMobile}
+        onBack={() => setActiveChat(null)}
+        attachedFiles={attachedFiles}
+        onAttachedFilesChange={setAttachedFiles}
+        onSessionUpdated={updated => setActiveChat(updated)}
+      />
+    );
+    return isMobile ? (
+      <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {chatPanel}
+      </div>
+    ) : (
+      <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <HubHeader value="team" onTab={onHubTab} auth={auth} onLogout={onLogout} />
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {chatPanel}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <HubHeader value="team" onTab={onHubTab} auth={auth} onLogout={onLogout} />
@@ -189,7 +216,7 @@ export function TeamPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
                   {th('Компетенции', 170)}
                   {th('Проекты', 62)}
                   {th('Память', 72)}
-                  <div style={{ width: 118, flexShrink: 0 }} />
+                  <div style={{ width: 90, flexShrink: 0 }} />
                 </div>
               )}
 
@@ -205,7 +232,7 @@ export function TeamPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
                     }}>
                       {/* Основная строка */}
                       <div
-                        onClick={() => startChat(role)}
+                        onClick={() => openChat(role)}
                         title="Открыть чат с сотрудником"
                         style={{
                           display: 'flex', alignItems: 'center', gap: 12, padding: isMobile ? '12px 14px' : '11px 14px',
@@ -276,16 +303,7 @@ export function TeamPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
                         )}
 
                         {/* Действия */}
-                        <div style={{ display: 'flex', flexShrink: 0, gap: 2, width: isMobile ? undefined : 118, justifyContent: 'flex-end' }}>
-                          {!isMobile && (
-                            <IconButton size="sm" title="Новый чат с сотрудником"
-                              onClick={e => { e.stopPropagation(); startChat(role, true); }}>
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M21 11.5a8.5 8.5 0 0 1-12 7.7L3 21l1.8-6A8.5 8.5 0 1 1 21 11.5z" />
-                                <path d="M12 8v6M9 11h6" />
-                              </svg>
-                            </IconButton>
-                          )}
+                        <div style={{ display: 'flex', flexShrink: 0, gap: 2, width: isMobile ? undefined : 90, justifyContent: 'flex-end' }}>
                           <IconButton size="sm" title="Редактировать"
                             onClick={e => { e.stopPropagation(); setEditTarget(role); }}>
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

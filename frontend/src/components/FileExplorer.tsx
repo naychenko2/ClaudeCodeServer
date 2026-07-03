@@ -23,7 +23,7 @@ import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { C, R, FONT, MODAL_W, TB } from '../lib/design';
-import { Modal, ModalActions, TextField, IconButton, Button } from './ui';
+import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem } from './ui';
 
 interface Props {
   project: Project;
@@ -61,10 +61,21 @@ export function getExplorerCreateInDir(projectId: string): string {
 
 const normPath = (p?: string | null) => (p ?? '').replace(/\\/g, '/');
 
-// Единая сортировка записей: папки сверху, затем по имени без учёта регистра
-const sortEntries = (entries: FileEntry[]): FileEntry[] =>
+// Режим сортировки дерева — глобальная настройка, живёт в localStorage
+type FileSortMode = 'name' | 'date';
+const SORT_MODE_KEY = 'cc_files_sort';
+const loadSortMode = (): FileSortMode =>
+  localStorage.getItem(SORT_MODE_KEY) === 'date' ? 'date' : 'name';
+
+// Единая сортировка записей: папки сверху, затем по имени (без учёта регистра)
+// или по дате изменения (свежие сверху, при равенстве — по имени)
+const sortEntries = (entries: FileEntry[], mode: FileSortMode): FileEntry[] =>
   [...entries].sort((a, b) => {
     if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    if (mode === 'date') {
+      const d = Date.parse(b.modified) - Date.parse(a.modified);
+      if (d) return d;
+    }
     return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
   });
 
@@ -356,6 +367,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const inFlight = useRef(new Set<string>());
   const dirCacheRef = useRef(dirCache);
   dirCacheRef.current = dirCache;
+
+  const [sortMode, setSortMode] = useState<FileSortMode>(loadSortMode);
+  const [showSortMenu, setShowSortMenu] = useState(false);
+  const changeSortMode = (m: FileSortMode) => {
+    setSortMode(m);
+    localStorage.setItem(SORT_MODE_KEY, m);
+    setShowSortMenu(false);
+  };
 
   const [search, setSearch] = useState(() => initial?.search ?? '');
   const [searchResults, setSearchResults] = useState<FileEntry[] | null>(() => initial?.searchResults ?? null);
@@ -769,7 +788,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const flatTree = useMemo((): TreeNode[] => {
     const walk = (path: string, depth: number): TreeNode[] => {
-      const entries = sortEntries(dirCache.get(path) ?? []);
+      const entries = sortEntries(dirCache.get(path) ?? [], sortMode);
       const result: TreeNode[] = [];
       for (const entry of entries) {
         result.push({ entry, depth });
@@ -780,15 +799,15 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       return result;
     };
     return walk('', 0);
-  }, [dirCache, expanded]);
+  }, [dirCache, expanded, sortMode]);
 
   const rootLoading = !dirCache.has('') && loadingDirs.has('');
 
   const mobileEntries = useMemo((): FileEntry[] => {
     const entries = dirCache.get(mobileDir);
     if (!entries) return [];
-    return sortEntries(entries);
-  }, [dirCache, mobileDir]);
+    return sortEntries(entries, sortMode);
+  }, [dirCache, mobileDir, sortMode]);
 
   const breadcrumbs = useMemo(() => {
     const crumbs: { label: string; path: string }[] = [{ label: 'Файлы', path: '' }];
@@ -1115,6 +1134,42 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             />
             {search && (
               <button onClick={() => handleSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 13, padding: 0 }}>✕</button>
+            )}
+          </div>
+          {/* Сортировка дерева: по имени / по дате изменения */}
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <IconButton
+              size="md"
+              active={showSortMenu}
+              onClick={() => setShowSortMenu(v => !v)}
+              title={sortMode === 'name' ? 'Сортировка: по имени' : 'Сортировка: по дате изменения'}
+            >
+              {sortMode === 'name' ? (
+                // arrow-down-a-z
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m3 16 4 4 4-4M7 20V4M20 8h-5M15 10V6.5a2.5 2.5 0 0 1 5 0V10M15 14h5l-5 6h5"/>
+                </svg>
+              ) : (
+                // clock-arrow-down
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 6v6l2 1M12.34 21.98A10 10 0 1 1 21.98 12.33"/>
+                  <path d="m14 18 4 4 4-4M18 14v8"/>
+                </svg>
+              )}
+            </IconButton>
+            {showSortMenu && (
+              <Menu onClose={() => setShowSortMenu(false)} top={34} minWidth={200}>
+                <MenuItem
+                  icon={sortMode === 'name' ? <polyline points="20 6 9 17 4 12" /> : <g />}
+                  label="По имени"
+                  onClick={() => changeSortMode('name')}
+                />
+                <MenuItem
+                  icon={sortMode === 'date' ? <polyline points="20 6 9 17 4 12" /> : <g />}
+                  label="По дате изменения"
+                  onClick={() => changeSortMode('date')}
+                />
+              </Menu>
             )}
           </div>
           {onOpenKnowledge && (

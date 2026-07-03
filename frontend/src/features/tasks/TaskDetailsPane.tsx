@@ -12,7 +12,7 @@ import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import {
   NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
-  deleteTask, dueLabel, projectColor, projectInitial, reminderLabel, updateTask,
+  deleteTask, dueLabel, projectColor, projectInitial, recurrenceLabel, reminderLabel, updateTask,
 } from '../../lib/tasks';
 import {
   ClaudeBadge, DueChip, ExtBadge, LabelChip, MeBadge,
@@ -241,6 +241,17 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
               <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
             </svg>
             {reminderLabel(task.reminderMinutes)}
+          </HeaderChip>
+        )}
+        {task.recurrence && (
+          <HeaderChip>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.info} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <path d="M17 1l4 4-4 4" />
+              <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+              <path d="M7 23l-4-4 4-4" />
+              <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+            </svg>
+            {recurrenceLabel(task.recurrence)}
           </HeaderChip>
         )}
         {task.assignee && (

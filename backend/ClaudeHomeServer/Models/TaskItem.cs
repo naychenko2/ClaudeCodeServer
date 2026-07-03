@@ -19,6 +19,10 @@ public class TaskItem
     // сбрасывается при изменении срока или офсета
     public DateTime? ReminderSentAt { get; set; }
     public TaskItemAssignee? Assignee { get; set; }
+    // Правило повторения; при завершении экземпляра создаётся следующий (см. TaskManager)
+    public TaskRecurrence? Recurrence { get; set; }
+    // Общий id серии повторяющейся задачи (= id первого экземпляра)
+    public string? SeriesId { get; set; }
     public string? LinkedSessionId { get; set; }
     public List<string> LinkedFiles { get; set; } = [];
     public List<TaskSubtask> Subtasks { get; set; } = [];
@@ -37,3 +41,16 @@ public class TaskSubtask
 public enum TaskItemStatus { Todo, InProgress, Done }
 public enum TaskItemPriority { Low, Medium, High, Urgent }
 public enum TaskItemAssignee { Me, Claude }
+
+// Правило повторения задачи. Weekdays — ISO-дни недели (1=Пн … 7=Вс), только для Weekly.
+// Until — последняя допустимая дата серии (YYYY-MM-DD, включительно).
+public class TaskRecurrence
+{
+    public TaskRecurrenceType Type { get; set; } = TaskRecurrenceType.Daily;
+    public int Interval { get; set; } = 1;   // каждые N дней/недель/месяцев/лет
+    public List<int>? Weekdays { get; set; }
+    public string? Until { get; set; }
+}
+
+// None — wire-сентинел в UpdateTaskRequest: «убрать повторение» (аналог "" у строк)
+public enum TaskRecurrenceType { None, Daily, Weekly, Monthly, Yearly }

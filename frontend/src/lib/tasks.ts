@@ -3,7 +3,7 @@
 // Realtime: бэк шлёт task_changed в группу user_{userId} — стор обновляется сам.
 
 import { useSyncExternalStore } from 'react';
-import type { CreateTaskDto, Task, TaskPriority, TaskStatus, UpdateTaskDto } from '../types';
+import type { CreateTaskDto, Task, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskStatus, UpdateTaskDto } from '../types';
 import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { C } from './design';
@@ -218,6 +218,29 @@ export function dueLabel(dueDate: string): string {
 // Срок «горит»: сегодня или просрочен (и задача не готова)
 export function isDueUrgent(task: Task): boolean {
   return task.status !== 'done' && !!task.dueDate && daysFromToday(task.dueDate) <= 0;
+}
+
+// === Повторение ===
+
+export const RECURRENCE_TYPE_LABEL: Record<Exclude<TaskRecurrenceType, 'none'>, string> = {
+  daily:   'Ежедневно',
+  weekly:  'Еженедельно',
+  monthly: 'Ежемесячно',
+  yearly:  'Ежегодно',
+};
+
+const ISO_WEEKDAY_SHORT = ['', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
+// «Ежедневно», «Каждые 2 нед · Пн, Ср», «Ежемесячно», «Каждые 3 г»
+export function recurrenceLabel(r: TaskRecurrence): string {
+  if (r.type === 'none') return '';
+  const base = r.interval > 1
+    ? { daily: `Каждые ${r.interval} дн`, weekly: `Каждые ${r.interval} нед`, monthly: `Каждые ${r.interval} мес`, yearly: `Каждые ${r.interval} г` }[r.type]
+    : RECURRENCE_TYPE_LABEL[r.type];
+  const days = r.type === 'weekly' && r.weekdays?.length
+    ? ' · ' + [...r.weekdays].sort((a, b) => a - b).map(d => ISO_WEEKDAY_SHORT[d] ?? '').filter(Boolean).join(', ')
+    : '';
+  return base + days;
 }
 
 // === Напоминания ===

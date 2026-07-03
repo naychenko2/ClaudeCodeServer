@@ -2,13 +2,13 @@
 // шапка «Редактирование задачи» с Отмена / ✓ Готово / корзина, ниже поля формы.
 
 import { useState } from 'react';
-import type { Task, TaskAssignee, TaskPriority, TaskSubtask, UpdateTaskDto } from '../../types';
+import type { Task, TaskAssignee, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskSubtask, UpdateTaskDto } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { IconButton } from '../../components/ui';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
-import { PRIORITY_LABEL, PRIORITY_ORDER, REMINDER_PRESETS, reminderLabel } from '../../lib/tasks';
+import { PRIORITY_LABEL, PRIORITY_ORDER, RECURRENCE_TYPE_LABEL, REMINDER_PRESETS, reminderLabel } from '../../lib/tasks';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { ClaudeBadge, MeBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
@@ -82,6 +82,9 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
   const [customReminderValue, setCustomReminderValue] = useState('2');
   const [customReminderUnit, setCustomReminderUnit] = useState<1 | 60 | 1440>(60);
   const remindersEnabled = useFeature(FLAGS.taskReminders);
+  const recurrenceEnabled = useFeature(FLAGS.taskRecurrence);
+  // Повторение: null — не повторяется
+  const [recurrence, setRecurrence] = useState<TaskRecurrence | null>(task.recurrence ?? null);
   const [assignee, setAssignee] = useState<TaskAssignee>(task.assignee ?? 'me');
   const [description, setDescription] = useState(task.description);
   const [descEditing, setDescEditing] = useState(!task.description);
@@ -152,6 +155,8 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
         dueTime: dueTime ?? '',
         // Без срока напоминание не имеет смысла; -1 = очистить на бэке
         reminderMinutes: dueDate && reminder !== null ? reminder : -1,
+        // Повторение тоже требует срока; type 'none' = убрать на бэке
+        recurrence: dueDate && recurrence ? recurrence : { type: 'none', interval: 1 },
         assignee,
         description,
         subtasks: subtasks.filter(s => s.title.trim()),
@@ -351,6 +356,104 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
                   >
                     Применить
                   </button>
+                </div>
+              )}
+              <div style={{ marginBottom: 14 }} />
+            </>
+          )}
+
+          {/* Повторение — только при заданном сроке (за фич-флагом) */}
+          {recurrenceEnabled && dueDate && (
+            <>
+              <div style={fieldLabelStyle()}>Повторение</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+                <button
+                  onClick={() => setRecurrence(null)}
+                  style={reminderChipStyle(recurrence === null)}
+                >
+                  Нет
+                </button>
+                {(Object.keys(RECURRENCE_TYPE_LABEL) as Exclude<TaskRecurrenceType, 'none'>[]).map(t => (
+                  <button
+                    key={t}
+                    onClick={() => setRecurrence(prev => ({
+                      type: t,
+                      interval: prev?.interval ?? 1,
+                      weekdays: t === 'weekly' ? prev?.weekdays : undefined,
+                      until: prev?.until,
+                    }))}
+                    style={reminderChipStyle(recurrence?.type === t)}
+                  >
+                    {RECURRENCE_TYPE_LABEL[t]}
+                  </button>
+                ))}
+              </div>
+              {recurrence && recurrence.type === 'weekly' && (
+                <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                  {(['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'] as const).map((label, i) => {
+                    const day = i + 1;
+                    const active = recurrence.weekdays?.includes(day) ?? false;
+                    return (
+                      <button
+                        key={day}
+                        onClick={() => setRecurrence(prev => prev && ({
+                          ...prev,
+                          weekdays: active
+                            ? prev.weekdays?.filter(d => d !== day)
+                            : [...(prev.weekdays ?? []), day],
+                        }))}
+                        style={{
+                          ...reminderChipStyle(active),
+                          padding: '6px 0', flex: 1, justifyContent: 'center', fontSize: 12,
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {recurrence && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textSecondary }}>Каждые</span>
+                  <input
+                    value={String(recurrence.interval)}
+                    onChange={e => {
+                      const n = parseInt(e.target.value.replace(/\D/g, '').slice(0, 2), 10);
+                      setRecurrence(prev => prev && ({ ...prev, interval: n || 1 }));
+                    }}
+                    inputMode="numeric"
+                    style={{
+                      width: 44, boxSizing: 'border-box', padding: '7px 10px', textAlign: 'center',
+                      border: `1px solid ${C.border}`, borderRadius: R.lg, outline: 'none',
+                      background: C.bgWhite, fontFamily: FONT.sans, fontSize: 13, color: C.textPrimary,
+                    }}
+                  />
+                  <span style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textSecondary }}>
+                    {{ daily: 'дн', weekly: 'нед', monthly: 'мес', yearly: 'г', none: '' }[recurrence.type]}
+                    {' · до'}
+                  </span>
+                  <input
+                    type="date"
+                    value={recurrence.until ?? ''}
+                    onChange={e => setRecurrence(prev => prev && ({ ...prev, until: e.target.value || undefined }))}
+                    style={{
+                      boxSizing: 'border-box', padding: '6px 10px',
+                      border: `1px solid ${C.border}`, borderRadius: R.lg, outline: 'none',
+                      background: C.bgWhite, fontFamily: FONT.sans, fontSize: 13, color: C.textPrimary,
+                    }}
+                  />
+                  {recurrence.until && (
+                    <button
+                      onClick={() => setRecurrence(prev => prev && ({ ...prev, until: undefined }))}
+                      style={{
+                        border: 'none', background: 'none', cursor: 'pointer', padding: 0,
+                        fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.accent,
+                      }}
+                    >
+                      Бессрочно
+                    </button>
+                  )}
                 </div>
               )}
               <div style={{ marginBottom: 14 }} />

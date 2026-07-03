@@ -6,7 +6,7 @@ import type { Project, Task, TaskAssignee, TaskPriority } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { Button, FieldLabel, Modal, TextField } from '../../components/ui';
 import { api } from '../../lib/api';
-import { PRIORITY_LABEL, PRIORITY_ORDER, createTask, projectColor } from '../../lib/tasks';
+import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, createTask, projectColor } from '../../lib/tasks';
 import { ClaudeBadge, PriorityFlag } from './bits';
 
 interface Props {
@@ -19,6 +19,7 @@ interface Props {
 export function NewTaskDialog({ defaultProjectId, onCreated, onClose }: Props) {
   const [title, setTitle] = useState('');
   const [projects, setProjects] = useState<Project[]>([]);
+  // null = «Личное» (задача вне проекта) — дефолт, когда открыто не из проекта
   const [projectId, setProjectId] = useState<string | null>(defaultProjectId ?? null);
   const [priority, setPriority] = useState<TaskPriority>('medium');
   const [assignee, setAssignee] = useState<TaskAssignee>('me');
@@ -26,19 +27,13 @@ export function NewTaskDialog({ defaultProjectId, onCreated, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.projects.list()
-      .then(list => {
-        setProjects(list);
-        // Без контекста — предвыбираем первый проект
-        setProjectId(prev => prev ?? list[0]?.id ?? null);
-      })
-      .catch(() => {});
+    api.projects.list().then(setProjects).catch(() => {});
   }, []);
 
-  const canCreate = title.trim().length > 0 && !!projectId && !saving;
+  const canCreate = title.trim().length > 0 && !saving;
 
   const handleCreate = async () => {
-    if (!canCreate || !projectId) return;
+    if (!canCreate) return;
     setSaving(true);
     setError(null);
     try {
@@ -74,6 +69,23 @@ export function NewTaskDialog({ defaultProjectId, onCreated, onClose }: Props) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <FieldLabel>Проект</FieldLabel>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {/* «Личное» — нейтральная опция первой (задача вне проекта) */}
+          <button
+            onClick={() => setProjectId(null)}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 7,
+              padding: '7px 13px', cursor: 'pointer',
+              border: `1px solid ${projectId === null ? C.accent : C.border}`,
+              borderRadius: 999,
+              background: projectId === null ? C.accentLight : C.bgWhite,
+              fontFamily: FONT.sans, fontSize: 13, fontWeight: projectId === null ? 600 : 500,
+              color: C.textPrimary,
+              transition: 'border-color 0.12s, background 0.12s',
+            }}
+          >
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: NO_PROJECT_COLOR.main, flexShrink: 0 }} />
+            {NO_PROJECT_LABEL}
+          </button>
           {projects.map(p => {
             const active = p.id === projectId;
             const color = projectColor(p.id);
@@ -97,9 +109,6 @@ export function NewTaskDialog({ defaultProjectId, onCreated, onClose }: Props) {
               </button>
             );
           })}
-          {projects.length === 0 && (
-            <span style={{ fontFamily: FONT.sans, fontSize: 12.5, color: C.textMuted }}>Нет проектов</span>
-          )}
         </div>
       </div>
 

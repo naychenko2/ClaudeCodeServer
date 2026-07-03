@@ -4,7 +4,7 @@
 import { useMemo, useState } from 'react';
 import type { Project, Task } from '../../types';
 import { C, FONT } from '../../lib/design';
-import { addDaysIso, projectColor, todayIso } from '../../lib/tasks';
+import { NO_PROJECT_LABEL, addDaysIso, projectColor, todayIso } from '../../lib/tasks';
 import { NavArrow } from './CalendarMonth';
 
 interface Props {
@@ -43,6 +43,8 @@ function weekTitle(startIso: string): string {
 
 export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenTask, isMobile }: Props) {
   const today = todayIso();
+  const nameOf = (t: Task) =>
+    t.projectId ? projectsById.get(t.projectId)?.name ?? '' : NO_PROJECT_LABEL;
   const start = weekStart(navDate);
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDaysIso(start, i)), [start]);
   const [selectedDay, setSelectedDay] = useState(() => days.includes(today) ? today : days[0]);
@@ -161,7 +163,7 @@ export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenT
                   {t.title}
                 </span>
                 <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textSecondary }}>
-                  весь день · {projectsById.get(t.projectId)?.name ?? ''}
+                  весь день · {nameOf(t)}
                 </span>
               </div>
             );
@@ -210,7 +212,7 @@ export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenT
                   {t.title}
                 </div>
                 <div style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textSecondary }}>
-                  {t.dueTime} · {projectsById.get(t.projectId)?.name ?? ''}
+                  {t.dueTime} · {nameOf(t)}
                 </div>
               </div>
             </div>

@@ -49,6 +49,62 @@ export function AssigneeBadge({ assignee, size = 20 }: { assignee?: TaskAssignee
   return null;
 }
 
+// Общие пропсы stroke-иконок (единый стиль проекта: currentColor, round caps)
+function strokeIconProps(size: number) {
+  return {
+    width: size, height: size, viewBox: '0 0 24 24', fill: 'none' as const,
+    stroke: 'currentColor', strokeWidth: 2,
+    strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const,
+    style: { flexShrink: 0 },
+  };
+}
+
+// Иконки видов календаря и группировок списка задач
+export function MonthIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg {...strokeIconProps(size)}>
+      <rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" />
+      <rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" />
+    </svg>
+  );
+}
+
+export function WeekIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg {...strokeIconProps(size)}>
+      <rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M9 9v12M15 9v12M8 2v4M16 2v4" />
+    </svg>
+  );
+}
+
+export function AgendaIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg {...strokeIconProps(size)}>
+      <line x1="9" y1="6" x2="21" y2="6" /><line x1="9" y1="12" x2="21" y2="12" /><line x1="9" y1="18" x2="21" y2="18" />
+      <circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none" />
+      <circle cx="4.5" cy="12" r="1" fill="currentColor" stroke="none" />
+      <circle cx="4.5" cy="18" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function ListIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg {...strokeIconProps(size)}>
+      <rect x="3" y="4" width="18" height="6" rx="2" /><rect x="3" y="14" width="18" height="6" rx="2" />
+    </svg>
+  );
+}
+
+export function ByDateIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg {...strokeIconProps(size)}>
+      <rect x="3" y="4" width="18" height="18" rx="3" /><path d="M3 9h18M8 2v4M16 2v4" />
+      <circle cx="12" cy="15" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 // Иконка календаря для чипов срока
 export function CalendarIcon({ size = 11 }: { size?: number }) {
   return (

@@ -9,6 +9,8 @@ import { PillSwitch } from '../../components/Toolbar';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { ensureTasksLoaded, todayIso, useTasks } from '../../lib/tasks';
+import { AgendaIcon, MonthIcon, WeekIcon } from './bits';
+import { TaskDetailsModal } from './TaskDetailsModal';
 import { CalendarMonth } from './CalendarMonth';
 import { CalendarWeek } from './CalendarWeek';
 import { CalendarAgenda } from './CalendarAgenda';
@@ -36,30 +38,11 @@ function useIsMobile() {
   return mobile;
 }
 
-// Иконки мобильного переключателя вида
-function ViewIcon({ view }: { view: CalView }) {
-  const common = { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none' as const, stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
-  if (view === 'month') {
-    return (
-      <svg {...common}>
-        <rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" />
-        <rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" />
-      </svg>
-    );
-  }
-  if (view === 'week') {
-    return (
-      <svg {...common}>
-        <rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M9 9v12M15 9v12M8 2v4M16 2v4" />
-      </svg>
-    );
-  }
-  return (
-    <svg {...common}>
-      <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
-      <circle cx="4" cy="6" r="0.5" /><circle cx="4" cy="12" r="0.5" /><circle cx="4" cy="18" r="0.5" />
-    </svg>
-  );
+// Иконки видов — общие для мобильного и десктопного переключателей (bits.tsx)
+function ViewIcon({ view, size = 16 }: { view: CalView; size?: number }) {
+  if (view === 'month') return <MonthIcon size={size} />;
+  if (view === 'week') return <WeekIcon size={size} />;
+  return <AgendaIcon size={size} />;
 }
 
 const VIEW_LABEL: Record<CalView, string> = { month: 'Месяц', week: 'Неделя', agenda: 'Агенда' };
@@ -78,6 +61,8 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [groupFilter, setGroupFilter] = useState<string>('all');   // 'all' | groupId | 'none'
   const [showCreate, setShowCreate] = useState(false);
+  // Личная задача, открытая в модале (id — чтобы карточка жила и обновлялась из стора)
+  const [personalTaskId, setPersonalTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     void ensureTasksLoaded();
@@ -87,10 +72,11 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
 
   const projectsById = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
 
-  // Фильтр по группе проектов
+  // Фильтр по группе проектов; личные задачи (без проекта) — в «Все» и «Без группы»
   const tasks = useMemo(() => {
     if (groupFilter === 'all') return allTasks;
     return allTasks.filter(t => {
+      if (!t.projectId) return groupFilter === 'none';
       const p = projectsById.get(t.projectId);
       if (!p) return false;
       return groupFilter === 'none' ? !p.groupId : p.groupId === groupFilter;
@@ -100,9 +86,18 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   const hasUngrouped = projects.some(p => !p.groupId);
 
   const handleOpenTask = (task: Task) => {
+    // Личная задача — детали в модале поверх календаря (воркспейса у неё нет)
+    if (!task.projectId) {
+      setPersonalTaskId(task.id);
+      return;
+    }
     const project = projectsById.get(task.projectId);
     if (project) onOpenTask(project, task.id);
   };
+
+  const personalTask = personalTaskId
+    ? allTasks.find(t => t.id === personalTaskId) ?? null
+    : null;
 
   const filterChip = (key: string, label: string, dot?: string) => {
     const active = groupFilter === key;
@@ -198,9 +193,9 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
                 <PillSwitch<CalView>
                   value={view}
                   options={[
-                    { value: 'month', label: 'Месяц' },
-                    { value: 'week', label: 'Неделя' },
-                    { value: 'agenda', label: 'Агенда' },
+                    { value: 'month', label: 'Месяц', icon: <MonthIcon /> },
+                    { value: 'week', label: 'Неделя', icon: <WeekIcon /> },
+                    { value: 'agenda', label: 'Агенда', icon: <AgendaIcon /> },
                   ]}
                   onChange={setView}
                 />
@@ -252,6 +247,14 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
         <NewTaskDialog
           onCreated={() => setShowCreate(false)}
           onClose={() => setShowCreate(false)}
+        />
+      )}
+
+      {personalTask && (
+        <TaskDetailsModal
+          task={personalTask}
+          isMobile={isMobile}
+          onClose={() => setPersonalTaskId(null)}
         />
       )}
     </div>

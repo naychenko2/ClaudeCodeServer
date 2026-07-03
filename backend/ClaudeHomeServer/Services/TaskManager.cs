@@ -29,7 +29,7 @@ public class TaskManager
         _tasks.Values.Where(t => t.ProjectId == projectId)
             .OrderBy(t => t.DueDate ?? "9999").ThenBy(t => t.CreatedAt).ToList();
 
-    public TaskItem Create(string projectId, string ownerId, CreateTaskRequest req)
+    public TaskItem Create(string? projectId, string ownerId, CreateTaskRequest req)
     {
         var task = new TaskItem
         {

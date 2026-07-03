@@ -10,6 +10,7 @@ import {
 } from '../../lib/tasks';
 import { TaskCard } from './TaskCard';
 import { NewTaskDialog } from './NewTaskDialog';
+import { ByDateIcon, ListIcon } from './bits';
 
 interface Props {
   project: Project;
@@ -105,8 +106,8 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile }: Prop
         <PillSwitch<GroupTab>
           value={groupTab}
           options={[
-            { value: 'status', label: 'Список' },
-            { value: 'date', label: 'По дате' },
+            { value: 'status', label: 'Список', icon: <ListIcon /> },
+            { value: 'date', label: 'По дате', icon: <ByDateIcon /> },
           ]}
           onChange={setGroupTab}
           fill

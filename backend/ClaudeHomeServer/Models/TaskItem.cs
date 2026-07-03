@@ -1,10 +1,11 @@
 namespace ClaudeHomeServer.Models;
 
-// Задача пользователя, привязана к проекту. Хранение — data/tasks.json (TaskManager).
+// Задача пользователя; может быть привязана к проекту или быть личной (ProjectId == null).
+// Хранение — data/tasks.json (TaskManager).
 public class TaskItem
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
-    public string ProjectId { get; set; } = "";
+    public string? ProjectId { get; set; }
     public string? OwnerId { get; set; }
     public string Title { get; set; } = "";
     public string Description { get; set; } = "";   // markdown

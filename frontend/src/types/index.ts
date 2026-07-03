@@ -45,7 +45,8 @@ export interface TaskSubtask {
 
 export interface Task {
   id: string;
-  projectId: string;
+  // Отсутствует у личной задачи (вне проекта)
+  projectId?: string;
   ownerId?: string;
   title: string;
   description: string;      // markdown

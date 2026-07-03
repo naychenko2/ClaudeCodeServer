@@ -10,7 +10,7 @@ import { Button, IconButton, Modal } from '../../components/ui';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import {
-  PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
+  NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
   deleteTask, projectColor, projectInitial, updateTask,
 } from '../../lib/tasks';
 import {
@@ -21,9 +21,11 @@ import { TaskEditForm } from './TaskEditForm';
 
 interface Props {
   task: Task;
-  project: Project;
+  // null/undefined — личная задача (вне проекта): секции сессии/файлов скрыты
+  project?: Project | null;
   isMobile?: boolean;
   onBack?: () => void;                          // мобила: ‹ назад
+  onClose?: () => void;                         // модальный режим (личная задача из календаря): ✕
   onOpenSession?: (sessionId: string) => void;  // переход в связанный диалог
   onOpenFile?: (path: string) => void;
   onDeleted: () => void;
@@ -47,24 +49,24 @@ function HeaderChip({ children, urgent }: { children: React.ReactNode; urgent?: 
   );
 }
 
-export function TaskDetailsPane({ task, project, isMobile, onBack, onOpenSession, onOpenFile, onDeleted }: Props) {
+export function TaskDetailsPane({ task, project, isMobile, onBack, onClose, onOpenSession, onOpenFile, onDeleted }: Props) {
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
 
-  // Имя связанной сессии
+  // Имя связанной сессии (только у проектных задач)
   useEffect(() => {
-    if (!task.linkedSessionId) return;
+    if (!task.linkedSessionId || !project) return;
     api.sessions.list(project.id).then(setSessions).catch(() => {});
-  }, [project.id, task.linkedSessionId]);
+  }, [project, task.linkedSessionId]);
 
   const linkedSession = useMemo(
     () => sessions.find(s => s.id === task.linkedSessionId) ?? null,
     [sessions, task.linkedSessionId],
   );
 
-  const color = projectColor(project.id);
+  const color = project ? projectColor(project.id) : NO_PROJECT_COLOR;
   const doneSubs = task.subtasks.filter(s => s.isDone).length;
 
   const setStatus = (status: TaskStatus) => { void updateTask(task.id, { status }); };
@@ -149,18 +151,22 @@ export function TaskDetailsPane({ task, project, isMobile, onBack, onOpenSession
 
   const content = (
     <div style={{ maxWidth: 680, padding: isMobile ? '16px 16px 32px' : '20px 32px 40px', boxSizing: 'border-box' }}>
-      {/* Чип проекта */}
+      {/* Чип проекта (у личной задачи — нейтральная точка + «Личное») */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-        <div style={{
-          width: 22, height: 22, borderRadius: 7, flexShrink: 0,
-          background: color.soft, color: color.main,
-          fontFamily: FONT.sans, fontSize: 11, fontWeight: 700,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          {projectInitial(project.name)}
-        </div>
+        {project ? (
+          <div style={{
+            width: 22, height: 22, borderRadius: 7, flexShrink: 0,
+            background: color.soft, color: color.main,
+            fontFamily: FONT.sans, fontSize: 11, fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            {projectInitial(project.name)}
+          </div>
+        ) : (
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: NO_PROJECT_COLOR.main, flexShrink: 0, marginLeft: 4 }} />
+        )}
         <span style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textSecondary }}>
-          {project.name}
+          {project ? project.name : NO_PROJECT_LABEL}
         </span>
       </div>
 
@@ -252,8 +258,8 @@ export function TaskDetailsPane({ task, project, isMobile, onBack, onOpenSession
         </div>
       )}
 
-      {/* Связанная сессия */}
-      {task.linkedSessionId && (
+      {/* Связанная сессия (только у проектных задач) */}
+      {project && task.linkedSessionId && (
         <div style={{ marginBottom: 26 }}>
           <SectionLabel style={{ marginBottom: 10 }}>Связанная сессия</SectionLabel>
           <button
@@ -287,8 +293,8 @@ export function TaskDetailsPane({ task, project, isMobile, onBack, onOpenSession
         </div>
       )}
 
-      {/* Файлы */}
-      {task.linkedFiles.length > 0 && (
+      {/* Файлы (только у проектных задач) */}
+      {project && task.linkedFiles.length > 0 && (
         <div style={{ marginBottom: 26 }}>
           <SectionLabel style={{ marginBottom: 10 }}>Файлы</SectionLabel>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
@@ -419,6 +425,13 @@ export function TaskDetailsPane({ task, project, isMobile, onBack, onOpenSession
             <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14" />
           </svg>
         </IconButton>
+        {onClose && (
+          <IconButton size="sm" onClick={onClose} title="Закрыть">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </IconButton>
+        )}
       </div>
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>

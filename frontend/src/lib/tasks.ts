@@ -82,7 +82,7 @@ export function useTasks(): Task[] {
 
 // === Мутации (обновляют стор сразу из ответа; broadcast продублирует — upsert идемпотентен) ===
 
-export async function createTask(projectId: string, dto: CreateTaskDto): Promise<Task> {
+export async function createTask(projectId: string | null, dto: CreateTaskDto): Promise<Task> {
   const task = await api.tasks.create(projectId, dto);
   upsert(task);
   return task;
@@ -154,7 +154,14 @@ const PROJECT_PALETTE: ProjectColor[] = [
   { main: '#7A7250', soft: '#EBE8DB' },  // хаки
 ];
 
-export function projectColor(projectId: string): ProjectColor {
+// Нейтральная пара для личных задач (вне проекта): тёплый taupe + тихая пастель
+export const NO_PROJECT_COLOR: ProjectColor = { main: '#9A8F7E', soft: '#EFEAE0' };
+
+// Подпись «проекта» личной задачи в карточках/агенде/списке дня
+export const NO_PROJECT_LABEL = 'Личное';
+
+export function projectColor(projectId?: string | null): ProjectColor {
+  if (!projectId) return NO_PROJECT_COLOR;
   let hash = 0;
   for (let i = 0; i < projectId.length; i++)
     hash = (hash * 31 + projectId.charCodeAt(i)) | 0;

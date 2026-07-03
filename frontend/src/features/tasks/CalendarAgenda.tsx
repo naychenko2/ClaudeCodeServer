@@ -4,7 +4,7 @@
 import { useMemo } from 'react';
 import type { Project, Task } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
-import { daysFromToday, projectColor } from '../../lib/tasks';
+import { NO_PROJECT_LABEL, daysFromToday, projectColor } from '../../lib/tasks';
 import { AssigneeBadge } from './bits';
 
 interface Props {
@@ -86,7 +86,7 @@ export function CalendarAgenda({ tasks, projectsById, onOpenTask, isMobile }: Pr
             {t.title}
           </div>
           <div style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, marginTop: 2 }}>
-            {projectsById.get(t.projectId)?.name ?? ''}
+            {t.projectId ? projectsById.get(t.projectId)?.name ?? '' : NO_PROJECT_LABEL}
           </div>
         </div>
         {t.assignee === 'claude' && <AssigneeBadge assignee="claude" size={22} />}

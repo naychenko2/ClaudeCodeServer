@@ -1,10 +1,11 @@
 // Вид «Месяц»: десктоп/планшет — крупная сетка с чипами задач,
 // мобила — компактная сетка с точками + список задач выбранного дня.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { Project, Task } from '../../types';
-import { C, FONT } from '../../lib/design';
-import { projectColor, todayIso, toIsoDate } from '../../lib/tasks';
+import { C, FONT, R, SHADOW, Z } from '../../lib/design';
+import { NO_PROJECT_LABEL, projectColor, todayIso, toIsoDate } from '../../lib/tasks';
 import { TaskCard } from './TaskCard';
 
 interface Props {
@@ -60,10 +61,106 @@ function taskCountLabel(n: number): string {
   return `${n} задач`;
 }
 
+// Поповер всех задач дня («+N ещё» в ячейке месяца). Позиция фиксированная,
+// от прямоугольника ячейки; при нехватке места снизу открывается над ячейкой.
+function DayOverflowPopover({ iso, rect, tasks, onOpenTask, onClose }: {
+  iso: string;
+  rect: DOMRect;
+  tasks: Task[];
+  onOpenTask: (t: Task) => void;
+  onClose: () => void;
+}) {
+  const [hovered, setHovered] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onDown = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement).closest('[data-day-popover]')) onClose();
+    };
+    // Скролл страницы уводит якорную ячейку — закрываем; скролл внутри поповера не считается
+    const onScroll = (e: Event) => {
+      if (!(e.target instanceof HTMLElement) || !e.target.closest('[data-day-popover]')) onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onDown);
+    window.addEventListener('resize', onClose);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('resize', onClose);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [onClose]);
+
+  const width = window.innerWidth < 1024 ? 260 : 280;
+  const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+  const openUp = window.innerHeight - rect.bottom < 330;
+
+  return createPortal(
+    <div
+      data-day-popover
+      style={{
+        position: 'fixed', left, width, zIndex: Z.dropdown, boxSizing: 'border-box',
+        ...(openUp ? { top: rect.top - 6, transform: 'translateY(-100%)' } : { top: rect.bottom + 6 }),
+        maxHeight: 320, overflowY: 'auto',
+        background: C.bgWhite, border: `1px solid ${C.border}`,
+        borderRadius: R.xl, boxShadow: SHADOW.dropdown,
+        padding: '10px 10px 8px',
+      }}
+    >
+      {/* Шапка: дата + счётчик */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8, padding: '0 4px' }}>
+        <span style={{ fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: C.textHeading }}>
+          {fullDayLabel(iso)}
+        </span>
+        <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted }}>
+          {taskCountLabel(tasks.length)}
+        </span>
+      </div>
+      {tasks.map(t => {
+        const color = projectColor(t.projectId);
+        const done = t.status === 'done';
+        return (
+          <div
+            key={t.id}
+            onClick={() => { onOpenTask(t); onClose(); }}
+            onMouseEnter={() => setHovered(t.id)}
+            onMouseLeave={() => setHovered(prev => prev === t.id ? null : prev)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 7,
+              padding: '6px 8px', borderRadius: R.md, cursor: 'pointer',
+              background: hovered === t.id ? color.soft : 'transparent',
+              transition: 'background 0.1s',
+            }}
+          >
+            <span style={{ width: 3, height: 14, borderRadius: 2, background: color.main, flexShrink: 0 }} />
+            <span style={{
+              flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: 12, fontWeight: 600,
+              color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              textDecoration: done ? 'line-through' : 'none', opacity: done ? 0.6 : 1,
+            }}>
+              {t.title}
+            </span>
+            {t.dueTime && (
+              <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
+                {t.dueTime}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>,
+    document.body,
+  );
+}
+
 export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpenTask, isMobile }: Props) {
   const today = todayIso();
   const [year, month] = [Number(navDate.slice(0, 4)), Number(navDate.slice(5, 7)) - 1];
   const [selectedDay, setSelectedDay] = useState(today);
+  // Раскрытый через «+N ещё» день (десктоп): дата + прямоугольник ячейки для позиционирования
+  const [overflowDay, setOverflowDay] = useState<{ iso: string; rect: DOMRect } | null>(null);
 
   const cells = useMemo(() => monthCells(year, month), [year, month]);
 
@@ -82,6 +179,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
 
   const shiftMonth = (dir: -1 | 1) => {
     const d = new Date(year, month + dir, 1);
+    setOverflowDay(null);
     onNavigate(toIsoDate(d));
   };
 
@@ -170,7 +268,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
                   key={t.id}
                   task={t}
                   onClick={() => onOpenTask(t)}
-                  projectName={projectsById.get(t.projectId)?.name}
+                  projectName={t.projectId ? projectsById.get(t.projectId)?.name : NO_PROJECT_LABEL}
                 />
               ))}
             </div>
@@ -213,6 +311,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
           return (
             <div
               key={iso}
+              data-day-cell
               style={{
                 minHeight: 86, minWidth: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '7px 8px',
                 background: isToday ? '#FBEBE0' : inMonth ? C.bgWhite : 'transparent',
@@ -265,15 +364,43 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
                   );
                 })}
                 {overflow > 0 && (
-                  <span style={{ fontFamily: FONT.sans, fontSize: 10, color: C.textMuted, paddingLeft: 4 }}>
+                  <button
+                    onClick={e => {
+                      const cell = (e.currentTarget as HTMLElement).closest('[data-day-cell]');
+                      if (cell) setOverflowDay({ iso, rect: cell.getBoundingClientRect() });
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.color = C.textPrimary;
+                      e.currentTarget.style.textDecoration = 'underline';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.color = C.textMuted;
+                      e.currentTarget.style.textDecoration = 'none';
+                    }}
+                    style={{
+                      alignSelf: 'flex-start', border: 'none', background: 'none', cursor: 'pointer',
+                      fontFamily: FONT.sans, fontSize: 10, color: C.textMuted,
+                      padding: '2px 4px', margin: '-2px 0',
+                    }}
+                  >
                     +{overflow} ещё
-                  </span>
+                  </button>
                 )}
               </div>
             </div>
           );
         })}
       </div>
+
+      {overflowDay && (
+        <DayOverflowPopover
+          iso={overflowDay.iso}
+          rect={overflowDay.rect}
+          tasks={byDay.get(overflowDay.iso) ?? []}
+          onOpenTask={onOpenTask}
+          onClose={() => setOverflowDay(null)}
+        />
+      )}
     </div>
   );
 }

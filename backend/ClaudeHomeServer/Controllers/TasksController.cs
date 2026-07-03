@@ -54,6 +54,18 @@ public class TasksController(
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
+    // Личная задача — без привязки к проекту
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateTaskRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Title))
+            return BadRequest(new { error = "Название задачи не может быть пустым" });
+
+        var task = tasks.Create(null, UserId, req);
+        await hub.BroadcastTaskChangedAsync(UserId, "created", task);
+        return Ok(task);
+    }
+
     // Все задачи пользователя (для календаря); опционально диапазон по сроку
     [HttpGet]
     public IActionResult GetAll([FromQuery] string? from = null, [FromQuery] string? to = null)

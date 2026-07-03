@@ -59,9 +59,10 @@ export function ToolbarIconButton({ onClick, title, isMobile, color, disabled, a
 }
 
 // === Pill / сегмент-переключатель: единый стиль дорожки и активного сегмента ===
+// icon (опционально) рисуется слева от подписи — stroke-иконки в общем стиле (currentColor)
 export function PillSwitch<T extends string>({ value, options, onChange, fill, isMobile }: {
   value: T;
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; icon?: ReactNode }[];
   onChange: (v: T) => void;
   fill?: boolean;
   isMobile?: boolean;
@@ -85,8 +86,10 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
               background: active ? TB.pillThumbBg : 'transparent',
               color: active ? C.textHeading : C.textSecondary,
               boxShadow: active ? TB.pillThumbShadow : 'none',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
             }}
           >
+            {opt.icon}
             {opt.label}
           </button>
         );

@@ -186,25 +186,47 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
               </button>
             );
           })}
-          <input
-            value={timeDraft}
-            onChange={e => setTimeDraft(maskTime(e.target.value))}
-            onBlur={() => {
-              const t = applyTime(timeDraft);
-              if (t) onChange(dueDate, t);
-              else if (timeDraft.trim() === '') onChange(dueDate, null);
-              else setTimeDraft(dueTime ?? '');
-            }}
-            placeholder="чч:мм"
-            inputMode="numeric"
-            maxLength={5}
-            style={{
-              width: 66, boxSizing: 'border-box', padding: '4px 8px',
-              border: `1px solid ${C.border}`, borderRadius: R.md,
-              background: C.bgWhite, fontFamily: FONT.mono, fontSize: 11.5,
-              color: C.textPrimary, outline: 'none', textAlign: 'center',
-            }}
-          />
+          {/* Своё время: чип-поле с часами — пунктир намекает «введи значение»;
+              при нестандартном времени подсвечен как активный выбор */}
+          {(() => {
+            const presets = ['09:00', '12:00', '14:00', '16:00', '18:00', '20:00'];
+            const customActive = !!dueTime && !presets.includes(dueTime);
+            return (
+              <label style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                padding: '3px 8px', cursor: 'text', boxSizing: 'border-box',
+                border: customActive ? `1px solid ${C.accent}` : `1.5px dashed ${C.dashed}`,
+                borderRadius: R.md,
+                background: customActive ? C.accentLight : 'transparent',
+              }}>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+                  stroke={customActive ? C.accent : C.textMuted} strokeWidth="2"
+                  strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
+                </svg>
+                <input
+                  value={timeDraft}
+                  onChange={e => setTimeDraft(maskTime(e.target.value))}
+                  onBlur={() => {
+                    const t = applyTime(timeDraft);
+                    if (t) onChange(dueDate, t);
+                    else if (timeDraft.trim() === '') onChange(dueDate, null);
+                    else setTimeDraft(dueTime ?? '');
+                  }}
+                  placeholder="своё время"
+                  inputMode="numeric"
+                  maxLength={5}
+                  size={9}
+                  style={{
+                    width: 74, border: 'none', outline: 'none', background: 'transparent',
+                    fontFamily: FONT.mono, fontSize: 11.5,
+                    fontWeight: customActive ? 700 : 400,
+                    color: customActive ? C.accent : C.textPrimary,
+                  }}
+                />
+              </label>
+            );
+          })()}
         </div>
       )}
 

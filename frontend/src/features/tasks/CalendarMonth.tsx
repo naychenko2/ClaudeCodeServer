@@ -102,7 +102,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
         </div>
 
         {/* Дни недели */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', marginBottom: 2 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', marginBottom: 2 }}>
           {WEEKDAYS.map(w => (
             <div key={w} style={{ textAlign: 'center', fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 600, color: C.textMuted, padding: '4px 0' }}>
               {w}
@@ -111,7 +111,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
         </div>
 
         {/* Сетка: число + точки задач */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', rowGap: 4 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', rowGap: 4 }}>
           {cells.map(({ iso, inMonth }) => {
             const dayTasksHere = byDay.get(iso) ?? [];
             const selected = iso === selectedDay;
@@ -194,7 +194,8 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
       </div>
 
       {/* Дни недели */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8, marginBottom: 6 }}>
+      {/* minmax(0,1fr): колонки не распираются min-content'ом чипов — равная ширина без скролла */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 8, marginBottom: 6 }}>
         {WEEKDAYS.map(w => (
           <div key={w} style={{ fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, padding: '0 2px' }}>
             {w}
@@ -203,7 +204,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
       </div>
 
       {/* Сетка */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8, paddingBottom: 28 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 8, paddingBottom: 28 }}>
         {cells.map(({ iso, inMonth }) => {
           const dayTasksHere = byDay.get(iso) ?? [];
           const isToday = iso === today;
@@ -213,7 +214,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
             <div
               key={iso}
               style={{
-                minHeight: 86, boxSizing: 'border-box', padding: '7px 8px',
+                minHeight: 86, minWidth: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '7px 8px',
                 background: isToday ? '#FBEBE0' : inMonth ? C.bgWhite : 'transparent',
                 border: `1px solid ${isToday ? C.accentMuted : inMonth ? C.borderLight : C.borderLight + '90'}`,
                 borderRadius: 10,

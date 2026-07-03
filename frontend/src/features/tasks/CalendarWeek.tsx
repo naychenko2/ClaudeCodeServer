@@ -105,7 +105,7 @@ export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenT
       </div>
 
       {/* Полоса дней */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: isMobile ? 4 : 10, marginBottom: 8 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: isMobile ? 4 : 10, marginBottom: 8 }}>
         {days.map((iso, i) => {
           const selected = iso === effectiveDay;
           const hasTasks = (byDay.get(iso) ?? []).length > 0;

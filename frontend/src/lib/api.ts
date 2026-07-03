@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, Task, CreateTaskDto, UpdateTaskDto } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -85,6 +85,24 @@ export const api = {
     reorder: (orderedIds: string[]) =>
       request<ProjectGroup[]>('/project-groups/reorder', { method: 'POST', body: JSON.stringify({ orderedIds }) }),
     delete: (id: string) => request<void>(`/project-groups/${id}`, { method: 'DELETE' }),
+  },
+
+  tasks: {
+    // Все задачи пользователя (для календаря)
+    listAll: (from?: string, to?: string) => {
+      const qs = new URLSearchParams();
+      if (from) qs.set('from', from);
+      if (to) qs.set('to', to);
+      const q = qs.toString();
+      return request<Task[]>(`/tasks${q ? `?${q}` : ''}`);
+    },
+    listByProject: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`),
+    create: (projectId: string, dto: CreateTaskDto) =>
+      request<Task>(`/projects/${projectId}/tasks`, { method: 'POST', body: JSON.stringify(dto) }),
+    get: (taskId: string) => request<Task>(`/tasks/${taskId}`),
+    update: (taskId: string, dto: UpdateTaskDto) =>
+      request<Task>(`/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(dto) }),
+    delete: (taskId: string) => request<void>(`/tasks/${taskId}`, { method: 'DELETE' }),
   },
 
   sessions: {

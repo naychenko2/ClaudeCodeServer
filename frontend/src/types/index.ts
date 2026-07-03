@@ -30,6 +30,67 @@ export interface ProjectGroup {
   order: number;
 }
 
+// --- Задачи ---
+
+// Значения enum-ов приходят с бэка в camelCase (JsonStringEnumConverter)
+export type TaskStatus = 'todo' | 'inProgress' | 'done';
+export type TaskPriority = 'urgent' | 'high' | 'medium' | 'low';
+export type TaskAssignee = 'me' | 'claude';
+
+export interface TaskSubtask {
+  id: string;
+  title: string;
+  isDone: boolean;
+}
+
+export interface Task {
+  id: string;
+  projectId: string;
+  ownerId?: string;
+  title: string;
+  description: string;      // markdown
+  status: TaskStatus;
+  priority: TaskPriority;
+  dueDate?: string;          // YYYY-MM-DD
+  dueTime?: string;          // HH:MM
+  assignee?: TaskAssignee;
+  linkedSessionId?: string;
+  linkedFiles: string[];
+  subtasks: TaskSubtask[];
+  labels: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateTaskDto {
+  title: string;
+  description?: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  dueDate?: string;
+  dueTime?: string;
+  assignee?: TaskAssignee;
+  linkedSessionId?: string;
+  linkedFiles?: string[];
+  subtasks?: { title: string }[];
+  labels?: string[];
+}
+
+// Пустая строка в dueDate/dueTime/linkedSessionId = очистить поле, undefined = не менять
+export interface UpdateTaskDto {
+  title?: string;
+  description?: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  dueDate?: string;
+  dueTime?: string;
+  assignee?: TaskAssignee;
+  linkedSessionId?: string;
+  linkedFiles?: string[];
+  subtasks?: TaskSubtask[];
+  labels?: string[];
+}
+
 // Тип доступа к Claude: подписка (стоимость ≈ API-эквивалент) или оплата по API-ключу (реальная цена)
 export type ClaudeBilling = 'subscription' | 'api';
 
@@ -116,6 +177,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'exited' }
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
+  | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
 );
 
 export interface UsageInfo {

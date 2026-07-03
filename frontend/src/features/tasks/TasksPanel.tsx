@@ -82,7 +82,9 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile }: Prop
   const groups = groupTab === 'status' ? groupByStatus(tasks) : groupByDate(tasks);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    // flex:1 + minHeight:0 — шапка (переключатель и кнопка) закреплена, скроллится только список:
+    // процентная высота во вложенных flex-колонках может резолвиться в auto, и тогда ехал весь блок
+    <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0, height: '100%', overflow: 'hidden' }}>
       {/* Подвкладки «Список | По дате»: на мобиле — сегменты с иконкой сверху
           (как Месяц/Неделя/Агенда в календаре), на десктопе — pill-переключатель */}
       <div style={{ padding: isMobile ? '10px 14px 4px' : '0 16px 4px', flexShrink: 0 }}>

@@ -94,6 +94,13 @@ body {
 }
 .cc-composer-input::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
+/* Горизонтальные ленты чипов (фильтры календаря и т.п.): скроллятся, но без видимого скроллбара */
+.cc-hide-scrollbar {
+  scrollbar-width: none;        /* Firefox */
+  -ms-overflow-style: none;     /* старый Edge */
+}
+.cc-hide-scrollbar::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
 .tool-spinner {
   width: 18px;
   height: 18px;

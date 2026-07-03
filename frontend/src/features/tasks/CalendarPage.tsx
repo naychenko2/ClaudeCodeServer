@@ -143,7 +143,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   };
 
   const filters = (
-    <div style={{
+    <div className="cc-hide-scrollbar" style={{
       display: 'flex', alignItems: 'center', gap: 8,
       overflowX: 'auto', paddingBottom: 2,
     }}>
@@ -173,23 +173,25 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
     <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <HubHeader value="calendar" onTab={onHubTab} auth={auth} onLogout={onLogout} />
 
+      {/* Мобила: переключатель вида и фильтры закреплены над скролл-областью */}
+      {isMobile && (
+        <div style={{ flexShrink: 0, padding: '12px 16px 10px', borderBottom: `1px solid ${C.borderLight}` }}>
+          <div style={{ marginBottom: 12 }}>
+            <IconViewSwitcher<CalView>
+              value={view}
+              options={(['month', 'week', 'agenda'] as CalView[]).map(v => ({
+                value: v, label: VIEW_LABEL[v], icon: <ViewIcon view={v} />,
+              }))}
+              onChange={setView}
+            />
+          </div>
+          {filters}
+        </div>
+      )}
+
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        <div style={{ maxWidth: 1180, margin: '0 auto', padding: isMobile ? '12px 16px 0' : '20px 32px 0', boxSizing: 'border-box' }}>
-          {isMobile ? (
-            <>
-              {/* Мобильный переключатель вида: иконка + подпись */}
-              <div style={{ marginBottom: 12 }}>
-                <IconViewSwitcher<CalView>
-                  value={view}
-                  options={(['month', 'week', 'agenda'] as CalView[]).map(v => ({
-                    value: v, label: VIEW_LABEL[v], icon: <ViewIcon view={v} />,
-                  }))}
-                  onChange={setView}
-                />
-              </div>
-              {filters}
-            </>
-          ) : (
+        <div style={{ maxWidth: 1180, margin: '0 auto', padding: isMobile ? '0 16px' : '20px 32px 0', boxSizing: 'border-box' }}>
+          {!isMobile && (
             <>
               {/* Заголовок + переключатель вида + «Задача» */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>

@@ -2,24 +2,19 @@ import { useEffect, useState, useCallback } from 'react';
 import type { ChatItem, ServerMessage, RateLimitInfo } from '../types';
 import { joinSession, joinProject, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision } from '../lib/signalr';
 import { api } from '../lib/api';
+import { applyServerMessage, normalizeHistory, initialChatState, type ChatState } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
 // Состояние живёт на уровне модуля и переживает переключение между сессиями.
 // Компоненты подписываются на обновления своей сессии, но при анмаунте
 // не отписываются от SignalR — сессия продолжает получать сообщения в фоне.
 
-interface SessionState {
-  items: ChatItem[];
-  isWaiting: boolean;
+// ChatState (items/isWaiting/rateLimits/компакция) — в lib/chatReducer.ts,
+// здесь добавляются только поля жизненного цикла подключения
+interface SessionState extends ChatState {
   isJoined: boolean;
   projectId?: string;
   isHistoryLoading: boolean;
-  // Лимиты подписки по окнам (five_hour/seven_day/…) — последнее значение, обновляется каждый ход
-  rateLimits: Record<string, RateLimitInfo>;
-  // Идёт сворачивание контекста (system/status: compacting → compact_result)
-  isCompacting: boolean;
-  // Мягкое уведомление о последнем компакте (например «нечего сжимать») — не ошибка
-  compactNote?: string;
 }
 
 const _store = new Map<string, SessionState>();
@@ -31,7 +26,7 @@ const loadHistory = (sid: string, projectId?: string) =>
   projectId ? api.sessions.getHistory(projectId, sid) : api.chats.getHistory(sid);
 
 function getState(sid: string): SessionState {
-  if (!_store.has(sid)) _store.set(sid, { items: [], isWaiting: false, isJoined: false, isHistoryLoading: true, rateLimits: {}, isCompacting: false });
+  if (!_store.has(sid)) _store.set(sid, { ...initialChatState(), isJoined: false, isHistoryLoading: true });
   return _store.get(sid)!;
 }
 
@@ -78,11 +73,7 @@ function ensureHandler() {
         if (wasWaiting.has(sid)) {
           try {
             const raw = await loadHistory(sid, s.projectId);
-            const items = (raw as any[]).map((msg: any): ChatItem => {
-              if (msg.kind === 'thinking') return { ...msg, expanded: false };
-              if (msg.kind === 'error') return { ...msg, canRetry: false };
-              return msg as ChatItem;
-            });
+            const items = normalizeHistory(raw);
             if (items.length > 0) {
               setState(sid, prev => ({
                 ...prev,
@@ -98,209 +89,31 @@ function ensureHandler() {
   onMessage((msg: ServerMessage) => {
     const sid = msg.sessionId;
     if (!sid) return;
-    switch (msg.type) {
-      case 'session_started':
-        if (msg.isResume)
-          updateItems(sid, items => items.some(i => i.kind === 'resumed') ? items : [...items, { kind: 'resumed' }]);
-        else
-          updateItems(sid, items => [...items, { kind: 'session_started', model: msg.model, mode: msg.mode, cwd: msg.cwd, toolCount: msg.toolCount, mcpServers: msg.mcpServers }]);
-        break;
-      case 'text_delta':
-        updateItems(sid, items => {
-          const last = items[items.length - 1];
-          if (last?.kind === 'text') return [...items.slice(0, -1), { kind: 'text', text: last.text + msg.text }];
-          return [...items, { kind: 'text', text: msg.text }];
+
+    // Чистая часть — в редьюсере (lib/chatReducer.ts). Если состояние не изменилось
+    // (вернулась та же ссылка) — подписчиков не будим.
+    const prev = getState(sid);
+    const next = applyServerMessage(prev, msg);
+    if (next !== prev) {
+      _store.set(sid, next);
+      _listeners.get(sid)?.forEach(fn => fn());
+    }
+
+    // Побочный эффект вне редьюсера: при переходе в active перезагружаем историю —
+    // клиент мог пропустить text_delta/tool_use пока был оффлайн или не в группе
+    if (msg.type === 'status_changed' && msg.status === 'active') {
+      const projectId = getState(sid).projectId;
+      loadHistory(sid, projectId).then(raw => {
+        const serverItems = normalizeHistory(raw);
+        setState(sid, p => {
+          if (serverItems.length <= p.items.length) return p;
+          return { ...p, items: serverItems };
         });
-        break;
-      case 'thinking_delta':
-        updateItems(sid, items => {
-          const last = items[items.length - 1];
-          if (last?.kind === 'thinking') return [...items.slice(0, -1), { ...last, text: last.text + msg.text }];
-          return [...items, { kind: 'thinking', text: msg.text, expanded: false }];
-        });
-        break;
-      case 'tool_use':
-        // Дедуп по id: ранняя карточка из стрима + финальный assistant с тем же id → обновляем
-        updateItems(sid, items => {
-          const idx = items.findIndex(it => it.kind === 'tool_use' && it.id === msg.id);
-          if (idx >= 0) {
-            const next = [...items];
-            const ex = next[idx] as Extract<ChatItem, { kind: 'tool_use' }>;
-            next[idx] = { ...ex, name: msg.name, input: msg.input, streamingArg: undefined, parentToolUseId: msg.parentToolUseId ?? ex.parentToolUseId };
-            return next;
-          }
-          return [...items, { kind: 'tool_use', id: msg.id, name: msg.name, input: msg.input, parentToolUseId: msg.parentToolUseId }];
-        });
-        break;
-      case 'tool_input_delta':
-        updateItems(sid, items => items.map(it =>
-          it.kind === 'tool_use' && it.id === msg.toolUseId ? { ...it, streamingArg: msg.partialJson } : it
-        ));
-        break;
-      case 'tool_result':
-        updateItems(sid, items => items.map(item =>
-          item.kind === 'tool_use' && item.id === msg.toolUseId
-            ? { ...item, result: msg.content, isError: msg.isError }
-            : item
-        ));
-        break;
-      case 'permission_request':
-        setState(sid, prev => ({
-          ...prev,
-          isWaiting: true,
-          items: [...prev.items, {
-            kind: 'permission_request',
-            requestId: msg.requestId,
-            toolName: msg.toolName,
-            toolInput: msg.toolInput,
-            resolved: false,
-          }],
-        }));
-        break;
-      case 'ask_question':
-        setState(sid, prev => ({
-          ...prev,
-          isWaiting: true,
-          items: [...prev.items, {
-            kind: 'ask_question',
-            toolUseId: msg.toolUseId,
-            input: msg.input,
-            resolved: false,
-          }],
-        }));
-        break;
-      case 'plan_review':
-        setState(sid, prev => ({
-          ...prev,
-          isWaiting: true,
-          items: [...prev.items, {
-            kind: 'plan_review',
-            requestId: msg.requestId,
-            plan: msg.plan,
-            resolved: false,
-          }],
-        }));
-        break;
-      case 'file_changed':
-        updateItems(sid, items => [...items, { kind: 'file_changed', path: msg.path, added: msg.added, removed: msg.removed }]);
-        break;
-      case 'result':
-        setState(sid, prev => ({
-          ...prev,
-          isWaiting: false,
-          items: [...prev.items, { kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd, apiErrorStatus: msg.apiErrorStatus, permissionDenials: msg.permissionDenials }],
-        }));
-        break;
-      case 'fal_cost':
-        // Стоимость генерации fal.ai приходит асинхронно. Дедуп по requestId
-        // (run_model + get_job_result несут один id; возможен повтор из истории).
-        updateItems(sid, items =>
-          items.some(it => it.kind === 'fal_cost' && it.requestId === msg.requestId)
-            ? items
-            : [...items, { kind: 'fal_cost', requestId: msg.requestId, endpointId: msg.endpointId, costUsd: msg.costUsd, outputUnits: msg.outputUnits, unitPrice: msg.unitPrice }]
-        );
-        break;
-      case 'truncated':
-        updateItems(sid, items => [...items, { kind: 'truncated' }]);
-        break;
-      case 'redacted_thinking':
-        updateItems(sid, items => [...items, { kind: 'redacted_thinking' }]);
-        break;
-      case 'rate_limit':
-        // Телеметрия использования подписки (приходит каждый ход). Храним последнее значение
-        // по каждому окну; индикатор/строку рисует ChatPanel из этого состояния (не в ленте).
-        setState(sid, prev => ({
-          ...prev,
-          rateLimits: {
-            ...prev.rateLimits,
-            [msg.limitType]: {
-              limitType: msg.limitType,
-              utilization: msg.utilization,
-              resetsAt: msg.resetsAt,
-              status: msg.status,
-              isUsingOverage: msg.isUsingOverage,
-              overageStatus: msg.overageStatus,
-              overageResetsAt: msg.overageResetsAt,
-            },
-          },
-        }));
-        break;
-      case 'compact_boundary':
-        // Успешное сжатие — сбрасываем note о «нечего сжимать»
-        setState(sid, prev => ({
-          ...prev,
-          isCompacting: false,
-          compactNote: undefined,
-          items: [...prev.items, { kind: 'compact_boundary', trigger: msg.trigger, preTokens: msg.preTokens, postTokens: msg.postTokens }],
-        }));
-        break;
-      case 'compact_status':
-        // Ход компакции: compacting → началась; compact_result — завершилась.
-        // «Not enough messages» — не ошибка, а «сжимать пока нечего»: показываем мягко (note), без красной плашки.
-        if (msg.status === 'compacting') {
-          setState(sid, prev => ({ ...prev, isCompacting: true }));
-        } else if (msg.compactResult) {
-          const soft = msg.compactResult === 'failed' && /not enough/i.test(msg.compactError ?? '');
-          setState(sid, prev => ({
-            ...prev,
-            isCompacting: false,
-            compactNote: soft ? 'Пока нечего сжимать — слишком мало сообщений.' : undefined,
-            items: (msg.compactResult === 'failed' && !soft)
-              ? [...prev.items, { kind: 'error', text: `Не удалось сжать контекст: ${msg.compactError ?? 'неизвестная ошибка'}`, canRetry: false }]
-              : prev.items,
-          }));
-        }
-        break;
-      case 'error':
-        setState(sid, prev => ({
-          ...prev,
-          isWaiting: false,
-          items: [...prev.items, { kind: 'error', text: msg.text, canRetry: true }],
-        }));
-        break;
-      case 'exited':
-        // Процесс claude завершился. Если ждали ответ и не было result/прерывания/ошибки — это аварийный выход.
-        setState(sid, prev => {
-          const last = prev.items[prev.items.length - 1];
-          const abnormal = prev.isWaiting && !(last && (last.kind === 'interrupted' || last.kind === 'error' || last.kind === 'session_ended'));
-          return { ...prev, isWaiting: false, items: abnormal ? [...prev.items, { kind: 'session_ended' }] : prev.items };
-        });
-        break;
-      case 'workflow_progress':
-        updateItems(sid, items => items.map(item =>
-          item.kind === 'tool_use' && item.id === msg.toolUseId
-            ? { ...item, workflowAgents: msg.agents, workflowDone: msg.isDone }
-            : item
-        ));
-        break;
-      case 'status_changed': {
-        // Синхронизируем isWaiting по статусу — работает для всех открытых вкладок/браузеров
-        if (msg.status === 'working' || msg.status === 'waiting') {
-          setState(sid, prev => ({ ...prev, isWaiting: true }));
-        } else if (msg.status === 'active' || msg.status === 'error' || msg.status === 'finished' || msg.status === 'orphaned') {
-          setState(sid, prev => ({ ...prev, isWaiting: false }));
-        }
-        // При переходе в active — перезагружаем историю:
-        // клиент мог пропустить text_delta/tool_use пока был оффлайн или не в группе
-        if (msg.status === 'active') {
-          const projectId = getState(sid).projectId;
-          loadHistory(sid, projectId).then(raw => {
-            const serverItems = (raw as any[]).map((m: any): ChatItem => {
-              if (m.kind === 'thinking') return { ...m, expanded: false };
-              if (m.kind === 'error') return { ...m, canRetry: false };
-              return m as ChatItem;
-            });
-            setState(sid, prev => {
-              if (serverItems.length <= prev.items.length) return prev;
-              return { ...prev, items: serverItems };
-            });
-          }).catch(() => {});
-        }
-        break;
-      }
+      }).catch(() => {});
     }
   });
 }
+
 
 // Присоединяемся к сессии один раз и остаёмся — даже при переключении между сессиями
 function ensureJoined(sid: string, projectId?: string) {
@@ -317,11 +130,7 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
   // может «зависнуть» в Reconnecting, поэтому join не должен блокировать историю.
   try {
     const raw = await loadHistory(sid, projectId);
-    const items = (raw as any[]).map((msg: any): ChatItem => {
-      if (msg.kind === 'thinking') return { ...msg, expanded: false };
-      if (msg.kind === 'error') return { ...msg, canRetry: false };
-      return msg as ChatItem;
-    });
+    const items = normalizeHistory(raw);
     setState(sid, prev => {
       // Сервер — источник истины: используем его данные если их больше.
       // Иначе оставляем живые сообщения от стриминга (race condition при активном ходе).
@@ -361,11 +170,7 @@ export function useSession(sessionId: string | null, projectId?: string) {
     const st = getState(sessionId);
     if (st.isJoined && !st.isWaiting) {
       loadHistory(sessionId, projectId).then(raw => {
-        const serverItems = (raw as any[]).map((m: any): ChatItem => {
-          if (m.kind === 'thinking') return { ...m, expanded: false };
-          if (m.kind === 'error') return { ...m, canRetry: false };
-          return m as ChatItem;
-        });
+        const serverItems = normalizeHistory(raw);
         setState(sessionId, prev => {
           if (serverItems.length <= prev.items.length) return prev;
           return { ...prev, items: serverItems };

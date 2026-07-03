@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
 import type { ChatItem } from '../types';
 import { useSession } from './useSession';
+import { toRelative } from '../lib/paths';
+import { workflowName } from '../lib/workflowMeta';
 
 // Артефакты, собранные за сессию из ленты чата:
 //  - файлы: измененные (file_changed/Write) + упомянутые путем в тексте ответа,
@@ -94,26 +96,6 @@ const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const URL_RE = /https?:\/\/[^\s<>()[\]"'`]+/g;
 // Хвостовая пунктуация, прилипающая к URL в тексте (точка в конце предложения, запятая, скобка)
 const TRAILING = /[.,;:!?)\]}>'"]+$/;
-
-// Привести абсолютный путь из аргументов инструмента к относительному в проекте.
-// Возвращает null, если путь вне rootPath (тогда file_changed его всё равно не поймает).
-function toRelative(raw: string, rootPath: string): string | null {
-  const p = raw.replace(/\\/g, '/');
-  // Уже относительный (Claude иногда передаёт относительные пути)
-  if (!/^([a-zA-Z]:\/|\/)/.test(p)) {
-    const rel = p.replace(/^\.\//, '');
-    // Выход за пределы корня — не файл проекта, в артефакты не берём
-    if (rel.startsWith('../') || rel.includes('/../')) return null;
-    return rel;
-  }
-  const root = rootPath.replace(/\\/g, '/').replace(/\/+$/, '');
-  if (!root) return null;
-  const lp = p.toLowerCase();
-  const lr = root.toLowerCase();
-  if (lp === lr) return null;
-  if (lp.startsWith(lr + '/')) return p.slice(root.length + 1);
-  return null;
-}
 
 function extractToolPath(input: unknown): string | null {
   if (!input || typeof input !== 'object') return null;
@@ -235,35 +217,6 @@ function toolCallArg(input: unknown): string | undefined {
   const v = o.command ?? o.file_path ?? o.path ?? o.notebook_path ?? o.pattern
     ?? o.query ?? o.url ?? o.description ?? o.prompt;
   return typeof v === 'string' && v ? firstLine(v) : undefined;
-}
-
-// Заголовок группы workflow. Приоритет — человекочитаемый meta.description
-// (пишется обычным языком), kebab-имя meta.name / input.name — фоллбэк.
-// Блок меты вырезаем по балансу скобок, как parseWorkflowMeta в ленте чата,
-// чтобы регекс не зацепил поля из тела скрипта.
-function workflowName(input: Record<string, unknown>): string {
-  const script = typeof input.script === 'string' ? input.script : '';
-  const metaStart = script.indexOf('export const meta');
-  if (metaStart !== -1) {
-    const braceStart = script.indexOf('{', metaStart);
-    if (braceStart !== -1) {
-      let depth = 0, metaEnd = -1;
-      for (let i = braceStart; i < script.length; i++) {
-        if (script[i] === '{') depth++;
-        else if (script[i] === '}') { depth--; if (depth === 0) { metaEnd = i; break; } }
-      }
-      if (metaEnd !== -1) {
-        const metaStr = script.slice(braceStart, metaEnd + 1);
-        const desc = metaStr.match(/description\s*:\s*['"`]([^'"`\n]+)['"`]/)?.[1];
-        if (desc) return desc;
-        const nm = metaStr.match(/name\s*:\s*['"`]([^'"`\n]+)['"`]/)?.[1];
-        if (nm) return nm;
-      }
-    }
-  }
-  // Сохранённый workflow запускается по имени, без script
-  if (typeof input.name === 'string' && input.name) return input.name;
-  return 'Workflow';
 }
 
 // Собрать агентов сессии из ленты чата:

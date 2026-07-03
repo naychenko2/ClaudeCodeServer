@@ -1,0 +1,699 @@
+import { memo, useState, useContext } from 'react';
+import type { ChatItem } from '../../types';
+import type { TodoItem } from '../../hooks/useSessionArtifacts';
+import type { Mode } from '../../lib/modes';
+import { C, FONT } from '../../lib/design';
+import { relPath, stripRoot } from '../../lib/paths';
+import { ChatProjectContext } from './contexts';
+import { MarkdownContent } from './MarkdownContent';
+import { ToolUseView } from './ToolUseView';
+import { AskQuestionView } from './AskQuestionView';
+import { PlanReviewView } from './PlanReviewView';
+
+// Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
+function parseTodoWriteInput(input: unknown): TodoItem[] {
+  const t = (input as { todos?: unknown } | null)?.todos;
+  return Array.isArray(t) ? (t as TodoItem[]) : [];
+}
+
+// Карточка плана задач — закрепленный чек-лист с прогрессом. Источник списка:
+// input TodoWrite либо агрегат TaskCreate/TaskUpdate (computeTodos)
+function TodoPlanView({ todos }: { todos: TodoItem[] }) {
+  if (todos.length === 0) return null;
+  const done = todos.filter(t => t.status === 'completed').length;
+
+  return (
+    <div style={{
+      border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite,
+      overflow: 'hidden', boxShadow: '0 2px 8px rgba(60,50,35,0.04)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderBottom: '1px solid #EFE9DD' }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+        </svg>
+        <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>План</span>
+        <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
+          {done}/{todos.length}
+        </span>
+      </div>
+      <div style={{ padding: '7px 13px 10px', display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {todos.map((t, i) => {
+          const isDone = t.status === 'completed';
+          const isActive = t.status === 'in_progress';
+          const label = isActive && t.activeForm ? t.activeForm : t.content;
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '4px 0' }}>
+              <span style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}>
+                {isDone ? (
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="8" fill="#5E8B4E" />
+                    <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                ) : isActive ? (
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="7" fill="#D97757" />
+                    <circle cx="8" cy="8" r="2.6" fill="#FBF1EA" />
+                  </svg>
+                ) : (
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="6.5" stroke="#C9BFAD" strokeWidth="1.5" />
+                  </svg>
+                )}
+              </span>
+              <span style={{
+                fontSize: 13, lineHeight: 1.4,
+                color: isDone ? C.textMuted : isActive ? C.textHeading : C.textSecondary,
+                textDecoration: isDone ? 'line-through' : 'none',
+                fontWeight: isActive ? 600 : 400,
+              }}>
+                {label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Компактная строка изменённого файла — для использования внутри общего контура
+// блока действий (рядом с карточками инструментов). Один ритм со строкой ToolUseView.
+export const FileChangedRow = memo(function FileChangedRow({ item, online, onOpenFile, onRevert }: {
+  item: Extract<ChatItem, { kind: 'file_changed' }>;
+  online: boolean;
+  onOpenFile?: (path: string) => void;
+  onRevert?: (path: string) => void;
+}) {
+  const project = useContext(ChatProjectContext);
+  const relativePath = relPath(item.path, project?.rootPath);
+  return (
+    <div style={{ padding: '9px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: '#C2693B' }}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+        </svg>
+      </span>
+      <span onClick={() => onOpenFile?.(item.path)}
+        style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: onOpenFile ? 'pointer' : 'default', direction: 'rtl', textAlign: 'left' }}>
+        {relativePath}
+      </span>
+      <span style={{ fontSize: 11.5, color: '#27AE60', fontFamily: FONT.mono, flexShrink: 0 }}>+{item.added}</span>
+      <span style={{ fontSize: 11.5, color: '#C0392B', fontFamily: FONT.mono, flexShrink: 0 }}>-{item.removed}</span>
+      {online && onRevert && (
+        <button onClick={() => onRevert(item.path)}
+          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid #E0D8CC', background: '#FFF', cursor: 'pointer', color: '#C0392B', flexShrink: 0 }}>
+          Откатить
+        </button>
+      )}
+    </div>
+  );
+});
+
+// Ответ ассистента. Действия «Копировать/Повторить» — иконками в правом верхнем
+// углу: десктоп — fade-in по hover на сообщении, мобайл (тач) — всегда видимы.
+function TextMessageView({ text, online, onRetry, streaming }: { text: string; online: boolean; onRetry: () => void; streaming?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {});
+  };
+  const iconBtn: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: 26, height: 26, borderRadius: 7, border: 'none', background: '#EDE7DA',
+    color: C.textMuted, cursor: 'pointer', fontFamily: 'inherit', padding: 0,
+  };
+  return (
+    <div className="cc-msg" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden' }}>
+      <div style={{ fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
+        <MarkdownContent text={text} />
+        {/* Мигающая каретка стриминга (B2) */}
+        {streaming && <span style={{ display: 'inline-block', width: 7, height: 15, marginTop: 3, borderRadius: 1, background: C.accent, animation: 'blink 1s step-start infinite', verticalAlign: 'text-bottom' }} />}
+      </div>
+      {/* Действия — компактными иконками в правом верхнем углу (CSS управляет hover/тач) */}
+      {!streaming && (
+        <div className="cc-actions" style={{ position: 'absolute', top: 0, right: 0, display: 'flex', gap: 4 }}>
+          <button onClick={copy} style={iconBtn} title={copied ? 'Скопировано' : 'Скопировать ответ'} aria-label="Скопировать ответ"
+            onMouseEnter={e => { if (!copied) e.currentTarget.style.background = '#E2DACB'; }}
+            onMouseLeave={e => { if (!copied) e.currentTarget.style.background = '#EDE7DA'; }}>
+            {copied
+              ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5E8B4E" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+              : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>}
+          </button>
+          {online && (
+            <button onClick={onRetry} style={iconBtn} title="Повторить последний запрос" aria-label="Повторить последний запрос"
+              onMouseEnter={e => (e.currentTarget.style.background = '#E2DACB')}
+              onMouseLeave={e => (e.currentTarget.style.background = '#EDE7DA')}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 4v6h6" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface ItemProps {
+  item: ChatItem;
+  index: number;
+  online: boolean;
+  streaming?: boolean;
+  isLastResult?: boolean;
+  onToggleThinking: (i: number) => void;
+  onAllowPermission: (id: string) => void;
+  onDenyPermission: (id: string) => void;
+  onAllowAlways: (id: string) => void;
+  onAnswerQuestion: (toolUseId: string, answerText: string) => void;
+  onRespondPlan: (requestId: string, approve: boolean, feedback?: string) => void;
+  planVersion?: number;
+  planShowBadge?: boolean;
+  planShowSwitch?: boolean;
+  onSwitchMode: (mode: Mode) => void;
+  onOpenFile?: (path: string) => void;
+  onRevert?: (path: string) => void;
+  onRetry: () => void;
+  onInterrupt: () => void;
+  // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
+  taskPlan?: TodoItem[];
+}
+
+// React.memo: переключатель по kind — самый массовый компонент ленты. Элементы ChatItem
+// иммутабельны по ссылке (обновление элемента = новый объект), пропсы-функции стабильны
+// (useCallback в ChatPanel) — при дописывании ленты старые элементы не перерендериваются.
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan }: ItemProps) {
+  const project = useContext(ChatProjectContext);
+  switch (item.kind) {
+    case 'user_message':
+      return (
+        <div style={{
+          alignSelf: 'flex-end', background: '#F1DDD1', color: '#5A3322',
+          borderRadius: '18px 18px 4px 18px', padding: '12px 17px',
+          maxWidth: '80%', fontSize: 14,
+        }}>
+          {item.text}
+          {item.attachedPaths && item.attachedPaths.length > 0 && (
+            <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {item.attachedPaths.map(p => (
+                <span key={p} style={{
+                  background: 'rgba(90,51,34,0.1)', borderRadius: 5,
+                  padding: '1px 6px', fontSize: 11,
+                }}>
+                  {/* В проекте — путь относительно корня; в чате без проекта — только имя файла */}
+                  {project ? relPath(p, project.rootPath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+
+    case 'session_started':
+      // Старт чата не показываем — тех-инфа (модель/режим/cwd/MCP) дублирует шапку и раздувает чат
+      return null;
+
+    case 'text':
+      return <TextMessageView text={item.text} online={online} onRetry={onRetry} streaming={streaming} />;
+
+    case 'thinking': {
+      const hasText = item.text.trim().length > 0;
+
+      // Завершён без текста — не рендерить
+      if (!streaming && !hasText) return null;
+
+      // Стриминг, текст ещё не накоплен — тихий индикатор «клод думает»
+      if (streaming && !hasText) {
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, height: 24, paddingLeft: 2 }}>
+            {[0, 1, 2].map(i => (
+              <span
+                key={i}
+                style={{
+                  display: 'inline-block', width: 5, height: 5, borderRadius: '50%',
+                  background: C.textMuted,
+                  animation: `thinkingDot 1.2s ease-in-out ${i * 0.2}s infinite`,
+                }}
+              />
+            ))}
+          </div>
+        );
+      }
+
+      // Есть текст (стриминг или завершён) — компактная collapsible строка
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+          {/* Триггер-строка — одна строчка, без фона/рамки */}
+          <div
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              cursor: 'pointer', userSelect: 'none',
+              padding: '2px 0',
+              width: 'fit-content',
+            }}
+            onClick={() => onToggleThinking(index)}
+          >
+            <span style={{ color: C.textMuted, display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3a6 6 0 0 0-4 10.5V17h8v-3.5A6 6 0 0 0 12 3z" />
+                <path d="M9 20h6M10 22h4" />
+              </svg>
+            </span>
+            <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>
+              Размышление
+            </span>
+            {streaming && (
+              <span style={{
+                width: 5, height: 5, borderRadius: '50%', background: C.textMuted,
+                animation: 'thinkingDot 1.2s ease-in-out infinite', flexShrink: 0,
+              }} />
+            )}
+            {!streaming && (
+              <span title="приблизительно, по объёму текста" style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, opacity: 0.7 }}>
+                ~{Math.max(1, Math.round(item.text.length / 4))} ток.
+              </span>
+            )}
+            <span style={{
+              color: C.textMuted, fontSize: 10, opacity: 0.7,
+              transform: item.expanded ? 'rotate(180deg)' : 'rotate(0deg)',
+              transition: 'transform 0.2s',
+              display: 'inline-block',
+            }}>▾</span>
+          </div>
+          {/* Раскрытое содержимое — левая полоска как у цитаты */}
+          {item.expanded && (
+            <div style={{
+              marginTop: 4,
+              paddingLeft: 10,
+              borderLeft: `2px solid ${C.borderLight}`,
+              fontSize: 11.5, fontStyle: 'italic', lineHeight: 1.65,
+              color: C.textMuted,
+              whiteSpace: 'pre-wrap',
+              fontFamily: FONT.sans,
+            }}>
+              {item.text}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    case 'tool_use':
+      // План задач рисуем отдельной карточкой-чек-листом: TodoWrite несет полный список
+      // в своем input, для инкрементальных TaskCreate/TaskUpdate агрегат (taskPlan)
+      // прокидывает ChatPanel — только на последний task-вызов ленты. Линию-коннектор для
+      // дочерних вызовов субагента (parentToolUseId) рисует renderItems — единой полосой.
+      if (item.name === 'TodoWrite') return <TodoPlanView todos={parseTodoWriteInput(item.input)} />;
+      if (taskPlan) return <TodoPlanView todos={taskPlan} />;
+      return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
+
+    case 'ask_question':
+      return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} onInterrupt={onInterrupt} />;
+
+    case 'plan_review':
+      return <PlanReviewView item={item} online={online} onRespond={onRespondPlan} version={planVersion} showBadge={planShowBadge} showSwitch={planShowSwitch} onSwitchMode={onSwitchMode} />;
+
+    case 'permission_request': {
+      // Что именно собирается выполнить Claude — команда/путь/аргументы
+      const detail = (() => {
+        const inp = item.toolInput as Record<string, unknown> | null;
+        if (!inp) return '';
+        if (typeof inp.command === 'string') return stripRoot(inp.command, project?.rootPath);
+        if (typeof inp.file_path === 'string') return relPath(inp.file_path, project?.rootPath);
+        if (typeof inp.path === 'string') return relPath(inp.path, project?.rootPath);
+        try { const s = JSON.stringify(inp, null, 2); return s === '{}' ? '' : s; } catch { return ''; }
+      })();
+      // Консольная команда (Bash/shell) → тёмный «терминал»; прочее (путь файла и т.п.) → светлая панель
+      const pn = item.toolName.toLowerCase();
+      const isConsoleReq = pn.startsWith('bash') || pn.includes('shell');
+      return (
+        <div style={{
+          border: '1px solid #E6C9B8', borderLeft: `3px solid ${C.accent}`,
+          borderRadius: 12, padding: '13px 14px', background: '#FBF1EA',
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: C.textHeading }}>
+            Запрос разрешения
+          </div>
+          <div style={{ fontSize: 12, color: '#5A5040', marginBottom: 10 }}>
+            Claude хочет выполнить <span style={{ fontWeight: 600 }}>{item.toolName}</span>:
+          </div>
+          <div style={{
+            background: isConsoleReq ? C.termBg : C.outputBg,
+            border: isConsoleReq ? 'none' : `1px solid ${C.outputBorder}`,
+            borderRadius: 7, padding: '8px 11px',
+            color: isConsoleReq ? C.termText : C.textPrimary, fontFamily: FONT.mono,
+            fontSize: 12, marginBottom: 12, lineHeight: 1.5,
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto',
+          }}>
+            {detail || item.toolName}
+          </div>
+          {item.resolved ? (
+            <div style={{ fontSize: 12, color: '#8A8070' }}>Решение принято</div>
+          ) : online ? (
+            <>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => onAllowPermission(item.requestId)}
+                  style={{
+                    flex: 1, background: C.accent, color: C.onAccent,
+                    borderRadius: 9, padding: 9, border: 'none',
+                    cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                  }}
+                >
+                  Разрешить
+                </button>
+                <button
+                  onClick={() => onDenyPermission(item.requestId)}
+                  style={{
+                    flex: 1, background: C.bgWhite, border: `1px solid ${C.border}`,
+                    color: C.textSecondary, borderRadius: 9, padding: 9,
+                    cursor: 'pointer', fontSize: 13,
+                  }}
+                >
+                  Отклонить
+                </button>
+              </div>
+              <button
+                onClick={() => onAllowAlways(item.requestId)}
+                style={{
+                  marginTop: 8, width: '100%', background: 'none', border: 'none',
+                  cursor: 'pointer', fontSize: 12, color: '#B05C38', padding: '4px 0',
+                }}
+              >
+                Всегда разрешать «{item.toolName}» в этом чате
+              </button>
+            </>
+          ) : (
+            <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
+          )}
+        </div>
+      );
+    }
+
+    case 'file_changed': {
+      const fileName = relPath(item.path, project?.rootPath);
+      return (
+        <div style={{
+          border: `1px solid ${C.borderLight}`, borderRadius: 14, overflow: 'hidden',
+          background: C.bgWhite, boxShadow: '0 2px 10px rgba(60,50,35,0.05)',
+        }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 11,
+            padding: '12px 13px', cursor: onOpenFile ? 'pointer' : 'default',
+            borderBottom: '1px solid #EFE9DD',
+          }}
+            onClick={() => onOpenFile?.(item.path)}
+          >
+            <div style={{
+              width: 28, height: 28, borderRadius: 8,
+              background: '#FBEBE0', color: '#C2693B',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0,
+            }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+              </svg>
+            </div>
+            <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {fileName}
+            </span>
+            <span style={{ fontSize: 11.5, color: '#27AE60', fontFamily: FONT.mono }}>
+              +{item.added}
+            </span>
+            <span style={{ fontSize: 11.5, color: '#C0392B', fontFamily: FONT.mono }}>
+              -{item.removed}
+            </span>
+          </div>
+          <div style={{ padding: '8px 13px', display: 'flex', gap: 6 }}>
+            {onOpenFile && (
+              <button
+                onClick={() => onOpenFile(item.path)}
+                style={{
+                  fontSize: 12, padding: '4px 10px', borderRadius: 6,
+                  border: `1px solid ${C.borderLight}`, background: '#FFF', cursor: 'pointer', color: C.textPrimary,
+                }}
+              >
+                Открыть
+              </button>
+            )}
+            {online && onRevert && (
+              <button
+                onClick={() => onRevert(item.path)}
+                style={{
+                  fontSize: 12, padding: '4px 10px', borderRadius: 6,
+                  border: '1px solid #E0D8CC', background: '#FFF',
+                  cursor: 'pointer', color: '#C0392B',
+                }}
+              >
+                Откатить
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    case 'result': {
+      const ok = item.subtype === 'success';
+      // Склонение числительного: 1 шаг, 2 шага, 5 шагов
+      const stepWord = (n: number) => {
+        const m10 = n % 10, m100 = n % 100;
+        if (m10 === 1 && m100 !== 11) return 'шаг';
+        if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'шага';
+        return 'шагов';
+      };
+      const fmtTok = (n: number) => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
+      const fmtCost = (c: number) => '$' + (c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2));
+      const u = item.usage;
+      const sep = <span style={{ opacity: 0.45 }}>·</span>;
+
+      // Ошибочный итог хода — показываем причину и предлагаем повторить
+      if (!ok) {
+        const REASONS: Record<string, string> = {
+          error_max_turns: 'достигнут лимит ходов',
+          error_during_execution: 'сбой во время выполнения',
+          error_max_budget_usd: 'исчерпан бюджет',
+          error_max_structured_output_retries: 'не удалось получить структурированный ответ',
+        };
+        // Конкретная причина по api_error_status имеет приоритет над общим subtype
+        const apiReason = (status?: string): string | null => {
+          if (!status) return null;
+          const s = status.toLowerCase();
+          if (s.includes('overload')) return 'серверы Anthropic перегружены';
+          if (s.includes('rate') || s.includes('429')) return 'превышен лимит запросов к API';
+          if (s.includes('credit') || s.includes('billing') || s.includes('payment') || s.includes('402')) return 'проблема с биллингом или кредитами';
+          if (s.includes('401') || s.includes('authentication')) return 'ошибка авторизации — проверьте API-ключ';
+          if (s.includes('403') || s.includes('permission')) return 'доступ запрещён (403)';
+          if (s.includes('404') || s.includes('not_found')) return 'ресурс не найден (404)';
+          if (s.includes('529')) return 'сервис временно перегружен (529)';
+          if (s.includes('500') || s.includes('internal')) return 'внутренняя ошибка сервера';
+          if (s.includes('timeout')) return 'таймаут запроса к API';
+          return `ошибка API: ${status}`;
+        };
+        const reason = apiReason(item.apiErrorStatus) ?? REASONS[item.subtype] ?? `ход завершился с ошибкой (${item.subtype})`;
+        return (
+          <div style={{
+            alignSelf: 'center', maxWidth: '100%',
+            background: '#FDECEA', border: '1px solid #F5C6CB', borderRadius: 8,
+            padding: '8px 12px', fontSize: 12.5, color: '#C0392B',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, flexWrap: 'wrap',
+          }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <span style={{ fontWeight: 700 }}>✗</span>
+              <span>{reason}</span>
+              <span style={{ opacity: 0.65, fontFamily: FONT.mono, fontSize: 11 }}>
+                · {item.numTurns} {stepWord(item.numTurns)} · {(item.durationMs / 1000).toFixed(1)}с
+              </span>
+            </span>
+            {online && (
+              <button
+                onClick={onRetry}
+                style={{
+                  fontSize: 12, padding: '4px 10px', borderRadius: 6,
+                  border: '1px solid #C0392B', background: '#FFF', cursor: 'pointer',
+                  color: '#C0392B', whiteSpace: 'nowrap', flexShrink: 0,
+                }}
+              >
+                Повторить
+              </button>
+            )}
+          </div>
+        );
+      }
+
+      // Плашка токенов/времени — только у последнего хода (экономия места); у прошлых скрываем
+      if (!isLastResult) return null;
+
+      return (
+        <div style={{
+          fontSize: 11, color: '#8A8070', alignSelf: 'center',
+          background: '#E8E2D6', borderRadius: 8, padding: '4px 11px',
+          fontFamily: FONT.mono,
+          display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', justifyContent: 'center',
+        }}>
+          <span style={{ color: ok ? C.success : '#C0392B', fontWeight: 700 }}>{ok ? '✓' : '✗'}</span>
+          <span>{item.numTurns} {stepWord(item.numTurns)}</span>
+          {sep}
+          <span>{(item.durationMs / 1000).toFixed(1)}с</span>
+          {u && (u.inputTokens > 0 || u.outputTokens > 0) && (
+            <>
+              {sep}
+              <span title="входные · выходные токены">↑{fmtTok(u.inputTokens)} ↓{fmtTok(u.outputTokens)}</span>
+            </>
+          )}
+          {typeof item.totalCostUsd === 'number' && item.totalCostUsd > 0 && (
+            <>
+              {sep}
+              <span style={{ color: '#B05C38', fontWeight: 700 }}>{fmtCost(item.totalCostUsd)}</span>
+            </>
+          )}
+          {item.permissionDenials && item.permissionDenials.length > 0 && (
+            <>
+              {sep}
+              <span title={`Запрещено: ${item.permissionDenials.join(', ')}`} style={{ color: '#C0392B', fontWeight: 700 }}>
+                ⊘ {item.permissionDenials.length} {item.permissionDenials.length === 1 ? 'запрет' : 'запрета(ов)'}
+              </span>
+            </>
+          )}
+        </div>
+      );
+    }
+
+    case 'rate_limit': {
+      // Мягкий лимит API: ход не упал, claude ждёт сброса окна — янтарный информационный баннер
+      const TYPES: Record<string, string> = {
+        five_hour: '5-часовой лимит',
+        seven_day: 'недельный лимит',
+        weekly: 'недельный лимит',
+      };
+      const label = TYPES[item.limitType] ?? (item.limitType ? `лимит (${item.limitType})` : 'лимит запросов');
+      // "rejected" — лимит реально достигнут; всё прочее (allowed_warning) — приближение
+      const reached = !item.status || item.status === 'rejected';
+      const verb = reached ? 'Достигнут' : 'Приближается';
+      let when = '';
+      if (item.resetsAt) {
+        const dt = new Date(item.resetsAt);
+        if (!isNaN(dt.getTime())) {
+          const sameDay = dt.toDateString() === new Date().toDateString();
+          const hhmm = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+          when = sameDay
+            ? `сбросится в ${hhmm}`
+            : `сбросится ${dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} в ${hhmm}`;
+        }
+      }
+      return (
+        <div style={{
+          alignSelf: 'center', maxWidth: '100%',
+          background: '#FBF0DC', border: '1px solid #EAD2A0', borderRadius: 8,
+          padding: '7px 12px', fontSize: 12.5, color: '#9A6B1E',
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center',
+        }}>
+          <span>⏳</span>
+          <span>{verb} {label}{when ? <span style={{ opacity: 0.75 }}> · {when}</span> : null}</span>
+        </div>
+      );
+    }
+
+    case 'compact_boundary': {
+      const fmtTok = (nn: number) => nn >= 1000 ? (nn / 1000).toFixed(nn >= 10000 ? 0 : 1) + 'k' : String(nn);
+      return (
+        <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center', gap: 10, color: C.textMuted, fontSize: 11, margin: '2px 0' }}>
+          <div style={{ flex: 1, height: 1, background: C.border }} />
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+            <span style={{ color: '#B89B6E' }}>✦</span>
+            контекст сжат{item.trigger === 'manual' ? ' вручную' : ''}
+            {typeof item.preTokens === 'number' && item.preTokens > 0 && (
+              <span style={{ opacity: 0.7 }}>
+                · {typeof item.postTokens === 'number' && item.postTokens > 0
+                  ? `${fmtTok(item.preTokens)} → ${fmtTok(item.postTokens)} токенов`
+                  : `было ${fmtTok(item.preTokens)} токенов`}
+              </span>
+            )}
+          </span>
+          <div style={{ flex: 1, height: 1, background: C.border }} />
+        </div>
+      );
+    }
+
+    case 'resumed':
+      // Разделитель «продолжение чата» убран — декоративный, без полезной нагрузки
+      return null;
+
+    case 'interrupted':
+      return (
+        <div style={{
+          alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
+          background: '#F3ECE2', border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 12px', fontSize: 12, color: C.textSecondary,
+        }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="#9A8F7E"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+            Ход остановлен пользователем
+          </span>
+          {online && (
+            <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: '1px solid #C9BEAD', background: '#FFF', cursor: 'pointer', color: '#5A5043', whiteSpace: 'nowrap' }}>Повторить</button>
+          )}
+        </div>
+      );
+
+    case 'truncated':
+      return (
+        <div style={{
+          alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 8,
+          background: '#FBF0DC', border: '1px solid #EAD2A0', borderRadius: 8, padding: '6px 12px',
+          fontSize: 12.5, color: '#9A6B1E',
+        }}>
+          <span>✂</span>
+          <span>Ответ обрезан — достигнут лимит токенов в ответе</span>
+        </div>
+      );
+
+    case 'redacted_thinking':
+      return (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+          background: '#EFEAE0', border: `1px solid ${C.border}`, borderRadius: 10,
+          fontSize: 12.5, fontStyle: 'italic', color: '#8A8070',
+        }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+          Размышление скрыто (зашифровано провайдером)
+        </div>
+      );
+
+    case 'session_ended':
+      return (
+        <div style={{
+          alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
+          background: '#FDECEA', border: '1px solid #F5C6CB', borderRadius: 8, padding: '7px 12px', fontSize: 12.5, color: '#C0392B',
+        }}>
+          <span>⚠ Сессия прервана — Claude завершился неожиданно</span>
+          {online && (
+            <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: '1px solid #C0392B', background: '#FFF', cursor: 'pointer', color: '#C0392B', whiteSpace: 'nowrap' }}>Повторить</button>
+          )}
+        </div>
+      );
+
+    case 'error':
+      return (
+        <div style={{
+          background: '#FDECEA', borderRadius: 8, padding: '8px 12px',
+          fontSize: 13, color: '#C0392B', border: '1px solid #F5C6CB',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+        }}>
+          <span>⚠ {item.text}</span>
+          {item.canRetry && online && (
+            <button
+              onClick={onRetry}
+              style={{
+                fontSize: 12, padding: '4px 10px', borderRadius: 6,
+                border: '1px solid #C0392B', background: '#FFF',
+                cursor: 'pointer', color: '#C0392B', whiteSpace: 'nowrap', flexShrink: 0,
+              }}
+            >
+              Повторить
+            </button>
+          )}
+        </div>
+      );
+
+    default:
+      return null;
+  }
+});

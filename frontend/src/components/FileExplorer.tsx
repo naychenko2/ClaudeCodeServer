@@ -62,19 +62,23 @@ export function getExplorerCreateInDir(projectId: string): string {
 const normPath = (p?: string | null) => (p ?? '').replace(/\\/g, '/');
 
 // Режим сортировки дерева — глобальная настройка, живёт в localStorage
-type FileSortMode = 'name' | 'date';
+type FileSortMode = 'name' | 'date-desc' | 'date-asc';
 const SORT_MODE_KEY = 'cc_files_sort';
-const loadSortMode = (): FileSortMode =>
-  localStorage.getItem(SORT_MODE_KEY) === 'date' ? 'date' : 'name';
+const loadSortMode = (): FileSortMode => {
+  const v = localStorage.getItem(SORT_MODE_KEY);
+  if (v === 'date' || v === 'date-desc') return 'date-desc'; // 'date' — старое значение до появления направлений
+  if (v === 'date-asc') return 'date-asc';
+  return 'name';
+};
 
 // Единая сортировка записей: папки сверху, затем по имени (без учёта регистра)
-// или по дате изменения (свежие сверху, при равенстве — по имени)
+// или по дате изменения (в выбранном направлении, при равенстве — по имени)
 const sortEntries = (entries: FileEntry[], mode: FileSortMode): FileEntry[] =>
   [...entries].sort((a, b) => {
     if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-    if (mode === 'date') {
-      const d = Date.parse(b.modified) - Date.parse(a.modified);
-      if (d) return d;
+    if (mode !== 'name') {
+      const d = Date.parse(a.modified) - Date.parse(b.modified);
+      if (d) return mode === 'date-asc' ? d : -d;
     }
     return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
   });
@@ -1142,18 +1146,28 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               size="md"
               active={showSortMenu}
               onClick={() => setShowSortMenu(v => !v)}
-              title={sortMode === 'name' ? 'Сортировка: по имени' : 'Сортировка: по дате изменения'}
+              title={
+                sortMode === 'name' ? 'Сортировка: по имени'
+                : sortMode === 'date-desc' ? 'Сортировка: сначала новые'
+                : 'Сортировка: сначала старые'
+              }
             >
               {sortMode === 'name' ? (
                 // arrow-down-a-z
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="m3 16 4 4 4-4M7 20V4M20 8h-5M15 10V6.5a2.5 2.5 0 0 1 5 0V10M15 14h5l-5 6h5"/>
                 </svg>
-              ) : (
-                // clock-arrow-down
+              ) : sortMode === 'date-desc' ? (
+                // clock-arrow-down — сначала новые
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 6v6l2 1M12.34 21.98A10 10 0 1 1 21.98 12.33"/>
                   <path d="m14 18 4 4 4-4M18 14v8"/>
+                </svg>
+              ) : (
+                // clock-arrow-up — сначала старые
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 6v6l2 1M12.34 21.98A10 10 0 1 1 21.98 12.33"/>
+                  <path d="m14 18 4-4 4 4M18 22v-8"/>
                 </svg>
               )}
             </IconButton>
@@ -1165,9 +1179,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                   onClick={() => changeSortMode('name')}
                 />
                 <MenuItem
-                  icon={sortMode === 'date' ? <polyline points="20 6 9 17 4 12" /> : <g />}
-                  label="По дате изменения"
-                  onClick={() => changeSortMode('date')}
+                  icon={sortMode === 'date-desc' ? <polyline points="20 6 9 17 4 12" /> : <g />}
+                  label="Сначала новые"
+                  onClick={() => changeSortMode('date-desc')}
+                />
+                <MenuItem
+                  icon={sortMode === 'date-asc' ? <polyline points="20 6 9 17 4 12" /> : <g />}
+                  label="Сначала старые"
+                  onClick={() => changeSortMode('date-asc')}
                 />
               </Menu>
             )}

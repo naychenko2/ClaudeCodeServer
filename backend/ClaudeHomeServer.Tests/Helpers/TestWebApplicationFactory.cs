@@ -32,6 +32,10 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
     public const string TestUsername = "testuser";
     public const string TestPassword = "testpassword";
 
+    // Второй пользователь — для тестов изоляции по владельцу
+    public const string SecondUsername = "seconduser";
+    public const string SecondPassword = "secondpassword";
+
     public string TempDir { get; } = Path.Combine(Path.GetTempPath(), "ccs_tests_" + Guid.NewGuid().ToString("N"));
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -65,27 +69,37 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
 
     private static void CreateUsersFile(string dir)
     {
+        var hasher = new PasswordHasher<User>();
         var user = new User { Username = TestUsername, Role = "admin" };
-        user.PasswordHash = new PasswordHasher<User>().HashPassword(user, TestPassword);
-        var usersFile = new { version = 1, users = new[] { user } };
+        user.PasswordHash = hasher.HashPassword(user, TestPassword);
+        var second = new User { Username = SecondUsername, Role = "user" };
+        second.PasswordHash = hasher.HashPassword(second, SecondPassword);
+        var usersFile = new { version = 1, users = new[] { user, second } };
         File.WriteAllText(
             Path.Combine(dir, "users.json"),
             JsonSerializer.Serialize(usersFile));
     }
 
-    /// <summary>Клиент с JWT, полученным через POST /api/auth/login.</summary>
-    public HttpClient CreateAuthenticatedClient()
+    /// <summary>JWT указанного пользователя через POST /api/auth/login.</summary>
+    public string GetToken(string username, string password)
     {
-        var client = CreateClient();
-        var response = client.PostAsJsonAsync("/api/auth/login", new
-        {
-            username = TestUsername,
-            password = TestPassword
-        }).GetAwaiter().GetResult();
-
+        using var client = CreateClient();
+        var response = client.PostAsJsonAsync("/api/auth/login", new { username, password })
+            .GetAwaiter().GetResult();
         response.EnsureSuccessStatusCode();
         var body = response.Content.ReadFromJsonAsync<JsonElement>().GetAwaiter().GetResult();
-        var token = body.GetProperty("token").GetString()!;
+        return body.GetProperty("token").GetString()!;
+    }
+
+    /// <summary>Клиент с JWT основного тестового пользователя.</summary>
+    public HttpClient CreateAuthenticatedClient() =>
+        CreateAuthenticatedClient(TestUsername, TestPassword);
+
+    /// <summary>Клиент с JWT указанного пользователя.</summary>
+    public HttpClient CreateAuthenticatedClient(string username, string password)
+    {
+        var client = CreateClient();
+        var token = GetToken(username, password);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return client;
     }

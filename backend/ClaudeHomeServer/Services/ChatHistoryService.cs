@@ -19,23 +19,16 @@ public class ChatHistoryService
         _basePath = Path.Combine(dataDir, "sessions");
     }
 
-    public async Task<List<StoredMessage>> LoadAsync(string claudeSessionId)
+    public Task<List<StoredMessage>> LoadAsync(string claudeSessionId)
     {
         var path = GetPath(claudeSessionId);
-        if (!File.Exists(path)) return [];
-        try
-        {
-            var json = await File.ReadAllTextAsync(path);
-            return JsonSerializer.Deserialize<List<StoredMessage>>(json, _opts) ?? [];
-        }
-        catch { return []; }
+        return Task.FromResult(JsonFileStore.Load<List<StoredMessage>>(path, _opts) ?? []);
     }
 
-    public async Task SaveAsync(string claudeSessionId, List<StoredMessage> messages)
+    public Task SaveAsync(string claudeSessionId, List<StoredMessage> messages)
     {
-        var path = GetPath(claudeSessionId);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(messages, _opts));
+        JsonFileStore.Save(GetPath(claudeSessionId), messages, _opts);
+        return Task.CompletedTask;
     }
 
     private string GetPath(string id) => Path.Combine(_basePath, id, "history.json");

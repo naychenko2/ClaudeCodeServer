@@ -29,16 +29,12 @@ public class UserStore
 
     private void Load(ILogger logger)
     {
-        if (File.Exists(_filePath))
+        // Повреждённый файл JsonFileStore сохранит в .bak и вернёт null — тогда создаём дефолтного пользователя
+        var doc = JsonFileStore.Load<UsersFile>(_filePath, JsonOptions, logger);
+        if (doc is not null)
         {
-            try
-            {
-                var json = File.ReadAllText(_filePath);
-                var doc = JsonSerializer.Deserialize<UsersFile>(json, JsonOptions);
-                _users = doc?.Users ?? [];
-                return;
-            }
-            catch { /* повреждённый файл — пересоздадим */ }
+            _users = doc.Users ?? [];
+            return;
         }
 
         var admin = new User { Username = "admin", Role = "admin" };
@@ -58,9 +54,7 @@ public class UserStore
     {
         lock (_lock)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-            File.WriteAllText(_filePath, JsonSerializer.Serialize(
-                new UsersFile { Users = _users }, JsonOptions));
+            JsonFileStore.Save(_filePath, new UsersFile { Users = _users }, JsonOptions);
         }
     }
 

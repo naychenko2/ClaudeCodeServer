@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Text.Json;
 using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
@@ -74,26 +73,21 @@ public class SyncService
 
     private void Load()
     {
-        if (!File.Exists(_storePath)) return;
-        try
-        {
-            var json = File.ReadAllText(_storePath);
-            var data = JsonSerializer.Deserialize<Dictionary<string, List<SyncMark>>>(json);
-            if (data is null) return;
-            foreach (var (projectId, list) in data)
-                _marks[projectId] = list;
-        }
-        catch { /* первый запуск или повреждённый файл */ }
+        var data = JsonFileStore.Load<Dictionary<string, List<SyncMark>>>(_storePath);
+        if (data is null) return;
+        foreach (var (projectId, list) in data)
+            _marks[projectId] = list;
     }
 
     private void Save()
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
-            File.WriteAllText(_storePath, JsonSerializer.Serialize(
-                _marks.ToDictionary(kv => kv.Key, kv => kv.Value)));
+            JsonFileStore.Save(_storePath, _marks.ToDictionary(kv => kv.Key, kv => kv.Value));
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SyncService] Не удалось сохранить {_storePath}: {ex.Message}");
+        }
     }
 }

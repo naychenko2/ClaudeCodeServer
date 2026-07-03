@@ -79,17 +79,11 @@ public class ProjectGroupManager
 
     private void Load()
     {
-        if (!File.Exists(_storePath)) return;
-        try
-        {
-            var json = File.ReadAllText(_storePath);
-            var list = JsonSerializer.Deserialize<List<ProjectGroup>>(json,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (list is null) return;
+        var list = JsonFileStore.Load<List<ProjectGroup>>(_storePath,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (list is not null)
             foreach (var g in list)
                 _groups[g.Id] = g;
-        }
-        catch { /* первый запуск или повреждённый файл */ }
 
         // Миграция: группы без OwnerId → первый пользователь
         var firstUser = _users.GetFirst();
@@ -109,8 +103,7 @@ public class ProjectGroupManager
     {
         lock (_saveLock)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
-            File.WriteAllText(_storePath, JsonSerializer.Serialize(_groups.Values.ToList()));
+            JsonFileStore.Save(_storePath, _groups.Values.ToList());
         }
     }
 }

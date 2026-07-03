@@ -188,25 +188,18 @@ public class TaskManager
 
     private void Load()
     {
-        if (!File.Exists(_storePath)) return;
-        try
-        {
-            var json = File.ReadAllText(_storePath);
-            var list = JsonSerializer.Deserialize<List<TaskItem>>(json,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (list is null) return;
-            foreach (var t in list)
-                _tasks[t.Id] = t;
-        }
-        catch { /* первый запуск или повреждённый файл */ }
+        var list = JsonFileStore.Load<List<TaskItem>>(_storePath,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (list is null) return;
+        foreach (var t in list)
+            _tasks[t.Id] = t;
     }
 
     private void Save()
     {
         lock (_saveLock)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
-            File.WriteAllText(_storePath, JsonSerializer.Serialize(_tasks.Values.ToList()));
+            JsonFileStore.Save(_storePath, _tasks.Values.ToList());
         }
     }
 }

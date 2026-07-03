@@ -30,19 +30,12 @@ public class PushSubscriptionStore
 
     private void Load()
     {
-        if (!File.Exists(_filePath)) return;
-        try
-        {
-            var json = File.ReadAllText(_filePath);
-            _byUser = JsonSerializer.Deserialize<Dictionary<string, List<PushSubscriptionRecord>>>(json, JsonOptions) ?? new();
-        }
-        catch { /* первый запуск или повреждённый файл */ }
+        _byUser = JsonFileStore.Load<Dictionary<string, List<PushSubscriptionRecord>>>(_filePath, JsonOptions) ?? new();
     }
 
     private void Save()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-        File.WriteAllText(_filePath, JsonSerializer.Serialize(_byUser, JsonOptions));
+        JsonFileStore.Save(_filePath, _byUser, JsonOptions);
     }
 
     /// <summary>Добавляет или обновляет подписку устройства (ключ — endpoint).</summary>

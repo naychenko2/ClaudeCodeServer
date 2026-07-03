@@ -165,17 +165,11 @@ public class ProjectManager
 
     private void Load()
     {
-        if (!File.Exists(_storePath)) return;
-        try
-        {
-            var json = File.ReadAllText(_storePath);
-            var list = JsonSerializer.Deserialize<List<Project>>(json,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (list is null) return;
+        var list = JsonFileStore.Load<List<Project>>(_storePath,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (list is not null)
             foreach (var p in list)
                 _projects[p.Id] = p;
-        }
-        catch { /* первый запуск или повреждённый файл */ }
 
         // Миграция: проекты без OwnerId → первый пользователь
         var firstUser = _users.GetFirst();
@@ -235,8 +229,7 @@ public class ProjectManager
     {
         lock (_saveLock)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
-            File.WriteAllText(_storePath, JsonSerializer.Serialize(_projects.Values.ToList()));
+            JsonFileStore.Save(_storePath, _projects.Values.ToList());
         }
     }
 }

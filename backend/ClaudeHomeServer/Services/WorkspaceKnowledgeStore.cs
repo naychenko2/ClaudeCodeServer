@@ -73,25 +73,18 @@ public class WorkspaceKnowledgeStore
 
     private void Load()
     {
-        if (!File.Exists(_storePath)) return;
-        try
-        {
-            var json = File.ReadAllText(_storePath);
-            var list = JsonSerializer.Deserialize<List<WorkspaceKnowledge>>(json,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (list is null) return;
-            foreach (var wk in list)
-                _store[NormalizePath(wk.RootPath)] = wk;
-        }
-        catch { }
+        var list = JsonFileStore.Load<List<WorkspaceKnowledge>>(_storePath,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (list is null) return;
+        foreach (var wk in list)
+            _store[NormalizePath(wk.RootPath)] = wk;
     }
 
     private void Persist()
     {
         lock (_saveLock)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
-            File.WriteAllText(_storePath, JsonSerializer.Serialize(_store.Values.ToList()));
+            JsonFileStore.Save(_storePath, _store.Values.ToList());
         }
     }
 }

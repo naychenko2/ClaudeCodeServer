@@ -46,7 +46,7 @@ public static class FeatureFlagCatalog
             Title: "Напоминания о задачах",
             Description: "Напоминание к сроку задачи (за N минут) с уведомлением в приложении и push на устройства.",
             Default: false,
-            Stage: "dev"),
+            Stage: "beta"),
 
         // Регулярные задачи: правило повторения, новый экземпляр при завершении.
         new FeatureFlagDefinition(
@@ -54,7 +54,7 @@ public static class FeatureFlagCatalog
             Title: "Регулярные задачи",
             Description: "Повторяющиеся задачи: ежедневно/еженедельно/ежемесячно/ежегодно, следующий экземпляр создаётся при завершении.",
             Default: false,
-            Stage: "dev"),
+            Stage: "beta"),
 
         // Claude-исполнитель: запуск сессии по задаче кнопкой и автоматически по сроку.
         new FeatureFlagDefinition(
@@ -62,7 +62,7 @@ public static class FeatureFlagCatalog
             Title: "Claude-исполнитель задач",
             Description: "Задачи с исполнителем Claude выполняются в отдельном чате: вручную кнопкой или автоматически при наступлении срока.",
             Default: false,
-            Stage: "dev"),
+            Stage: "beta"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

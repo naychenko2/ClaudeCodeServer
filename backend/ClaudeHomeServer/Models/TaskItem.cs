@@ -24,6 +24,10 @@ public class TaskItem
     // Общий id серии повторяющейся задачи (= id первого экземпляра)
     public string? SeriesId { get; set; }
     public string? LinkedSessionId { get; set; }
+    // Claude-исполнитель: отметка запуска (идемпотентность автозапуска, переживает рестарт)
+    public DateTime? ClaudeStartedAt { get; set; }
+    // Итог последнего запуска: success | error; null — ещё выполняется или не запускалась
+    public string? ClaudeResult { get; set; }
     public List<string> LinkedFiles { get; set; } = [];
     public List<TaskSubtask> Subtasks { get; set; } = [];
     public List<string> Labels { get; set; } = [];

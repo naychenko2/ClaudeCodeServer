@@ -76,6 +76,8 @@ export interface Task {
   recurrence?: TaskRecurrence;
   seriesId?: string;         // общий id серии регулярной задачи
   linkedSessionId?: string;
+  claudeStartedAt?: string;  // отметка запуска Claude-исполнителя
+  claudeResult?: 'success' | 'error';  // итог последнего запуска (null — выполняется/не запускалась)
   linkedFiles: string[];
   subtasks: TaskSubtask[];
   labels: string[];

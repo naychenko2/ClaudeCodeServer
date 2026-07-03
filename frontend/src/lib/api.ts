@@ -125,6 +125,8 @@ export const api = {
     update: (taskId: string, dto: UpdateTaskDto) =>
       request<Task>(`/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(dto) }),
     delete: (taskId: string) => request<void>(`/tasks/${taskId}`, { method: 'DELETE' }),
+    // Запустить выполнение задачи Claude-ом (отдельная сессия)
+    execute: (taskId: string) => request<Task>(`/tasks/${taskId}/execute`, { method: 'POST' }),
     // Генерация Claude: описание по названию (+контекст проекта), подзадачи по описанию
     aiDescription: (title: string, projectId?: string | null) =>
       request<{ description: string }>('/tasks/ai/description', {

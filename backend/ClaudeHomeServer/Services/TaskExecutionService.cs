@@ -1,0 +1,159 @@
+using System.Text;
+using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
+using Microsoft.AspNetCore.SignalR;
+
+namespace ClaudeHomeServer.Services;
+
+// Claude-исполнитель задач: запускает отдельную чат-сессию по задаче (кнопкой или
+// автозапуском по сроку), следит за её ходом через SessionManager.OnSessionMessage
+// и уведомляет пользователя (тост + push) о завершении и запросах разрешений.
+public class TaskExecutionService
+{
+    private readonly TaskManager _tasks;
+    private readonly SessionManager _sessions;
+    private readonly IHubContext<SessionHub> _hub;
+    private readonly PushService _push;
+    private readonly ILogger<TaskExecutionService> _log;
+
+    public TaskExecutionService(
+        TaskManager tasks, SessionManager sessions,
+        IHubContext<SessionHub> hub, PushService push, ILogger<TaskExecutionService> log)
+    {
+        _tasks = tasks;
+        _sessions = sessions;
+        _hub = hub;
+        _push = push;
+        _log = log;
+        _sessions.OnSessionMessage += OnSessionMessageAsync;
+    }
+
+    /// <summary>
+    /// Запуск выполнения задачи Claude-ом: отдельная сессия в проекте задачи
+    /// (личная — чат вне проекта) в режиме acceptEdits, первым сообщением — постановка.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">задача не подходит или уже выполняется</exception>
+    public async Task<TaskItem> ExecuteAsync(TaskItem task, bool auto)
+    {
+        if (task.Status == TaskItemStatus.Done)
+            throw new InvalidOperationException("Задача уже завершена");
+        if (task.OwnerId is null)
+            throw new InvalidOperationException("У задачи нет владельца");
+
+        // Не более одной живой сессии на задачу
+        if (task.LinkedSessionId is not null &&
+            _sessions.GetById(task.LinkedSessionId) is { } linked &&
+            linked.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting)
+            throw new InvalidOperationException("По задаче уже работает сессия");
+
+        var name = "Задача: " + (task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title);
+        var session = task.ProjectId is not null
+            ? await _sessions.CreateAsync(task.ProjectId, ClaudeMode.AcceptEdits, name: name)
+            : await _sessions.CreateChatAsync(task.OwnerId, ClaudeMode.AcceptEdits, name: name);
+
+        var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow)
+            ?? throw new InvalidOperationException("Задача удалена");
+        await _hub.BroadcastTaskChangedAsync(task.OwnerId, "updated", updated);
+
+        await _sessions.SendMessageAsync(session.Id, BuildPrompt(updated), []);
+
+        if (auto)
+            await NotifyAsync(updated, new NotificationMessage(
+                Title: "Claude взял задачу в работу",
+                Body: updated.Title,
+                Url: TaskSchedulerService.TaskUrl(updated),
+                Kind: "claude"));
+
+        _log.LogInformation("Claude-исполнитель запущен ({Trigger}): задача {TaskId} «{Title}», сессия {SessionId}",
+            auto ? "автозапуск" : "вручную", updated.Id, updated.Title, session.Id);
+        return updated;
+    }
+
+    // Постановка задачи для Claude: контекст + правила ведения статуса через MCP tasks_*
+    private static string BuildPrompt(TaskItem task)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Выполни задачу из трекера (id задачи: {task.Id}).");
+        sb.AppendLine();
+        sb.AppendLine($"# {task.Title}");
+        if (!string.IsNullOrWhiteSpace(task.Description))
+        {
+            sb.AppendLine();
+            sb.AppendLine(task.Description);
+        }
+        if (task.Subtasks.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Подзадачи:");
+            foreach (var s in task.Subtasks)
+                sb.AppendLine($"- [{(s.IsDone ? "x" : " ")}] {s.Title} (id: {s.Id})");
+        }
+        if (task.LinkedFiles.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Связанные файлы:");
+            foreach (var f in task.LinkedFiles)
+                sb.AppendLine($"- {f}");
+        }
+        sb.AppendLine();
+        sb.AppendLine("Правила:");
+        sb.AppendLine("- Задача уже переведена в статус inProgress; веди её через MCP-инструменты tasks_*.");
+        sb.AppendLine("- Выполненные подзадачи отмечай через tasks_toggle_subtask.");
+        sb.AppendLine("- Когда всё сделано и проверено — заверши задачу через tasks_complete.");
+        sb.AppendLine("- Если выполнить невозможно — не завершай задачу, а кратко опиши причину.");
+        sb.AppendLine("- В конце подведи короткий итог сделанного.");
+        return sb.ToString();
+    }
+
+    // Наблюдатель сообщений всех сессий: реагируем только на сессии, привязанные к задачам
+    private async Task OnSessionMessageAsync(Session session, ServerMessage msg)
+    {
+        if (msg is not (ResultMessage or PermissionRequestMessage or AskQuestionMessage)) return;
+
+        // Ищем задачу этой сессии с незавершённым запуском исполнителя
+        var task = FindTracked(session.Id);
+        if (task is null) return;
+
+        switch (msg)
+        {
+            case ResultMessage result:
+            {
+                var ok = result.Subtype != "error";
+                var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
+                if (updated is null) return;
+                await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
+
+                // Claude завершает задачу сам через tasks_complete; если статус не done —
+                // результат требует внимания пользователя
+                var body = updated.Status == TaskItemStatus.Done
+                    ? updated.Title
+                    : $"{updated.Title} — проверь результат в чате";
+                await NotifyAsync(updated, new NotificationMessage(
+                    Title: ok ? "Claude завершил работу над задачей" : "Claude не смог выполнить задачу",
+                    Body: body,
+                    Url: TaskSchedulerService.TaskUrl(updated),
+                    Kind: "claude"));
+                break;
+            }
+            case PermissionRequestMessage or AskQuestionMessage:
+                await NotifyAsync(task, new NotificationMessage(
+                    Title: "Claude ждёт ответа по задаче",
+                    Body: task.Title,
+                    Url: TaskSchedulerService.TaskUrl(task),
+                    Kind: "claude"));
+                break;
+        }
+    }
+
+    // Задача, привязанная к сессии, по которой идёт незавершённый запуск исполнителя
+    private TaskItem? FindTracked(string sessionId) =>
+        _tasks.GetBySession(sessionId) is { ClaudeStartedAt: not null, ClaudeResult: null } t ? t : null;
+
+    private async Task NotifyAsync(TaskItem task, NotificationMessage message)
+    {
+        await _hub.Clients.Group("user_" + task.OwnerId).SendAsync("message", message);
+        await _push.SendToUserAsync(task.OwnerId!, message);
+    }
+}

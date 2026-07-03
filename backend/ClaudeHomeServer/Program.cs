@@ -53,6 +53,7 @@ builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
+builder.Services.AddSingleton<TaskExecutionService>();
 builder.Services.AddHostedService<TaskSchedulerService>();
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");

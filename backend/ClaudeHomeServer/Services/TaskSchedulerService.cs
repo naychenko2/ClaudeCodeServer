@@ -15,9 +15,13 @@ public class TaskSchedulerService(
     FeatureFlagService flags,
     IHubContext<SessionHub> hub,
     PushService push,
+    TaskExecutionService executor,
     ILogger<TaskSchedulerService> log) : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
+    // Автозапуск только для сроков, наступивших недавно: защита от лавины сессий
+    // по старым просроченным задачам при включении флага или долгом простое сервера
+    private static readonly TimeSpan AutoStartWindow = TimeSpan.FromHours(24);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -40,14 +44,36 @@ public class TaskSchedulerService(
         {
             var effective = flags.GetEffective(user.Id);
             var remindersOn = effective.GetValueOrDefault("task-reminders");
-            if (!remindersOn) continue;
+            var execOn = effective.GetValueOrDefault("task-claude-exec");
+            if (!remindersOn && !execOn) continue;
 
             var tz = TaskDueCalculator.ResolveTimeZone(user.TimeZone);
             foreach (var task in tasks.GetByOwner(user.Id))
             {
                 if (task.Status == TaskItemStatus.Done) continue;
-                await ProcessReminderAsync(task, tz, nowUtc);
+                if (remindersOn) await ProcessReminderAsync(task, tz, nowUtc);
+                if (execOn) await ProcessClaudeAutoStartAsync(task, tz, nowUtc);
             }
+        }
+    }
+
+    // Автозапуск Claude-исполнителя в момент срока: assignee=Claude, ещё не запускалась
+    private async Task ProcessClaudeAutoStartAsync(TaskItem task, TimeZoneInfo tz, DateTime nowUtc)
+    {
+        if (task.Assignee != TaskItemAssignee.Claude) return;
+        if (task.Status != TaskItemStatus.Todo || task.ClaudeStartedAt is not null) return;
+
+        var dueUtc = TaskDueCalculator.DueMomentUtc(task, tz);
+        if (dueUtc is null || dueUtc > nowUtc || nowUtc - dueUtc > AutoStartWindow) return;
+
+        try
+        {
+            await executor.ExecuteAsync(task, auto: true);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Автозапуск Claude-исполнителя не удался: задача {TaskId} «{Title}»",
+                task.Id, task.Title);
         }
     }
 

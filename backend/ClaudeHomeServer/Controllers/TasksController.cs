@@ -51,7 +51,7 @@ public class ProjectTasksController(
 [Route("api/tasks")]
 public class TasksController(
     TaskManager tasks, IHubContext<SessionHub> hub, TaskAiService ai, ProjectManager projects,
-    FeatureFlagService flags) : ControllerBase
+    FeatureFlagService flags, TaskExecutionService executor) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -161,6 +161,25 @@ public class TasksController(
         }
 
         return Ok(updated);
+    }
+
+    // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)
+    [HttpPost("{taskId}/execute")]
+    public async Task<IActionResult> Execute(string taskId)
+    {
+        var task = tasks.GetById(taskId);
+        if (task is null || task.OwnerId != UserId) return NotFound();
+        if (!flags.GetEffective(UserId).GetValueOrDefault("task-claude-exec"))
+            return BadRequest(new { error = "Функция «Claude-исполнитель задач» выключена" });
+
+        try
+        {
+            return Ok(await executor.ExecuteAsync(task, auto: false));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [HttpDelete("{taskId}")]

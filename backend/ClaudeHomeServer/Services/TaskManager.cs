@@ -21,6 +21,10 @@ public class TaskManager
 
     public TaskItem? GetById(string id) => _tasks.GetValueOrDefault(id);
 
+    // Задача, к которой привязана сессия (Claude-исполнитель)
+    public TaskItem? GetBySession(string sessionId) =>
+        _tasks.Values.FirstOrDefault(t => t.LinkedSessionId == sessionId);
+
     public IReadOnlyCollection<TaskItem> GetByOwner(string userId) =>
         _tasks.Values.Where(t => t.OwnerId == userId)
             .OrderBy(t => t.DueDate ?? "9999").ThenBy(t => t.CreatedAt).ToList();
@@ -136,6 +140,31 @@ public class TaskManager
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
         task.ReminderSentAt = atUtc;
+        Save();
+        return task;
+    }
+
+    // Запуск Claude-исполнителя: связка с сессией + перевод в работу
+    public TaskItem? MarkClaudeStarted(string id, string sessionId, DateTime atUtc)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.LinkedSessionId = sessionId;
+        task.ClaudeStartedAt = atUtc;
+        task.ClaudeResult = null;
+        if (task.Status == TaskItemStatus.Todo) task.Status = TaskItemStatus.InProgress;
+        task.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return task;
+    }
+
+    // Итог хода Claude-исполнителя (success/error)
+    public TaskItem? MarkClaudeResult(string id, string result)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.ClaudeResult = result;
+        task.UpdatedAt = DateTime.UtcNow;
         Save();
         return task;
     }

@@ -19,6 +19,7 @@ import {
   PriorityFlag, SectionLabel, SubtaskCheck,
 } from './bits';
 import { TaskEditForm } from './TaskEditForm';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 
 interface Props {
   task: Task;
@@ -58,6 +59,9 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const claudeExecEnabled = useFeature(FLAGS.taskClaudeExec);
+  const [executing, setExecuting] = useState(false);
+  const [execError, setExecError] = useState<string | null>(null);
 
   // Имя связанной сессии (только у проектных задач)
   useEffect(() => {
@@ -115,6 +119,47 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         {task.dueDate && ` · ${dueLabel(task.dueDate)}${task.dueTime ? ` ${task.dueTime}` : ''}`}
       </div>
     </div>
+  );
+
+  // Запуск Claude-исполнителя: сессия создаётся на бэке, стор обновится по task_changed
+  const handleExecute = async () => {
+    if (executing) return;
+    setExecuting(true);
+    setExecError(null);
+    try {
+      await api.tasks.execute(task.id);
+    } catch (e) {
+      setExecError(e instanceof Error ? e.message : 'Не удалось запустить выполнение');
+    } finally {
+      setExecuting(false);
+    }
+  };
+
+  // Живая сессия по задаче уже идёт — не показываем кнопку повторного запуска
+  const claudeRunning = !!task.claudeStartedAt && !task.claudeResult && task.status !== 'done';
+  const executeButton = claudeExecEnabled && task.assignee === 'claude' && task.status !== 'done' && !claudeRunning && (
+    <button
+      onClick={handleExecute}
+      disabled={executing}
+      title="Создать чат и поручить задачу Claude"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+        padding: '0 14px', height: 32, cursor: executing ? 'default' : 'pointer',
+        border: 'none', borderRadius: R.md,
+        background: C.accent, color: C.onAccent,
+        fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
+        opacity: executing ? 0.6 : 1,
+      }}
+    >
+      {executing
+        ? <span className="tool-spinner" style={{ width: 12, height: 12, flexShrink: 0 }} />
+        : (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+            <polygon points="6 3 20 12 6 21" />
+          </svg>
+        )}
+      {executing ? 'Запуск…' : 'Выполнить с Claude'}
+    </button>
   );
 
   const editButton = (
@@ -222,6 +267,25 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
       }}>
         {task.title}
       </h1>
+
+      {execError && (
+        <div style={{ fontFamily: FONT.sans, fontSize: 12.5, color: C.danger, marginBottom: 12 }}>
+          {execError}
+        </div>
+      )}
+
+      {/* Claude сейчас работает над задачей */}
+      {claudeRunning && (
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 12,
+          padding: '6px 12px', borderRadius: 999,
+          border: `1px solid ${C.accentMuted}`, background: C.accentLight,
+          fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, color: C.accent,
+        }}>
+          <span className="tool-spinner" style={{ width: 11, height: 11, flexShrink: 0 }} />
+          Claude работает над задачей
+        </div>
+      )}
 
       {/* Ряд чипов */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 22 }}>
@@ -392,6 +456,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           <BackButton onClick={onBack ?? (() => {})} style={{ flex: 1, minWidth: 0 }} title="Назад к списку">
             {headerTitleBlock}
           </BackButton>
+          {executeButton}
           {editButton}
         </Toolbar>
 
@@ -443,6 +508,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
       {/* Шапка — как тулбар чата: название/мета слева, действия справа */}
       <Toolbar>
         {headerTitleBlock}
+        {executeButton}
         {editButton}
         <IconButton size="md" tone="danger" onClick={() => setConfirmDelete(true)} title="Удалить задачу">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

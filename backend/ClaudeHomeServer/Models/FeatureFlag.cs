@@ -38,7 +38,7 @@ public static class FeatureFlagCatalog
             Title: "Задачи и календарь",
             Description: "Раздел «Календарь» со всеми задачами и вкладка «Задачи» внутри проекта.",
             Default: false,
-            Stage: "dev"),
+            Stage: "beta"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

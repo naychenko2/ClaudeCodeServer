@@ -46,8 +46,8 @@ public class SessionManager
     private readonly FeatureFlagService _featureFlags;
     private readonly Microsoft.AspNetCore.Hosting.Server.IServer _server;
     private readonly IConfiguration _config;
-    // Сервисные токены MCP tasks-server — по одному на владельца, на жизнь процесса
-    private readonly ConcurrentDictionary<string, string> _tasksTokens = new();
+    // Сервисные токены MCP tasks-server — по одному на владельца, с перевыпуском до истечения
+    private readonly ConcurrentDictionary<string, (string Token, DateTime IssuedAt)> _tasksTokens = new();
 
     // Наблюдатель сообщений сессий (Claude-исполнитель задач слушает result/permission).
     // Вызывается после обновления статуса и broadcast; его ошибки не роняют пайплайн
@@ -106,36 +106,35 @@ public class SessionManager
     private TasksMcpContext? BuildTasksContext(string? ownerId, string? projectId)
     {
         if (ownerId is null) return null;
-        if (!_featureFlags.GetEffective(ownerId).TryGetValue("tasks", out var enabled) || !enabled)
+        if (!_featureFlags.GetEffective(ownerId).TryGetValue(FeatureFlagKeys.Tasks, out var enabled) || !enabled)
             return null;
-        var token = _tasksTokens.GetOrAdd(ownerId, id => _jwt.IssueServiceToken(id));
-        return new TasksMcpContext(ResolveTasksApiUrl(), token, projectId);
+        // Перевыпуск за сутки до истечения — сервер может жить дольше срока токена
+        var entry = _tasksTokens.AddOrUpdate(ownerId,
+            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
+            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
+                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
+                : old);
+        return new TasksMcpContext(ResolveTasksApiUrl(), entry.Token, projectId);
     }
 
     // --- Персистентность сессий ---
 
     private void LoadSessions()
     {
-        if (!File.Exists(_sessionsFilePath)) return;
-        try
+        var list = JsonFileStore.Load<List<Session>>(_sessionsFilePath, _jsonOpts);
+        if (list is null) return;
+        foreach (var session in list)
         {
-            var json = File.ReadAllText(_sessionsFilePath);
-            var list = JsonSerializer.Deserialize<List<Session>>(json, _jsonOpts);
-            if (list is null) return;
-            foreach (var session in list)
+            // Процесс умер при рестарте — "живые" статусы переводим в orphaned
+            session.Status = session.Status switch
             {
-                // Процесс умер при рестарте — "живые" статусы переводим в orphaned
-                session.Status = session.Status switch
-                {
-                    SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting
-                        => SessionStatus.Orphaned,
-                    SessionStatus.Active => SessionStatus.Finished,
-                    _ => session.Status,
-                };
-                _sessions[session.Id] = new SessionEntry { Info = session };
-            }
+                SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting
+                    => SessionStatus.Orphaned,
+                SessionStatus.Active => SessionStatus.Finished,
+                _ => session.Status,
+            };
+            _sessions[session.Id] = new SessionEntry { Info = session };
         }
-        catch { }
     }
 
     private void SaveSessions()
@@ -144,11 +143,13 @@ public class SessionManager
         {
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(_sessionsFilePath)!);
                 var sessions = _sessions.Values.Select(e => e.Info).ToList();
-                File.WriteAllText(_sessionsFilePath, JsonSerializer.Serialize(sessions, _jsonOpts));
+                JsonFileStore.Save(_sessionsFilePath, sessions, _jsonOpts);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Не удалось сохранить {_sessionsFilePath}: {ex.Message}");
+            }
         }
     }
 
@@ -310,10 +311,7 @@ public class SessionManager
             }
         }
 
-        entry.Info.Status = SessionStatus.Working;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        await BroadcastStatusChangeAsync(sessionId, entry.Info,
-            SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
+        await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
         entry.Accumulator?.OnUserMessage(text, attachedPaths);
         await entry.Process!.SendMessageAsync(text, attachedPaths);
@@ -328,10 +326,7 @@ public class SessionManager
 
         await EnsureProcessAsync(sessionId, entry);
 
-        entry.Info.Status = SessionStatus.Working;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        await BroadcastStatusChangeAsync(sessionId, entry.Info,
-            SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
+        await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
         await entry.Process!.CompactAsync();
     }
@@ -403,9 +398,8 @@ public class SessionManager
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         entry.Process?.RespondPermission(requestId, behavior);
-        entry.Info.Status = SessionStatus.Working;
-        _ = BroadcastStatusChangeAsync(sessionId, entry.Info,
-            SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
+        FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
+            $"смена статуса после permission ({sessionId})");
     }
 
     public void Interrupt(string sessionId)
@@ -428,13 +422,16 @@ public class SessionManager
                 if (doc.RootElement.TryGetProperty("answers", out var a))
                     answers = JsonSerializer.Deserialize<object>(a.GetRawText());
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Ответ на вопрос ({sessionId}) не распарсился, в историю уйдёт без answers: {ex.Message}");
+            }
             entry.Accumulator.OnQuestionAnswered(toolUseId, answers);
-            _ = entry.Accumulator.SaveSnapshotAsync(_history);
+            FireAndForget(entry.Accumulator.SaveSnapshotAsync(_history),
+                $"сохранение истории после ответа на вопрос ({sessionId})");
         }
-        entry.Info.Status = SessionStatus.Working;
-        _ = BroadcastStatusChangeAsync(sessionId, entry.Info,
-            SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
+        FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
+            $"смена статуса после ответа на вопрос ({sessionId})");
     }
 
     public void RespondPlan(string sessionId, string requestId, bool approve, string? feedback)
@@ -445,11 +442,11 @@ public class SessionManager
         if (entry.Accumulator is not null)
         {
             entry.Accumulator.OnPlanResolved(requestId, approve, feedback);
-            _ = entry.Accumulator.SaveSnapshotAsync(_history);
+            FireAndForget(entry.Accumulator.SaveSnapshotAsync(_history),
+                $"сохранение истории после решения по плану ({sessionId})");
         }
-        entry.Info.Status = SessionStatus.Working;
-        _ = BroadcastStatusChangeAsync(sessionId, entry.Info,
-            SessionStatus.Working, entry.Info.LastMessage, entry.Info.MessageCount);
+        FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
+            $"смена статуса после решения по плану ({sessionId})");
     }
 
     public async Task DeleteAsync(string sessionId)
@@ -544,7 +541,8 @@ public class SessionManager
             Console.Error.WriteLine($"[SessionManager] Ошибка аккумулятора ({sessionId}): {ex.Message}");
         }
 
-        // Обновление статуса — всегда, независимо от аккумулятора.
+        // Обновление статуса — всегда, независимо от аккумулятора; SessionManager —
+        // ЕДИНСТВЕННЫЙ владелец переходов Session.Status (ClaudeSession статус не пишет).
         // Если OnResultAsync выбросит, статус всё равно обновится.
         if (entry is not null)
         {
@@ -553,21 +551,23 @@ public class SessionManager
             if (msg is PermissionRequestMessage or AskQuestionMessage or PlanReviewMessage)
                 newStatus = SessionStatus.Waiting;
             else if (msg is ResultMessage rm)
+                // Active (не Finished): клиент по active перезагружает историю хода;
+                // финальный Finished выставится по ExitedMessage ниже
                 newStatus = rm.Subtype == "error" ? SessionStatus.Error : SessionStatus.Active;
             else if (msg is ErrorMessage)
                 newStatus = SessionStatus.Error;
-            else if (msg is ExitedMessage &&
-                     (entry.Info.Status == SessionStatus.Working || entry.Info.Status == SessionStatus.Waiting))
-                newStatus = SessionStatus.Active; // прерван без result — возвращаем в рабочее состояние
+            else if (msg is ExitedMessage)
+                newStatus = entry.Info.Status switch
+                {
+                    // прерван без result — возвращаем в рабочее состояние
+                    SessionStatus.Working or SessionStatus.Waiting => SessionStatus.Active,
+                    // ход завершился штатно (result уже перевёл в Active) — фиксируем Finished
+                    SessionStatus.Active => SessionStatus.Finished,
+                    _ => null,
+                };
 
             if (newStatus.HasValue)
-            {
-                entry.Info.Status = newStatus.Value;
-                entry.Info.UpdatedAt = DateTime.UtcNow;
-                if (msg is ResultMessage) SaveSessions();
-                await BroadcastStatusChangeAsync(sessionId, entry.Info,
-                    newStatus.Value, entry.Info.LastMessage, entry.Info.MessageCount);
-            }
+                await ApplyStatusAsync(sessionId, entry, newStatus.Value);
         }
 
         await BroadcastAsync(sessionId, msg);
@@ -659,6 +659,39 @@ public class SessionManager
         }
 
         await BroadcastAsync(sessionId, msg);
+    }
+
+    // Единая точка перехода статуса сессии: обновить Info → сохранить на диск → разослать клиентам
+    private async Task ApplyStatusAsync(string sessionId, SessionEntry entry, SessionStatus status)
+    {
+        entry.Info.Status = status;
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        await BroadcastStatusChangeAsync(sessionId, entry.Info,
+            status, entry.Info.LastMessage, entry.Info.MessageCount);
+    }
+
+    // Для fire-and-forget задач: ошибку логируем, а не теряем молча
+    private static void FireAndForget(Task task, string context) =>
+        task.ContinueWith(
+            t => Console.Error.WriteLine($"[SessionManager] {context}: {t.Exception?.GetBaseException().Message}"),
+            TaskContinuationOptions.OnlyOnFaulted);
+
+    // Остановка всех живых процессов claude — вызывается при graceful shutdown приложения,
+    // иначе после остановки сервера остаются зомби-процессы (claude + node MCP-серверов)
+    public void KillAllProcesses()
+    {
+        var tasks = _sessions.Values
+            .Select(e => e.Process)
+            .OfType<ClaudeSession>()
+            .Select(p => p.DisposeAsync().AsTask())
+            .ToArray();
+        if (tasks.Length == 0) return;
+        try { Task.WaitAll(tasks, TimeSpan.FromSeconds(15)); }
+        catch (AggregateException ex)
+        {
+            Console.Error.WriteLine($"[SessionManager] Остановка процессов при завершении: {ex.GetBaseException().Message}");
+        }
     }
 
     private Task BroadcastAsync(string sessionId, ServerMessage msg) =>

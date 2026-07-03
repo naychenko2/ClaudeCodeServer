@@ -16,23 +16,29 @@ public class ClaudeSession : IAsyncDisposable
 
     private readonly string _rootPath;
     private readonly Func<ServerMessage, Task> _onMessage;
-    private readonly Dictionary<string, TaskCompletionSource<string>> _permissionWaiters = new();
-    // Инструменты, для которых пользователь выбрал «всегда разрешать» в этой сессии
-    private readonly HashSet<string> _autoAllowTools = new();
+    // Словари ниже — Concurrent: их мутируют и памп stdout, и SignalR-вызовы
+    // (RespondPermission/AnswerQuestion/RespondPlan/Interrupt) параллельно
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _permissionWaiters = new();
+    // Инструменты, для которых пользователь выбрал «всегда разрешать» в этой сессии (значение не используется)
+    private readonly ConcurrentDictionary<string, byte> _autoAllowTools = new();
     // tool_use_id → request_id вопросов AskUserQuestion (приходят как control_request can_use_tool, ждут control_response)
-    private readonly Dictionary<string, string> _pendingQuestions = new();
+    private readonly ConcurrentDictionary<string, string> _pendingQuestions = new();
     // request_id → исходный input ожидающего согласования ExitPlanMode (режим «План»)
-    private readonly Dictionary<string, object> _pendingPlans = new();
+    private readonly ConcurrentDictionary<string, object> _pendingPlans = new();
     // Гарантированное исполнение одобренного плана:
     // после approve ждём реализацию; если ход завершится без правок — дошлём команду.
     private volatile bool _awaitPlanExecution;
     private volatile bool _sawToolSinceApprove;
     // Следующий ход запустить без --permission-mode plan (исполнение одобренного плана)
     private volatile bool _forceNonPlanNextTurn;
-    // Стриминг tool_use: индекс content-блока → (id инструмента, накопленный partial_json)
-    private readonly Dictionary<int, (string Id, System.Text.StringBuilder Sb)> _toolStream = new();
+    // Стриминг tool_use: индекс content-блока → (id инструмента, накопленный partial_json).
+    // Concurrent — для видимости между потоками пампа разных ходов
+    private readonly ConcurrentDictionary<int, (string Id, System.Text.StringBuilder Sb)> _toolStream = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _turnLock = new(1, 1);
+    // Сериализует записи в stdin процесса: control_response шлются из SignalR-потоков
+    // параллельно с пампом — без лока JSON-строки могут перемешаться
+    private readonly SemaphoreSlim _stdinLock = new(1, 1);
     private Process? _currentProcess;
 
     // Ватчеры фоновых Workflow (по одному на каждый запущенный workflow в сессии)
@@ -132,7 +138,12 @@ public class ClaudeSession : IAsyncDisposable
             File.WriteAllText(tmpPath, combined.ToJsonString());
             return tmpPath;
         }
-        catch { return null; }
+        catch (Exception ex)
+        {
+            // Без лога сессия молча пойдёт без MCP-серверов (tasks/dify) — обязательно сообщаем
+            Console.Error.WriteLine($"[ClaudeSession] Не удалось собрать MCP-конфиг хода, используется базовый конфиг: {ex.Message}");
+            return null;
+        }
     }
 
     // index.js MCP-сервера задач: рядом с exe (prod) или в корне репо (dev)
@@ -176,10 +187,10 @@ public class ClaudeSession : IAsyncDisposable
             if (_cts.IsCancellationRequested) return;
             await _turnLock.WaitAsync(_cts.Token);
             try { await RunTurnAsync(fullText, imagePaths, _cts.Token); }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException) { /* остановка сессии — штатно */ }
             catch (Exception ex)
             {
-                Info.Status = SessionStatus.Error;
+                // Статус Error выставит SessionManager по ErrorMessage
                 await _onMessage(new ErrorMessage(ex.Message));
             }
             finally { _turnLock.Release(); }
@@ -228,7 +239,10 @@ public class ClaudeSession : IAsyncDisposable
                     source = new { type = "base64", media_type = MediaTypeForExt(Path.GetExtension(rel)), data = Convert.ToBase64String(bytes) }
                 });
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] Не удалось прочитать вложение-изображение «{rel}»: {ex.Message}");
+            }
         }
         return blocks;
     }
@@ -278,7 +292,10 @@ public class ClaudeSession : IAsyncDisposable
                 var ext = Path.GetExtension(relativePath).TrimStart('.');
                 sb.Append($"\n\n---\nФайл: {relativePath}\n```{ext}\n{content}{truncated}\n```");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] Не удалось заинлайнить вложение «{relativePath}»: {ex.Message}");
+            }
         }
         return sb.ToString();
     }
@@ -292,11 +309,14 @@ public class ClaudeSession : IAsyncDisposable
     // Ответ пользователя на AskUserQuestion — control_response на исходный can_use_tool запрос
     public void AnswerQuestion(string toolUseId, string updatedInputJson)
     {
-        if (!_pendingQuestions.Remove(toolUseId, out var requestId)) return;
-        Info.Status = SessionStatus.Working;
+        if (!_pendingQuestions.TryRemove(toolUseId, out var requestId)) return;
         object updatedInput;
         try { updatedInput = JsonSerializer.Deserialize<object>(updatedInputJson)!; }
-        catch { updatedInput = new { }; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ClaudeSession] Ответ на вопрос не распарсился, отправляем пустой input: {ex.Message}");
+            updatedInput = new { };
+        }
         SendControlResponse(requestId, new { behavior = "allow", updatedInput });
     }
 
@@ -304,8 +324,7 @@ public class ClaudeSession : IAsyncDisposable
     // reject → deny с комментарием, Claude остаётся в режиме планирования
     public void RespondPlan(string requestId, bool approve, string? feedback)
     {
-        if (!_pendingPlans.Remove(requestId, out var input)) return;
-        Info.Status = SessionStatus.Working;
+        if (!_pendingPlans.TryRemove(requestId, out var input)) return;
         if (approve)
         {
             // Ждём, что Claude реализует план в этом ходу; если завершит без правок — дошлём команду
@@ -337,9 +356,9 @@ public class ClaudeSession : IAsyncDisposable
 
         if (toolName == "AskUserQuestion")
         {
-            // Ждём выбор пользователя — control_response отправит AnswerQuestion
+            // Ждём выбор пользователя — control_response отправит AnswerQuestion.
+            // Статус Waiting выставит SessionManager по AskQuestionMessage
             _pendingQuestions[toolUseId] = requestId;
-            Info.Status = SessionStatus.Waiting;
             await _onMessage(new AskQuestionMessage(toolUseId, input));
             return;
         }
@@ -347,11 +366,11 @@ public class ClaudeSession : IAsyncDisposable
         if (toolName == "ExitPlanMode")
         {
             // Режим «План»: Claude представил план — ждём решения пользователя (RespondPlan),
-            // НЕ авто-одобряем, иначе план не выносится на согласование
+            // НЕ авто-одобряем, иначе план не выносится на согласование.
+            // Статус Waiting выставит SessionManager по PlanReviewMessage
             _pendingPlans[requestId] = input;
             var plan = req.TryGetProperty("input", out var pin) && pin.TryGetProperty("plan", out var pl)
                 ? pl.GetString() ?? "" : "";
-            Info.Status = SessionStatus.Waiting;
             await _onMessage(new PlanReviewMessage(requestId, plan));
             return;
         }
@@ -367,16 +386,43 @@ public class ClaudeSession : IAsyncDisposable
             type = "control_response",
             response = new { subtype = "success", request_id = requestId, response = responsePayload }
         });
-        if (_currentProcess != null && !_currentProcess.HasExited)
+        WriteLineToStdin(msg);
+    }
+
+    // Единая точка записи в stdin процесса — под _stdinLock, чтобы параллельные
+    // control_response (SignalR-потоки + памп) не перемешали JSON-строки
+    private void WriteLineToStdin(string line)
+    {
+        var proc = _currentProcess;
+        if (proc is null || proc.HasExited) return;
+        _stdinLock.Wait();
+        try
         {
-            _currentProcess.StandardInput.WriteLine(msg);
-            _currentProcess.StandardInput.Flush();
+            proc.StandardInput.WriteLine(line);
+            proc.StandardInput.Flush();
         }
+        catch (Exception ex)
+        {
+            // Процесс мог завершиться между проверкой и записью
+            Console.Error.WriteLine($"[ClaudeSession] Запись в stdin не удалась: {ex.Message}");
+        }
+        finally { _stdinLock.Release(); }
+    }
+
+    // Закрытие stdin под тем же локом — не обрываем чужую запись на середине строки
+    private void CloseStdin(Process? proc)
+    {
+        if (proc is null) return;
+        _stdinLock.Wait();
+        try { proc.StandardInput.Close(); }
+        catch { /* поток уже закрыт или процесс мёртв — не критично */ }
+        finally { _stdinLock.Release(); }
     }
 
     public void Interrupt()
     {
-        try { _currentProcess?.Kill(); } catch { }
+        try { _currentProcess?.Kill(entireProcessTree: true); }
+        catch { /* процесс уже завершился */ }
         // Отменяем все ожидающие permission-диалоги: процесс убит, ответа не будет
         foreach (var tcs in _permissionWaiters.Values)
             tcs.TrySetCanceled();
@@ -527,8 +573,13 @@ public class ClaudeSession : IAsyncDisposable
             type = "user",
             message = new { role = "user", content }
         });
-        await process.StandardInput.WriteLineAsync(msg);
-        await process.StandardInput.FlushAsync();
+        await _stdinLock.WaitAsync(ct);
+        try
+        {
+            await process.StandardInput.WriteLineAsync(msg);
+            await process.StandardInput.FlushAsync();
+        }
+        finally { _stdinLock.Release(); }
 
         try
         {
@@ -549,7 +600,8 @@ public class ClaudeSession : IAsyncDisposable
                     // Сработал watchdog (не внешняя отмена сессии)
                     await _onMessage(new ErrorMessage(
                         $"Claude не отвечает более {IdleTimeout.TotalMinutes:0} мин — прерываем"));
-                    try { process.Kill(); } catch { }
+                    try { process.Kill(entireProcessTree: true); }
+                    catch { /* процесс уже завершился */ }
                     break;
                 }
 
@@ -558,14 +610,15 @@ public class ClaudeSession : IAsyncDisposable
                 await ProcessLineAsync(line);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { /* отмена сессии — штатно */ }
         finally
         {
             StopFileWatcher();
-            try { process.StandardInput.Close(); } catch { }
+            CloseStdin(process);
             if (!process.HasExited)
             {
-                try { process.Kill(); } catch { }
+                try { process.Kill(entireProcessTree: true); }
+                catch { /* процесс уже завершился */ }
                 // Ограниченное ожидание завершения — Kill() асинхронен на некоторых ОС
                 using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 try { await process.WaitForExitAsync(exitCts.Token); }
@@ -577,14 +630,25 @@ public class ClaudeSession : IAsyncDisposable
                 if (!string.IsNullOrWhiteSpace(stderr))
                     Console.Error.WriteLine($"[ClaudeSession stderr] {stderr.Trim()}");
             }
-            catch { }
+            catch (OperationCanceledException) { /* сессия отменена — stderr уже не важен */ }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] Чтение stderr не удалось: {ex.Message}");
+            }
             process.Dispose();
             _currentProcess = null;
-            if (turnMcpPath != null) try { File.Delete(turnMcpPath); } catch { }
+            if (turnMcpPath != null)
+                try { File.Delete(turnMcpPath); }
+                catch (Exception ex)
+                {
+                    // В temp-конфиге сервисный токен — важно знать, если он не удалился
+                    Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp MCP-конфиг {turnMcpPath}: {ex.Message}");
+                }
 
-            if (Info.Status == SessionStatus.Active)
-                Info.Status = SessionStatus.Finished;
+            // Ватчеры завершившихся workflow задиспозились сами — убираем их из списка
+            lock (_workflowWatchers) _workflowWatchers.RemoveAll(w => w.IsDisposed);
 
+            // Статусом владеет SessionManager: Finished/Active он выставит по ExitedMessage
             await _onMessage(new ExitedMessage());
         }
     }
@@ -599,12 +663,19 @@ public class ClaudeSession : IAsyncDisposable
         if (File.Exists(exePath)) return exePath;
         try
         {
-            var where = Process.Start(new ProcessStartInfo("where.exe", "claude.exe")
-                { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true })!;
-            var line = where.StandardOutput.ReadLine();
-            if (!string.IsNullOrEmpty(line) && File.Exists(line)) return line.Trim();
+            using var where = Process.Start(new ProcessStartInfo("where.exe", "claude.exe")
+                { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true });
+            if (where is not null)
+            {
+                var line = where.StandardOutput.ReadLine();
+                where.WaitForExit(3000);
+                if (!string.IsNullOrEmpty(line) && File.Exists(line)) return line.Trim();
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ClaudeSession] Поиск claude.exe через where.exe не удался: {ex.Message}");
+        }
         return "claude.exe";
     }
 
@@ -697,10 +768,10 @@ public class ClaudeSession : IAsyncDisposable
                     foreach (var x in pd.EnumerateArray())
                         denials.Add(x.TryGetProperty("tool_name", out var tnm) ? tnm.GetString() ?? "?" : "?");
                 }
-                Info.Status = subtype == "error" ? SessionStatus.Error : SessionStatus.Finished;
+                // Статус Error/Active выставит SessionManager по ResultMessage
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, ParseUsage(root), totalCost, apiErr, denials));
                 // Закрываем stdin: все permission-запросы уже обработаны, Claude может завершить процесс
-                try { _currentProcess?.StandardInput.Close(); } catch { }
+                CloseStdin(_currentProcess);
                 // Гарантия исполнения одобренного плана: если ход завершился, а Claude так и не
                 // приступил к правкам — дошлём команду на реализацию (следующий ход — без plan-режима)
                 if (_awaitPlanExecution)
@@ -821,7 +892,12 @@ public class ClaudeSession : IAsyncDisposable
                 {
                     var transcriptDir = m.Groups[1].Value.Trim();
                     var watcher = new WorkflowWatcher(transcriptDir, toolUseId, _onMessage);
-                    _workflowWatchers.Add(watcher);
+                    lock (_workflowWatchers)
+                    {
+                        // Завершившиеся ватчеры диспозятся сами — чистим список, чтобы не рос
+                        _workflowWatchers.RemoveAll(w => w.IsDisposed);
+                        _workflowWatchers.Add(watcher);
+                    }
                     watcher.Start();
                 }
             }
@@ -850,7 +926,7 @@ public class ClaudeSession : IAsyncDisposable
             return;
         }
 
-        if (eventType == "content_block_stop") { _toolStream.Remove(index); return; }
+        if (eventType == "content_block_stop") { _toolStream.TryRemove(index, out _); return; }
 
         if (eventType != "content_block_delta") return;
         if (!evt.TryGetProperty("delta", out var delta)) return;
@@ -934,7 +1010,7 @@ public class ClaudeSession : IAsyncDisposable
         {
             behavior = "deny";
         }
-        else if (ruleDecision == "allow" || _autoAllowTools.Contains(toolName))
+        else if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(toolName))
         {
             // Разрешено правилом проекта или ранее выбрано «всегда разрешать» — не спрашиваем
             behavior = "allow";
@@ -943,8 +1019,9 @@ public class ClaudeSession : IAsyncDisposable
         {
             var tcs = new TaskCompletionSource<string>();
             _permissionWaiters[requestId] = tcs;
-            Info.Status = SessionStatus.Waiting;
 
+            // Статус Waiting выставит SessionManager по PermissionRequestMessage,
+            // Working вернёт SessionManager.RespondPermission по ответу пользователя
             await _onMessage(new PermissionRequestMessage(requestId, toolName, toolInput));
 
             try
@@ -955,26 +1032,24 @@ public class ClaudeSession : IAsyncDisposable
             catch (TaskCanceledException)
             {
                 // Interrupt() отменил TCS через TrySetCanceled() — процесс уже убит
-                _permissionWaiters.Remove(requestId);
+                _permissionWaiters.TryRemove(requestId, out _);
                 return;
             }
             catch (TimeoutException)
             {
                 // Пользователь не ответил — deny и продолжаем
-                _permissionWaiters.Remove(requestId);
+                _permissionWaiters.TryRemove(requestId, out _);
                 behavior = "deny";
             }
 
-            _permissionWaiters.Remove(requestId);
+            _permissionWaiters.TryRemove(requestId, out _);
 
             // «Всегда разрешать»: запоминаем инструмент и отвечаем claude обычным allow
             if (behavior == "allow_always")
             {
-                _autoAllowTools.Add(toolName);
+                _autoAllowTools.TryAdd(toolName, 0);
                 behavior = "allow";
             }
-
-            Info.Status = SessionStatus.Working;
         }
 
         var response = JsonSerializer.Serialize(new
@@ -983,11 +1058,7 @@ public class ClaudeSession : IAsyncDisposable
             behavior,
             updated_input = toolInput
         });
-        if (_currentProcess != null && !_currentProcess.HasExited)
-        {
-            await _currentProcess.StandardInput.WriteLineAsync(response);
-            await _currentProcess.StandardInput.FlushAsync();
-        }
+        WriteLineToStdin(response);
     }
 
     // Применение правил проекта к permission-запросу.
@@ -1119,7 +1190,7 @@ public class ClaudeSession : IAsyncDisposable
                 if (added == 0 && removed == 0) return;
                 _ = _onMessage(new FileChangedMessage(rel, added, removed));
             }
-            catch { }
+            catch { /* файл занят/удалён между событиями watcher-а — пропускаем */ }
         }, TaskScheduler.Default);
     }
 
@@ -1133,18 +1204,27 @@ public class ClaudeSession : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         StopFileWatcher();
-        foreach (var w in _workflowWatchers) w.Dispose();
-        _workflowWatchers.Clear();
+        lock (_workflowWatchers)
+        {
+            foreach (var w in _workflowWatchers) w.Dispose();
+            _workflowWatchers.Clear();
+        }
         _cts.Cancel();
         if (_currentProcess != null && !_currentProcess.HasExited)
         {
-            _currentProcess.Kill();
+            // Убиваем всё дерево: claude порождает node-процессы MCP-серверов
+            try { _currentProcess.Kill(entireProcessTree: true); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] Kill при Dispose не удался: {ex.Message}");
+            }
             using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try { await _currentProcess.WaitForExitAsync(exitCts.Token); }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException) { } // 10 с истекло — идём дальше
         }
         _currentProcess?.Dispose();
         _cts.Dispose();
         _turnLock.Dispose();
+        _stdinLock.Dispose();
     }
 }

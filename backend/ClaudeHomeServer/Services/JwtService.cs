@@ -54,7 +54,11 @@ public class JwtService
         return (new JwtSecurityTokenHandler().WriteToken(jwt), expiresAt);
     }
 
-    // Долгоживущий токен для MCP tasks-server от имени владельца сессии:
+    // Срок сервисного токена MCP — короткий: токен каждый ход пишется в temp-файл
+    // конфига MCP, и при крэше сервера файл может остаться на диске
+    public static readonly TimeSpan ServiceTokenLifetime = TimeSpan.FromDays(7);
+
+    // Токен для MCP tasks-server от имени владельца сессии:
     // задачи per-owner, поэтому токен привязан к конкретному пользователю.
     // Живёт только в temp-конфиге MCP на машине сервера, наружу не отдаётся.
     public string IssueServiceToken(string userId)
@@ -70,7 +74,7 @@ public class JwtService
             issuer: "ClaudeHomeServer",
             audience: "ClaudeHomeServer",
             claims: claims,
-            expires: DateTime.UtcNow.AddYears(1),
+            expires: DateTime.UtcNow.Add(ServiceTokenLifetime),
             signingCredentials: creds);
         return new JwtSecurityTokenHandler().WriteToken(jwt);
     }

@@ -16,6 +16,9 @@ public sealed class WorkflowWatcher : IDisposable
     private DateTime _lastChange = DateTime.UtcNow;
     private volatile bool _disposed;
 
+    // Ватчер задиспозился сам (workflow стабилизировался или таймаут) — можно убирать из списков
+    public bool IsDisposed => _disposed;
+
     private static readonly TimeSpan DebounceDelay = TimeSpan.FromSeconds(2);
     // Тишина после завершения ВСЕХ агентов, после которой считаем workflow стабильным.
     private static readonly TimeSpan StableDelay = TimeSpan.FromSeconds(5);

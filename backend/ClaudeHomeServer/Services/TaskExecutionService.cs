@@ -72,7 +72,7 @@ public class TaskExecutionService
     }
 
     // Постановка задачи для Claude: контекст + правила ведения статуса через MCP tasks_*
-    private static string BuildPrompt(TaskItem task)
+    internal static string BuildPrompt(TaskItem task)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Выполни задачу из трекера (id задачи: {task.Id}).");
@@ -120,36 +120,52 @@ public class TaskExecutionService
         {
             case ResultMessage result:
             {
-                var ok = result.Subtype != "error";
+                var ok = IsSuccess(result);
                 var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
                 if (updated is null) return;
                 await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
-
-                // Claude завершает задачу сам через tasks_complete; если статус не done —
-                // результат требует внимания пользователя
-                var body = updated.Status == TaskItemStatus.Done
-                    ? updated.Title
-                    : $"{updated.Title} — проверь результат в чате";
-                await NotifyAsync(updated, new NotificationMessage(
-                    Title: ok ? "Claude завершил работу над задачей" : "Claude не смог выполнить задачу",
-                    Body: body,
-                    Url: TaskSchedulerService.TaskUrl(updated),
-                    Kind: "claude"));
+                await NotifyAsync(updated, BuildResultNotification(updated, ok));
                 break;
             }
             case PermissionRequestMessage or AskQuestionMessage:
-                await NotifyAsync(task, new NotificationMessage(
-                    Title: "Claude ждёт ответа по задаче",
-                    Body: task.Title,
-                    Url: TaskSchedulerService.TaskUrl(task),
-                    Kind: "claude"));
+                await NotifyAsync(task, BuildWaitingNotification(task));
                 break;
         }
     }
 
+    // --- Чистая логика маппинга (извлечена для юнит-тестов) ---
+
+    // Итог хода успешен, если result не error
+    internal static bool IsSuccess(ResultMessage result) => result.Subtype != "error";
+
+    // По задаче идёт незавершённый запуск исполнителя (ждём result её сессии)
+    internal static bool IsAwaitingResult(TaskItem task) =>
+        task.ClaudeStartedAt is not null && task.ClaudeResult is null;
+
+    // Уведомление о завершении хода. Claude завершает задачу сам через tasks_complete;
+    // если статус не done — результат требует внимания пользователя
+    internal static NotificationMessage BuildResultNotification(TaskItem updated, bool ok)
+    {
+        var body = updated.Status == TaskItemStatus.Done
+            ? updated.Title
+            : $"{updated.Title} — проверь результат в чате";
+        return new NotificationMessage(
+            Title: ok ? "Claude завершил работу над задачей" : "Claude не смог выполнить задачу",
+            Body: body,
+            Url: TaskSchedulerService.TaskUrl(updated),
+            Kind: "claude");
+    }
+
+    // Уведомление «ждёт ответа» (permission_request / AskUserQuestion)
+    internal static NotificationMessage BuildWaitingNotification(TaskItem task) => new(
+        Title: "Claude ждёт ответа по задаче",
+        Body: task.Title,
+        Url: TaskSchedulerService.TaskUrl(task),
+        Kind: "claude");
+
     // Задача, привязанная к сессии, по которой идёт незавершённый запуск исполнителя
     private TaskItem? FindTracked(string sessionId) =>
-        _tasks.GetBySession(sessionId) is { ClaudeStartedAt: not null, ClaudeResult: null } t ? t : null;
+        _tasks.GetBySession(sessionId) is { } t && IsAwaitingResult(t) ? t : null;
 
     private async Task NotifyAsync(TaskItem task, NotificationMessage message)
     {

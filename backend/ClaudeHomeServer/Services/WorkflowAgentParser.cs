@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using ClaudeHomeServer.Protocol;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Services;
 
@@ -7,6 +8,10 @@ namespace ClaudeHomeServer.Services;
 // Используется и WorkflowWatcher (реалтайм), и WorkflowController (REST).
 public static class WorkflowAgentParser
 {
+    // Класс статический, DI-логгера нет — ставится один раз из Program.cs.
+    // Битые строки — норма (файл дописывается на лету), поэтому уровень Debug.
+    public static ILogger Log { get; set; } = NullLogger.Instance;
+
     public static readonly string AllowedRoot = Path.GetFullPath(
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects"));
 
@@ -47,10 +52,16 @@ public static class WorkflowAgentParser
                         root.TryGetProperty("agentId", out var aid))
                         done.Add(aid.GetString() ?? "");
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Log.LogDebug(ex, "Битая строка в journal.jsonl: {Path}", journalPath);
+                }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log.LogDebug(ex, "Не удалось прочитать journal.jsonl: {Path}", journalPath);
+        }
         return done;
     }
 
@@ -77,14 +88,25 @@ public static class WorkflowAgentParser
                 {
                     isFirst = false;
                     try { prompt = ExtractText(line); }
-                    catch { return null; }
+                    catch (Exception ex)
+                    {
+                        Log.LogDebug(ex, "Битая первая строка (промпт) в {Path}", filePath);
+                        return null;
+                    }
                     continue;
                 }
                 try { ProcessLine(line, ref summary, ref isDone, toolCounts, filesSet, filesDedup); }
-                catch { }
+                catch (Exception ex)
+                {
+                    Log.LogDebug(ex, "Битая строка в {Path}", filePath);
+                }
             }
         }
-        catch { return null; }
+        catch (Exception ex)
+        {
+            Log.LogDebug(ex, "Не удалось прочитать agent-файл: {Path}", filePath);
+            return null;
+        }
 
         if (prompt is null) return null;
 

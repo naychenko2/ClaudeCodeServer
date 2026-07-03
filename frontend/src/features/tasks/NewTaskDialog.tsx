@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Project, Task, TaskAssignee, TaskPriority } from '../../types';
 import { C, FONT, R } from '../../lib/design';
-import { Button, FieldLabel, Modal, TextField, useIsMobileModal } from '../../components/ui';
+import { Button, FieldLabel, Modal, TextField } from '../../components/ui';
 import { api } from '../../lib/api';
 import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, createTask, projectColor } from '../../lib/tasks';
 import { ClaudeBadge, PriorityFlag } from './bits';
@@ -39,9 +39,8 @@ export function NewTaskDialog({ defaultProjectId, defaultDueDate, configureLabel
     api.projects.list().then(setProjects).catch(() => {});
   }, []);
 
-  // Мобила: проектов может быть много — чипы одной горизонтальной лентой,
-  // проект контекста первым, выбранный подъезжает в видимую зону
-  const isMobile = useIsMobileModal();
+  // Проектов может быть много (10+) — чипы одной горизонтальной лентой на всех
+  // размерах, проект контекста первым, выбранный подъезжает в видимую зону
   const chipsRef = useRef<HTMLDivElement>(null);
   const orderedProjects = useMemo(() => {
     if (!defaultProjectId) return projects;
@@ -50,10 +49,10 @@ export function NewTaskDialog({ defaultProjectId, defaultDueDate, configureLabel
   }, [projects, defaultProjectId]);
 
   useEffect(() => {
-    if (!isMobile || projects.length === 0) return;
+    if (projects.length === 0) return;
     chipsRef.current?.querySelector('[data-active="true"]')
       ?.scrollIntoView({ inline: 'center', block: 'nearest' });
-  }, [isMobile, projects.length]);
+  }, [projects.length]);
 
   const canCreate = title.trim().length > 0 && !saving;
 
@@ -99,13 +98,11 @@ export function NewTaskDialog({ defaultProjectId, defaultDueDate, configureLabel
       {/* Проект */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <FieldLabel>Проект</FieldLabel>
-        {/* Мобила: одна горизонтальная лента (проектов может быть 10+), десктоп — перенос строк */}
+        {/* Одна горизонтальная лента: 10+ проектов не распирают форму */}
         <div
           ref={chipsRef}
-          className={isMobile ? 'cc-hide-scrollbar' : undefined}
-          style={isMobile
-            ? { display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }
-            : { display: 'flex', flexWrap: 'wrap', gap: 8 }}
+          className="cc-hide-scrollbar"
+          style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }}
         >
           {/* «Личное» — нейтральная опция первой (задача вне проекта) */}
           <button

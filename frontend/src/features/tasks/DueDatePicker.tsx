@@ -16,6 +16,7 @@ interface Props {
 
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const TIME_PRESETS = ['09:00', '12:00', '14:00', '16:00', '18:00', '20:00'];
 
 function chipStyle(active: boolean): React.CSSProperties {
   return {
@@ -66,9 +67,12 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
     const [y, m] = base.split('-').map(Number);
     return [y, m - 1];
   });
-  const [timeDraft, setTimeDraft] = useState(dueTime ?? '');
+  // Поле «своё время» показывает только кастомное значение: пресет (09:00 и т.п.)
+  // в него не дублируется — активный пресет и так подсвечен своим чипом
+  const customTime = dueTime && !TIME_PRESETS.includes(dueTime) ? dueTime : '';
+  const [timeDraft, setTimeDraft] = useState(customTime);
 
-  useEffect(() => { setTimeDraft(dueTime ?? ''); }, [dueTime]);
+  useEffect(() => { setTimeDraft(customTime); }, [customTime]);
 
   // Клик вне поповера — закрыть (portal: проверяем по data-атрибуту)
   useEffect(() => {
@@ -166,7 +170,7 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
           }}>
             Время
           </span>
-          {[null, '09:00', '12:00', '14:00', '16:00', '18:00', '20:00'].map(t => {
+          {[null, ...TIME_PRESETS].map(t => {
             const active = (dueTime ?? null) === t;
             return (
               <button
@@ -189,8 +193,7 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
           {/* Своё время: чип-поле с часами — пунктир намекает «введи значение»;
               при нестандартном времени подсвечен как активный выбор */}
           {(() => {
-            const presets = ['09:00', '12:00', '14:00', '16:00', '18:00', '20:00'];
-            const customActive = !!dueTime && !presets.includes(dueTime);
+            const customActive = customTime !== '';
             return (
               <label style={{
                 display: 'inline-flex', alignItems: 'center', gap: 5,
@@ -210,8 +213,8 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
                   onBlur={() => {
                     const t = applyTime(timeDraft);
                     if (t) onChange(dueDate, t);
-                    else if (timeDraft.trim() === '') onChange(dueDate, null);
-                    else setTimeDraft(dueTime ?? '');
+                    else if (timeDraft.trim() === '' && customTime !== '') onChange(dueDate, null);
+                    else setTimeDraft(customTime);
                   }}
                   placeholder="своё время"
                   inputMode="numeric"

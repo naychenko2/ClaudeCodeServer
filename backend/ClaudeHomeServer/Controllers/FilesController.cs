@@ -8,7 +8,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/files")]
-public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config) : ControllerBase
+public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, ILogger<FilesController> logger) : ControllerBase
 {
     private ClaudeHomeServer.Models.Project GetProject(string projectId) =>
         projects.GetById(projectId) ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -194,9 +194,11 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
             var relativePath = string.IsNullOrEmpty(path) ? safeName : $"{path}/{safeName}";
 
-            using var ms = new MemoryStream();
-            await file.CopyToAsync(ms);
-            files.WriteFileBytes(root, relativePath, ms.ToArray());
+            // Стриминг на диск вместо буферизации всего файла в памяти
+            var safePath = FileService.SafeJoinPublic(root, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(safePath)!);
+            await using (var fs = new FileStream(safePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                await file.CopyToAsync(fs);
             return Ok();
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -229,14 +231,14 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     [AllowAnonymous]
     public IActionResult OfficeDownload(string projectId, [FromQuery] string path, [FromQuery] string token)
     {
-        var expected = GetDownloadToken();
-        if (string.IsNullOrEmpty(token) || token != expected)
+        if (!TokenMatches(token))
             return Unauthorized();
 
         try
         {
             var root = GetRoot(projectId);
-            var bytes = files.ReadFileBytes(root, path);
+            var safePath = FileService.SafeJoinPublic(root, path);
+            if (!System.IO.File.Exists(safePath)) return NotFound();
             var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
             var mime = ext switch {
                 "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -245,7 +247,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 "pdf"  => "application/pdf",
                 _ => "application/octet-stream",
             };
-            return File(bytes, mime);
+            // Стриминг с диска вместо буферизации всего файла в памяти
+            return PhysicalFile(safePath, mime);
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (FileNotFoundException) { return NotFound(); }
@@ -329,6 +332,29 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
     }
 
+    // Сравнение токена за постоянное время — статичный токен нельзя подбирать по таймингу
+    private bool TokenMatches(string? token)
+    {
+        if (string.IsNullOrEmpty(token)) return false;
+        return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+            System.Text.Encoding.UTF8.GetBytes(token),
+            System.Text.Encoding.UTF8.GetBytes(GetDownloadToken()));
+    }
+
+    // SSRF-защита callback: скачиваем документ только с хостов OnlyOffice
+    // (хост ServerUrl + явный список OnlyOffice:AllowedCallbackHosts)
+    private bool IsAllowedCallbackSource(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+        if (uri.Scheme is not ("http" or "https")) return false;
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (Uri.TryCreate(config["OnlyOffice:ServerUrl"], UriKind.Absolute, out var srv))
+            allowed.Add(srv.Host);
+        foreach (var h in config.GetSection("OnlyOffice:AllowedCallbackHosts").Get<string[]>() ?? [])
+            allowed.Add(h);
+        return allowed.Contains(uri.Host);
+    }
+
     private static string? _downloadTokenCache;
     // Активные edit-ключи: "{projectId}/{path}" → docKey
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _activeEditKeys = new();
@@ -349,8 +375,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         [FromServices] IHttpClientFactory httpClientFactory,
         CancellationToken ct)
     {
-        var expected = GetDownloadToken();
-        if (string.IsNullOrEmpty(token) || token != expected)
+        if (!TokenMatches(token))
             return Unauthorized();
 
         OOCallbackPayload? payload;
@@ -361,7 +386,11 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true },
                 ct);
         }
-        catch { return Ok(new { error = 1, message = "bad json" }); }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "office-callback: не удалось разобрать тело запроса для {Path}", path);
+            return Ok(new { error = 1, message = "bad json" });
+        }
 
         // Пользователь нажал «Отмена» — пропускаем сохранение
         if (payload?.Key != null && _discardedKeys.TryRemove(payload.Key, out _))
@@ -369,6 +398,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
         if (payload?.Status is 2 or 6 && payload.Url != null)
         {
+            if (!IsAllowedCallbackSource(payload.Url))
+                return Ok(new { error = 1, message = "url host not allowed" });
             try
             {
                 var root = GetRoot(projectId);
@@ -433,7 +464,11 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             await client.PostAsync($"{ooInternalUrl}/coauthoring/CommandService.ashx",
                 new StringContent(payload, System.Text.Encoding.UTF8, "application/json"), ct);
         }
-        catch { /* Command API недоступен — ждём таймаут */ }
+        catch (Exception ex)
+        {
+            // Command API недоступен — ждём таймаут
+            logger.LogWarning(ex, "office-force-save: Command API недоступен для {Path}", path);
+        }
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
         linked.CancelAfter(TimeSpan.FromSeconds(10));
@@ -482,15 +517,51 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         try
         {
             var root = GetRoot(projectId);
+            var safePath = FileService.SafeJoinPublic(root, req.Path);
             var client = httpClientFactory.CreateClient("proxy");
-            var bytes = await client.GetByteArrayAsync(uri, ct);
-            files.WriteFileBytes(root, req.Path, bytes);
+
+            // Стриминг в файл вместо буферизации всего ответа в памяти
+            using var resp = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct);
+            resp.EnsureSuccessStatusCode();
+
+            if (resp.Content.Headers.ContentLength > MaxSaveFromUrlBytes)
+                return StatusCode(StatusCodes.Status413PayloadTooLarge,
+                    new { error = $"Файл больше {MaxSaveFromUrlBytes / (1024 * 1024)} МБ" });
+
+            Directory.CreateDirectory(Path.GetDirectoryName(safePath)!);
+            var exceeded = false;
+            await using (var src = await resp.Content.ReadAsStreamAsync(ct))
+            await using (var fs = new FileStream(safePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+            {
+                // Content-Length может отсутствовать — копируем с подсчётом и обрываем при превышении
+                var buffer = new byte[81920];
+                long total = 0;
+                int read;
+                while ((read = await src.ReadAsync(buffer, ct)) > 0)
+                {
+                    total += read;
+                    if (total > MaxSaveFromUrlBytes) { exceeded = true; break; }
+                    await fs.WriteAsync(buffer.AsMemory(0, read), ct);
+                }
+            }
+
+            if (exceeded)
+            {
+                try { System.IO.File.Delete(safePath); }
+                catch (Exception ex) { logger.LogWarning(ex, "save-from-url: не удалось удалить недокачанный файл {Path}", safePath); }
+                return StatusCode(StatusCodes.Status413PayloadTooLarge,
+                    new { error = $"Файл больше {MaxSaveFromUrlBytes / (1024 * 1024)} МБ" });
+            }
+
             return Ok(new { path = req.Path });
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (HttpRequestException ex) { return StatusCode(502, new { error = ex.Message }); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
+
+    // Предельный размер скачивания save-from-url (совпадает с RequestSizeLimit)
+    private const long MaxSaveFromUrlBytes = 200L * 1024 * 1024;
 }
 
 public record SaveContentRequest(string Content);

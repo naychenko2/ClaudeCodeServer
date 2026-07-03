@@ -196,7 +196,12 @@ public static class WebDavHandler
             // result.Principal — не ctx.User: Negotiate не обновляет ctx.User автоматически
             var winName = result.Principal?.Identity?.Name ?? "";
             var shortName = winName.Contains('\\') ? winName.Split('\\').Last() : winName;
-            var ntlmUser = users.FindByUsername(shortName);
+            // Маппинг Windows-аккаунта на пользователя приложения по совпадению имени —
+            // только явным opt-in (WebDav:NtlmMapWindowsNames): иначе любой локальный
+            // аккаунт с именем вида "admin" входит без пароля приложения
+            var mapNtlm = ctx.RequestServices.GetRequiredService<IConfiguration>()
+                .GetValue("WebDav:NtlmMapWindowsNames", false);
+            var ntlmUser = mapNtlm ? users.FindByUsername(shortName) : null;
             if (ntlmUser is not null)
             {
                 ctx.Items["DavUserId"] = ntlmUser.Id;
@@ -560,9 +565,10 @@ public static class WebDavHandler
         var absPath = FileService.SafeJoinPublic(root, relPath);
         var existed = File.Exists(absPath);
 
-        using var ms = new MemoryStream();
-        await ctx.Request.Body.CopyToAsync(ms);
-        files.WriteFileBytes(root, relPath, ms.ToArray());
+        // Стриминг тела запроса на диск вместо буферизации всего файла в памяти
+        Directory.CreateDirectory(Path.GetDirectoryName(absPath)!);
+        await using (var fs = new FileStream(absPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+            await ctx.Request.Body.CopyToAsync(fs);
 
         ctx.Response.StatusCode = existed ? 204 : 201;
     }
@@ -730,7 +736,13 @@ public static class WebDavHandler
                     owner = XmlEscape(ownerMatch.Groups[1].Value);
             }
         }
-        catch { /* тело может быть пустым */ }
+        catch (Exception ex)
+        {
+            // тело может быть пустым — блокировка продолжает работать без owner
+            ctx.RequestServices.GetRequiredService<ILoggerFactory>()
+                .CreateLogger(nameof(WebDavHandler))
+                .LogWarning(ex, "LOCK: не удалось прочитать тело запроса для {Path}", relPath);
+        }
 
         var lockKey = $"{projectName}/{relPath}";
 

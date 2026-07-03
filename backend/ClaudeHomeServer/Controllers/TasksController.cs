@@ -66,9 +66,14 @@ public class TasksController(
         return Ok(task);
     }
 
-    // Все задачи пользователя (для календаря); опционально диапазон по сроку
+    // Все задачи пользователя (календарь, MCP): диапазон по сроку, поиск и фильтры.
+    // personal=true — только личные (вне проекта); projectId — только задачи проекта.
     [HttpGet]
-    public IActionResult GetAll([FromQuery] string? from = null, [FromQuery] string? to = null)
+    public IActionResult GetAll(
+        [FromQuery] string? from = null, [FromQuery] string? to = null,
+        [FromQuery] string? q = null, [FromQuery] string? status = null,
+        [FromQuery] string? priority = null, [FromQuery] string? assignee = null,
+        [FromQuery] string? projectId = null, [FromQuery] bool personal = false)
     {
         var result = tasks.GetByOwner(UserId).AsEnumerable();
         // Строковое сравнение корректно для ISO-дат YYYY-MM-DD
@@ -76,6 +81,21 @@ public class TasksController(
             result = result.Where(t => t.DueDate is not null && string.Compare(t.DueDate, from, StringComparison.Ordinal) >= 0);
         if (to is not null)
             result = result.Where(t => t.DueDate is not null && string.Compare(t.DueDate, to, StringComparison.Ordinal) <= 0);
+        if (personal)
+            result = result.Where(t => t.ProjectId is null);
+        else if (!string.IsNullOrEmpty(projectId))
+            result = result.Where(t => t.ProjectId == projectId);
+        if (status is not null && Enum.TryParse<TaskItemStatus>(status, true, out var s))
+            result = result.Where(t => t.Status == s);
+        if (priority is not null && Enum.TryParse<TaskItemPriority>(priority, true, out var p))
+            result = result.Where(t => t.Priority == p);
+        if (assignee is not null && Enum.TryParse<TaskItemAssignee>(assignee, true, out var a))
+            result = result.Where(t => t.Assignee == a);
+        if (!string.IsNullOrWhiteSpace(q))
+            result = result.Where(t =>
+                t.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                t.Description.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                t.Labels.Any(l => l.Contains(q, StringComparison.OrdinalIgnoreCase)));
         return Ok(result.ToList());
     }
 

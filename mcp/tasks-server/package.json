@@ -1,0 +1,7 @@
+{
+  "name": "tasks-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP-сервер задач ClaudeHomeServer (stdio, без зависимостей)",
+  "type": "module",
+  "main": "index.js"
+}

@@ -6,6 +6,10 @@ using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services;
 
+// Контекст MCP-сервера задач для сессии: адрес API, сервисный токен владельца
+// и проект (null — чат вне проекта, контекст личных задач)
+public record TasksMcpContext(string ApiUrl, string Token, string? ProjectId);
+
 public class ClaudeSession : IAsyncDisposable
 {
     public Session Info { get; }
@@ -48,11 +52,13 @@ public class ClaudeSession : IAsyncDisposable
     private readonly WorkspaceKnowledgeStore? _wkStore;
     // Провайдер правил разрешений проекта — резолвим каждый запрос (правила могут меняться)
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
+    private readonly TasksMcpContext? _tasksMcp;
 
     public ClaudeSession(Session info, string rootPath, Func<ServerMessage, Task> onMessage,
         string? mcpConfigPath = null, string? rawSystemPrompt = null,
         SkillsService? skills = null, WorkspaceKnowledgeStore? workspaceStore = null,
-        Func<IReadOnlyList<PermissionRule>>? permissionRules = null)
+        Func<IReadOnlyList<PermissionRule>>? permissionRules = null,
+        TasksMcpContext? tasksMcp = null)
     {
         Info = info;
         _rootPath = rootPath;
@@ -62,26 +68,75 @@ public class ClaudeSession : IAsyncDisposable
         _skills = skills;
         _wkStore = workspaceStore;
         _permissionRules = permissionRules;
+        _tasksMcp = tasksMcp;
     }
 
-    private static string? CreateSessionMcpConfig(string? basePath, string? datasetId)
+    // Объединённый MCP-конфиг хода: серверы из базового конфига (Dify с инжекцией
+    // dataset id) + tasks-server с контекстом сессии. null → базовый конфиг как есть.
+    private string? BuildTurnMcpConfig(string? datasetId)
     {
-        if (string.IsNullOrEmpty(basePath) || !File.Exists(basePath) || string.IsNullOrEmpty(datasetId))
-            return null;
+        var tasksServerPath = _tasksMcp is not null ? FindTasksServerPath() : null;
+        var hasTasks = tasksServerPath is not null;
+        var hasDataset = !string.IsNullOrEmpty(datasetId);
+        if (!hasTasks && !hasDataset) return null;
+
         try
         {
-            var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(basePath))!;
-            var env = node["mcpServers"]?["dify"]?["env"];
-            if (env != null)
+            var servers = new System.Text.Json.Nodes.JsonObject();
+
+            // Серверы из базового конфига (+ dataset id в env Dify)
+            if (!string.IsNullOrEmpty(_mcpConfigPath) && File.Exists(_mcpConfigPath))
             {
-                env["DIFY_DEFAULT_DATASET_ID"] = datasetId;
-                env["DIFY_SEARCH_ONLY"] = "true";
+                var baseDoc = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(_mcpConfigPath));
+                if (baseDoc?["mcpServers"] is System.Text.Json.Nodes.JsonObject baseServers)
+                {
+                    foreach (var (key, val) in baseServers)
+                    {
+                        var clone = val?.DeepClone();
+                        if (clone is null) continue;
+                        if (key == "dify" && hasDataset && clone["env"] is { } env)
+                        {
+                            env["DIFY_DEFAULT_DATASET_ID"] = datasetId;
+                            env["DIFY_SEARCH_ONLY"] = "true";
+                        }
+                        servers[key] = clone;
+                    }
+                }
             }
+
+            if (hasTasks)
+            {
+                servers["tasks"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["command"] = "node",
+                    ["args"] = new System.Text.Json.Nodes.JsonArray { tasksServerPath! },
+                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["TASKS_API_URL"] = _tasksMcp!.ApiUrl,
+                        ["TASKS_API_TOKEN"] = _tasksMcp.Token,
+                        ["TASKS_PROJECT_ID"] = _tasksMcp.ProjectId ?? "",
+                    },
+                };
+            }
+
+            if (servers.Count == 0) return null;
+            var combined = new System.Text.Json.Nodes.JsonObject { ["mcpServers"] = servers };
             var tmpPath = Path.Combine(Path.GetTempPath(), $"claude-mcp-{Guid.NewGuid():N}.json");
-            File.WriteAllText(tmpPath, node.ToJsonString());
+            File.WriteAllText(tmpPath, combined.ToJsonString());
             return tmpPath;
         }
         catch { return null; }
+    }
+
+    // index.js MCP-сервера задач: рядом с exe (prod) или в корне репо (dev)
+    private static string? FindTasksServerPath()
+    {
+        var nearExe = Path.Combine(AppContext.BaseDirectory, "mcp", "tasks-server", "index.js");
+        if (File.Exists(nearExe)) return nearExe;
+        var nearCwd = Path.GetFullPath(Path.Combine(
+            Directory.GetCurrentDirectory(), "..", "..", "mcp", "tasks-server", "index.js"));
+        if (File.Exists(nearCwd)) return nearCwd;
+        return null;
     }
 
     // Ничего не делаем при старте — процесс запускается при первом сообщении
@@ -350,7 +405,7 @@ public class ClaudeSession : IAsyncDisposable
         // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)
         var currentWk = _wkStore?.GetByPath(_rootPath);
         var currentDatasetId = currentWk?.DifyDatasetId;
-        string? turnMcpPath = CreateSessionMcpConfig(_mcpConfigPath, currentDatasetId);
+        string? turnMcpPath = BuildTurnMcpConfig(currentDatasetId);
         var effectiveMcpConfig = turnMcpPath ?? _mcpConfigPath;
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
             args.AddRange(["--mcp-config", effectiveMcpConfig]);
@@ -361,6 +416,23 @@ public class ClaudeSession : IAsyncDisposable
         {
             var basePrompt = ProjectManager.BuildSystemPrompt(
                 _rawSystemPrompt, currentDatasetId != null, currentWk?.DocumentTags);
+
+            // Подсказка про систему задач — только когда tasks-server подключён
+            if (_tasksMcp is not null)
+            {
+                var scope = _tasksMcp.ProjectId is not null
+                    ? "Текущий контекст — задачи этого проекта."
+                    : "Текущий контекст — личные задачи пользователя (вне проектов).";
+                var tasksHint =
+                    "У пользователя есть встроенная система задач (вкладка «Задачи» в проекте и раздел «Календарь»). " +
+                    "Управляй ею через MCP-инструменты mcp__tasks__* (tasks_list, tasks_search, tasks_get, tasks_create, " +
+                    "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask). " + scope + " " +
+                    "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
+                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM.";
+                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                    ? tasksHint
+                    : basePrompt + "\n\n" + tasksHint;
+            }
 
             string? agentPrompt = null;
             if (!string.IsNullOrEmpty(Info.AgentName) && _skills is not null)

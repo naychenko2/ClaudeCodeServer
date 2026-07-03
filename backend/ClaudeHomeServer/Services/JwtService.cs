@@ -54,6 +54,27 @@ public class JwtService
         return (new JwtSecurityTokenHandler().WriteToken(jwt), expiresAt);
     }
 
+    // Долгоживущий токен для MCP tasks-server от имени владельца сессии:
+    // задачи per-owner, поэтому токен привязан к конкретному пользователю.
+    // Живёт только в temp-конфиге MCP на машине сервера, наружу не отдаётся.
+    public string IssueServiceToken(string userId)
+    {
+        var creds = new SigningCredentials(_key, SecurityAlgorithms.HmacSha256);
+        var claims = new[]
+        {
+            new Claim(JwtRegisteredClaimNames.Sub, userId),
+            new Claim(ClaimTypes.Name, "mcp-tasks"),
+            new Claim(ClaimTypes.Role, "user"),
+        };
+        var jwt = new JwtSecurityToken(
+            issuer: "ClaudeHomeServer",
+            audience: "ClaudeHomeServer",
+            claims: claims,
+            expires: DateTime.UtcNow.AddYears(1),
+            signingCredentials: creds);
+        return new JwtSecurityTokenHandler().WriteToken(jwt);
+    }
+
     public TokenValidationParameters ValidationParameters => new()
     {
         ValidateIssuer = true,

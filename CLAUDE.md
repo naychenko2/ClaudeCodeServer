@@ -89,6 +89,20 @@ WorkingDirectory = `project.RootPath`
 - `sdk_control_request` → `permission_request` (ждём → пишем `control_response` в stdin)
 - `result` → `result` + `exited`
 
+## MCP-сервер задач (mcp/tasks-server)
+
+Один файл [mcp/tasks-server/index.js](mcp/tasks-server/index.js) — чистый Node (stdio JSON-RPC,
+**без зависимостей**, npm install не нужен). Инструменты: `tasks_list`, `tasks_search`,
+`tasks_get`, `tasks_create`, `tasks_update`, `tasks_complete`, `tasks_delete`,
+`tasks_add_subtask`, `tasks_toggle_subtask`.
+
+Подключение автоматическое (за фич-флагом `tasks` владельца): `ClaudeSession.BuildTurnMcpConfig`
+каждый ход собирает временный MCP-конфиг (серверы из `McpConfigPath` + `tasks`) и передаёт env:
+`TASKS_API_URL` (адрес Kestrel или конфиг `McpTasksApiUrl`), `TASKS_API_TOKEN`
+(сервисный JWT владельца сессии, `JwtService.IssueServiceToken`), `TASKS_PROJECT_ID`
+(пусто = чат вне проекта → контекст личных задач). В системный промпт добавляется
+подсказка об инструментах. Задачи per-owner: токен владельца ограничивает доступ его задачами.
+
 ## REST API
 
 Все эндпоинты (кроме `/api/auth/ping`) и SignalR-хаб защищены `[Authorize]` —

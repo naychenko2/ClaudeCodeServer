@@ -41,11 +41,18 @@ public class SessionManager
     private readonly UsageService _usage;
     private readonly AppSettingsService _appSettings;
     private readonly UserStore _users;
+    private readonly JwtService _jwt;
+    private readonly FeatureFlagService _featureFlags;
+    private readonly Microsoft.AspNetCore.Hosting.Server.IServer _server;
+    private readonly IConfiguration _config;
+    // Сервисные токены MCP tasks-server — по одному на владельца, на жизнь процесса
+    private readonly ConcurrentDictionary<string, string> _tasksTokens = new();
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, SkillsService skills,
         WorkspaceKnowledgeStore workspaceStore, FalCostService falCost, UsageService usage,
-        AppSettingsService appSettings, UserStore users)
+        AppSettingsService appSettings, UserStore users, JwtService jwt,
+        FeatureFlagService featureFlags, Microsoft.AspNetCore.Hosting.Server.IServer server)
     {
         _projects = projects;
         _hub = hub;
@@ -56,6 +63,10 @@ public class SessionManager
         _usage = usage;
         _appSettings = appSettings;
         _users = users;
+        _jwt = jwt;
+        _featureFlags = featureFlags;
+        _server = server;
+        _config = config;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
         _falCost.OnCostResolved = PublishFalCostAsync;
 
@@ -67,6 +78,32 @@ public class SessionManager
         _mcpConfigPath = config["McpConfigPath"];
 
         LoadSessions();
+    }
+
+    // --- MCP tasks-server ---
+
+    // Базовый URL API для MCP-сервера: конфиг → первый адрес Kestrel → дефолт.
+    // 0.0.0.0/[::] заменяем на localhost — MCP-сервер ходит с той же машины.
+    private string ResolveTasksApiUrl()
+    {
+        var fromConfig = _config["McpTasksApiUrl"];
+        if (!string.IsNullOrWhiteSpace(fromConfig)) return fromConfig.TrimEnd('/');
+
+        var addr = _server.Features
+            .Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()?
+            .Addresses.FirstOrDefault();
+        if (string.IsNullOrEmpty(addr)) return "http://localhost:5000";
+        return addr.Replace("0.0.0.0", "localhost").Replace("[::]", "localhost").TrimEnd('/');
+    }
+
+    // Контекст MCP-сервера задач для сессии; null — фича выключена у владельца
+    private TasksMcpContext? BuildTasksContext(string? ownerId, string? projectId)
+    {
+        if (ownerId is null) return null;
+        if (!_featureFlags.GetEffective(ownerId).TryGetValue("tasks", out var enabled) || !enabled)
+            return null;
+        var token = _tasksTokens.GetOrAdd(ownerId, id => _jwt.IssueServiceToken(id));
+        return new TasksMcpContext(ResolveTasksApiUrl(), token, projectId);
     }
 
     // --- Персистентность сессий ---
@@ -222,11 +259,16 @@ public class SessionManager
         var entry = new SessionEntry { Info = session, Accumulator = accumulator };
         _sessions[session.Id] = entry;
 
+        // Владелец: у проектной сессии — владелец проекта, у чата — из самой сессии
+        var ownerId = session.ProjectId is not null
+            ? _projects.GetById(session.ProjectId)?.OwnerId
+            : session.OwnerId;
         var claudeSession = new ClaudeSession(session, rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
             _mcpConfigPath, rawSystemPrompt,
             _skills, _workspaceStore,
-            permissionRules);
+            permissionRules,
+            BuildTasksContext(ownerId, session.ProjectId));
         entry.Process = claudeSession;
 
         await claudeSession.StartAsync();
@@ -266,7 +308,8 @@ public class SessionManager
                 claudeSession = new ClaudeSession(entry.Info, rootPath,
                     msg => OnMessageAsync(sessionId, accumulator, msg),
                     _mcpConfigPath, rawSystemPrompt: null,
-                    _skills, _workspaceStore, permissionRules: null);
+                    _skills, _workspaceStore, permissionRules: null,
+                    tasksMcp: BuildTasksContext(entry.Info.OwnerId, null));
             }
             else
             {
@@ -276,7 +319,8 @@ public class SessionManager
                     msg => OnMessageAsync(sessionId, accumulator, msg),
                     _mcpConfigPath, project.SystemPrompt,
                     _skills, _workspaceStore,
-                    () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>());
+                    () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
+                    BuildTasksContext(project.OwnerId, project.Id));
             }
             entry.Process = claudeSession;
             await claudeSession.StartAsync();

@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, TaskManager tasks) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, WorkspaceKnowledgeStore wkStore, TaskManager tasks) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -24,6 +24,19 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
     [HttpGet("builtin-prompt")]
     public IActionResult GetBuiltinPrompt() => Ok(new { content = ProjectManager.BuiltInSystemPrompt });
+
+    // Эффективный системный промпт проекта — ровно те части, что уходят в --append-system-prompt
+    // (без промпта агента: он добавляется per-session для агент-чатов)
+    [HttpGet("{id}/effective-prompt")]
+    public IActionResult GetEffectivePrompt(string id)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        var wk = wkStore.GetByPath(p.RootPath);
+        var parts = ProjectManager.GetSystemPromptParts(
+            p.SystemPrompt, wk?.DifyDatasetId != null, wk?.DocumentTags);
+        return Ok(new { parts });
+    }
 
     [HttpGet]
     public IActionResult GetAll() => Ok(projects.GetByOwner(UserId).Select(WithCount));

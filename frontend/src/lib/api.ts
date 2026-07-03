@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, Task, CreateTaskDto, UpdateTaskDto } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -19,11 +19,17 @@ export const api = {
         body: JSON.stringify({ username, password }),
       }),
     me: () =>
-      request<{ userId: string; username: string; role: string; featureFlags?: Record<string, boolean> }>('/auth/me'),
+      request<{ userId: string; username: string; role: string; featureFlags?: Record<string, boolean>; contextThresholds?: { warnPct: number; dangerPct: number } | null }>('/auth/me'),
     changePassword: (currentPassword: string, newPassword: string) =>
       request<void>('/auth/password', {
         method: 'PUT',
         body: JSON.stringify({ currentPassword, newPassword }),
+      }),
+    // Пороги индикатора контекста (per-user); пустой body → сброс к дефолтам
+    setContextThresholds: (t: { warnPct?: number; dangerPct?: number }) =>
+      request<{ contextThresholds: { warnPct: number; dangerPct: number } | null }>('/auth/context-thresholds', {
+        method: 'PUT',
+        body: JSON.stringify(t),
       }),
   },
 
@@ -73,6 +79,7 @@ export const api = {
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
     getBuiltinPrompt: () => request<{ content: string }>('/projects/builtin-prompt'),
+    getEffectivePrompt: (id: string) => request<{ parts: SystemPromptPart[] }>(`/projects/${id}/effective-prompt`),
   },
 
   // Группы проектов

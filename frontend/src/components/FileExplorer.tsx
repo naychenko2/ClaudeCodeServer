@@ -23,7 +23,7 @@ import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { C, R, FONT, MODAL_W, TB } from '../lib/design';
-import { Modal, ModalActions, TextField, IconButton, Button } from './ui';
+import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem } from './ui';
 
 interface Props {
   project: Project;
@@ -60,6 +60,28 @@ export function getExplorerCreateInDir(projectId: string): string {
 }
 
 const normPath = (p?: string | null) => (p ?? '').replace(/\\/g, '/');
+
+// Режим сортировки дерева — глобальная настройка, живёт в localStorage
+type FileSortMode = 'name' | 'date-desc' | 'date-asc';
+const SORT_MODE_KEY = 'cc_files_sort';
+const loadSortMode = (): FileSortMode => {
+  const v = localStorage.getItem(SORT_MODE_KEY);
+  if (v === 'date' || v === 'date-desc') return 'date-desc'; // 'date' — старое значение до появления направлений
+  if (v === 'date-asc') return 'date-asc';
+  return 'name';
+};
+
+// Единая сортировка записей: папки сверху, затем по имени (без учёта регистра)
+// или по дате изменения (в выбранном направлении, при равенстве — по имени)
+const sortEntries = (entries: FileEntry[], mode: FileSortMode): FileEntry[] =>
+  [...entries].sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    if (mode !== 'name') {
+      const d = Date.parse(a.modified) - Date.parse(b.modified);
+      if (d) return mode === 'date-asc' ? d : -d;
+    }
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+  });
 
 // Возвращает [parentDir, name] из пути
 const splitPath = (p: string): [string, string] => {
@@ -349,6 +371,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const inFlight = useRef(new Set<string>());
   const dirCacheRef = useRef(dirCache);
   dirCacheRef.current = dirCache;
+
+  const [sortMode, setSortMode] = useState<FileSortMode>(loadSortMode);
+  const [showSortMenu, setShowSortMenu] = useState(false);
+  const changeSortMode = (m: FileSortMode) => {
+    setSortMode(m);
+    localStorage.setItem(SORT_MODE_KEY, m);
+    setShowSortMenu(false);
+  };
 
   const [search, setSearch] = useState(() => initial?.search ?? '');
   const [searchResults, setSearchResults] = useState<FileEntry[] | null>(() => initial?.searchResults ?? null);
@@ -762,7 +792,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const flatTree = useMemo((): TreeNode[] => {
     const walk = (path: string, depth: number): TreeNode[] => {
-      const entries = dirCache.get(path) ?? [];
+      const entries = sortEntries(dirCache.get(path) ?? [], sortMode);
       const result: TreeNode[] = [];
       for (const entry of entries) {
         result.push({ entry, depth });
@@ -773,18 +803,15 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       return result;
     };
     return walk('', 0);
-  }, [dirCache, expanded]);
+  }, [dirCache, expanded, sortMode]);
 
   const rootLoading = !dirCache.has('') && loadingDirs.has('');
 
   const mobileEntries = useMemo((): FileEntry[] => {
     const entries = dirCache.get(mobileDir);
     if (!entries) return [];
-    return [...entries].sort((a, b) => {
-      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
-  }, [dirCache, mobileDir]);
+    return sortEntries(entries, sortMode);
+  }, [dirCache, mobileDir, sortMode]);
 
   const breadcrumbs = useMemo(() => {
     const crumbs: { label: string; path: string }[] = [{ label: 'Файлы', path: '' }];
@@ -813,6 +840,16 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     const isDropTgt = dropTarget === entry.path;
     const isDragging = dragPath === entry.path;
     const isRenaming = renamingPath === entry.path;
+
+    const rowBg = isDropTgt
+      ? '#F1DDD1'
+      : isActive ? '#F1DDD1'
+      : hoveredPath === entry.path ? '#E8E1D4'
+      : normPath(entry.path) === newlyCreatedPath ? 'rgba(217,119,87,0.13)'
+      : (sstate || folderSyncing) ? '#F4ECE3'
+      : 'transparent';
+    // Десктоп: кластер иконок липнет к правому краю видимой области при горизонтальном скролле
+    const stickyIcons = !isMobile;
 
     const handleRowClick = () => {
       if (isRenaming) return;
@@ -844,7 +881,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         onTouchCancel={isMobile || alwaysShowIcons ? handleTouchCancel : undefined}
         style={{
           display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 6,
-          paddingLeft: 8 + depth * 16, paddingRight: 8,
+          paddingLeft: 8 + depth * 16, paddingRight: stickyIcons ? 0 : 8,
           paddingTop: isMobile || alwaysShowIcons ? 10 : 6,
           paddingBottom: isMobile || alwaysShowIcons ? 10 : 6,
           // фикс высоты: hover-иконки (24) чуть выше контента строки — держим 36, чтобы строка не «прыгала»
@@ -853,13 +890,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           width: '100%', boxSizing: 'border-box',
           opacity: isDragging ? 0.4 : pressingPath === entry.path ? 0.6 : 1,
           transform: pressingPath === entry.path ? 'scale(0.98)' : 'none',
-          background: isDropTgt
-            ? '#F1DDD1'
-            : isActive ? '#F1DDD1'
-            : hoveredPath === entry.path ? '#E8E1D4'
-            : normPath(entry.path) === newlyCreatedPath ? 'rgba(217,119,87,0.13)'
-            : (sstate || folderSyncing) ? '#F4ECE3'
-            : 'transparent',
+          background: rowBg,
           boxShadow: isDropTgt
             ? `inset 0 0 0 2px ${C.accent}`
             : isActive ? 'inset 2px 0 0 #D97757'
@@ -935,6 +966,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             }}>{parentDir}</span>
           )}
         </span>
+        {/* Кластер правых иконок: на десктопе — sticky, не уезжает при горизонтальном скролле */}
+        <span style={{
+          display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+          ...(stickyIcons ? {
+            position: 'sticky' as const, right: 0,
+            alignSelf: 'stretch',
+            paddingLeft: 4, paddingRight: 8,
+            background: rowBg === 'transparent' ? C.bgPanel : rowBg,
+            borderRadius: '0 8px 8px 0',
+          } : {}),
+        }}>
         {entry.isModified && (
           <span style={{ fontSize: 9, fontWeight: 700, color: '#C2693B', background: '#FBEBE0', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
         )}
@@ -1050,6 +1092,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         })()}
         {/* Намёк «войти в папку» — только мобильная навигация */}
         {mobileNav && entry.isDirectory && <ChevronRight />}
+        </span>
       </div>
     );
   };
@@ -1095,6 +1138,57 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             />
             {search && (
               <button onClick={() => handleSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 13, padding: 0 }}>✕</button>
+            )}
+          </div>
+          {/* Сортировка дерева: по имени / по дате изменения */}
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <IconButton
+              size="md"
+              active={showSortMenu}
+              onClick={() => setShowSortMenu(v => !v)}
+              title={
+                sortMode === 'name' ? 'Сортировка: по имени'
+                : sortMode === 'date-desc' ? 'Сортировка: сначала новые'
+                : 'Сортировка: сначала старые'
+              }
+            >
+              {sortMode === 'name' ? (
+                // arrow-down-a-z
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m3 16 4 4 4-4M7 20V4M20 8h-5M15 10V6.5a2.5 2.5 0 0 1 5 0V10M15 14h5l-5 6h5"/>
+                </svg>
+              ) : sortMode === 'date-desc' ? (
+                // clock-arrow-down — сначала новые
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 6v6l2 1M12.34 21.98A10 10 0 1 1 21.98 12.33"/>
+                  <path d="m14 18 4 4 4-4M18 14v8"/>
+                </svg>
+              ) : (
+                // clock-arrow-up — сначала старые
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 6v6l2 1M12.34 21.98A10 10 0 1 1 21.98 12.33"/>
+                  <path d="m14 18 4-4 4 4M18 22v-8"/>
+                </svg>
+              )}
+            </IconButton>
+            {showSortMenu && (
+              <Menu onClose={() => setShowSortMenu(false)} top={34} minWidth={200}>
+                <MenuItem
+                  icon={sortMode === 'name' ? <polyline points="20 6 9 17 4 12" /> : <g />}
+                  label="По имени"
+                  onClick={() => changeSortMode('name')}
+                />
+                <MenuItem
+                  icon={sortMode === 'date-desc' ? <polyline points="20 6 9 17 4 12" /> : <g />}
+                  label="Сначала новые"
+                  onClick={() => changeSortMode('date-desc')}
+                />
+                <MenuItem
+                  icon={sortMode === 'date-asc' ? <polyline points="20 6 9 17 4 12" /> : <g />}
+                  label="Сначала старые"
+                  onClick={() => changeSortMode('date-asc')}
+                />
+              </Menu>
             )}
           </div>
           {onOpenKnowledge && (
@@ -1208,7 +1302,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       )}
 
       {/* Tree / список папки / результаты поиска */}
-      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowX: 'hidden', overflowY: 'auto', padding: '0 4px 12px' }}>
+      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowX: isMobile ? 'hidden' : 'auto', overflowY: 'auto', padding: '0 4px 12px' }}>
         {searchResults !== null ? (
           searchResults.length === 0 ? (
             <EmptyState
@@ -1238,7 +1332,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         ) : flatTree.length === 0 ? (
           <FilesRootEmptyState onCreateFile={online ? () => { setCreateInDir(''); setShowCreateFile(true); } : undefined} />
         ) : (
-          flatTree.map(({ entry, depth }) => renderFileRow(entry, depth))
+          // width: max-content — строки растягиваются под самое длинное имя,
+          // контейнер даёт горизонтальный скролл вместо обрезания
+          <div style={{ minWidth: '100%', width: 'max-content' }}>
+            {flatTree.map(({ entry, depth }) => renderFileRow(entry, depth))}
+          </div>
         )}
       </div>
 

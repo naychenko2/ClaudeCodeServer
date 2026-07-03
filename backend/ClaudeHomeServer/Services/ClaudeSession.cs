@@ -41,6 +41,11 @@ public class ClaudeSession : IAsyncDisposable
     // Если claude не выдаёт ни одной строки дольше этого — считаем зависшим
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(60);
 
+    // Коннекторы аккаунта claude.ai (Calendar, Drive, Gamma, Miro и др.) вливаются в каждую
+    // сессию автоматически помимо --mcp-config — их нельзя убрать через конфиг. Блокируем
+    // через --disallowedTools; список задаётся из конфига (Claude:DisallowedTools).
+    private readonly string[] _disallowedTools;
+
     // Отслеживание изменений файлов
     private FileSystemWatcher? _watcher;
     private readonly ConcurrentDictionary<string, string?> _fileCache = new();
@@ -58,7 +63,8 @@ public class ClaudeSession : IAsyncDisposable
         string? mcpConfigPath = null, string? rawSystemPrompt = null,
         SkillsService? skills = null, WorkspaceKnowledgeStore? workspaceStore = null,
         Func<IReadOnlyList<PermissionRule>>? permissionRules = null,
-        TasksMcpContext? tasksMcp = null)
+        TasksMcpContext? tasksMcp = null,
+        string[]? disallowedTools = null)
     {
         Info = info;
         _rootPath = rootPath;
@@ -69,6 +75,7 @@ public class ClaudeSession : IAsyncDisposable
         _wkStore = workspaceStore;
         _permissionRules = permissionRules;
         _tasksMcp = tasksMcp;
+        _disallowedTools = disallowedTools ?? [];
     }
 
     // Объединённый MCP-конфиг хода: серверы из базового конфига (Dify с инжекцией
@@ -154,7 +161,16 @@ public class ClaudeSession : IAsyncDisposable
         var (imagePaths, otherPaths) = SplitImagePaths(attachedPaths);
         var fullText = BuildMessageText(effectiveText, otherPaths);
 
-        // Запускаем ход в фоне, чтобы не блокировать SignalR-соединение
+        return QueueTurnAsync(fullText, imagePaths);
+    }
+
+    // Ручное сворачивание контекста: /compact как обычный ход,
+    // минуя счётчики сообщений, авто-имя чата и разворачивание скиллов
+    public Task CompactAsync() => QueueTurnAsync("/compact", []);
+
+    // Ставит ход в очередь в фоне, чтобы не блокировать SignalR-соединение
+    private Task QueueTurnAsync(string fullText, List<string> imagePaths)
+    {
         _ = Task.Run(async () =>
         {
             if (_cts.IsCancellationRequested) return;
@@ -410,6 +426,10 @@ public class ClaudeSession : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
             args.AddRange(["--mcp-config", effectiveMcpConfig]);
 
+        // Блокируем коннекторы аккаунта claude.ai — они вливаются помимо --mcp-config.
+        if (_disallowedTools.Length > 0)
+            args.AddRange(["--disallowedTools", string.Join(",", _disallowedTools)]);
+
         // Системный промпт: пересчитываем и передаём КАЖДЫЙ ход. Каждый ход — новый процесс
         // claude --print --resume, а --append-system-prompt не сохраняется в транскрипте сессии:
         // не передать его → инструкции (fal-ai/запрет ASCII, Dify, теги) пропадут на этом ходу.
@@ -634,7 +654,21 @@ public class ClaudeSession : IAsyncDisposable
                         ? tr.GetString() ?? "auto" : "auto";
                     int? preTokens = meta.ValueKind == JsonValueKind.Object
                         && meta.TryGetProperty("pre_tokens", out var pt) && pt.TryGetInt32(out var ptv) ? ptv : null;
-                    await _onMessage(new CompactBoundaryMessage(trigger, preTokens));
+                    int? postTokens = meta.ValueKind == JsonValueKind.Object
+                        && meta.TryGetProperty("post_tokens", out var pst) && pst.TryGetInt32(out var pstv) ? pstv : null;
+                    await _onMessage(new CompactBoundaryMessage(trigger, preTokens, postTokens));
+                }
+                else if (sysSubtype == "status")
+                {
+                    // Ход компакции: status=="compacting" — началась; compact_result — завершилась
+                    var status = root.TryGetProperty("status", out var stv) && stv.ValueKind == JsonValueKind.String
+                        ? stv.GetString() : null;
+                    var compactResult = root.TryGetProperty("compact_result", out var crv) && crv.ValueKind == JsonValueKind.String
+                        ? crv.GetString() : null;
+                    var compactError = root.TryGetProperty("compact_error", out var cev) && cev.ValueKind == JsonValueKind.String
+                        ? cev.GetString() : null;
+                    if (status == "compacting" || compactResult is not null)
+                        await _onMessage(new CompactStatusMessage(status, compactResult, compactError));
                 }
                 break;
 
@@ -750,6 +784,9 @@ public class ClaudeSession : IAsyncDisposable
     {
         if (!root.TryGetProperty("message", out var msg)) return;
         if (!msg.TryGetProperty("content", out var content)) return;
+        // Строковый content — служебные user-сообщения CLI (summary после компакта,
+        // <local-command-stdout>): не tool_result, в ленту не транслируем
+        if (content.ValueKind != JsonValueKind.Array) return;
 
         foreach (var block in content.EnumerateArray())
         {

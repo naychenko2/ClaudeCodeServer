@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredFileChangedMessage), "file_changed")]
 [JsonDerivedType(typeof(StoredResultMessage), "result")]
 [JsonDerivedType(typeof(StoredFalCostMessage), "fal_cost")]
+[JsonDerivedType(typeof(StoredCompactBoundaryMessage), "compact_boundary")]
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
 public abstract class StoredMessage { }
 
@@ -61,6 +62,14 @@ public class StoredResultMessage(string subtype, long durationMs, int numTurns,
 public class StoredErrorMessage(string text) : StoredMessage
 {
     public string Text { get; init; } = text;
+}
+
+// Граница компакции контекста — чтобы после перезагрузки страницы оценка заполнения не врала
+public class StoredCompactBoundaryMessage(string trigger, int? preTokens, int? postTokens = null) : StoredMessage
+{
+    public string Trigger { get; init; } = trigger;
+    public int? PreTokens { get; init; } = preTokens;
+    public int? PostTokens { get; init; } = postTokens;
 }
 
 // Стоимость генерации fal.ai (фактически списанная), приходит вне хода — хранится отдельной записью

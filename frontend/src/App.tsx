@@ -15,6 +15,7 @@ import { navPush, navReplace, parseHash, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags, useFeature, FLAGS } from './lib/featureFlags'
+import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
 
@@ -89,6 +90,7 @@ export default function App() {
     api.auth.me()
       .then(me => {
         if (me?.featureFlags) setAllFlags(me.featureFlags)
+        setCtxThresholdsFromServer(me?.contextThresholds)
         loadModels() // актуальный список моделей Claude (fire-and-forget, есть fallback)
       })
       .catch(() => { /* результат отразится в _online */ })

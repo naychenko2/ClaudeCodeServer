@@ -234,6 +234,23 @@ public class UserStore
         }
     }
 
+    /// <summary>
+    /// Устанавливает per-user пороги индикатора контекста (null — сброс к дефолтам).
+    /// Возвращает false если пользователь не найден.
+    /// </summary>
+    public bool SetContextThresholds(string id, ContextThresholds? thresholds)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+
+            user.ContextThresholds = thresholds;
+            Save();
+            return true;
+        }
+    }
+
     // Вызывается только из Update/Delete, уже из-под взятого лока — отдельная синхронизация не нужна.
     private bool HasOtherAdmin(string excludeId) =>
         _users.Any(u => u.Id != excludeId && u.Role == "admin");

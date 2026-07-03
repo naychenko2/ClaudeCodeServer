@@ -3,12 +3,15 @@ import { MermaidDiagram } from './MermaidDiagram';
 import { getExplorerCreateInDir } from './FileExplorer';
 import type { Project, Session, ChatItem, FileEntry, SkillInfo, AgentInfo, ClaudeBilling } from '../types';
 import { useSession } from '../hooks/useSession';
-import { countFiles } from '../hooks/useSessionArtifacts';
+import { countFiles, computeTodos, type TodoItem } from '../hooks/useSessionArtifacts';
 import { useOnline } from '../hooks/useOnline';
 import { api, type WorkflowAgentInfo } from '../lib/api';
-import { useModelLabel } from '../lib/models';
+import { modelLabel, useModelLabel } from '../lib/models';
 import { effortLabel } from '../lib/effort';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, toRateWindows, worstWindow } from '../lib/rateLimit';
+import { type ContextEstimate, estimateContext } from '../lib/context';
+import { useCtxThresholds } from '../lib/contextPrefs';
+import { ContextThresholdsDialog } from './ContextThresholdsDialog';
 import { notify } from '../lib/notify';
 import { type Mode, MODE_META, ModeIcon } from '../lib/modes';
 import { Composer } from './Composer';
@@ -382,6 +385,111 @@ function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
   );
 }
 
+// Индикатор заполнения контекстного окна: пилюля с мини-баром и процентом.
+// Клик — попап с деталями и кнопкой «Свернуть контекст» (/compact); пороги
+// подсветки настраиваются per-user (модалка «Настроить пороги…»).
+function ContextBadge({ estimate, isMobile, isWaiting, isCompacting, canCompact, compactNote, onCompact, online }: {
+  estimate: ContextEstimate; isMobile?: boolean; isWaiting: boolean; isCompacting: boolean;
+  canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean;
+}) {
+  const [showThresholds, setShowThresholds] = useState(false);
+  const c = RATE_COLORS[estimate.level];
+  const tone = estimate.level !== 'normal' ? estimate.level : undefined;
+  const hasPct = estimate.pct !== undefined;
+
+  // В начале сессии показывать нечего (нет оценки и контекст не свёрнут) — прячем пилюлю
+  if (!hasPct && !estimate.fresh) return null;
+
+  const amountNode = (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+      {isCompacting ? (
+        <div className="tool-spinner" style={{ width: 10, height: 10 }} />
+      ) : hasPct ? (
+        <span style={{ width: isMobile ? 18 : 26, height: 5, borderRadius: 3, background: '#E5DCCB', overflow: 'hidden', display: 'inline-block' }}>
+          <span style={{ display: 'block', width: `${estimate.pct}%`, height: '100%', background: c.fill }} />
+        </span>
+      ) : null}
+      <span style={{ color: tone ? c.text : undefined }}>
+        {isCompacting ? '…' : hasPct ? `${estimate.pct}%` : estimate.fresh ? '✦' : '—'}
+      </span>
+    </span>
+  );
+
+  // Кнопка сжатия недоступна: ход идёт, компакт идёт, оценки нет, контекст только что сжат,
+  // или сжимать ещё нечего (слишком мало ходов — CLI вернёт «not enough messages»)
+  const compactDisabled = isWaiting || isCompacting || !hasPct || estimate.fresh || !canCompact || !online;
+  const compactTitle = !canCompact && !isWaiting && !isCompacting
+    ? 'Пока нечего сжимать — слишком мало сообщений'
+    : isWaiting && !isCompacting ? 'Дождитесь завершения текущего хода' : undefined;
+
+  return (
+    <>
+      <BadgeShell
+        label={isMobile ? 'Ctx' : 'Контекст'}
+        amount={amountNode}
+        isMobile={isMobile}
+        tone={tone}
+        title="Заполнение контекста сессии — нажмите для деталей"
+      >
+        <div style={badgeTitleStyle}>Контекст сессии</div>
+        {hasPct ? (
+          <>
+            <div style={{ height: 5, borderRadius: 3, background: '#E5DCCB', overflow: 'hidden', margin: '2px 0 6px' }}>
+              <div style={{ width: `${estimate.pct}%`, height: '100%', background: c.fill }} />
+            </div>
+            <BadgeRow k="Заполнено" v={`${estimate.pct}%`} />
+            <BadgeRow k="≈ Токенов" v={`${fmtTokens(estimate.tokens!)} из ${fmtTokens(estimate.window)}`} />
+            {estimate.model && <BadgeRow k="Модель" v={modelLabel(estimate.model)} />}
+          </>
+        ) : (
+          <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+            {estimate.fresh
+              ? 'Контекст сжат — точная оценка появится после следующего хода.'
+              : 'Оценка появится после первого ответа Claude.'}
+          </div>
+        )}
+        <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 6, lineHeight: 1.4 }}>
+          Сжимает историю диалога в саммари, освобождая место в окне. При заполнении Claude делает это автоматически.
+        </div>
+        {compactNote && (
+          <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, marginTop: 8, padding: '6px 9px', background: C.bgInset, borderRadius: 6, lineHeight: 1.4 }}>
+            {compactNote}
+          </div>
+        )}
+        <button
+          type="button"
+          disabled={compactDisabled}
+          onClick={onCompact}
+          title={compactTitle}
+          style={{
+            marginTop: 10, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+            padding: '6px 10px', borderRadius: 7, border: `1px solid ${compactDisabled ? C.border : '#C9BEAD'}`,
+            background: C.bgWhite, cursor: compactDisabled ? 'default' : 'pointer',
+            fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
+            color: compactDisabled ? C.textMuted : '#5A5043', opacity: compactDisabled ? 0.65 : 1,
+          }}
+        >
+          {isCompacting && <div className="tool-spinner" style={{ width: 11, height: 11 }} />}
+          {isCompacting ? 'Сжимаю…' : 'Сжать контекст'}
+        </button>
+        <div style={{ marginTop: 8, textAlign: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setShowThresholds(true)}
+            style={{
+              border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+              fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, textDecoration: 'underline',
+            }}
+          >
+            Настроить пороги…
+          </button>
+        </div>
+      </BadgeShell>
+      {showThresholds && <ContextThresholdsDialog onClose={() => setShowThresholds(false)} />}
+    </>
+  );
+}
+
 // Бейдж трат на fal.ai (медиа). Отдельная от Claude цифра. Разбивка по моделям.
 // В выпадашке: остаток баланса аккаунта (асинхронно) сверху + траты этого чата + ссылка на статистику.
 function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boolean }) {
@@ -498,9 +606,15 @@ interface ChatHeaderBarProps {
   artifactsOpen?: boolean;
   onToggleArtifacts?: () => void;
   artifactFileCount?: number;
+  ctxEstimate: ContextEstimate;
+  isWaiting: boolean;
+  isCompacting: boolean;
+  canCompact: boolean;
+  compactNote?: string;
+  onCompact: () => void;
 }
 
-function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount }: ChatHeaderBarProps) {
+function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact }: ChatHeaderBarProps) {
   const sessionModelLabel = useModelLabel(session.model);
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
@@ -537,10 +651,19 @@ function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBil
       </span>
     </div>
   ) : null;
+  const ctxBadge = (
+    <ContextBadge estimate={ctxEstimate} isMobile={isMobile} isWaiting={isWaiting}
+      isCompacting={isCompacting} canCompact={canCompact} compactNote={compactNote}
+      onCompact={onCompact} online={online} />
+  );
   const costBadges = isMobile ? (
-    <CombinedCostBadge cost={cost} falCost={falCost} billing={billing} windows={rateWindows} />
+    <>
+      {ctxBadge}
+      <CombinedCostBadge cost={cost} falCost={falCost} billing={billing} windows={rateWindows} />
+    </>
   ) : (
     <>
+      {ctxBadge}
       <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />
       <FalCostBadge stats={falCost} isMobile={isMobile} />
     </>
@@ -867,10 +990,15 @@ function ToolGroupBlock({ isGroupDone, toolCount, children }: {
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, toggleThinking } = useSession(session.id, project?.id);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking } = useSession(session.id, project?.id);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
   const worstRate = useMemo(() => worstWindow(rateWindows), [rateWindows]);
+  // Оценка заполнения контекстного окна — по последнему result-элементу ленты
+  const ctxThresholds = useCtxThresholds();
+  const ctxEstimate = useMemo(() => estimateContext(items, session.model, ctxThresholds), [items, session.model, ctxThresholds]);
+  // Сжимать имеет смысл только когда набралось достаточно ходов (иначе CLI вернёт «not enough messages»)
+  const canCompact = useMemo(() => items.filter(it => it.kind === 'result').length >= 2, [items]);
   const online = useOnline();
 
   // Число изменённых файлов — для бейджа на кнопке «Артефакты» (только когда тумблер проброшен)
@@ -1278,6 +1406,18 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return -1;
   }, [items]);
 
+  // Todo через TaskCreate/TaskUpdate инкрементальны (в отличие от TodoWrite с полным
+  // списком) — карточку чек-листа рисуем один раз, на последнем task-вызове ленты:
+  // там агрегат computeTodos отражает актуальное состояние всего списка
+  const lastTaskIdx = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === 'tool_use' && !it.parentToolUseId && (it.name === 'TaskCreate' || it.name === 'TaskUpdate')) return i;
+    }
+    return -1;
+  }, [items]);
+  const taskTodos = useMemo(() => (lastTaskIdx >= 0 ? computeTodos(items) : []), [items, lastTaskIdx]);
+
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке)
   const renderItem = (item: ChatItem, i: number) => (
     <ChatItemView
@@ -1301,6 +1441,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onRevert={project ? (path => api.files.revert(project.id, path)) : undefined}
       onRetry={handleRetry}
       onInterrupt={interrupt}
+      taskPlan={i === lastTaskIdx && taskTodos.length > 0 ? taskTodos : undefined}
     />
   );
 
@@ -1309,8 +1450,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // file_changed между инструментами не разрывал стопку. Контур рисуем только если в
   // блоке есть хотя бы один инструмент; одиночные file_changed остаются обычными карточками.
   const renderItems = () => {
-    const isTool = (it: ChatItem) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow';
-    const inBlock = (it: ChatItem) => isTool(it) || it.kind === 'file_changed';
+    // Последний task-вызов (lastTaskIdx) исключаем из блока действий, как и TodoWrite:
+    // на его месте рисуется отдельная карточка чек-листа, ей не место внутри контура
+    const isTool = (it: ChatItem, idx: number) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && idx !== lastTaskIdx && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow';
+    const inBlock = (it: ChatItem, idx: number) => isTool(it, idx) || it.kind === 'file_changed';
     // Строим карту дочерних tool_use для Workflow-блоков
     const childrenByParentId = new Map<string, ToolUseItem[]>();
     for (const it of items) {
@@ -1392,10 +1535,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           pushNode(subDiv, start);
         }
         prevNodeWasBlock = false;
-      } else if (inBlock(items[i])) {
+      } else if (inBlock(items[i], i)) {
         const start = i;
         const slice: Array<[ChatItem, number]> = [];
-        while (i < items.length && inBlock(items[i])) { slice.push([items[i], i]); i++; }
+        while (i < items.length && inBlock(items[i], i)) { slice.push([items[i], i]); i++; }
         // Один контур: инструменты и изменения файлов — компактными строками (в т.ч. одиночные).
         // Для agent-вызовов с детьми сразу рисуем детей inline под родителем — иначе при параллельных
         // агентах все их инструменты сливаются в один безымянный блок после шапки.
@@ -1493,6 +1636,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         artifactsOpen={artifactsOpen}
         onToggleArtifacts={onToggleArtifacts}
         artifactFileCount={artifactFileCount}
+        ctxEstimate={ctxEstimate}
+        isWaiting={isWaiting}
+        isCompacting={isCompacting}
+        canCompact={canCompact}
+        compactNote={compactNote}
+        onCompact={compact}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
@@ -1763,14 +1912,15 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   );
 }
 
-// Карточка плана задач (TodoWrite) — закреплённый чек-лист с прогрессом
-interface TodoEntry { content: string; status: string; activeForm?: string }
+// Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
+function parseTodoWriteInput(input: unknown): TodoItem[] {
+  const t = (input as { todos?: unknown } | null)?.todos;
+  return Array.isArray(t) ? (t as TodoItem[]) : [];
+}
 
-function TodoPlanView({ input }: { input: unknown }) {
-  const todos = (() => {
-    const t = (input as { todos?: unknown } | null)?.todos;
-    return Array.isArray(t) ? (t as TodoEntry[]) : [];
-  })();
+// Карточка плана задач — закрепленный чек-лист с прогрессом. Источник списка:
+// input TodoWrite либо агрегат TaskCreate/TaskUpdate (computeTodos)
+function TodoPlanView({ todos }: { todos: TodoItem[] }) {
   if (todos.length === 0) return null;
   const done = todos.filter(t => t.status === 'completed').length;
 
@@ -1848,8 +1998,17 @@ function toolMeta(name: string): { color: string; icon: React.ReactNode } {
     return { color: '#B05C38', icon: svg(<><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>) };
   if (n === 'skill')
     return { color: '#8E4A82', icon: svg(<><path d="M12 3l1.9 5.2L19 10l-5.1 1.8L12 17l-1.9-5.2L5 10l5.1-1.8z" /><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" /></>) };
+  // Todo-задачи — та же «галочка в рамке», что у карточки плана
+  if (['taskcreate', 'taskupdate', 'tasklist', 'taskget'].includes(n))
+    return { color: C.accent, icon: svg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>) };
   return { color: C.info, icon: svg(<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6 2 2 6-6a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3z" />) };
 }
+
+// Статусы todo-задач (TaskUpdate) по-русски — для компактной строки в ленте
+const TASK_STATUS_RU: Record<string, string> = {
+  pending: 'в очереди', in_progress: 'в работе', completed: 'готово',
+  cancelled: 'отменена', deleted: 'удалена',
+};
 
 // Русские названия инструментов для ленты чата
 const TOOL_LABELS: Record<string, string> = {
@@ -1858,6 +2017,7 @@ const TOOL_LABELS: Record<string, string> = {
   glob: 'Поиск файлов', grep: 'Поиск', ls: 'Список', task: 'Субагент', agent: 'Субагент',
   websearch: 'Веб-поиск', webfetch: 'Загрузка страницы', skill: 'Навык',
   todowrite: 'План задач', exitplanmode: 'План', toolsearch: 'Поиск инструментов',
+  taskcreate: 'Задача', taskupdate: 'Задача', tasklist: 'Список задач', taskget: 'Задача',
   killshell: 'Остановка команды',
 };
 // Имя инструмента для показа: MCP → «server · tool», известные — по-русски, прочее — как есть
@@ -2363,7 +2523,12 @@ function ToolUseView({ item, online = true, onOpenFile }: { item: Extract<ChatIt
   // Пути показываем относительно корня проекта: file_path/path — целиком, в командах и
   // glob-шаблонах вырезаем абсолютный корень из текста (там путь — часть строки).
   const pathVal = inp.file_path ?? inp.path ?? inp.notebook_path;
-  const toolArg = item.streamingArg ?? String(
+  // Человекочитаемый аргумент для todo-задач: TaskCreate — тема, TaskUpdate — «#id → статус»
+  const taskArg = n === 'taskcreate' && typeof inp.subject === 'string' ? inp.subject
+    : n === 'taskupdate' && inp.taskId != null
+      ? `#${inp.taskId}${typeof inp.status === 'string' ? ` → ${TASK_STATUS_RU[inp.status] ?? inp.status}` : ''}`
+      : null;
+  const toolArg = item.streamingArg ?? taskArg ?? String(
     (inp.command != null ? stripRoot(String(inp.command), project?.rootPath) : null)
     ?? (pathVal != null ? relPath(String(pathVal), project?.rootPath) : null)
     ?? (inp.pattern != null ? stripRoot(String(inp.pattern), project?.rootPath) : null)
@@ -3489,9 +3654,11 @@ interface ItemProps {
   onRevert?: (path: string) => void;
   onRetry: () => void;
   onInterrupt: () => void;
+  // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
+  taskPlan?: TodoItem[];
 }
 
-function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt }: ItemProps) {
+function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan }: ItemProps) {
   const project = useContext(ChatProjectContext);
   switch (item.kind) {
     case 'user_message':
@@ -3608,9 +3775,13 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
     }
 
     case 'tool_use':
-      // План задач рисуем отдельной карточкой-чек-листом. Линию-коннектор для дочерних
-      // вызовов субагента (parentToolUseId) рисует renderItems — единой непрерывной полосой.
-      return item.name === 'TodoWrite' ? <TodoPlanView input={item.input} /> : <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
+      // План задач рисуем отдельной карточкой-чек-листом: TodoWrite несет полный список
+      // в своем input, для инкрементальных TaskCreate/TaskUpdate агрегат (taskPlan)
+      // прокидывает ChatPanel — только на последний task-вызов ленты. Линию-коннектор для
+      // дочерних вызовов субагента (parentToolUseId) рисует renderItems — единой полосой.
+      if (item.name === 'TodoWrite') return <TodoPlanView todos={parseTodoWriteInput(item.input)} />;
+      if (taskPlan) return <TodoPlanView todos={taskPlan} />;
+      return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
 
     case 'ask_question':
       return <AskQuestionView item={item} online={online} onAnswer={onAnswerQuestion} onInterrupt={onInterrupt} />;
@@ -3907,8 +4078,14 @@ function ChatItemView({ item, index, online, streaming, isLastResult, onToggleTh
           <div style={{ flex: 1, height: 1, background: C.border }} />
           <span style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
             <span style={{ color: '#B89B6E' }}>✦</span>
-            контекст свёрнут
-            {typeof item.preTokens === 'number' && item.preTokens > 0 && <span style={{ opacity: 0.7 }}>· было {fmtTok(item.preTokens)} токенов</span>}
+            контекст сжат{item.trigger === 'manual' ? ' вручную' : ''}
+            {typeof item.preTokens === 'number' && item.preTokens > 0 && (
+              <span style={{ opacity: 0.7 }}>
+                · {typeof item.postTokens === 'number' && item.postTokens > 0
+                  ? `${fmtTok(item.preTokens)} → ${fmtTok(item.postTokens)} токенов`
+                  : `было ${fmtTok(item.preTokens)} токенов`}
+              </span>
+            )}
           </span>
           <div style={{ flex: 1, height: 1, background: C.border }} />
         </div>

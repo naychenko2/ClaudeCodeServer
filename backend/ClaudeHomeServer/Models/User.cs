@@ -11,4 +11,9 @@ public class User
     public byte[]? NtHash { get; set; }
     // Per-user override фич-флагов поверх дефолтов из FeatureFlagCatalog; null/отсутствует — все по дефолту
     public Dictionary<string, bool>? FeatureFlags { get; set; }
+    // Per-user пороги индикатора заполнения контекста (проценты); null — дефолты фронта
+    public ContextThresholds? ContextThresholds { get; set; }
 }
+
+// Пороги подсветки индикатора контекста: warn — янтарь, danger — красный
+public record ContextThresholds(int WarnPct, int DangerPct);

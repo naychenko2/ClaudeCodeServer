@@ -355,6 +355,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const [diff, setDiff] = useState<string | null>(null);
   const [tab, setTab] = useState<ViewTab>('file');
   const [editing, setEditing] = useState(false);
+  const [htmlTab, setHtmlTab] = useState<'preview' | 'code'>('preview');
   const [officeMode, setOfficeMode] = useState<'view' | 'edit'>('view');
   const [officeSwitching, setOfficeSwitching] = useState(false);
   const [officeDiscardConfirm, setOfficeDiscardConfirm] = useState(false);
@@ -376,6 +377,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   useEffect(() => {
     setEditing(false);
     setTab('file');
+    setHtmlTab('preview');
     setOfficeMode('view');
     setOfficeSwitching(false);
     setOfficeDiscardConfirm(false);
@@ -495,6 +497,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const fileName = filePath.split('/').pop() ?? filePath;
   const isMarkdown = /\.(md|mdx)$/i.test(fileName);
   const isMermaid = /\.mmd$/i.test(fileName);
+  const isHtml = /\.html?$/i.test(fileName);
   const diffStats = diff ? {
     added: diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
     removed: diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length,
@@ -509,6 +512,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const isOfficeFile = !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind !== 'pdf';
   const isCodeEditing = editing && tab === 'file' && !fileContent?.isBinary && !fileContent?.isImage;
   const isPdfViewing = !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind === 'pdf';
+  const isHtmlPreviewing = !loading && !loadError && tab === 'file' && isHtml && htmlTab === 'preview' && !editing && !fileContent?.isBinary;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative' }}>
@@ -548,6 +552,16 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             value={tab}
             options={[{ value: 'file', label: 'Файл' }, { value: 'diff', label: 'Diff' }]}
             onChange={setTab}
+            isMobile={isMobile}
+          />
+        )}
+
+        {/* Переключатель Просмотр / Код для HTML-файлов */}
+        {isHtml && !editing && tab === 'file' && !fileContent?.isBinary && (
+          <PillSwitch<'preview' | 'code'>
+            value={htmlTab}
+            options={[{ value: 'preview', label: 'Просмотр' }, { value: 'code', label: 'Код' }]}
+            onChange={v => { setHtmlTab(v); if (v === 'code') setEditing(false); }}
             isMobile={isMobile}
           />
         )}
@@ -644,7 +658,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   : <button onClick={handleRevert} style={tbBtnGhost}>Откатить</button>
               )}
               {!isMobile && (
-                <button onClick={() => { setEditing(true); setTab('file'); }} style={tbBtnPrimary}>Править</button>
+                isHtml && htmlTab === 'preview'
+                  ? <button onClick={() => setHtmlTab('code')} style={tbBtnPrimary}>Править</button>
+                  : <button onClick={() => { setEditing(true); setTab('file'); }} style={tbBtnPrimary}>Править</button>
               )}
             </>
           )}
@@ -754,7 +770,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       )}
 
       {/* Содержимое */}
-      <div style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing) ? 0 : 16, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing) ? 0 : 16, display: 'flex', flexDirection: 'column' }}>
         {loading && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 14 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', border: `3px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.8s linear infinite' }} />
@@ -913,7 +929,14 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                     />
                   </Suspense>
                 )
-                : isMermaid
+                : isHtml && htmlTab === 'preview'
+                  ? <iframe
+                      srcDoc={content}
+                      sandbox="allow-scripts allow-forms allow-popups allow-modals"
+                      style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
+                      title={fileName}
+                    />
+                  : isMermaid
                   ? <div style={{ padding: 16 }}><MermaidDiagram code={content} /></div>
                   : isMarkdown
                   ? <MarkdownViewer content={content} />
@@ -940,7 +963,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       </div>
 
       {/* Плавающая кнопка редактирования на мобиле (MA4) */}
-      {isMobile && online && !editing && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && (
+      {isMobile && online && !editing && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !(isHtml && htmlTab === 'preview') && (
         <button
           onClick={() => { setEditing(true); setTab('file'); }}
           title="Редактировать"

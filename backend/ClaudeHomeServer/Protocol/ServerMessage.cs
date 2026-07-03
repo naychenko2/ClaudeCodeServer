@@ -92,6 +92,11 @@ public record WorkflowAgentDto(string Id, string Prompt, string? Summary,
 public record WorkflowProgressMessage(string ToolUseId, IReadOnlyList<WorkflowAgentDto> Agents, bool IsDone)
     : ServerMessage("workflow_progress");
 
+// Изменение задачи (created/updated/deleted) — шлётся в группу user_{userId},
+// чтобы все устройства пользователя обновили списки и календарь
+public record TaskChangedMessage(string Action, Models.TaskItem Task)
+    : ServerMessage("task_changed");
+
 // Сообщения от клиента к серверу
 public record ClientMessage([property: JsonPropertyName("type")] string Type);
 

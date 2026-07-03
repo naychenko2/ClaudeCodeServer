@@ -31,6 +31,14 @@ public static class FeatureFlagCatalog
             Description: "Панель справа от чата с изменёнными файлами, планом и ссылками за текущую сессию.",
             Default: false,
             Stage: "beta"),
+
+        // Задачи: вкладка «Календарь» в хабе и вкладка «Задачи» внутри проекта.
+        new FeatureFlagDefinition(
+            Key: "tasks",
+            Title: "Задачи и календарь",
+            Description: "Раздел «Календарь» со всеми задачами и вкладка «Задачи» внутри проекта.",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

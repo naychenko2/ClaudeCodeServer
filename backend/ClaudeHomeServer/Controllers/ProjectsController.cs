@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, TaskManager tasks) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -68,6 +68,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
         projects.Delete(id);
+        tasks.DeleteByProject(id);
         return NoContent();
     }
 }

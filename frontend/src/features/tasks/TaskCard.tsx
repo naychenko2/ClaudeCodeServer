@@ -49,7 +49,8 @@ export function TaskCard({ task, selected, onClick, compact, projectName }: Prop
           }}>
             {task.title}
           </span>
-          <AssigneeBadge assignee={task.assignee} />
+          {/* В компактных карточках сайдбара показываем только Claude (как в макете) */}
+          <AssigneeBadge assignee={compact && task.assignee === 'me' ? undefined : task.assignee} />
         </div>
 
         {/* Нижняя строка: чипы */}

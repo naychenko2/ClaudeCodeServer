@@ -5,7 +5,7 @@
 import { useSyncExternalStore } from 'react';
 import type { CreateTaskDto, Task, TaskPriority, TaskStatus, UpdateTaskDto } from '../types';
 import { api } from './api';
-import { onMessage, onReconnected } from './signalr';
+import { joinUser, onMessage, onReconnected } from './signalr';
 import { C } from './design';
 
 // === Стор ===
@@ -36,16 +36,24 @@ function remove(taskId: string) {
   }
 }
 
+// task_changed шлётся в группу user_{userId} — вступаем в неё
+// (повторный JoinUser для того же соединения безопасен)
+function joinUserGroup() {
+  const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+  if (uid) joinUser(uid).catch(() => {});
+}
+
 function wireRealtime() {
   if (_realtimeWired) return;
   _realtimeWired = true;
+  joinUserGroup();
   onMessage(msg => {
     if (msg.type !== 'task_changed') return;
     if (msg.action === 'deleted') remove(msg.task.id);
     else upsert(msg.task);
   });
   // После разрыва соединения могли потеряться события — перечитываем целиком
-  onReconnected(() => { void reloadTasks(); });
+  onReconnected(() => { joinUserGroup(); void reloadTasks(); });
 }
 
 export async function reloadTasks(): Promise<void> {

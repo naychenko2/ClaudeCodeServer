@@ -14,6 +14,7 @@ public class TaskSchedulerService(
     UserStore users,
     FeatureFlagService flags,
     IHubContext<SessionHub> hub,
+    PushService push,
     ILogger<TaskSchedulerService> log) : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
@@ -71,9 +72,12 @@ public class TaskSchedulerService(
         log.LogInformation("Напоминание отправлено: задача {TaskId} «{Title}»", updated.Id, updated.Title);
     }
 
-    // Тост в открытом приложении (SignalR); web push добавится этапом 2
-    private Task SendNotificationAsync(TaskItem task, NotificationMessage message) =>
-        hub.Clients.Group("user_" + task.OwnerId).SendAsync("message", message);
+    // Тост в открытом приложении (SignalR) + web push на подписанные устройства
+    private async Task SendNotificationAsync(TaskItem task, NotificationMessage message)
+    {
+        await hub.Clients.Group("user_" + task.OwnerId).SendAsync("message", message);
+        await push.SendToUserAsync(task.OwnerId!, message);
+    }
 
     // Hash-диплинк на задачу: проектная → детали в проекте, личная → модалка в календаре
     internal static string TaskUrl(TaskItem task) =>

@@ -39,6 +39,14 @@ export const api = {
       }),
   },
 
+  push: {
+    vapidPublicKey: () => request<{ publicKey: string }>('/push/vapid-public-key'),
+    subscribe: (sub: { endpoint: string; p256dh: string; auth: string }) =>
+      request<void>('/push/subscribe', { method: 'POST', body: JSON.stringify(sub) }),
+    unsubscribe: (endpoint: string) =>
+      request<void>('/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint }) }),
+  },
+
   users: {
     list: () => request<UserProfile[]>('/users'),
     create: (data: { username: string; password: string; role: string }) =>

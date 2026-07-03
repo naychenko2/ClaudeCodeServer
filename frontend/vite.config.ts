@@ -7,13 +7,15 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'prompt',
-      devOptions: { enabled: true },
+      // Свой sw (src/sw.ts): прежний precache/SPA-fallback + обработчики web push.
+      // В dev SW подключается как module (требование injectManifest dev-режима)
+      devOptions: { enabled: true, type: 'module' },
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
       // .mjs включён в precache — иначе pdf.worker.min.mjs выпадает и PDF не работает офлайн
-      workbox: {
+      injectManifest: {
         globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,webmanifest}'],
-        // /api/* и OnlyOffice-пути не должны перехватываться SW.
-        // OO использует версионированные пути /X.Y.Z-hash/... и статику /web-apps/, /sdkjs/ и т.д.
-        navigateFallbackDenylist: [/^\/api\//, /^\/\d/, /^\/web-apps\//, /^\/sdkjs\//, /^\/doceditor\//, /^\/doc\//, /^\/coauthoring\//, /^\/cache\//],
       },
       manifest: {
         name: 'Claude Home',

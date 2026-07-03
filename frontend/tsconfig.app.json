@@ -21,5 +21,7 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  // sw.ts — отдельный проект tsconfig.sw.json (lib WebWorker конфликтует с DOM)
+  "include": ["src"],
+  "exclude": ["src/sw.ts"]
 }

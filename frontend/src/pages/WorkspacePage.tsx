@@ -145,17 +145,21 @@ const windowWidth = useWindowWidth();
   const isMobile = windowWidth < 768;
   const isTablet = windowWidth >= 768 && windowWidth < 1200;
 
-  // Задачи (за фич-флагом): вкладка «Задачи» в сайдбаре + карточка задачи в центре
+  // Задачи (за фич-флагом): вкладка «Задачи» в сайдбаре + карточка задачи в центре.
+  // Открытая задача ведёт себя как открытый файл: переключение вкладок сайдбара
+  // основную зону не трогает — карточка открывается кликом и закрывается крестиком.
   const tasksEnabled = useFeature(FLAGS.tasks);
   const allTasks = useTasks();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const tasksMode = tasksEnabled && leftTab === 'tasks';
-  const selectedTask = tasksMode && selectedTaskId
+  const selectedTask = tasksEnabled && selectedTaskId
     ? allTasks.find(t => t.id === selectedTaskId && t.projectId === project.id) ?? null
     : null;
 
   const handleSelectTask = (task: Task) => {
     setSelectedTaskId(task.id);
+    // Открытый файл уступает место карточке задачи
+    setOpenFile(null);
     if (isMobile) {
       setMobileView('chat');
       navPush({ screen: 'project', project, view: 'chat', file: null });
@@ -275,8 +279,9 @@ const windowWidth = useWindowWidth();
       navPush({ screen: 'project', project, view: 'chat', file: null });
     }
     if (!autoSelect) {
-      // явный выбор — закрываем файл, показываем чат во весь экран
+      // явный выбор — закрываем файл и открытую задачу, показываем чат во весь экран
       setOpenFile(null);
+      setSelectedTaskId(null);
     }
   };
 
@@ -697,21 +702,15 @@ const windowWidth = useWindowWidth();
 
         return (
           <>
-            {/* Режим «Задачи»: карточка задачи вместо чата */}
-            {!openFile && tasksMode && (
+            {/* Открытая задача — карточка в основной зоне (как открытый файл), ✕ возвращает чат */}
+            {!openFile && selectedTask && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                {selectedTask
-                  ? <TaskDetailsPane task={selectedTask} project={project} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => setSelectedTaskId(null)} />
-                  : (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8A8070', fontSize: 14 }}>
-                      Выберите или создайте задачу
-                    </div>
-                  )}
+                <TaskDetailsPane task={selectedTask} project={project} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onClose={() => setSelectedTaskId(null)} onDeleted={() => setSelectedTaskId(null)} />
               </div>
             )}
 
-            {/* Нет открытого файла — только чат */}
-            {!openFile && !tasksMode && (
+            {/* Нет открытого файла и задачи — чат */}
+            {!openFile && !selectedTask && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 {activeSession
                   ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined} />

@@ -1,4 +1,6 @@
-﻿using ClaudeHomeServer.Models;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -11,25 +13,51 @@ namespace ClaudeHomeServer.Hubs;
 public class SessionHub : Hub
 {
     private readonly SessionManager _sessions;
+    private readonly ProjectManager _projects;
     private readonly FileWatcherService _watcher;
     private readonly ConnectionDiagnostics _diag;
 
-    public SessionHub(SessionManager sessions, FileWatcherService watcher, ConnectionDiagnostics diag)
+    public SessionHub(SessionManager sessions, ProjectManager projects, FileWatcherService watcher, ConnectionDiagnostics diag)
     {
         _sessions = sessions;
+        _projects = projects;
         _watcher = watcher;
         _diag = diag;
     }
 
+    // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
+    private string? UserId => Context.User?.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
+    // Владелец сессии: у проектной — владелец проекта, у чата вне проекта — сама сессия.
+    // Сессии без владельца (легаси/удалённый проект) недоступны никому — как в REST-контроллерах.
+    private bool OwnsSession(string sessionId)
+    {
+        var info = _sessions.GetById(sessionId);
+        if (info is null) return false;
+        var ownerId = info.ProjectId is not null
+            ? _projects.GetById(info.ProjectId)?.OwnerId
+            : info.OwnerId;
+        return ownerId is not null && ownerId == UserId;
+    }
+
+    private bool OwnsProject(string projectId)
+    {
+        var ownerId = _projects.GetById(projectId)?.OwnerId;
+        return ownerId is not null && ownerId == UserId;
+    }
+
+    private static HubException Denied() => new("Доступ запрещён");
+
     public override Task OnConnectedAsync()
     {
         var transport = Context.Features.Get<IHttpTransportFeature>()?.TransportType.ToString() ?? "unknown";
-        _diag.RecordConnect(Context.ConnectionId, transport, Context.UserIdentifier ?? Context.User?.Identity?.Name);
+        _diag.RecordConnect(Context.ConnectionId, transport, UserId ?? Context.User?.Identity?.Name);
         return base.OnConnectedAsync();
     }
 
     public async Task JoinSession(string sessionId)
     {
+        if (!OwnsSession(sessionId)) throw Denied();
         await Groups.AddToGroupAsync(Context.ConnectionId, sessionId);
 
         // Новый клиент сразу получает текущий статус (чтобы не пропустить working при workflow)
@@ -53,6 +81,7 @@ public class SessionHub : Hub
 
     public async Task JoinProject(string projectId)
     {
+        if (!OwnsProject(projectId)) throw Denied();
         await Groups.AddToGroupAsync(Context.ConnectionId, "project_" + projectId);
         _watcher.Watch(projectId, Context.ConnectionId);
     }
@@ -63,9 +92,12 @@ public class SessionHub : Hub
         _watcher.Unwatch(projectId, Context.ConnectionId);
     }
 
-    // Группа для realtime-обновления списка чатов вне проекта (без файлового watcher)
+    // Группа для realtime-обновления списка чатов вне проекта (без файлового watcher).
+    // Подписаться можно только на самого себя.
     public Task JoinUser(string userId) =>
-        Groups.AddToGroupAsync(Context.ConnectionId, "user_" + userId);
+        userId == UserId
+            ? Groups.AddToGroupAsync(Context.ConnectionId, "user_" + userId)
+            : throw Denied();
 
     public Task LeaveUser(string userId) =>
         Groups.RemoveFromGroupAsync(Context.ConnectionId, "user_" + userId);
@@ -79,32 +111,38 @@ public class SessionHub : Hub
 
     public async Task SendMessage(string sessionId, string text, List<string>? attachedPaths = null, string? mode = null)
     {
+        if (!OwnsSession(sessionId)) throw Denied();
         await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? [], mode);
     }
 
     public void RespondPermission(string sessionId, string requestId, string behavior)
     {
+        if (!OwnsSession(sessionId)) throw Denied();
         _sessions.RespondPermission(sessionId, requestId, behavior);
     }
 
     public void Interrupt(string sessionId)
     {
+        if (!OwnsSession(sessionId)) throw Denied();
         _sessions.Interrupt(sessionId);
     }
 
     // Ручное сворачивание контекста сессии (/compact)
     public async Task CompactSession(string sessionId)
     {
+        if (!OwnsSession(sessionId)) throw Denied();
         await _sessions.CompactAsync(sessionId);
     }
 
     public void AnswerQuestion(string sessionId, string toolUseId, string answerText)
     {
+        if (!OwnsSession(sessionId)) throw Denied();
         _sessions.AnswerQuestion(sessionId, toolUseId, answerText);
     }
 
     public void RespondPlan(string sessionId, string requestId, bool approve, string? feedback = null)
     {
+        if (!OwnsSession(sessionId)) throw Denied();
         _sessions.RespondPlan(sessionId, requestId, approve, feedback);
     }
 }

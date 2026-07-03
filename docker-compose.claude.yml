@@ -30,6 +30,8 @@ services:
       McpConfigPath: /app/.mcp.docker.json
       # Внешние сервисы — через хост-шлюз
       Dify__ApiUrl: http://host.docker.internal:8080/v1
+      # Ключ Dify Knowledge (dataset-...) — секрет, значение в .env / .env.prod
+      Dify__ApiKey: ${DIFY_API_KEY:-}
       # Platform API-ключ fal.ai для учёта стоимости генераций (billing-events).
       # Это НЕ тот токен, что у MCP fal-ai — отдельный ключ key:secret. Значение в .env.
       Fal__ApiKey: ${FAL_API_KEY:-}

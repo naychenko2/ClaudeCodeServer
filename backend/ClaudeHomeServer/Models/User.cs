@@ -13,6 +13,9 @@ public class User
     public Dictionary<string, bool>? FeatureFlags { get; set; }
     // Per-user пороги индикатора заполнения контекста (проценты); null — дефолты фронта
     public ContextThresholds? ContextThresholds { get; set; }
+    // IANA-таймзона пользователя (например "Europe/Moscow") — фронт присылает при старте;
+    // нужна планировщику для перевода локальных сроков задач в UTC. null — считаем UTC
+    public string? TimeZone { get; set; }
 }
 
 // Пороги подсветки индикатора контекста: warn — янтарь, danger — красный

@@ -10,6 +10,9 @@ import { useSyncExternalStore } from 'react';
 export const FLAGS = {
   sessionArtifacts: 'session-artifacts',
   tasks: 'tasks',
+  taskReminders: 'task-reminders',
+  taskRecurrence: 'task-recurrence',
+  taskClaudeExec: 'task-claude-exec',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

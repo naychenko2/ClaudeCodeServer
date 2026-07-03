@@ -235,6 +235,24 @@ public class UserStore
     }
 
     /// <summary>
+    /// Сохраняет IANA-таймзону пользователя (для планировщика напоминаний).
+    /// Возвращает false если пользователь не найден.
+    /// </summary>
+    public bool SetTimeZone(string id, string timeZone)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            if (user.TimeZone == timeZone) return true; // без лишней записи файла
+
+            user.TimeZone = timeZone;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Устанавливает per-user пороги индикатора контекста (null — сброс к дефолтам).
     /// Возвращает false если пользователь не найден.
     /// </summary>

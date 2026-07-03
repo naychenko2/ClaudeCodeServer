@@ -92,6 +92,9 @@ export default function App() {
         if (me?.featureFlags) setAllFlags(me.featureFlags)
         setCtxThresholdsFromServer(me?.contextThresholds)
         loadModels() // актуальный список моделей Claude (fire-and-forget, есть fallback)
+        // Таймзона устройства — серверу для напоминаний (fire-and-forget)
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+        if (tz) api.auth.setTimeZone(tz).catch(() => {})
       })
       .catch(() => { /* результат отразится в _online */ })
       .finally(() => {

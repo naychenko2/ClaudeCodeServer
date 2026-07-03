@@ -31,6 +31,12 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(t),
       }),
+    // Таймзона устройства (IANA) — серверу для расчёта напоминаний по локальным срокам
+    setTimeZone: (timeZone: string) =>
+      request<void>('/auth/timezone', {
+        method: 'PUT',
+        body: JSON.stringify({ timeZone }),
+      }),
   },
 
   users: {

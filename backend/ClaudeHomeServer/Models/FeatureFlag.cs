@@ -39,6 +39,30 @@ public static class FeatureFlagCatalog
             Description: "Раздел «Календарь» со всеми задачами и вкладка «Задачи» внутри проекта.",
             Default: false,
             Stage: "beta"),
+
+        // Напоминания о задачах: офсет от срока + доставка тостом и web push.
+        new FeatureFlagDefinition(
+            Key: "task-reminders",
+            Title: "Напоминания о задачах",
+            Description: "Напоминание к сроку задачи (за N минут) с уведомлением в приложении и push на устройства.",
+            Default: false,
+            Stage: "dev"),
+
+        // Регулярные задачи: правило повторения, новый экземпляр при завершении.
+        new FeatureFlagDefinition(
+            Key: "task-recurrence",
+            Title: "Регулярные задачи",
+            Description: "Повторяющиеся задачи: ежедневно/еженедельно/ежемесячно/ежегодно, следующий экземпляр создаётся при завершении.",
+            Default: false,
+            Stage: "dev"),
+
+        // Claude-исполнитель: запуск сессии по задаче кнопкой и автоматически по сроку.
+        new FeatureFlagDefinition(
+            Key: "task-claude-exec",
+            Title: "Claude-исполнитель задач",
+            Description: "Задачи с исполнителем Claude выполняются в отдельном чате: вручную кнопкой или автоматически при наступлении срока.",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

@@ -51,6 +51,7 @@ builder.Services.AddSingleton<FalAccountService>();
 builder.Services.AddSingleton<UsageService>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddSingleton<ModelCatalogService>();
+builder.Services.AddHostedService<TaskSchedulerService>();
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");
 builder.Services.AddHttpClient("fal");

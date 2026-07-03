@@ -13,6 +13,11 @@ public class TaskItem
     public TaskItemPriority Priority { get; set; } = TaskItemPriority.Medium;
     public string? DueDate { get; set; }   // ISO: YYYY-MM-DD
     public string? DueTime { get; set; }   // HH:MM
+    // Напоминание: офсет до срока в минутах (0 = в момент срока); null — без напоминания
+    public int? ReminderMinutes { get; set; }
+    // UTC-отметка отправленного напоминания (идемпотентность планировщика);
+    // сбрасывается при изменении срока или офсета
+    public DateTime? ReminderSentAt { get; set; }
     public TaskItemAssignee? Assignee { get; set; }
     public string? LinkedSessionId { get; set; }
     public List<string> LinkedFiles { get; set; } = [];

@@ -45,6 +45,23 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         return Ok(new { userId, username, role, featureFlags, contextThresholds });
     }
 
+    // Таймзона пользователя (IANA, например "Europe/Moscow") — фронт шлёт при старте.
+    // Нужна планировщику напоминаний для перевода локальных сроков задач в UTC.
+    [Authorize]
+    [HttpPut("timezone")]
+    public IActionResult SetTimeZone([FromBody] TimeZoneRequest req)
+    {
+        var userId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (userId is null) return Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(req.TimeZone) ||
+            !TimeZoneInfo.TryFindSystemTimeZoneById(req.TimeZone.Trim(), out _))
+            return BadRequest(new { error = "Неизвестная таймзона" });
+
+        if (!users.SetTimeZone(userId, req.TimeZone.Trim())) return Unauthorized();
+        return NoContent();
+    }
+
     // Пороги индикатора заполнения контекста (per-user). body null/пустой → сброс к дефолтам
     [Authorize]
     [HttpPut("context-thresholds")]
@@ -87,3 +104,4 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
 public record LoginRequest(string? Username, string? Password);
 public record ChangePasswordRequest(string? CurrentPassword, string NewPassword);
 public record ContextThresholdsRequest(int? WarnPct, int? DangerPct);
+public record TimeZoneRequest(string? TimeZone);

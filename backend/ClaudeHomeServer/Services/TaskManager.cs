@@ -41,6 +41,7 @@ public class TaskManager
             Priority = req.Priority ?? TaskItemPriority.Medium,
             DueDate = string.IsNullOrEmpty(req.DueDate) ? null : req.DueDate,
             DueTime = string.IsNullOrEmpty(req.DueTime) ? null : req.DueTime,
+            ReminderMinutes = req.ReminderMinutes is < 0 ? null : req.ReminderMinutes,
             Assignee = req.Assignee,
             LinkedSessionId = req.LinkedSessionId,
             LinkedFiles = req.LinkedFiles ?? [],
@@ -62,8 +63,15 @@ public class TaskManager
         if (req.Status is not null) task.Status = req.Status.Value;
         if (req.Priority is not null) task.Priority = req.Priority.Value;
         // Пустая строка = очистить поле, null = не менять
+        var dueBefore = (task.DueDate, task.DueTime, task.ReminderMinutes);
         if (req.DueDate is not null) task.DueDate = req.DueDate == "" ? null : req.DueDate;
         if (req.DueTime is not null) task.DueTime = req.DueTime == "" ? null : req.DueTime;
+        // Для int-поля семантика очистки — отрицательное значение (аналог "" у строк)
+        if (req.ReminderMinutes is not null)
+            task.ReminderMinutes = req.ReminderMinutes < 0 ? null : req.ReminderMinutes;
+        // Срок или офсет поменялись — напоминание должно сработать заново
+        if (dueBefore != (task.DueDate, task.DueTime, task.ReminderMinutes))
+            task.ReminderSentAt = null;
         if (req.Assignee is not null) task.Assignee = req.Assignee;
         if (req.LinkedSessionId is not null)
             task.LinkedSessionId = req.LinkedSessionId == "" ? null : req.LinkedSessionId;
@@ -78,6 +86,16 @@ public class TaskManager
             }).ToList();
 
         task.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return task;
+    }
+
+    // Отметка планировщика об отправленном напоминании (идемпотентность между тиками и рестартами)
+    public TaskItem? MarkReminderSent(string id, DateTime atUtc)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.ReminderSentAt = atUtc;
         Save();
         return task;
     }
@@ -131,6 +149,7 @@ public record CreateTaskRequest(
     TaskItemPriority? Priority = null,
     string? DueDate = null,
     string? DueTime = null,
+    int? ReminderMinutes = null,
     TaskItemAssignee? Assignee = null,
     string? LinkedSessionId = null,
     List<string>? LinkedFiles = null,
@@ -146,6 +165,8 @@ public record UpdateTaskRequest(
     TaskItemPriority? Priority = null,
     string? DueDate = null,
     string? DueTime = null,
+    // null = не менять, отрицательное = убрать напоминание
+    int? ReminderMinutes = null,
     TaskItemAssignee? Assignee = null,
     string? LinkedSessionId = null,
     List<string>? LinkedFiles = null,

@@ -188,20 +188,27 @@ const windowWidth = useWindowWidth();
     ...(tasksEnabled ? [{ value: 'tasks' as const, label: 'Задачи' }] : []),
   ];
 
-  // Диплинк #/project/{id}/file/…: App положил путь файла в sessionStorage
+  // Диплинк файла: App положил «projectId|путь» в sessionStorage.
+  // Значение чужого проекта не трогаем — его заберёт WorkspacePage нужного проекта.
   useEffect(() => {
-    const pendingFile = sessionStorage.getItem('cc_pending_file');
-    if (!pendingFile) return;
+    const raw = sessionStorage.getItem('cc_pending_file');
+    if (!raw) return;
+    const sep = raw.indexOf('|');
+    const [pid, path] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
+    if (pid !== project.id) return;
     sessionStorage.removeItem('cc_pending_file');
-    setOpenFile(pendingFile);
+    setOpenFile(path);
     setFileFullscreen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Переход из календаря / диплинк задачи: App положил id задачи в sessionStorage
+  // Переход из календаря / диплинк задачи: App положил «projectId|taskId» в sessionStorage
   useEffect(() => {
-    const pending = sessionStorage.getItem('cc_pending_task');
-    if (!pending) return;
+    const raw = sessionStorage.getItem('cc_pending_task');
+    if (!raw) return;
+    const sep = raw.indexOf('|');
+    const [pid, pending] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
+    if (pid !== project.id) return;
     sessionStorage.removeItem('cc_pending_task');
     // Флаг «сразу в редактирование» (свежесозданная из календаря)
     const edit = sessionStorage.getItem('cc_pending_task_edit') === '1';

@@ -12,12 +12,14 @@ import { ClaudeBadge, PriorityFlag } from './bits';
 interface Props {
   // Проект, выбранный по умолчанию (контекст воркспейса или фильтра календаря)
   defaultProjectId?: string;
-  // configure=true — «Создать и настроить»: открыть карточку сразу в редактировании
+  // Подпись кнопки «создать и открыть редактор» (в календаре — «Подробнее»)
+  configureLabel?: string;
+  // configure=true — открыть карточку сразу в редактировании
   onCreated: (task: Task, configure: boolean) => void;
   onClose: () => void;
 }
 
-export function NewTaskDialog({ defaultProjectId, onCreated, onClose }: Props) {
+export function NewTaskDialog({ defaultProjectId, configureLabel = 'Создать и настроить', onCreated, onClose }: Props) {
   const [title, setTitle] = useState('');
   const [projects, setProjects] = useState<Project[]>([]);
   // null = «Личное» (задача вне проекта) — дефолт, когда открыто не из проекта
@@ -56,7 +58,7 @@ export function NewTaskDialog({ defaultProjectId, onCreated, onClose }: Props) {
         <>
           <Button variant="secondary" onClick={onClose}>Отмена</Button>
           <Button variant="secondary" disabled={!canCreate} loading={saving === 'configure'} onClick={() => handleCreate(true)}>
-            Создать и настроить
+            {configureLabel}
           </Button>
           <Button variant="primary" disabled={!canCreate} loading={saving === 'plain'} onClick={() => handleCreate(false)}>
             Создать

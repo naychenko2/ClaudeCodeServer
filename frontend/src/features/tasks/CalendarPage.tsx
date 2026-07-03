@@ -251,6 +251,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
 
       {showCreate && (
         <NewTaskDialog
+          configureLabel="Подробнее"
           onCreated={handleCreated}
           onClose={() => setShowCreate(false)}
         />

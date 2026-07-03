@@ -81,25 +81,6 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile }: Prop
 
   const groups = groupTab === 'status' ? groupByStatus(tasks) : groupByDate(tasks);
 
-  const newTaskButton = (
-    <button
-      onClick={() => setShowCreate(true)}
-      style={{
-        width: '100%', boxSizing: 'border-box',
-        padding: '11px 14px', marginTop: 4,
-        border: `1.5px dashed ${C.dashed}`, borderRadius: R.xl,
-        background: 'transparent', color: C.accent,
-        fontFamily: FONT.sans, fontSize: 13.5, fontWeight: 600, cursor: 'pointer',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-      }}
-    >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-        <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-      </svg>
-      Новая задача
-    </button>
-  );
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Подвкладки «Список | По дате»: на мобиле — сегменты с иконкой сверху
@@ -127,18 +108,37 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile }: Prop
         )}
       </div>
 
+      {/* Кнопка создания — закреплена сверху, не уползает при длинном списке */}
+      <div style={{ padding: isMobile ? '8px 14px 4px' : '8px 12px 4px', flexShrink: 0 }}>
+        <button
+          onClick={() => setShowCreate(true)}
+          style={{
+            width: '100%', boxSizing: 'border-box',
+            padding: '11px 14px',
+            border: `1.5px dashed ${C.dashed}`, borderRadius: R.xl,
+            background: 'transparent', color: C.accent,
+            fontFamily: FONT.sans, fontSize: 13.5, fontWeight: 600, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+          }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          Новая задача
+        </button>
+      </div>
+
       {/* Список */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '8px 14px 16px' : '8px 12px 16px' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '4px 14px 16px' : '4px 12px 16px' }}>
         {loading ? (
           <div style={{ padding: 24, textAlign: 'center', color: C.textMuted, fontFamily: FONT.sans, fontSize: 13 }}>
             Загрузка…
           </div>
         ) : tasks.length === 0 ? (
           <div style={{ padding: '28px 8px 8px', textAlign: 'center' }}>
-            <div style={{ fontFamily: FONT.sans, fontSize: 13.5, color: C.textMuted, marginBottom: 14, lineHeight: 1.5 }}>
+            <div style={{ fontFamily: FONT.sans, fontSize: 13.5, color: C.textMuted, lineHeight: 1.5 }}>
               В проекте пока нет задач
             </div>
-            {newTaskButton}
           </div>
         ) : (
           <>
@@ -168,7 +168,6 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile }: Prop
                 </div>
               </div>
             ))}
-            {newTaskButton}
           </>
         )}
       </div>

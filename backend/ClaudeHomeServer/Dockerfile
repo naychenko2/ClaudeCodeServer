@@ -50,6 +50,8 @@ COPY --from=backend /app/publish ./
 COPY --from=mcp /src/mcp-dify/dist        ./mcp-dify/dist
 COPY --from=mcp /src/mcp-dify/node_modules ./mcp-dify/node_modules
 COPY --from=mcp /src/mcp-dify/package.json ./mcp-dify/package.json
+# MCP-сервер задач: чистый Node без зависимостей — сборка не нужна
+COPY mcp/tasks-server ./mcp/tasks-server
 
 # Каталоги под volume (проекты, данные, креды claude)
 RUN mkdir -p /projects /data /home/app/.claude \

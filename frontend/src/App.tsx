@@ -24,9 +24,10 @@ const HUB_TAB_KEY = 'cc_hub_tab'
 // Диплинк из hash-URL (#/calendar, #/project/{id}/task/{tid}…) — читаем один раз
 // при загрузке страницы, до первого рендера (WorkspacePage заберёт pending-значения)
 const initialHash = parseHash()
-if (initialHash?.screen === 'project') {
-  if (initialHash.taskId) sessionStorage.setItem('cc_pending_task', initialHash.taskId)
-  if (initialHash.file) sessionStorage.setItem('cc_pending_file', initialHash.file)
+if (initialHash?.screen === 'project' && initialHash.projectId) {
+  // Формат «projectId|taskId» — WorkspacePage чужого проекта не заберёт значение
+  if (initialHash.taskId) sessionStorage.setItem('cc_pending_task', `${initialHash.projectId}|${initialHash.taskId}`)
+  if (initialHash.file) sessionStorage.setItem('cc_pending_file', `${initialHash.projectId}|${initialHash.file}`)
 }
 
 export default function App() {
@@ -125,7 +126,11 @@ export default function App() {
     navReplace({ screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : 'projects' })
     // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
     // проектом — при hubTab==='chats' проект «спит» и в истории не отражается.
-    if (hubTab === 'projects' && project) {
+    // Если hash-диплинк указывает на ДРУГОЙ проект — восстановленный не пушим,
+    // его откроет эффект диплинка (иначе гонка перетирает URL).
+    const hashOtherProject = initialHash?.screen === 'project'
+      && !!initialHash.projectId && initialHash.projectId !== project?.id
+    if (hubTab === 'projects' && project && !hashOtherProject) {
       navPush({ screen: 'project', project, view: 'sidebar', file: null })
       const ws = loadWorkspaceState(project.id)
       if (ws?.openFile) navPush({ screen: 'project', project, view: 'sidebar', file: ws.openFile })
@@ -172,6 +177,8 @@ export default function App() {
         if (p) {
           localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
           setProject(p)
+          // Пишем проект из диплинка в историю (сид его пропустил из-за расхождения)
+          navPush({ screen: 'project', project: p, view: 'sidebar', file: null })
         }
       })
       .catch(() => { /* офлайн/нет доступа — остаёмся на восстановленном состоянии */ })
@@ -228,7 +235,7 @@ export default function App() {
   // Из календаря: открыть задачу во вкладке «Задачи» её проекта.
   // Задача передаётся через sessionStorage — WorkspacePage подхватывает при монтировании.
   const openTaskInProject = (p: Project, taskId: string) => {
-    sessionStorage.setItem('cc_pending_task', taskId)
+    sessionStorage.setItem('cc_pending_task', `${p.id}|${taskId}`)
     localStorage.setItem(HUB_TAB_KEY, 'projects')
     setHubTab('projects')
     openProject(p)

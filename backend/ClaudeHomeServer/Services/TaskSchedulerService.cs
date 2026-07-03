@@ -21,7 +21,7 @@ public class TaskSchedulerService(
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
     // Автозапуск только для сроков, наступивших недавно: защита от лавины сессий
     // по старым просроченным задачам при включении флага или долгом простое сервера
-    private static readonly TimeSpan AutoStartWindow = TimeSpan.FromHours(24);
+    internal static readonly TimeSpan AutoStartWindow = TimeSpan.FromHours(24);
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -43,8 +43,8 @@ public class TaskSchedulerService(
         foreach (var user in users.GetAll())
         {
             var effective = flags.GetEffective(user.Id);
-            var remindersOn = effective.GetValueOrDefault("task-reminders");
-            var execOn = effective.GetValueOrDefault("task-claude-exec");
+            var remindersOn = effective.GetValueOrDefault(FeatureFlagKeys.TaskReminders);
+            var execOn = effective.GetValueOrDefault(FeatureFlagKeys.TaskClaudeExec);
             if (!remindersOn && !execOn) continue;
 
             var tz = TaskDueCalculator.ResolveTimeZone(user.TimeZone);
@@ -57,14 +57,31 @@ public class TaskSchedulerService(
         }
     }
 
+    // Чистые предикаты выбора задач — извлечены из Process*-методов для юнит-тестов
+
+    // Пора ли напоминать: напоминание настроено, ещё не отправлялось и момент наступил
+    internal static bool ShouldRemind(TaskItem task, TimeZoneInfo tz, DateTime nowUtc)
+    {
+        if (task.ReminderSentAt is not null) return false;
+        var remindAt = TaskDueCalculator.ReminderMomentUtc(task, tz);
+        return remindAt is not null && remindAt <= nowUtc;
+    }
+
+    // Пора ли автозапускать исполнителя: assignee=Claude, ещё не запускалась,
+    // срок наступил и не старше AutoStartWindow (защита от лавины по старым задачам)
+    internal static bool ShouldAutoStart(TaskItem task, TimeZoneInfo tz, DateTime nowUtc)
+    {
+        if (task.Assignee != TaskItemAssignee.Claude) return false;
+        if (task.Status != TaskItemStatus.Todo || task.ClaudeStartedAt is not null) return false;
+
+        var dueUtc = TaskDueCalculator.DueMomentUtc(task, tz);
+        return dueUtc is not null && dueUtc <= nowUtc && nowUtc - dueUtc <= AutoStartWindow;
+    }
+
     // Автозапуск Claude-исполнителя в момент срока: assignee=Claude, ещё не запускалась
     private async Task ProcessClaudeAutoStartAsync(TaskItem task, TimeZoneInfo tz, DateTime nowUtc)
     {
-        if (task.Assignee != TaskItemAssignee.Claude) return;
-        if (task.Status != TaskItemStatus.Todo || task.ClaudeStartedAt is not null) return;
-
-        var dueUtc = TaskDueCalculator.DueMomentUtc(task, tz);
-        if (dueUtc is null || dueUtc > nowUtc || nowUtc - dueUtc > AutoStartWindow) return;
+        if (!ShouldAutoStart(task, tz, nowUtc)) return;
 
         try
         {
@@ -79,9 +96,7 @@ public class TaskSchedulerService(
 
     private async Task ProcessReminderAsync(TaskItem task, TimeZoneInfo tz, DateTime nowUtc)
     {
-        if (task.ReminderSentAt is not null) return;
-        var remindAt = TaskDueCalculator.ReminderMomentUtc(task, tz);
-        if (remindAt is null || remindAt > nowUtc) return;
+        if (!ShouldRemind(task, tz, nowUtc)) return;
 
         var updated = tasks.MarkReminderSent(task.Id, nowUtc);
         if (updated is null) return; // задача удалена между чтением и отметкой

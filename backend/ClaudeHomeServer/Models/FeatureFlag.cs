@@ -16,6 +16,19 @@ public record FeatureFlagDefinition(
     string Stage);
 
 /// <summary>
+/// Константы ключей флагов — использовать вместо строковых литералов,
+/// чтобы опечатка не отключала фичу молча.
+/// </summary>
+public static class FeatureFlagKeys
+{
+    public const string SessionArtifacts = "session-artifacts";
+    public const string Tasks = "tasks";
+    public const string TaskReminders = "task-reminders";
+    public const string TaskRecurrence = "task-recurrence";
+    public const string TaskClaudeExec = "task-claude-exec";
+}
+
+/// <summary>
 /// Единственное место, где объявляются фич-флаги. Чтобы добавить новый флаг —
 /// допиши строку в <see cref="All"/> (и продублируй ключ в lib/featureFlags.ts на фронте).
 /// </summary>
@@ -26,7 +39,7 @@ public static class FeatureFlagCatalog
         // Панель «Артефакты сессии» — сводка по активной сессии справа от чата:
         // измененные файлы (с дельтами строк), план (из ExitPlanMode), задачи (TodoWrite) и ссылки.
         new FeatureFlagDefinition(
-            Key: "session-artifacts",
+            Key: FeatureFlagKeys.SessionArtifacts,
             Title: "Артефакты сессии",
             Description: "Панель справа от чата с измененными файлами, планом, задачами, агентами и ссылками за текущую сессию.",
             Default: false,
@@ -34,7 +47,7 @@ public static class FeatureFlagCatalog
 
         // Задачи: вкладка «Календарь» в хабе и вкладка «Задачи» внутри проекта.
         new FeatureFlagDefinition(
-            Key: "tasks",
+            Key: FeatureFlagKeys.Tasks,
             Title: "Задачи и календарь",
             Description: "Раздел «Календарь» со всеми задачами и вкладка «Задачи» внутри проекта.",
             Default: false,
@@ -42,7 +55,7 @@ public static class FeatureFlagCatalog
 
         // Напоминания о задачах: офсет от срока + доставка тостом и web push.
         new FeatureFlagDefinition(
-            Key: "task-reminders",
+            Key: FeatureFlagKeys.TaskReminders,
             Title: "Напоминания о задачах",
             Description: "Напоминание к сроку задачи (за N минут) с уведомлением в приложении и push на устройства.",
             Default: false,
@@ -50,7 +63,7 @@ public static class FeatureFlagCatalog
 
         // Регулярные задачи: правило повторения, новый экземпляр при завершении.
         new FeatureFlagDefinition(
-            Key: "task-recurrence",
+            Key: FeatureFlagKeys.TaskRecurrence,
             Title: "Регулярные задачи",
             Description: "Повторяющиеся задачи: ежедневно/еженедельно/ежемесячно/ежегодно, следующий экземпляр создаётся при завершении.",
             Default: false,
@@ -58,7 +71,7 @@ public static class FeatureFlagCatalog
 
         // Claude-исполнитель: запуск сессии по задаче кнопкой и автоматически по сроку.
         new FeatureFlagDefinition(
-            Key: "task-claude-exec",
+            Key: FeatureFlagKeys.TaskClaudeExec,
             Title: "Claude-исполнитель задач",
             Description: "Задачи с исполнителем Claude выполняются в отдельном чате: вручную кнопкой или автоматически при наступлении срока.",
             Default: false,

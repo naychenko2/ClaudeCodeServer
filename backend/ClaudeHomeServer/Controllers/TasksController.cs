@@ -153,7 +153,7 @@ public class TasksController(
         // Завершение экземпляра регулярной задачи → следующий экземпляр серии.
         // Покрывает и UI, и MCP (tasks_complete/tasks_update идут через этот PUT)
         if (!wasDone && updated.Status == TaskItemStatus.Done && updated.Recurrence is not null &&
-            flags.GetEffective(UserId).GetValueOrDefault("task-recurrence"))
+            flags.GetEffective(UserId).GetValueOrDefault(FeatureFlagKeys.TaskRecurrence))
         {
             var next = tasks.SpawnNextOccurrence(updated);
             if (next is not null)
@@ -169,7 +169,7 @@ public class TasksController(
     {
         var task = tasks.GetById(taskId);
         if (task is null || task.OwnerId != UserId) return NotFound();
-        if (!flags.GetEffective(UserId).GetValueOrDefault("task-claude-exec"))
+        if (!flags.GetEffective(UserId).GetValueOrDefault(FeatureFlagKeys.TaskClaudeExec))
             return BadRequest(new { error = "Функция «Claude-исполнитель задач» выключена" });
 
         try

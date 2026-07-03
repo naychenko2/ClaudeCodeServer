@@ -37,6 +37,11 @@ public class ClaudeSession : IAsyncDisposable
     // Если claude не выдаёт ни одной строки дольше этого — считаем зависшим
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(60);
 
+    // Коннекторы аккаунта claude.ai (Calendar, Drive, Gamma, Miro и др.) вливаются в каждую
+    // сессию автоматически помимо --mcp-config — их нельзя убрать через конфиг. Блокируем
+    // через --disallowedTools; список задаётся из конфига (Claude:DisallowedTools).
+    private readonly string[] _disallowedTools;
+
     // Отслеживание изменений файлов
     private FileSystemWatcher? _watcher;
     private readonly ConcurrentDictionary<string, string?> _fileCache = new();
@@ -52,7 +57,8 @@ public class ClaudeSession : IAsyncDisposable
     public ClaudeSession(Session info, string rootPath, Func<ServerMessage, Task> onMessage,
         string? mcpConfigPath = null, string? rawSystemPrompt = null,
         SkillsService? skills = null, WorkspaceKnowledgeStore? workspaceStore = null,
-        Func<IReadOnlyList<PermissionRule>>? permissionRules = null)
+        Func<IReadOnlyList<PermissionRule>>? permissionRules = null,
+        string[]? disallowedTools = null)
     {
         Info = info;
         _rootPath = rootPath;
@@ -62,6 +68,7 @@ public class ClaudeSession : IAsyncDisposable
         _skills = skills;
         _wkStore = workspaceStore;
         _permissionRules = permissionRules;
+        _disallowedTools = disallowedTools ?? [];
     }
 
     private static string? CreateSessionMcpConfig(string? basePath, string? datasetId)
@@ -363,6 +370,10 @@ public class ClaudeSession : IAsyncDisposable
         var effectiveMcpConfig = turnMcpPath ?? _mcpConfigPath;
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
             args.AddRange(["--mcp-config", effectiveMcpConfig]);
+
+        // Блокируем коннекторы аккаунта claude.ai — они вливаются помимо --mcp-config.
+        if (_disallowedTools.Length > 0)
+            args.AddRange(["--disallowedTools", string.Join(",", _disallowedTools)]);
 
         // Системный промпт: пересчитываем и передаём КАЖДЫЙ ход. Каждый ход — новый процесс
         // claude --print --resume, а --append-system-prompt не сохраняется в транскрипте сессии:

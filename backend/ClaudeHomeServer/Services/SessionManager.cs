@@ -35,6 +35,7 @@ public class SessionManager
     };
 
     private readonly string? _mcpConfigPath;
+    private readonly string[] _disallowedTools;
     private readonly SkillsService _skills;
     private readonly WorkspaceKnowledgeStore _workspaceStore;
     private readonly FalCostService _falCost;
@@ -65,6 +66,7 @@ public class SessionManager
         _sessionsFilePath = Path.Combine(dataDir, "sessions.json");
 
         _mcpConfigPath = config["McpConfigPath"];
+        _disallowedTools = config.GetSection("Claude:DisallowedTools").Get<string[]>() ?? [];
 
         LoadSessions();
     }
@@ -226,7 +228,7 @@ public class SessionManager
             msg => OnMessageAsync(session.Id, accumulator, msg),
             _mcpConfigPath, rawSystemPrompt,
             _skills, _workspaceStore,
-            permissionRules);
+            permissionRules, _disallowedTools);
         entry.Process = claudeSession;
 
         await claudeSession.StartAsync();
@@ -309,7 +311,7 @@ public class SessionManager
             claudeSession = new ClaudeSession(entry.Info, rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 _mcpConfigPath, rawSystemPrompt: null,
-                _skills, _workspaceStore, permissionRules: null);
+                _skills, _workspaceStore, permissionRules: null, _disallowedTools);
         }
         else
         {
@@ -319,7 +321,8 @@ public class SessionManager
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 _mcpConfigPath, project.SystemPrompt,
                 _skills, _workspaceStore,
-                () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>());
+                () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
+                _disallowedTools);
         }
         entry.Process = claudeSession;
         await claudeSession.StartAsync();

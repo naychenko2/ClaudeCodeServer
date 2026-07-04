@@ -31,10 +31,22 @@ public class FileServiceTests : IDisposable
     }
 
     [Fact]
-    public void SafeJoin_AbsolutePathOutsideRoot_ThrowsUnauthorizedAccess()
+    public void SafeJoin_AbsolutePathOutsideRoot_DoesNotEscapeRoot()
     {
-        var act = () => FileService.SafeJoin(_root, @"C:\Windows\System32\cmd.exe");
-        act.Should().Throw<UnauthorizedAccessException>();
+        // Абсолютный путь чужого корня не должен давать доступ за пределы root.
+        // Семантика зависит от платформы, поэтому берём абсолютный путь под текущую ОС:
+        if (OperatingSystem.IsWindows())
+        {
+            // На Windows путь другого драйва отбрасывает root — SafeJoin отвергает его.
+            var act = () => FileService.SafeJoin(_root, @"C:\Windows\System32\cmd.exe");
+            act.Should().Throw<UnauthorizedAccessException>();
+        }
+        else
+        {
+            // На Unix ведущий «/» срезается, путь остаётся под root — доступа наружу нет.
+            var result = FileService.SafeJoin(_root, "/etc/passwd");
+            result.Should().StartWith(_root);
+        }
     }
 
     [Fact]

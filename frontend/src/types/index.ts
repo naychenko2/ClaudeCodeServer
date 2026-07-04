@@ -356,3 +356,10 @@ export interface DaySummaryStub {
   commitCount: number;
   cached: boolean;
 }
+
+// Статус настройки источника changelog — «настроено» vs «донастрой инстанс»
+export interface ChangelogStatus {
+  configured: boolean;
+  mode: string;         // 'repo' | 'projects'
+  detail: string | null;
+}

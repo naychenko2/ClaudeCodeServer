@@ -13,6 +13,10 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/history")]
 public class HistoryController(ChangelogService changelog, IConfiguration config) : ControllerBase
 {
+    // Статус настройки источника — чтобы фронт отличил «не настроено» от «пусто»
+    [HttpGet("status")]
+    public IActionResult GetStatus() => Ok(changelog.GetStatus());
+
     // Список дней с коммитами за окно — мгновенно, без LLM
     [HttpGet("days")]
     public IActionResult GetDays([FromQuery] int sinceDays = 0)

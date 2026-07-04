@@ -66,11 +66,13 @@ public class HistoryControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task Day_ВалиднаяДатаБезКоммитов_ПустойДень()
     {
-        var response = await _client.GetAsync("/api/history/day/2026-07-01");
+        // Заведомо давняя дата без коммитов в любом источнике — GetDay вернёт пусто
+        // и НЕ полезет в claude (важно: не зависим от локального Changelog:SourceRepoPath)
+        var response = await _client.GetAsync("/api/history/day/2000-01-01");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("date").GetString().Should().Be("2026-07-01");
+        body.GetProperty("date").GetString().Should().Be("2000-01-01");
         body.GetProperty("items").GetArrayLength().Should().Be(0);
     }
 

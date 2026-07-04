@@ -59,3 +59,15 @@ public record DaySummaryStub(
     string Date,
     int CommitCount,
     bool Cached);
+
+/// <summary>
+/// Статус настройки источника changelog — чтобы фронт при пустом разделе отличал
+/// «не настроено, донастрой инстанс» от «настроено, но изменений пока нет».
+/// </summary>
+/// <param name="Configured">Источник задан и пригоден (репа с .git либо есть хоть один проект).</param>
+/// <param name="Mode">Режим источника: "repo" (фиксированная репа продукта) | "projects" (агрегация проектов).</param>
+/// <param name="Detail">Человеческая подсказка, что не так / что донастроить (null, если всё ок).</param>
+public record ChangelogStatus(
+    bool Configured,
+    string Mode,
+    string? Detail);

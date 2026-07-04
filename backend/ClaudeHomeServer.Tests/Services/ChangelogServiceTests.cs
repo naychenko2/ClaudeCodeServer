@@ -22,32 +22,36 @@ public class ChangelogServiceTests : IDisposable
         Directory.CreateDirectory(_tempDir);
         _cacheDir = Path.Combine(_tempDir, "data", "changelog");
 
+        // Без Changelog:SourceRepoPath — источник не задан, коммитов нет
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json")
             }).Build();
 
-        // ProjectManager с пустым хранилищем (проектов нет → коммитов нет)
-        var users = new UserStore(config, NullLogger<UserStore>.Instance);
-        var appSettings = new AppSettingsService(config);
-        var projects = new ProjectManager(config, users, appSettings);
-
-        _sut = new ChangelogService(new FileService(), projects, config, NullLogger<ChangelogService>.Instance);
+        _sut = new ChangelogService(new FileService(), config, NullLogger<ChangelogService>.Instance);
     }
 
-    // ─── Пустой набор проектов ──────────────────────────────────────────────
+    // ─── Источник не задан ──────────────────────────────────────────────────
 
     [Fact]
-    public void GetDays_НетПроектов_ПустойСписок()
+    public void GetDays_БезИсточника_ПустойСписок()
     {
         _sut.GetDays(30).Should().BeEmpty();
     }
 
     [Fact]
-    public void GetNewCommitCount_НетПроектов_Ноль()
+    public void GetNewCommitCount_БезИсточника_Ноль()
     {
         _sut.GetNewCommitCount(DateTimeOffset.Now.AddDays(-7)).Should().Be(0);
+    }
+
+    [Fact]
+    public void GetStatus_БезИсточника_НеНастроен()
+    {
+        var status = _sut.GetStatus();
+        status.Configured.Should().BeFalse();
+        status.Detail.Should().NotBeNullOrEmpty();
     }
 
     // ─── Ленивая сводка дня без коммитов не должна дёргать claude ────────────

@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Services;
 /// всех проектов) — сводка одна для всех и перегенерируется только при новых
 /// коммитах дня.
 /// </summary>
-public class ChangelogService(FileService files, ProjectManager projects, IConfiguration config, ILogger<ChangelogService> logger)
+public class ChangelogService(FileService files, IConfiguration config, ILogger<ChangelogService> logger)
 {
     private readonly string _cacheDir = Path.Combine(
         Path.GetDirectoryName(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
@@ -24,6 +24,13 @@ public class ChangelogService(FileService files, ProjectManager projects, IConfi
 
     private readonly string _model = config["Changelog:Model"] ?? "haiku";
     private readonly int _claudeTimeoutMs = int.TryParse(config["Changelog:TimeoutMs"], out var t) ? t : 240_000;
+
+    // Источник changelog. Если задан SourceRepoPath — «Что нового» строится ТОЛЬКО из этой
+    // репы (changelog самого продукта, одинаковый для всех, независимо от проектов юзера).
+    // Пусто — прежнее поведение: агрегация по всем проектам инстанса. Путь машинно-специфичный
+    // (у каждого своя папка) — задаётся в appsettings.Local.json.
+    private readonly string? _sourceRepoPath = config["Changelog:SourceRepoPath"];
+    private readonly string? _sourceProjectName = config["Changelog:SourceProjectName"];
 
     // Алиасы авторов: git-email → отображаемое имя (иначе светится git-ник вроде depeche81)
     private readonly IReadOnlyDictionary<string, string> _authorAliases =
@@ -95,6 +102,21 @@ public class ChangelogService(FileService files, ProjectManager projects, IConfi
     public int GetNewCommitCount(DateTimeOffset since) =>
         GetAllCommits().Count(c => c.Date > since);
 
+    /// <summary>Настроен ли источник changelog — чтобы фронт показал подсказку донастроить.</summary>
+    public ChangelogStatus GetStatus()
+    {
+        if (string.IsNullOrWhiteSpace(_sourceRepoPath))
+            return new ChangelogStatus(false, "repo",
+                "Источник не настроен. Укажите git-репозиторий продукта в Changelog:SourceRepoPath в appsettings.");
+
+        // Путь должен существовать и быть git-репой
+        var gitDir = Path.Combine(_sourceRepoPath, ".git");
+        var valid = Directory.Exists(_sourceRepoPath) && (Directory.Exists(gitDir) || File.Exists(gitDir));
+        return new ChangelogStatus(valid, "repo", valid
+            ? null
+            : $"Источник задан, но путь не найден или это не git-репозиторий: {_sourceRepoPath}. Проверьте Changelog:SourceRepoPath в appsettings.");
+    }
+
     /// <summary>Сбросить кеш одного дня — при следующем GetDay он сгенерится заново.</summary>
     public void InvalidateDay(string date)
     {
@@ -136,10 +158,13 @@ public class ChangelogService(FileService files, ProjectManager projects, IConfi
             if (_rawCache is { } c && c.ExpiresAt > now) return c.Commits;
         }
         var all = new List<GitCommitRaw>();
-        foreach (var p in projects.GetAll())
+        if (!string.IsNullOrWhiteSpace(_sourceRepoPath))
         {
-            if (string.IsNullOrWhiteSpace(p.RootPath)) continue;
-            all.AddRange(files.GetCommitsRaw(p.RootPath, p.Name, limit: 2000, _authorAliases));
+            // Единственный источник — репа продукта из конфига (Changelog:SourceRepoPath)
+            var name = string.IsNullOrWhiteSpace(_sourceProjectName)
+                ? Path.GetFileName(_sourceRepoPath.TrimEnd('/', '\\'))
+                : _sourceProjectName;
+            all.AddRange(files.GetCommitsRaw(_sourceRepoPath, name, limit: 2000, _authorAliases));
         }
         lock (_rawCacheLock)
         {

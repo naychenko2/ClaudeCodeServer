@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -189,6 +189,21 @@ export const api = {
       }
       return res.json();
     },
+  },
+
+  // Продуктовая история (AI-сводка по всем проектам): дни, сводка дня, счетчик новых
+  history: {
+    days: (sinceDays = 0) =>
+      request<DaySummaryStub[]>(`/history/days${sinceDays > 0 ? `?sinceDays=${sinceDays}` : ''}`),
+    day: (date: string) =>
+      request<ChangelogDay>(`/history/day/${date}`),
+    newCount: (sinceIso: string) =>
+      request<{ count: number }>(`/history/new-count?since=${encodeURIComponent(sinceIso)}`),
+    // Сбросить кеш одного дня (перегенерация) / всей истории (очистка)
+    invalidateDay: (date: string) =>
+      request<void>(`/history/day/${date}`, { method: 'DELETE' }),
+    clear: () =>
+      request<void>('/history', { method: 'DELETE' }),
   },
 
   files: {

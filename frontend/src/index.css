@@ -42,6 +42,15 @@ body {
   to { transform: rotate(360deg); }
 }
 
+@keyframes cc-fade-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Горизонтальный скролл без видимого скроллбара (вкладки-области и т.п.) */
+.cc-scroll-x { scrollbar-width: none; -ms-overflow-style: none; }
+.cc-scroll-x::-webkit-scrollbar { display: none; }
+
 @keyframes blink {
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }

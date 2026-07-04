@@ -7,6 +7,8 @@ import { WorkspacePage } from './pages/WorkspacePage'
 import type { HubTab } from './components/HubTabs'
 import { UpdatePrompt } from './components/UpdatePrompt'
 import { NotificationToasts } from './components/NotificationToasts'
+import { ProductHistory } from './components/ProductHistory'
+import { PRODUCT_HISTORY_EVENT, PRODUCT_HISTORY_SEEN_KEY } from './components/HubHeader'
 import { initConnectivity } from './lib/offline'
 import { useOnline } from './hooks/useOnline'
 import { runOfflineSnapshot, syncProjectFiles } from './lib/sync'
@@ -77,6 +79,20 @@ export default function App() {
   // (или ещё не загружен), сохранённая вкладка «календарь» откатывается на «Чаты»
   const tasksEnabled = useFeature(FLAGS.tasks)
   const effectiveHubTab: HubTab = hubTab === 'calendar' && !tasksEnabled ? 'chats' : hubTab
+
+  // «Что нового» — продуктовая история по всем проектам. Overlay на верхнем уровне,
+  // открывается из HubHeader (событие) из любого раздела.
+  const [historyOpen, setHistoryOpen] = useState(false)
+  useEffect(() => {
+    const open = () => {
+      setHistoryOpen(true)
+      // Фиксируем момент просмотра — от него отсчитывается бейдж новых изменений
+      try { localStorage.setItem(PRODUCT_HISTORY_SEEN_KEY, new Date().toISOString()) } catch { /* ignore */ }
+    }
+    window.addEventListener(PRODUCT_HISTORY_EVENT, open)
+    return () => window.removeEventListener(PRODUCT_HISTORY_EVENT, open)
+  }, [])
+  const isMobileView = typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
 
   const online = useOnline()
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
@@ -322,6 +338,9 @@ export default function App() {
                 ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
                 : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
       }
+      {auth && historyOpen && (
+        <ProductHistory isMobile={isMobileView} onClose={() => setHistoryOpen(false)} />
+      )}
     </>
   )
 }

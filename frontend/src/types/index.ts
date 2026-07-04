@@ -328,3 +328,31 @@ export interface UserProfile {
   role: 'admin' | 'user';
   createdAt: string;
 }
+
+// ===== Продуктовая история (AI-сводка по всем проектам) =====
+
+// Пункт продуктовой сводки за день: что нового и чем полезно
+export interface ChangelogItem {
+  type: 'feature' | 'improvement' | 'fix' | 'other';
+  area: string;      // раздел продукта — для группировки внутри дня
+  emoji: string;
+  title: string;
+  benefit: string;
+  score: number;        // значимость 1-5 (5 — хит, 1-2 — по мелочи)
+  scoreReason: string;  // обоснование оценки (в тултипе бейджа)
+  authors: string[];
+  projects: string[];
+}
+
+// Сводка изменений за один день (по всем проектам)
+export interface ChangelogDay {
+  date: string; // yyyy-MM-dd
+  items: ChangelogItem[];
+}
+
+// Заглушка дня для мгновенного списка (без LLM)
+export interface DaySummaryStub {
+  date: string;
+  commitCount: number;
+  cached: boolean;
+}

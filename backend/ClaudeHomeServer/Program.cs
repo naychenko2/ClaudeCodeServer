@@ -40,6 +40,7 @@ builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();
+builder.Services.AddSingleton<ChangelogService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();
 builder.Services.AddSingleton<FileWatcherService>();

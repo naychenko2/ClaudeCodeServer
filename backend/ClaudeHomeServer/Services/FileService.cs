@@ -249,6 +249,37 @@ public class FileService
         }
     }
 
+    /// <summary>
+    /// Последние коммиты репозитория (сырье для продуктовой сводки). Алиасы авторов:
+    /// map email → отображаемое имя; нет совпадения — остается git user.name.
+    /// projectName проставляется в каждый коммит — для агрегации по всем проектам.
+    /// </summary>
+    public List<Models.GitCommitRaw> GetCommitsRaw(string rootPath, string projectName = "", int limit = 200, IReadOnlyDictionary<string, string>? authorAliases = null)
+    {
+        if (!IsGitRepo(rootPath)) return [];
+        try
+        {
+            // Аргументы передаём раздельно (защита от инъекции); %x1f/%x1e —
+            // unit/record separators: subject и body могут содержать переводы строк
+            var output = GitRun(rootPath, "log", "-n", limit.ToString(),
+                "--pretty=format:%H%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%b%x1e");
+            var commits = new List<Models.GitCommitRaw>();
+            foreach (var record in output.Split('\x1e', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var f = record.Trim('\n', '\r').Split('\x1f');
+                if (f.Length < 6) continue;
+                if (!DateTimeOffset.TryParse(f[3], out var date)) continue;
+                var name = f[1];
+                var email = f[2];
+                if (authorAliases != null && authorAliases.TryGetValue(email, out var alias))
+                    name = alias;
+                commits.Add(new Models.GitCommitRaw(f[0], name, email, date, f[4], f[5].Trim(), projectName));
+            }
+            return commits;
+        }
+        catch { return []; }
+    }
+
     private static string GitRun(string rootPath, params string[] args)
     {
         var psi = new System.Diagnostics.ProcessStartInfo("git")

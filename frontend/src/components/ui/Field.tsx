@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import type { ReactNode, CSSProperties, KeyboardEvent } from 'react';
+import type { ReactNode, CSSProperties, KeyboardEvent, Ref } from 'react';
 import { C, R, FONT, FIELD, SHADOW } from '../../lib/design';
 
 // === Подпись поля (uppercase-лейбл формы) ===
@@ -128,12 +128,16 @@ interface IconFieldProps {
   radius?: number;
   fontSize?: number;
   style?: CSSProperties;
+  autoFocus?: boolean;
+  onEnter?: () => void;
+  inputRef?: Ref<HTMLInputElement>;
 }
 
 // === Поле с иконкой-префиксом (логин, поиск): бордер на обёртке, инпут без рамки ===
 export function IconField({
   icon, value, onChange, placeholder, type = 'text', mono, disabled,
   letterSpacing, height = 50, radius = R.xxl, fontSize = 15, style,
+  autoFocus, onEnter, inputRef,
 }: IconFieldProps) {
   const [focused, setFocused] = useState(false);
   return (
@@ -151,13 +155,16 @@ export function IconField({
         </span>
       )}
       <input
+        ref={inputRef}
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
+        autoFocus={autoFocus}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
+        onKeyDown={onEnter ? (e: KeyboardEvent) => { if (e.key === 'Enter') onEnter(); } : undefined}
         style={{
           border: 'none', background: 'none', flex: 1, fontSize,
           color: C.textHeading, fontFamily: mono ? FONT.mono : 'inherit',

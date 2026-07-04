@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import type { AuthState } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
@@ -18,6 +18,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
   const [remember, setRemember] = useState(() => !!localStorage.getItem('cc_token'));
   const [pageState, setPageState] = useState<PageState>('idle');
   const [errorMessage, setErrorMessage] = useState('');
+
+  // Refs для навигации с клавиатуры: логин → пароль → тумблер → вход
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const toggleRef = useRef<HTMLDivElement>(null);
 
   const handleConnect = async () => {
     setPageState('loading');
@@ -108,6 +112,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
             onChange={setUsername}
             placeholder="Имя пользователя"
             disabled={isLoading}
+            onEnter={() => passwordRef.current?.focus()}
             icon={
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <circle cx="12" cy="8" r="4"/>
@@ -126,6 +131,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
             placeholder="Пароль"
             disabled={isLoading}
             mono
+            inputRef={passwordRef}
+            onEnter={() => toggleRef.current?.focus()}
             icon={
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <rect x="4" y="11" width="16" height="10" rx="2" />
@@ -140,7 +147,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
           onClick={() => !isLoading && setRemember(!remember)}
           style={{ display: 'flex', alignItems: 'center', gap: 11, cursor: isLoading ? 'default' : 'pointer', marginBottom: 28, userSelect: 'none' }}
         >
-          <Toggle checked={remember} onChange={setRemember} disabled={isLoading} />
+          <Toggle
+            ref={toggleRef}
+            checked={remember}
+            onChange={setRemember}
+            disabled={isLoading}
+            focusable
+            onEnter={() => { if (!isDisabled) handleConnect(); }}
+          />
           <span style={{ fontSize: 14, color: C.textSecondary }}>
             Запомнить меня на этом устройстве
           </span>

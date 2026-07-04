@@ -287,7 +287,11 @@ public class FileService
             WorkingDirectory = rootPath,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            UseShellExecute = false
+            UseShellExecute = false,
+            // git выводит UTF-8; без явной кодировки .NET читает в системной (OEM/ANSI)
+            // и кириллица в сообщениях коммитов превращается в кракозябры (особенно на проде)
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
         using var proc = System.Diagnostics.Process.Start(psi)!;

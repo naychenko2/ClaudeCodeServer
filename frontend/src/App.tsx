@@ -8,7 +8,7 @@ import type { HubTab } from './components/HubTabs'
 import { UpdatePrompt } from './components/UpdatePrompt'
 import { NotificationToasts } from './components/NotificationToasts'
 import { ProductHistory } from './components/ProductHistory'
-import { PRODUCT_HISTORY_EVENT, PRODUCT_HISTORY_SEEN_KEY } from './components/HubHeader'
+import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
 import { initConnectivity } from './lib/offline'
 import { useOnline } from './hooks/useOnline'
 import { runOfflineSnapshot, syncProjectFiles } from './lib/sync'
@@ -86,8 +86,13 @@ export default function App() {
   useEffect(() => {
     const open = () => {
       setHistoryOpen(true)
-      // Фиксируем момент просмотра — от него отсчитывается бейдж новых изменений
-      try { localStorage.setItem(PRODUCT_HISTORY_SEEN_KEY, new Date().toISOString()) } catch { /* ignore */ }
+      // Фиксируем момент просмотра — от него отсчитывается бейдж новых изменений.
+      // Ключ per-user (актуальный id на момент открытия), чтобы на одном устройстве
+      // у разных аккаунтов была своя отметка.
+      try {
+        const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id') || undefined
+        localStorage.setItem(productHistorySeenKey(uid), new Date().toISOString())
+      } catch { /* ignore */ }
     }
     window.addEventListener(PRODUCT_HISTORY_EVENT, open)
     return () => window.removeEventListener(PRODUCT_HISTORY_EVENT, open)

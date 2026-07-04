@@ -17,8 +17,12 @@ interface Props {
 
 // Событие открытия продуктовой истории — слушает App (overlay на верхнем уровне)
 export const PRODUCT_HISTORY_EVENT = 'open-product-history';
-// Метка «просмотрено» для бейджа — ISO-время последнего открытия истории
-export const PRODUCT_HISTORY_SEEN_KEY = 'cc_product_history_seen';
+// Метка «просмотрено» для бейджа — ISO-время последнего открытия истории.
+// Ключ привязан к пользователю (userId), чтобы на одном устройстве у разных аккаунтов
+// была своя отметка. Без userId (не залогинен) — общий базовый ключ.
+const PRODUCT_HISTORY_SEEN_BASE = 'cc_product_history_seen';
+export const productHistorySeenKey = (userId?: string | null) =>
+  userId ? `${PRODUCT_HISTORY_SEEN_BASE}_${userId}` : PRODUCT_HISTORY_SEEN_BASE;
 
 // Мобильный брейкпоинт (совпадает с остальными раскладками)
 function useIsMobile() {
@@ -47,18 +51,29 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';
 
   // «Что нового» — продуктовая история по всем проектам (основной функционал).
-  // Бейдж: сколько изменений в проектах появилось с последнего захода.
+  // Бейдж: число новых изменений с последнего захода. Особый случай — пользователь
+  // ещё ни разу не открывал историю (нет метки): показываем точку без числа
+  // («тут есть что-то новенькое, загляни»).
   const [historyBadge, setHistoryBadge] = useState(0);
+  const [neverSeen, setNeverSeen] = useState(false);
+  const [showHistoryTip, setShowHistoryTip] = useState(false);   // кастомный tooltip кнопки «Что нового»
+  const historyTip = (historyBadge ?? 0) > 0
+    ? `Что нового (${historyBadge! > 99 ? '99+' : historyBadge})`
+    : neverSeen ? 'Что нового — есть свежее' : 'Что нового';
   useEffect(() => {
     let seen: string | null = null;
-    try { seen = localStorage.getItem(PRODUCT_HISTORY_SEEN_KEY); } catch { /* ignore */ }
-    if (!seen) return; // первый заход — бейдж не показываем
-    api.history.newCount(seen).then(({ count }) => setHistoryBadge(count)).catch(() => {});
-    // Сбрасываем бейдж, когда историю открыли (App диспатчит это же событие)
-    const reset = () => setHistoryBadge(0);
+    try { seen = localStorage.getItem(productHistorySeenKey(auth.id)); } catch { /* ignore */ }
+    if (!seen) {
+      setNeverSeen(true); // первый заход — точка-индикатор без числа
+    } else {
+      setNeverSeen(false);
+      api.history.newCount(seen).then(({ count }) => setHistoryBadge(count)).catch(() => {});
+    }
+    // Открыли историю → гасим и точку, и число (App диспатчит это же событие)
+    const reset = () => { setHistoryBadge(0); setNeverSeen(false); };
     window.addEventListener(PRODUCT_HISTORY_EVENT, reset);
     return () => window.removeEventListener(PRODUCT_HISTORY_EVENT, reset);
-  }, []);
+  }, [auth.id]);
 
   const openHistory = () => window.dispatchEvent(new Event(PRODUCT_HISTORY_EVENT));
 
@@ -92,21 +107,21 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
         {(
           <button
             onClick={openHistory}
-            title="Что нового"
+            aria-label={historyTip}
             style={{
               position: 'relative', width: 32, height: 32, borderRadius: 8, border: 'none',
               background: 'none', color: C.textSecondary, cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
             }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,0,0,0.05)'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,0,0,0.05)'; setShowHistoryTip(true); }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none'; setShowHistoryTip(false); }}
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
               <path d="M3 3v5h5" />
               <polyline points="12 7 12 12 15 14" />
             </svg>
-            {(historyBadge ?? 0) > 0 && (
+            {(historyBadge ?? 0) > 0 ? (
               <span style={{
                 position: 'absolute', top: -3, right: -5, minWidth: 15, height: 15,
                 padding: '0 4px', borderRadius: 8, background: C.accent, color: '#fff',
@@ -114,6 +129,24 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
                 boxSizing: 'border-box', pointerEvents: 'none',
               }}>
                 {historyBadge! > 99 ? '99+' : historyBadge}
+              </span>
+            ) : neverSeen && (
+              // Ещё ни разу не открывал — точка без числа: «тут есть что-то новенькое»
+              <span style={{
+                position: 'absolute', top: 0, right: -1, width: 8, height: 8,
+                borderRadius: '50%', background: C.accent, pointerEvents: 'none',
+              }} />
+            )}
+            {/* Кастомный tooltip в стиле приложения (вместо системного title) */}
+            {showHistoryTip && (
+              <span style={{
+                position: 'absolute', top: 'calc(100% + 7px)', right: 0, zIndex: 200,
+                background: '#fff', border: `1px solid ${C.border}`, borderRadius: 8,
+                boxShadow: '0 6px 20px rgba(60, 50, 40, 0.16)', padding: '5px 10px',
+                fontSize: 12, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap',
+                fontFamily: FONT.sans, pointerEvents: 'none',
+              }}>
+                {historyTip}
               </span>
             )}
           </button>

@@ -27,6 +27,10 @@ public class SkillsController(SkillsService skills, ProjectManager projects) : C
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
+    // Список глобальных скиллов (без привязки к проекту) — для чатов вне проекта
+    [HttpGet("api/skills")]
+    public IActionResult ListGlobal() => Ok(skills.GetGlobalSkills());
+
     // Содержимое глобального скилла
     [HttpGet("api/skills/{skillName}")]
     public IActionResult GetSkill(string skillName)

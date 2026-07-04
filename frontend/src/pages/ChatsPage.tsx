@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import type { AuthState, Session } from '../types';
+import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
 import { joinUser, leaveUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
@@ -42,6 +42,13 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   const [creating, setCreating] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const isMobile = useWindowWidth() < 768;
+
+  // Глобальные скиллы для кнопки «/» в композере. Чаты здесь вне проекта,
+  // поэтому берём глобальные скиллы (~/.claude/skills), без агентов (они per-project).
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  useEffect(() => {
+    api.skills.listGlobal().then(setSkills).catch(() => {});
+  }, []);
 
   // Вложения относятся к конкретному чату — сбрасываем при смене активного
   useEffect(() => { setAttachedFiles([]); }, [activeId]);
@@ -219,6 +226,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               session={activeChat}
               isMobile
               onBack={backToList}
+              skills={skills}
               attachedFiles={attachedFiles}
               onAttachedFilesChange={setAttachedFiles}
               onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
@@ -289,6 +297,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
             <ChatPanel
               key={activeChat.id}
               session={activeChat}
+              skills={skills}
               attachedFiles={attachedFiles}
               onAttachedFilesChange={setAttachedFiles}
               onOpenSidebar={openSidebar}

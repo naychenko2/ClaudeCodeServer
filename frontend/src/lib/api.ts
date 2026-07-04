@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -294,6 +294,8 @@ export const api = {
 
   skills: {
     list: (projectId: string) => request<SkillsData>(`/projects/${projectId}/skills`),
+    // Глобальные скиллы без привязки к проекту (для чатов вне проекта)
+    listGlobal: () => request<SkillInfo[]>('/skills'),
     getSkill: (skillName: string) => request<{ content: string }>(`/skills/${skillName}`),
     saveSkill: (skillName: string, content: string) =>
       request<void>(`/skills/${skillName}`, { method: 'PUT', body: JSON.stringify({ content }) }),

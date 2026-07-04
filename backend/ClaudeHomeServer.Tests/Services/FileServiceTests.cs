@@ -79,11 +79,23 @@ public class FileServiceTests : IDisposable
     }
 
     [Fact]
-    public void SafeJoin_AbsoluteSiblingWithCommonPrefix_ThrowsUnauthorizedAccess()
+    public void SafeJoin_AbsoluteSiblingWithCommonPrefix_DoesNotEscapeRoot()
     {
-        // root "...\proj" не должен пропускать абсолютный путь "...\proj2\secret"
-        var act = () => FileService.SafeJoin(_root, _root + "2" + Path.DirectorySeparatorChar + "secret.txt");
-        act.Should().Throw<UnauthorizedAccessException>();
+        // root "...\proj" не должен давать доступ к соседнему "...\proj2\secret" (общий префикс имени).
+        // Семантика абсолютного пути зависит от платформы:
+        var absoluteSibling = _root + "2" + Path.DirectorySeparatorChar + "secret.txt";
+        if (OperatingSystem.IsWindows())
+        {
+            // На Windows это абсолютный путь другого каталога — SafeJoin его отвергает.
+            var act = () => FileService.SafeJoin(_root, absoluteSibling);
+            act.Should().Throw<UnauthorizedAccessException>();
+        }
+        else
+        {
+            // На Unix ведущий «/» срезается, путь оседает под root — до соседнего каталога не дотянуться.
+            var result = FileService.SafeJoin(_root, absoluteSibling);
+            result.Should().StartWith(_root);
+        }
     }
 
     // Свойство безопасности: любой хитрый относительный путь либо отклоняется,

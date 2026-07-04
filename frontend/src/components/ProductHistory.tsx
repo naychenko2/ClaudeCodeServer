@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { ChangelogDay, ChangelogItem, DaySummaryStub } from '../types';
+import type { ChangelogDay, ChangelogItem, DaySummaryStub, ChangelogStatus } from '../types';
 import { api } from '../lib/api';
 import { C, FONT, R, MODAL_W } from '../lib/design';
 import { EmptyState } from './EmptyState';
@@ -54,6 +54,7 @@ export function ProductHistory({ isMobile, onClose }: {
 }) {
   const [days, setDays] = useState<DaySummaryStub[] | null>(null);      // null = загрузка списка
   const [daysError, setDaysError] = useState<string | null>(null);
+  const [configStatus, setConfigStatus] = useState<ChangelogStatus | null>(null); // настроен ли источник (для пустого экрана)
   const [summaries, setSummaries] = useState<Map<string, ChangelogDay>>(new Map());
   const [loadingDays, setLoadingDays] = useState<Set<string>>(new Set());
   const [failedDays, setFailedDays] = useState<Set<string>>(new Set());   // дни, где сборка сводки не удалась (ретраи исчерпаны)
@@ -97,6 +98,13 @@ export function ProductHistory({ isMobile, onClose }: {
       .catch(() => { if (!cancelled) setDaysError('Не удалось загрузить историю'); });
     return () => { cancelled = true; };
   }, [windowDays, reloadKey]);
+
+  // Дней нет — уточняем у бэка, настроен ли источник (чтобы показать «донастрой», а не «пусто»)
+  useEffect(() => {
+    if (days && days.length === 0) {
+      api.history.status().then(setConfigStatus).catch(() => setConfigStatus(null));
+    }
+  }, [days]);
 
   // ===== Ленивая загрузка сводок дней =====
   // Генерация большого дня на бэке идёт дольше HTTP-таймаута (FETCH_TIMEOUT ~30с) —
@@ -218,23 +226,32 @@ export function ProductHistory({ isMobile, onClose }: {
   const shownGroup = groups.find(g => g.area === activeAreaName) ?? groups[0];
 
   const dayContent = (
-    <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: isMobile ? '14px 16px 30px' : '20px 32px 40px' }}>
-      <div style={{ maxWidth: 900 }}>
-        {days === null && !daysError && (
-          <div style={{ color: C.textMuted, fontSize: 13, padding: 24, textAlign: 'center' }}>Загрузка истории…</div>
-        )}
-        {daysError && (
-          <div style={{ color: C.danger, fontSize: 13, padding: 24, textAlign: 'center' }}>{daysError}</div>
-        )}
-        {days?.length === 0 && (
-          <EmptyState
-            icon={<ClockIcon size={26} />}
-            title="Пока пусто"
-            subtitle="Как только в проектах появятся изменения — здесь будет сводка, что нового и чем это полезно"
-          />
-        )}
-        {selDay && (
-          <>
+    <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: isMobile ? '14px 16px 30px' : '20px 32px 40px' }}>
+      {days === null && !daysError && (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка истории…</div>
+      )}
+      {daysError && (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.danger, fontSize: 13 }}>{daysError}</div>
+      )}
+      {days?.length === 0 && (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {configStatus && !configStatus.configured ? (
+            <EmptyState
+              icon={<GearIcon size={26} />}
+              title="Раздел не настроен"
+              subtitle={configStatus.detail || 'Укажите источник changelog (git-репозиторий продукта) в настройках инстанса.'}
+            />
+          ) : (
+            <EmptyState
+              icon={<ClockIcon size={26} />}
+              title="Пока пусто"
+              subtitle="Как только появятся изменения — здесь будет сводка, что нового и чем это полезно"
+            />
+          )}
+        </div>
+      )}
+      {selDay && (
+        <div style={{ maxWidth: 900, width: '100%' }}>
             {/* Шапка дня: дата + фильтр + вкладки категорий. На телефоне зафиксирована
                 (sticky) при скролле ленты пунктов — даты и категории всегда на виду */}
             <div style={isMobile ? {
@@ -309,9 +326,8 @@ export function ProductHistory({ isMobile, onClose }: {
                 ))}
               </div>
             )}
-          </>
+        </div>
         )}
-      </div>
     </div>
   );
 
@@ -400,11 +416,13 @@ function groupEmoji(list: ChangelogItem[]): string {
   return list.find(i => i.emoji)?.emoji || '📋';
 }
 
-// Бейдж значимости по оценке 1-5: ярлык + цвет (обоснование — в пузыре-реплике при наведении)
+// Бейдж значимости по оценке 1-5: ярлык + цвет (обоснование — в пузыре-реплике при наведении).
+// Цвета разведены по разным семантическим токенам, чтобы статусы чётко различались:
+// Хит — красный (топ), Круто — зелёный (хорошо), Заметно — синий (норм), По мелочи — серый.
 function scoreBadge(score: number): { label: string; bg: string; color: string } {
-  if (score >= 5) return { label: 'Хит', bg: '#F6E0D5', color: '#B4452F' };
-  if (score >= 4) return { label: 'Круто', bg: C.accentLight, color: C.accent };
-  if (score >= 3) return { label: 'Заметно', bg: '#EFEAD9', color: '#C9923E' };
+  if (score >= 5) return { label: 'Хит', bg: C.dangerBg, color: C.dangerText };
+  if (score >= 4) return { label: 'Круто', bg: C.successBg, color: C.successText };
+  if (score >= 3) return { label: 'Заметно', bg: C.infoBg, color: C.info };
   return { label: 'По мелочи', bg: C.bgPanel, color: C.textMuted };
 }
 
@@ -774,6 +792,16 @@ function ClockIcon({ size = 22 }: { size?: number }) {
       <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
       <path d="M3 3v5h5" />
       <polyline points="12 7 12 12 15 14" />
+    </svg>
+  );
+}
+
+// Иконка-шестерёнка для состояния «раздел не настроен»
+function GearIcon({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   );
 }

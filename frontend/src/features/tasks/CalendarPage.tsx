@@ -8,7 +8,7 @@ import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
-import { ensureTasksLoaded, todayIso, useTasks } from '../../lib/tasks';
+import { addDaysIso, ensureTasksLoaded, expandRecurringTasks, todayIso, toIsoDate, useTasks } from '../../lib/tasks';
 import { AgendaIcon, IconViewSwitcher, MonthIcon, WeekIcon } from './bits';
 import { TaskDetailsModal } from './TaskDetailsModal';
 import { CalendarMonth } from './CalendarMonth';
@@ -26,6 +26,28 @@ interface Props {
 
 type CalView = 'month' | 'week' | 'agenda';
 const VIEW_KEY = 'cc_cal_view';
+
+// Горизонт проекции повторов для агенды (у неё нет верхней границы навигации)
+const AGENDA_HORIZON_DAYS = 90;
+
+// Видимое окно дат для текущего вида — в него разворачиваем будущие повторы
+function visibleRange(view: CalView, navDate: string): { from: string; to: string } {
+  if (view === 'agenda') {
+    const today = todayIso();
+    return { from: today, to: addDaysIso(today, AGENDA_HORIZON_DAYS) };
+  }
+  if (view === 'week') {
+    const [y, m, d] = navDate.split('-').map(Number);
+    const offset = (new Date(y, m - 1, d).getDay() + 6) % 7;   // Пн = 0
+    const start = addDaysIso(navDate, -offset);
+    return { from: start, to: addDaysIso(start, 6) };
+  }
+  // month: та же сетка 6 недель, что и в CalendarMonth.monthCells
+  const [y, m] = [Number(navDate.slice(0, 4)), Number(navDate.slice(5, 7)) - 1];
+  const first = new Date(y, m, 1);
+  const start = toIsoDate(new Date(y, m, 1 - ((first.getDay() + 6) % 7)));
+  return { from: start, to: addDaysIso(start, 41) };
+}
 
 function useIsMobile() {
   const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
@@ -102,15 +124,24 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
 
   const hasUngrouped = projects.some(p => !p.groupId);
 
+  // Задачи для календаря: реальные + вычисленные будущие повторы (virtual) в видимом окне
+  const calendarTasks = useMemo(() => {
+    const { from, to } = visibleRange(view, navDate);
+    return expandRecurringTasks(tasks, from, to);
+  }, [tasks, view, navDate]);
+
   const handleOpenTask = (task: Task) => {
+    // Клик по виртуальному повтору открывает единственный реальный экземпляр серии
+    const realId = task.occurrenceOf ?? task.id;
+    const real = allTasks.find(t => t.id === realId) ?? task;
     // Личная задача — детали в модале поверх календаря (воркспейса у неё нет)
-    if (!task.projectId) {
+    if (!real.projectId) {
       setPersonalEdit(false);
-      setPersonalTaskId(task.id);
+      setPersonalTaskId(realId);
       return;
     }
-    const project = projectsById.get(task.projectId);
-    if (project) onOpenTask(project, task.id);
+    const project = projectsById.get(real.projectId);
+    if (project) onOpenTask(project, realId);
   };
 
   // «Создать и настроить» из календаря: личная — модал в редактировании,
@@ -177,11 +208,11 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   );
 
   const currentView = view === 'month' ? (
-    <CalendarMonth tasks={tasks} projectsById={projectsById} navDate={navDate} onNavigate={setNavDate} onOpenTask={handleOpenTask} onQuickCreate={iso => setCreateDialog({ date: iso })} isMobile={isMobile} />
+    <CalendarMonth tasks={calendarTasks} projectsById={projectsById} navDate={navDate} onNavigate={setNavDate} onOpenTask={handleOpenTask} onQuickCreate={iso => setCreateDialog({ date: iso })} isMobile={isMobile} />
   ) : view === 'week' ? (
-    <CalendarWeek tasks={tasks} projectsById={projectsById} navDate={navDate} onNavigate={setNavDate} onOpenTask={handleOpenTask} isMobile={isMobile} />
+    <CalendarWeek tasks={calendarTasks} projectsById={projectsById} navDate={navDate} onNavigate={setNavDate} onOpenTask={handleOpenTask} isMobile={isMobile} />
   ) : (
-    <CalendarAgenda tasks={tasks} projectsById={projectsById} onOpenTask={handleOpenTask} isMobile={isMobile} />
+    <CalendarAgenda tasks={calendarTasks} projectsById={projectsById} onOpenTask={handleOpenTask} isMobile={isMobile} />
   );
 
   return (

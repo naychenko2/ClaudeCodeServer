@@ -5,7 +5,7 @@ import { useMemo } from 'react';
 import type { Project, Task } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { NO_PROJECT_LABEL, daysFromToday, projectColor } from '../../lib/tasks';
-import { AssigneeBadge } from './bits';
+import { AssigneeBadge, RepeatIcon } from './bits';
 import { useTaskHover } from './TaskHoverCard';
 
 interface Props {
@@ -83,12 +83,14 @@ export function CalendarAgenda({ tasks, projectsById, onOpenTask, isMobile }: Pr
         <span style={{ width: 3, alignSelf: 'stretch', borderRadius: 2, background: color.main, flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
             fontFamily: FONT.sans, fontSize: 13.5, fontWeight: 700,
             color: done ? C.textMuted : C.textPrimary,
             textDecoration: done ? 'line-through' : 'none',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            overflow: 'hidden', opacity: t.virtual ? 0.82 : 1,
           }}>
-            {t.title}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</span>
+            {t.virtual && <span title="Повтор" style={{ color: color.main, opacity: 0.8, display: 'flex', flexShrink: 0 }}><RepeatIcon size={11} /></span>}
           </div>
           <div style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, marginTop: 2 }}>
             {nameOf(t)}

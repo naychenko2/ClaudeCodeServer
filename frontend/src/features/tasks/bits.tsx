@@ -139,6 +139,17 @@ export function IconViewSwitcher<T extends string>({ value, options, onChange }:
   );
 }
 
+// Иконка повтора — маркер виртуального (вычисленного) экземпляра регулярной задачи в календаре
+export function RepeatIcon({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+      <path d="M17 2l4 4-4 4" /><path d="M3 11v-1a4 4 0 0 1 4-4h14" />
+      <path d="M7 22l-4-4 4-4" /><path d="M21 13v1a4 4 0 0 1-4 4H3" />
+    </svg>
+  );
+}
+
 // Иконка календаря для чипов срока
 export function CalendarIcon({ size = 11 }: { size?: number }) {
   return (

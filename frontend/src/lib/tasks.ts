@@ -229,6 +229,93 @@ export const RECURRENCE_TYPE_LABEL: Record<Exclude<TaskRecurrenceType, 'none'>, 
   yearly:  'Ежегодно',
 };
 
+// Порт TaskRecurrenceCalculator.cs — расчёт даты следующего экземпляра серии.
+// Дублирует бэкенд (тест-зеркало в __tests__/recurrence.test.ts держит их в согласии),
+// чтобы календарь мог показывать будущие повторы без обращения к серверу.
+
+// ISO-день недели (1=Пн … 7=Вс) для даты YYYY-MM-DD
+function isoWeekday(iso: string): number {
+  const [y, m, d] = iso.split('-').map(Number);
+  const wd = new Date(y, m - 1, d).getDay();   // 0=Вс … 6=Сб
+  return wd === 0 ? 7 : wd;
+}
+
+// Разница в целых днях между двумя ISO-датами (a - b); UTC, чтобы не влиял переход на летнее время
+function diffDaysIso(aIso: string, bIso: string): number {
+  const [ay, am, ad] = aIso.split('-').map(Number);
+  const [by, bm, bd] = bIso.split('-').map(Number);
+  return Math.round((Date.UTC(ay, am - 1, ad) - Date.UTC(by, bm - 1, bd)) / 86400000);
+}
+
+// Прибавить месяцы с клипованием дня на конец месяца (как DateTime.AddMonths в .NET):
+// 31 января + 1 мес → 28/29 февраля; 29 февраля + 12 мес → 28 февраля
+function addMonthsIso(iso: string, months: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const total = (m - 1) + months;
+  const ny = y + Math.floor(total / 12);
+  const nm = ((total % 12) + 12) % 12;   // 0-based месяц
+  const daysInMonth = new Date(ny, nm + 1, 0).getDate();
+  return toIsoDate(new Date(ny, nm, Math.min(d, daysInMonth)));
+}
+
+// Следующий срок для weekly: каждые N недель по дням недели (или по дню исходного срока)
+function nextWeekly(currentIso: string, interval: number, weekdays?: number[]): string {
+  let days = weekdays && weekdays.length
+    ? [...new Set(weekdays.filter(d => d >= 1 && d <= 7))].sort((a, b) => a - b)
+    : [isoWeekday(currentIso)];
+  if (days.length === 0) days = [isoWeekday(currentIso)];
+
+  const currentWeekMonday = addDaysIso(currentIso, 1 - isoWeekday(currentIso));
+  for (let offset = 1; offset <= interval * 14; offset++) {
+    const candidate = addDaysIso(currentIso, offset);
+    if (!days.includes(isoWeekday(candidate))) continue;
+    const candidateWeekMonday = addDaysIso(candidate, 1 - isoWeekday(candidate));
+    const weeksBetween = diffDaysIso(candidateWeekMonday, currentWeekMonday) / 7;
+    if (weeksBetween % interval === 0) return candidate;
+  }
+  return addDaysIso(currentIso, 7 * interval);
+}
+
+// Дата следующего экземпляра (YYYY-MM-DD) или null — серия закончена (until) либо правило пустое
+export function nextDueDate(currentIso: string, rule: TaskRecurrence): string | null {
+  const interval = Math.max(1, rule.interval);
+  let next: string | null;
+  switch (rule.type) {
+    case 'daily':   next = addDaysIso(currentIso, interval); break;
+    case 'weekly':  next = nextWeekly(currentIso, interval, rule.weekdays); break;
+    case 'monthly': next = addMonthsIso(currentIso, interval); break;
+    case 'yearly':  next = addMonthsIso(currentIso, interval * 12); break;
+    default:        next = null;
+  }
+  if (next === null) return null;
+  if (rule.until && next > rule.until) return null;
+  return next;
+}
+
+// Развернуть повторяющиеся задачи в набор для календаря: реальные задачи + вычисленные
+// будущие повторы (virtual) в окне [fromIso, toIso]. Реально существует один экземпляр серии,
+// поэтому у проекций occurrenceOf = id реального экземпляра (его и открываем по клику).
+const MAX_OCCURRENCES = 400;   // предохранитель от зацикливания на битом правиле
+
+export function expandRecurringTasks(tasks: Task[], fromIso: string, toIso: string): Task[] {
+  const result: Task[] = [];
+  for (const t of tasks) {
+    result.push(t);
+    // Завершённый экземпляр не проецируем — следующий уже создан как реальная задача
+    if (!t.recurrence || t.recurrence.type === 'none' || !t.dueDate || t.status === 'done') continue;
+
+    let date = t.dueDate;
+    for (let guard = 0; guard < MAX_OCCURRENCES; guard++) {
+      const next = nextDueDate(date, t.recurrence);
+      if (next === null || next > toIso) break;
+      date = next;
+      if (next < fromIso) continue;   // повтор раньше окна — пропускаем, но продолжаем перебор
+      result.push({ ...t, id: `${t.id}#${next}`, dueDate: next, occurrenceOf: t.id, virtual: true });
+    }
+  }
+  return result;
+}
+
 const ISO_WEEKDAY_SHORT = ['', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
 // «Ежедневно», «Каждые 2 нед · Пн, Ср», «Ежемесячно», «Каждые 3 г»

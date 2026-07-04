@@ -6,6 +6,7 @@ import type { Project, Task } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { NO_PROJECT_LABEL, addDaysIso, projectColor, todayIso } from '../../lib/tasks';
 import { NavArrow } from './CalendarMonth';
+import { RepeatIcon } from './bits';
 import { useTaskHover } from './TaskHoverCard';
 
 interface Props {
@@ -162,9 +163,14 @@ export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenT
                 }}
               >
                 <span style={{ width: 3, height: 18, borderRadius: 2, background: color.main, flexShrink: 0 }} />
-                <span style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textPrimary }}>
+                <span style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textPrimary, opacity: t.virtual ? 0.75 : 1 }}>
                   {t.title}
                 </span>
+                {t.virtual && (
+                  <span title="Повтор" style={{ color: color.main, opacity: 0.75, display: 'flex', flexShrink: 0 }}>
+                    <RepeatIcon size={11} />
+                  </span>
+                )}
                 <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textSecondary }}>
                   весь день · {nameOf(t)}
                 </span>
@@ -209,11 +215,13 @@ export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenT
               <span style={{ width: 3, alignSelf: 'stretch', borderRadius: 2, background: color.main, flexShrink: 0 }} />
               <div style={{ minWidth: 0 }}>
                 <div style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
                   fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textPrimary,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  textDecoration: t.status === 'done' ? 'line-through' : 'none',
+                  overflow: 'hidden', textDecoration: t.status === 'done' ? 'line-through' : 'none',
+                  opacity: t.virtual ? 0.8 : 1,
                 }}>
-                  {t.title}
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</span>
+                  {t.virtual && <span title="Повтор" style={{ color: color.main, opacity: 0.75, display: 'flex', flexShrink: 0 }}><RepeatIcon size={10} /></span>}
                 </div>
                 <div style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textSecondary }}>
                   {t.dueTime} · {nameOf(t)}

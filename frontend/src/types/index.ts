@@ -83,6 +83,11 @@ export interface Task {
   labels: string[];
   createdAt: string;
   updatedAt: string;
+  // UI-проекция повторяющейся задачи в календаре (не приходит с бэка):
+  // occurrenceOf — id реального экземпляра серии, который надо открыть по клику;
+  // virtual — признак вычисленного будущего повтора (реально существует только один экземпляр)
+  occurrenceOf?: string;
+  virtual?: boolean;
 }
 
 export interface CreateTaskDto {

@@ -7,6 +7,7 @@ import type { Project, Task } from '../../types';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import { NO_PROJECT_LABEL, projectColor, todayIso, toIsoDate } from '../../lib/tasks';
 import { TaskCard } from './TaskCard';
+import { RepeatIcon } from './bits';
 import { useTaskHover } from './TaskHoverCard';
 
 interface Props {
@@ -141,10 +142,15 @@ function DayOverflowPopover({ iso, rect, tasks, onOpenTask, onClose }: {
             <span style={{
               flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: 12, fontWeight: 600,
               color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              textDecoration: done ? 'line-through' : 'none', opacity: done ? 0.6 : 1,
+              textDecoration: done ? 'line-through' : 'none', opacity: done ? 0.6 : t.virtual ? 0.7 : 1,
             }}>
               {t.title}
             </span>
+            {t.virtual && (
+              <span title="Повтор" style={{ color: color.main, opacity: 0.75, display: 'flex', flexShrink: 0 }}>
+                <RepeatIcon size={10} />
+              </span>
+            )}
             {t.dueTime && (
               <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
                 {t.dueTime}
@@ -409,13 +415,19 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
                     >
                       <span style={{ width: 3, height: 12, borderRadius: 2, background: color.main, flexShrink: 0 }} />
                       <span style={{
+                        flex: 1, minWidth: 0,
                         fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 600, color: C.textPrimary,
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         textDecoration: t.status === 'done' ? 'line-through' : 'none',
-                        opacity: t.status === 'done' ? 0.6 : 1,
+                        opacity: t.status === 'done' ? 0.6 : t.virtual ? 0.7 : 1,
                       }}>
                         {t.title}
                       </span>
+                      {t.virtual && (
+                        <span title="Повтор" style={{ color: color.main, opacity: 0.75, display: 'flex', flexShrink: 0 }}>
+                          <RepeatIcon size={9} />
+                        </span>
+                      )}
                     </div>
                   );
                 })}

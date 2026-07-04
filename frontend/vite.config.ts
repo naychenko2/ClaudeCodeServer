@@ -2,6 +2,10 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
+// Порт бэкенда для прокси /api и /hubs (по умолчанию 5000; переопределяется BACKEND_PORT)
+const backendPort = process.env.BACKEND_PORT || '5000';
+const backendUrl = `http://localhost:${backendPort}`;
+
 export default defineConfig({
   plugins: [
     react(),
@@ -40,16 +44,16 @@ export default defineConfig({
     // Разрешаем заход через внешний домен (реверс-прокси/туннель) — иначе Vite режет чужой Host
     allowedHosts: ['naychenko.me'],
     proxy: {
-      '/api': { target: 'http://localhost:5000', changeOrigin: true },
-      '/hubs': { target: 'http://localhost:5000', changeOrigin: true, ws: true },
+      '/api': { target: backendUrl, changeOrigin: true },
+      '/hubs': { target: backendUrl, changeOrigin: true, ws: true },
     },
   },
   preview: {
     port: 4173,
     allowedHosts: ['naychenko.me'],
     proxy: {
-      '/api': { target: 'http://localhost:5000', changeOrigin: true },
-      '/hubs': { target: 'http://localhost:5000', changeOrigin: true, ws: true },
+      '/api': { target: backendUrl, changeOrigin: true },
+      '/hubs': { target: backendUrl, changeOrigin: true, ws: true },
     },
   },
 });

@@ -661,6 +661,9 @@ public class ClaudeSession : IAsyncDisposable
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         var exePath = Path.Combine(appData, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
         if (File.Exists(exePath)) return exePath;
+        // Новый путь standalone-установки: %USERPROFILE%\.local\bin\claude.exe
+        var localBin = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "claude.exe");
+        if (File.Exists(localBin)) return localBin;
         try
         {
             using var where = Process.Start(new ProcessStartInfo("where.exe", "claude.exe")

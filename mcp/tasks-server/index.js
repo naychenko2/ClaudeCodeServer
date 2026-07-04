@@ -40,6 +40,9 @@ function brief(t) {
     priority: t.priority,
     dueDate: t.dueDate ?? null,
     dueTime: t.dueTime ?? null,
+    reminderMinutes: t.reminderMinutes ?? null,
+    // Правило повторения показываем, только если оно активно
+    recurrence: t.recurrence && t.recurrence.type !== 'none' ? t.recurrence : null,
     assignee: t.assignee ?? null,
     projectId: t.projectId ?? null,
     labels: t.labels,
@@ -57,6 +60,34 @@ const ENUMS = {
   status: ['todo', 'inProgress', 'done'],
   priority: ['urgent', 'high', 'medium', 'low'],
   assignee: ['me', 'claude'],
+};
+
+// Правило повторения задачи (соответствует TaskRecurrence на бэке).
+// Требует заданного dueDate: серия ведётся одним экземпляром — при переводе
+// текущего в done автоматически создаётся следующий (нужен фич-флаг task-recurrence).
+const RECURRENCE_SCHEMA = {
+  type: 'object',
+  description: 'Повторение задачи. Требует dueDate. Реально существует один экземпляр серии; следующий создаётся при завершении текущего.',
+  required: ['type'],
+  properties: {
+    type: {
+      type: 'string',
+      enum: ['none', 'daily', 'weekly', 'monthly', 'yearly'],
+      description: "Период повторения. 'none' — только в tasks_update, означает «убрать повторение»",
+    },
+    interval: { type: 'integer', minimum: 1, description: 'Каждые N периодов (по умолчанию 1): каждые 2 недели — weekly + interval 2' },
+    weekdays: {
+      type: 'array',
+      items: { type: 'integer', minimum: 1, maximum: 7 },
+      description: 'Только для weekly: дни недели по ISO (1=Пн … 7=Вс). Напр. [1,3,5] — Пн/Ср/Пт',
+    },
+    until: { type: 'string', description: 'Последняя дата серии YYYY-MM-DD (включительно); опустить — бессрочно' },
+  },
+};
+
+const REMINDER_MINUTES_SCHEMA = {
+  type: 'integer',
+  description: 'Напоминание: за сколько минут до срока уведомить (0 = в момент срока). Требует dueDate.',
 };
 
 const TOOLS = [
@@ -105,6 +136,8 @@ const TOOLS = [
         priority: { type: 'string', enum: ENUMS.priority, description: 'Приоритет (по умолчанию medium)' },
         dueDate: { type: 'string', description: 'Срок YYYY-MM-DD' },
         dueTime: { type: 'string', description: 'Время HH:MM' },
+        reminderMinutes: REMINDER_MINUTES_SCHEMA,
+        recurrence: RECURRENCE_SCHEMA,
         assignee: { type: 'string', enum: ENUMS.assignee, description: 'Исполнитель' },
         subtasks: { type: 'array', items: { type: 'string' }, description: 'Названия подзадач' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки' },
@@ -113,7 +146,7 @@ const TOOLS = [
   },
   {
     name: 'tasks_update',
-    description: 'Обновить поля задачи (передавать только изменяемые). Пустая строка в dueDate/dueTime очищает поле.',
+    description: 'Обновить поля задачи (передавать только изменяемые). Пустая строка в dueDate/dueTime очищает поле; recurrence с type "none" убирает повторение.',
     inputSchema: {
       type: 'object',
       required: ['id'],
@@ -125,6 +158,8 @@ const TOOLS = [
         priority: { type: 'string', enum: ENUMS.priority },
         dueDate: { type: 'string', description: 'YYYY-MM-DD или "" чтобы убрать срок' },
         dueTime: { type: 'string', description: 'HH:MM или "" чтобы убрать время' },
+        reminderMinutes: { ...REMINDER_MINUTES_SCHEMA, description: REMINDER_MINUTES_SCHEMA.description + ' Отрицательное значение — убрать напоминание.' },
+        recurrence: RECURRENCE_SCHEMA,
         assignee: { type: 'string', enum: ENUMS.assignee },
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки (заменяют список целиком)' },
       },
@@ -207,7 +242,7 @@ async function callTool(name, args) {
 
     case 'tasks_create': {
       const body = { title: args.title };
-      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'assignee', 'labels'])
+      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'labels'])
         if (args[k] !== undefined) body[k] = args[k];
       if (Array.isArray(args.subtasks) && args.subtasks.length)
         body.subtasks = args.subtasks.map(t => ({ title: String(t) }));

@@ -253,12 +253,14 @@ export function ProductHistory({ isMobile, onClose }: {
                 )}
                 <RegenButton spinning={selLoading} onClick={() => askRegenerate(selDay.date)} />
               </div>
-              {/* Мини-фильтр по исполнителю */}
+              {/* Мини-фильтр по исполнителю — с количеством пунктов каждого за этот день */}
               {authors.length > 1 && (
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: groups.length ? 12 : 18 }}>
-                  <FilterChip label="Все" active={authorFilter === null} onClick={() => setAuthorFilter(null)} />
+                  <FilterChip label="Все" count={selSum?.items.length} active={authorFilter === null} onClick={() => setAuthorFilter(null)} />
                   {authors.map(a => (
-                    <FilterChip key={a} label={a} emoji={authorEmoji(a)} active={authorFilter === a}
+                    <FilterChip key={a} label={a} emoji={authorEmoji(a)}
+                      count={selSum?.items.filter(it => it.authors.includes(a)).length}
+                      active={authorFilter === a}
                       onClick={() => setAuthorFilter(prev => prev === a ? null : a)} />
                   ))}
                 </div>
@@ -439,23 +441,22 @@ function TimelineNode({ item, last }: { item: ChangelogItem; last: boolean }) {
             </div>
           )}
         </div>
-        {/* Правая колонка: исполнитель сверху, бейдж значимости под ним */}
+        {/* Правая колонка: бейдж значимости сверху, исполнитель под ним */}
         <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0 }}>
+          {/* Бейдж значимости — с иконкой Клауда; при наведении на него «говорит» обоснование */}
+          <ScoreBadge badge={b} reason={item.scoreReason} />
           {item.authors.length > 0 && (
-            <span style={{ display: 'flex', gap: 6 }}>
+            <span style={{ display: 'flex', gap: 10 }}>
               {item.authors.map(a => (
                 <span key={a} title={a} style={{
                   display: 'inline-flex', alignItems: 'center', gap: 4,
                   fontSize: 11.5, color: C.textMuted, whiteSpace: 'nowrap',
-                  background: C.bgPanel, borderRadius: 10, padding: '1px 8px 1px 6px',
                 }}>
                   <span style={{ fontSize: 12 }}>{authorEmoji(a)}</span>{a}
                 </span>
               ))}
             </span>
           )}
-          {/* Бейдж значимости — с иконкой Клауда; при наведении на него «говорит» обоснование */}
-          <ScoreBadge badge={b} reason={item.scoreReason} />
         </span>
       </div>
     </div>
@@ -736,7 +737,7 @@ function AreaTabs({ groups, active, onChange }: {
 }
 
 // Чип фильтра по исполнителю: активный — accent-обводка/фон, иначе приглушённый
-function FilterChip({ label, emoji, active, onClick }: { label: string; emoji?: string; active: boolean; onClick: () => void }) {
+function FilterChip({ label, emoji, count, active, onClick }: { label: string; emoji?: string; count?: number; active: boolean; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -752,6 +753,7 @@ function FilterChip({ label, emoji, active, onClick }: { label: string; emoji?: 
     >
       {emoji && <span style={{ fontSize: 13 }}>{emoji}</span>}
       {label}
+      {count !== undefined && <span style={{ fontSize: 11, opacity: 0.65 }}>{count}</span>}
     </button>
   );
 }

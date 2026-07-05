@@ -103,8 +103,9 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
 
       {/* Правая секция — меню аватара (управление пользователями — внутри меню, admin) */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
-        {/* «Что нового» — продуктовая история по всем проектам (во всех разделах) */}
-        {(
+        {/* «Что нового» — продуктовая история по всем проектам (во всех разделах).
+            На мобилке кнопка наезжала бы на контент — там она уезжает в меню аватара. */}
+        {!isMobile && (
           <button
             onClick={openHistory}
             aria-label={historyTip}
@@ -160,6 +161,11 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile}
+          // На мобилке «Что нового» переезжает в меню (в шапке нет места); индикатор
+          // новизны переносим на аватар и в пункт меню, чтобы он не потерялся
+          onShowHistory={isMobile ? openHistory : undefined}
+          historyBadge={historyBadge}
+          historyNeverSeen={neverSeen}
         />
       </div>
 

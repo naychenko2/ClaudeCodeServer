@@ -20,9 +20,13 @@ interface Props {
   onShowUserManagement: () => void;
   // На мобилке URL-бейдж распирает шапку — прячем, оставляя только аватар
   hideStatus?: boolean;
+  // «Что нового» в меню (на мобилке, где кнопка убрана из шапки). undefined — пункт не показывать
+  onShowHistory?: () => void;
+  historyBadge?: number;       // число новых изменений с последнего захода
+  historyNeverSeen?: boolean;  // ещё ни разу не открывал историю — точка без числа
 }
 
-export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus }: Props) {
+export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -57,6 +61,22 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
         {!hideStatus && <ConnectionStatus variant="badge" label={serverUrl || 'localhost'} />}
       </div>
 
+      {/* Индикатор новизны «Что нового» на аватаре (мобилка: кнопка уехала в меню) */}
+      {onShowHistory && (historyBadge > 0 || historyNeverSeen) && (
+        <span style={{
+          position: 'absolute', top: -2, right: -2, pointerEvents: 'none',
+          ...(historyBadge > 0
+            ? {
+                minWidth: 15, height: 15, padding: '0 4px', borderRadius: 8,
+                background: C.accent, color: '#fff', fontSize: 9.5, fontWeight: 700,
+                lineHeight: '15px', textAlign: 'center', boxSizing: 'border-box',
+              }
+            : { width: 8, height: 8, borderRadius: '50%', background: C.accent }),
+        }}>
+          {historyBadge > 0 ? (historyBadge > 99 ? '99+' : historyBadge) : ''}
+        </span>
+      )}
+
       {open && (
         <div style={{
           position: 'absolute', top: 'calc(100% + 6px)', right: 0,
@@ -73,6 +93,33 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
               <span style={{ marginLeft: 6, fontSize: 11, color: C.accent }}>admin</span>
             )}
           </div>
+          {onShowHistory && (
+            <button
+              onClick={() => { setOpen(false); onShowHistory(); }}
+              style={dropdownItem}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+                <polyline points="12 7 12 12 15 14" />
+              </svg>
+              Что нового
+              {(historyBadge > 0 || historyNeverSeen) && (
+                <span style={{
+                  marginLeft: 'auto',
+                  ...(historyBadge > 0
+                    ? {
+                        minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
+                        background: C.accent, color: '#fff', fontSize: 11, fontWeight: 700,
+                        lineHeight: '18px', textAlign: 'center', boxSizing: 'border-box',
+                      }
+                    : { width: 8, height: 8, borderRadius: '50%', background: C.accent }),
+                }}>
+                  {historyBadge > 0 ? (historyBadge > 99 ? '99+' : historyBadge) : ''}
+                </span>
+              )}
+            </button>
+          )}
           {isAdmin && (
             <button
               onClick={() => { setOpen(false); onShowUserManagement(); }}

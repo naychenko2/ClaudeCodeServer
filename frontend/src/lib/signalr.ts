@@ -30,6 +30,11 @@ export function getConnection(): signalR.HubConnection {
         // JWT для WebSocket уходит как ?access_token= (заголовок задать нельзя)
         accessTokenFactory: () => localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || '',
       })
+      // Смягчаем разрывы на дрожащем канале: клиент считает сервер живым 60 с
+      // (дефолт 30 с рвал соединение при коротком отсутствии сообщений), пингует каждые 15 с.
+      // Согласовано с серверными ClientTimeoutInterval=60 / KeepAliveInterval=15.
+      .withServerTimeout(60_000)
+      .withKeepAliveInterval(15_000)
       .withAutomaticReconnect({
         // Первая попытка — мгновенно (0мс): кратковременный блип чинится сразу,
         // UI не успевает мигнуть. Дальше — экспоненциальный откат, макс 30 сек.

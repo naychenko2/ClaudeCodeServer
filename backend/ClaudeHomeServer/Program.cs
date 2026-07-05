@@ -26,7 +26,17 @@ builder.Services.AddControllers()
         o.JsonSerializerOptions.Converters.Add(
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
 
-builder.Services.AddSignalR()
+builder.Services.AddSignalR(o =>
+    {
+        // Смягчаем разрывы у клиентов с дрожащим каналом (мобильные, засыпающие вкладки):
+        // сервер закрывает соединение, если не слышал клиента дольше ClientTimeoutInterval.
+        // Дефолт 30 с рвал соединение при коротком замолкании — поднимаем до 60 с
+        // (должен быть ≥ 2× клиентского KeepAlive). KeepAlive 15 с — пинги сервера клиенту.
+        o.ClientTimeoutInterval = TimeSpan.FromSeconds(60);
+        o.KeepAliveInterval = TimeSpan.FromSeconds(15);
+        // Медленное рукопожатие на плохом канале не должно ронять подключение
+        o.HandshakeTimeout = TimeSpan.FromSeconds(30);
+    })
     .AddJsonProtocol(o =>
         o.PayloadSerializerOptions.Converters.Add(
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));

@@ -163,8 +163,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // Если сообщение — вызов скилла (/skill-name [args]), разворачиваем его содержимое
         var effectiveText = _skills?.TryExpandSkill(text) ?? text;
         // Картинки отправляем как image-блоки (base64), остальные файлы — инлайним в текст
-        var (imagePaths, otherPaths) = SplitImagePaths(attachedPaths);
-        var fullText = BuildMessageText(effectiveText, otherPaths);
+        var (imagePaths, otherPaths) = AttachmentInliner.SplitImagePaths(attachedPaths);
+        var fullText = AttachmentInliner.BuildMessageText(_rootPath, effectiveText, otherPaths);
 
         return QueueTurnAsync(fullText, imagePaths);
     }
@@ -191,20 +191,6 @@ public class ClaudeSession : ILlmSessionAdapter
         });
 
         return Task.CompletedTask;
-    }
-
-    // Расширения, которые отправляем как image-блоки, а не инлайним текстом
-    private static readonly HashSet<string> _imageExts =
-        new(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".gif", ".webp" };
-
-    private static (List<string> images, List<string> others) SplitImagePaths(IReadOnlyList<string>? paths)
-    {
-        var images = new List<string>();
-        var others = new List<string>();
-        if (paths != null)
-            foreach (var p in paths)
-                (_imageExts.Contains(Path.GetExtension(p)) ? images : others).Add(p);
-        return (images, others);
     }
 
     private static string MediaTypeForExt(string ext) => ext.ToLowerInvariant() switch
@@ -239,59 +225,6 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
         return blocks;
-    }
-
-    // Максимум текста на один инлайн-файл — чтобы вложение не раздуло сообщение
-    private const int MaxInlineBytes = 256 * 1024;
-
-    private string BuildMessageText(string text, IReadOnlyList<string>? paths)
-    {
-        if (paths is null || paths.Count == 0) return text;
-
-        var sb = new System.Text.StringBuilder(text);
-        foreach (var relativePath in paths)
-        {
-            try
-            {
-                var fullPath = FileService.SafeJoin(_rootPath, relativePath);
-                if (!File.Exists(fullPath)) continue;
-
-                var info = new FileInfo(fullPath);
-                byte[] bytes;
-                using (var fs = info.OpenRead())
-                {
-                    var len = (int)Math.Min(info.Length, MaxInlineBytes);
-                    bytes = new byte[len];
-                    var read = 0;
-                    while (read < len)
-                    {
-                        var n = fs.Read(bytes, read, len - read);
-                        if (n == 0) break;
-                        read += n;
-                    }
-                    if (read < len) Array.Resize(ref bytes, read);
-                }
-
-                // Бинарный файл (PDF/docx/xlsx/архив и т.п.) определяем по нулевому байту.
-                // Не инлайним мусор-кракозябры: даём ссылку — рабочая папка = корень проекта,
-                // Claude при необходимости откроет файл инструментом Read (умеет PDF/изображения/notebook).
-                if (Array.IndexOf(bytes, (byte)0) >= 0)
-                {
-                    sb.Append($"\n\n---\nПрикреплён файл: {relativePath} (бинарный/документ — открой инструментом Read, если нужно его содержимое).");
-                    continue;
-                }
-
-                var content = System.Text.Encoding.UTF8.GetString(bytes);
-                var truncated = info.Length > MaxInlineBytes ? "\n…(файл обрезан по размеру)" : "";
-                var ext = Path.GetExtension(relativePath).TrimStart('.');
-                sb.Append($"\n\n---\nФайл: {relativePath}\n```{ext}\n{content}{truncated}\n```");
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[ClaudeSession] Не удалось заинлайнить вложение «{relativePath}»: {ex.Message}");
-            }
-        }
-        return sb.ToString();
     }
 
     public void RespondPermission(string requestId, string behavior)

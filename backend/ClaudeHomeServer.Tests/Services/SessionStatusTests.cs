@@ -61,8 +61,12 @@ public class SessionStatusTests : IDisposable
 
     private SessionManager CreateSessionManager()
     {
+        var deepSeekOptions = Microsoft.Extensions.Options.Options.Create(new DeepSeekOptions());
         var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
-            _config, new SkillsService(), new WorkspaceKnowledgeStore(_config));
+            _config, new SkillsService(), new WorkspaceKnowledgeStore(_config),
+            new ClaudeHomeServer.Services.Llm.DeepSeek.DeepSeekClient(
+                new Mock<IHttpClientFactory>().Object, deepSeekOptions),
+            deepSeekOptions, new FileService());
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, _config);
         var usage = new UsageService(_config);
         var userStore = new UserStore(_config, NullLogger<UserStore>.Instance);

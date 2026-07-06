@@ -46,8 +46,12 @@ public class SessionManagerTests : IDisposable
         var hub = new Mock<IHubContext<SessionHub>>();
         hub.Setup(h => h.Clients).Returns(clients.Object);
 
+        var deepSeekOptions = Microsoft.Extensions.Options.Options.Create(new DeepSeekOptions());
         var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
-            config, new SkillsService(), new WorkspaceKnowledgeStore(config));
+            config, new SkillsService(), new WorkspaceKnowledgeStore(config),
+            new ClaudeHomeServer.Services.Llm.DeepSeek.DeepSeekClient(
+                new Mock<IHttpClientFactory>().Object, deepSeekOptions),
+            deepSeekOptions, new FileService());
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var jwt = new JwtService(config, NullLogger<JwtService>.Instance);

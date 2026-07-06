@@ -23,6 +23,7 @@ public class SessionsController(SessionManager sessions) : ControllerBase
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     [HttpPut("{sessionId}")]

@@ -99,9 +99,11 @@ export function RateLimitBar({ w }: { w: RateWindow }) {
 // tone окрашивает пилюлю при приближении к лимиту (warn/danger).
 // stacked — двухстрочная пилюля (label скрыт/опущен): содержимое amount в столбик,
 // компактнее по ширине (для мобильного объединённого чипа).
-function BadgeShell({ label, amount, title, isMobile, tone, stacked, children }: {
+// wide — более широкий поповер на мобилке (для объединённого чипа с двумя секциями:
+// шире → меньше переносов → ниже по высоте, помещается на экран).
+function BadgeShell({ label, amount, title, isMobile, tone, stacked, wide, children }: {
   label?: string; amount: React.ReactNode; title: string; isMobile?: boolean;
-  tone?: 'warn' | 'danger'; stacked?: boolean; children: React.ReactNode;
+  tone?: 'warn' | 'danger'; stacked?: boolean; wide?: boolean; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const toneBg = tone === 'danger' ? RATE_COLORS.danger.bg : tone === 'warn' ? RATE_COLORS.warn.bg : C.bgWhite;
@@ -130,7 +132,13 @@ function BadgeShell({ label, amount, title, isMobile, tone, stacked, children }:
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
           <div style={{
             position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 41,
-            minWidth: isMobile ? 200 : 240, padding: '12px 14px',
+            width: wide && isMobile ? 340 : undefined,
+            minWidth: isMobile ? (wide ? 300 : 200) : 240,
+            // не вылезать за края экрана по ширине и высоте; при переполнении — скролл внутри
+            maxWidth: 'calc(100vw - 24px)',
+            maxHeight: isMobile ? 'calc(100dvh - 130px)' : undefined,
+            overflowY: isMobile ? 'auto' : undefined,
+            padding: '12px 14px',
             background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, boxShadow: SHADOW.dropdown,
           }}>
             {children}
@@ -580,6 +588,7 @@ function MobileCombinedBadge(props: {
       isMobile
       tone={tone}
       stacked
+      wide
       title="Контекст и расход сессии — нажмите для деталей"
     >
       {showCtx && <ContextPopoverBody {...props} />}
@@ -735,7 +744,7 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
   // На мобилке артефакты и настройки — плотная пара справа (gap 2 вместо TB.gap),
   // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
   const actionBtns = isMobile
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>{artifactsBtn}{settingsBtn}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{artifactsBtn}{settingsBtn}</div>
     : <>{artifactsBtn}{settingsBtn}</>;
 
   return (

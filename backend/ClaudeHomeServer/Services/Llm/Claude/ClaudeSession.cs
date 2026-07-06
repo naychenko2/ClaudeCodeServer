@@ -295,7 +295,10 @@ public class ClaudeSession : ILlmSessionAdapter
         }
     }
 
-    // Обработка control_request(can_use_tool): AskUserQuestion → интерактивная карточка; прочее → авто-allow
+    // Обработка control_request(can_use_tool): AskUserQuestion → интерактивная карточка,
+    // ExitPlanMode → согласование плана, прочие инструменты → permission-пайплайн.
+    // Актуальные CLI шлют permission-запросы именно этим каналом (не sdk_control_request) —
+    // авто-allow здесь означал бы исполнение любых команд без карточек.
     private async Task HandleControlRequestAsync(JsonElement root)
     {
         var requestId = root.TryGetProperty("request_id", out var rid) ? rid.GetString() ?? "" : "";
@@ -305,8 +308,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
         var toolName = req.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
         var toolUseId = req.TryGetProperty("tool_use_id", out var tu) ? tu.GetString() ?? "" : "";
-        var input = req.TryGetProperty("input", out var ti)
-            ? JsonSerializer.Deserialize<object>(ti.GetRawText())! : new object();
+        var inputEl = req.TryGetProperty("input", out var ti) ? ti : default;
+        var input = inputEl.ValueKind != JsonValueKind.Undefined
+            ? JsonSerializer.Deserialize<object>(inputEl.GetRawText())! : new object();
 
         if (toolName == "AskUserQuestion")
         {
@@ -323,14 +327,62 @@ public class ClaudeSession : ILlmSessionAdapter
             // НЕ авто-одобряем, иначе план не выносится на согласование.
             // Статус Waiting выставит SessionManager по PlanReviewMessage
             _pendingPlans[requestId] = input;
-            var plan = req.TryGetProperty("input", out var pin) && pin.TryGetProperty("plan", out var pl)
+            var plan = inputEl.ValueKind == JsonValueKind.Object && inputEl.TryGetProperty("plan", out var pl)
                 ? pl.GetString() ?? "" : "";
             await _onMessage(new PlanReviewMessage(requestId, plan));
             return;
         }
 
-        // Прочие инструменты авто-разрешаем (поведение по умолчанию), чтобы ход не завис
-        SendControlResponse(requestId, new { behavior = "allow", updatedInput = input });
+        var behavior = await DecidePermissionAsync(requestId, toolName, inputEl, input);
+        if (behavior == "cancelled") return; // Interrupt — процесс убит, отвечать некому
+        SendControlResponse(requestId, behavior == "allow"
+            ? new { behavior = "allow", updatedInput = input }
+            : (object)new { behavior = "deny", message = "Пользователь отклонил действие" });
+    }
+
+    // Решение по инструменту: правила проекта → «всегда разрешать» этой сессии → карточка
+    // пользователю. Возвращает "allow" | "deny" | "cancelled" (Interrupt во время ожидания).
+    private async Task<string> DecidePermissionAsync(string requestId, string toolName, JsonElement inputEl, object toolInput)
+    {
+        // Правила проекта: deny приоритетнее; allow — авто-разрешить; null — спросить пользователя
+        var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, inputEl);
+        if (ruleDecision == "deny") return "deny";
+        if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(toolName)) return "allow";
+
+        var tcs = new TaskCompletionSource<string>();
+        _permissionWaiters[requestId] = tcs;
+
+        // Статус Waiting выставит SessionManager по PermissionRequestMessage,
+        // Working вернёт SessionManager.RespondPermission по ответу пользователя
+        await _onMessage(new PermissionRequestMessage(requestId, toolName, toolInput));
+
+        string behavior;
+        try
+        {
+            // Ждём ответа пользователя или таймаута 60 минут
+            behavior = await tcs.Task.WaitAsync(TimeSpan.FromMinutes(60));
+        }
+        catch (TaskCanceledException)
+        {
+            // Interrupt() отменил TCS через TrySetCanceled() — процесс уже убит
+            _permissionWaiters.TryRemove(requestId, out _);
+            return "cancelled";
+        }
+        catch (TimeoutException)
+        {
+            // Пользователь не ответил — deny и продолжаем
+            _permissionWaiters.TryRemove(requestId, out _);
+            return "deny";
+        }
+        _permissionWaiters.TryRemove(requestId, out _);
+
+        // «Всегда разрешать»: запоминаем инструмент и отвечаем обычным allow
+        if (behavior == "allow_always")
+        {
+            _autoAllowTools.TryAdd(toolName, 0);
+            behavior = "allow";
+        }
+        return behavior;
     }
 
     private void SendControlResponse(string requestId, object responsePayload)
@@ -938,6 +990,7 @@ public class ClaudeSession : ILlmSessionAdapter
             await _onMessage(new TruncatedMessage());
     }
 
+    // Permission-запрос старого канала (sdk_control_request) — общий пайплайн DecidePermissionAsync
     private async Task HandlePermissionAsync(JsonElement root)
     {
         // Используем request_id из CLI — именно его ждёт claude в control_response
@@ -950,55 +1003,8 @@ public class ClaudeSession : ILlmSessionAdapter
         var toolInput = inputEl.ValueKind != JsonValueKind.Undefined
             ? JsonSerializer.Deserialize<object>(inputEl.GetRawText())! : new object();
 
-        // Правила проекта: deny приоритетнее; allow — авто-разрешить; null — спросить пользователя
-        var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, inputEl);
-
-        string behavior;
-        if (ruleDecision == "deny")
-        {
-            behavior = "deny";
-        }
-        else if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(toolName))
-        {
-            // Разрешено правилом проекта или ранее выбрано «всегда разрешать» — не спрашиваем
-            behavior = "allow";
-        }
-        else
-        {
-            var tcs = new TaskCompletionSource<string>();
-            _permissionWaiters[requestId] = tcs;
-
-            // Статус Waiting выставит SessionManager по PermissionRequestMessage,
-            // Working вернёт SessionManager.RespondPermission по ответу пользователя
-            await _onMessage(new PermissionRequestMessage(requestId, toolName, toolInput));
-
-            try
-            {
-                // Ждём ответа пользователя или таймаута 60 минут
-                behavior = await tcs.Task.WaitAsync(TimeSpan.FromMinutes(60));
-            }
-            catch (TaskCanceledException)
-            {
-                // Interrupt() отменил TCS через TrySetCanceled() — процесс уже убит
-                _permissionWaiters.TryRemove(requestId, out _);
-                return;
-            }
-            catch (TimeoutException)
-            {
-                // Пользователь не ответил — deny и продолжаем
-                _permissionWaiters.TryRemove(requestId, out _);
-                behavior = "deny";
-            }
-
-            _permissionWaiters.TryRemove(requestId, out _);
-
-            // «Всегда разрешать»: запоминаем инструмент и отвечаем claude обычным allow
-            if (behavior == "allow_always")
-            {
-                _autoAllowTools.TryAdd(toolName, 0);
-                behavior = "allow";
-            }
-        }
+        var behavior = await DecidePermissionAsync(requestId, toolName, inputEl, toolInput);
+        if (behavior == "cancelled") return; // Interrupt — процесс убит, отвечать некому
 
         var response = JsonSerializer.Serialize(new
         {

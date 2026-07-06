@@ -107,9 +107,12 @@ ClaudeSession + `LlmCapabilities`). `SessionManager` создаёт адапте
   - авто-compact при заполнении окна (`DeepSeek:AutoCompactThresholdPct`, дефолт 80%);
     гарантия исполнения плана (approve без правок → досыл «реализуй»);
   - permissions через те же `PermissionRequestMessage` (общий `PermissionRuleEvaluator`);
-  - **MCP** — свой stdio-клиент (`DeepSeekMcp.cs`: McpStdioClient + DeepSeekMcpManager):
-    серверы из `McpConfigPath` (Dify с инжекцией dataset id) + встроенный tasks-server;
-    инструменты в цикле как `mcp__<server>__<tool>`, класс Edit;
+  - **MCP** — свой клиент (`DeepSeekMcp.cs`: `IMcpClient` = McpStdioClient | McpHttpClient +
+    DeepSeekMcpManager): stdio-серверы (command/args/env) И remote HTTP/SSE-серверы (type: http/url +
+    headers, напр. fal.ai) из `McpConfigPath` + доп. `DeepSeek:McpConfigPath` (можно указать
+    ~/.claude.json, чтобы DeepSeek видел те же серверы, что Claude, без задвоения) + tasks-server;
+    инструменты в цикле как `mcp__<server>__<tool>`, класс Edit. Стоимость fal.ai отслеживается
+    автоматически (tool_result → SessionManager.TryTrackFalCost, тот же путь что у Claude);
   - **режим «План»** — эмуляция: read-инструменты + виртуальный `exit_plan_mode` →
     `PlanReviewMessage`; approve снимает ограничение до конца хода и на следующий ход;
   - **вопросы** — виртуальный `ask_user_question` → `AskQuestionMessage` (та же карточка);

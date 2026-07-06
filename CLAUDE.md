@@ -134,7 +134,11 @@ ClaudeSession + `LlmCapabilities`). `SessionManager` создаёт адапте
 (`useModelCaps` в `lib/models.ts`). Общие хелперы адаптеров: `TurnFileWatcher`
 (file_changed на время хода), `AttachmentInliner` (инлайн вложений), `TasksServerLocator`.
 Модель Claude-исполнителя задач настраивается ключом `Tasks:ExecutorModel`
-(null — дефолт; deepseek-модель тоже валидна).
+(null — дефолт; deepseek-модель тоже валидна). AI-генерация описания/подзадач задач —
+`Tasks:AiModel` (deepseek-* → DeepSeek API вместо claude CLI); сводки «Что нового» —
+`Changelog:Model` (deepseek-* → DeepSeek). Одноразовые генерации — `DeepSeekClient.CompleteAsync`.
+История баланса DeepSeek: `GET /api/providers/deepseek/usage` (снапшоты 8 дней,
+data/deepseek-usage.json) — вкладка DeepSeek на экране «Использование» (видна при настроенном ключе).
 
 ## Claude Code CLI subprocess
 

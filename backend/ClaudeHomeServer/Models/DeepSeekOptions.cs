@@ -15,6 +15,8 @@ public class DeepSeekOptions
     // Инструмент запуска команд (run_command): каждый запуск требует разрешения пользователя
     public bool EnableShellTool { get; set; } = true;
     public int ShellTimeoutSeconds { get; set; } = 120;
+    // Порог авто-сворачивания контекста (% окна). 0 или ≥100 — авто-компакт выключен
+    public int AutoCompactThresholdPct { get; set; } = 80;
     public List<DeepSeekModelConfig> Models { get; set; } = [];
 
     public bool Enabled => !string.IsNullOrWhiteSpace(ApiKey);

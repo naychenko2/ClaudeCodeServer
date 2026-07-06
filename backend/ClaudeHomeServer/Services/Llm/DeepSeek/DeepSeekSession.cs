@@ -41,11 +41,19 @@ public class DeepSeekSession : ILlmSessionAdapter
     private volatile bool _forceNonPlanNextTurn;
     // План одобрен в текущем ходу → остаток хода с полным набором инструментов
     private volatile bool _planApprovedInTurn;
+    // Гарантия исполнения плана: после approve ждём правки; если ход завершится без них — дошлём команду
+    private volatile bool _awaitPlanExecution;
+    private volatile bool _sawMutationSinceApprove;
     private volatile CancellationTokenSource? _currentTurnCts;
+    // Результаты фоновых команд, завершившихся между ходами — вольются в начало следующего хода
+    private readonly ConcurrentQueue<string> _backgroundResults = new();
 
-    // Виртуальные инструменты сессии (не из реестра): вопросы и согласование плана
+    // Виртуальные инструменты сессии (не из реестра): вопросы, план, todo-список, субагенты.
+    // Имена совпадают с тем, что распознаёт фронт (useSessionArtifacts): TodoWrite, Task
     private const string AskQuestionTool = "ask_user_question";
     private const string ExitPlanTool = "exit_plan_mode";
+    private const string TodoTool = "TodoWrite";
+    private const string SpawnAgentTool = "Task";
 
     // Если API не выдаёт ни одного события дольше этого — считаем зависшим
     private static readonly TimeSpan StreamIdleTimeout = TimeSpan.FromMinutes(5);
@@ -72,7 +80,7 @@ public class DeepSeekSession : ILlmSessionAdapter
         _mcp = new DeepSeekMcpManager(mcpConfigPath, context.TasksMcp,
             () => workspaceStore?.GetByPath(context.RootPath)?.DifyDatasetId);
         _registry = new DeepSeekToolRegistry(_rootPath, files,
-            options.Value.EnableShellTool, options.Value.ShellTimeoutSeconds);
+            options.Value.EnableShellTool, options.Value.ShellTimeoutSeconds, OnBackgroundCommandDoneAsync);
         _store = new DeepSeekConversationStore(sessionsBasePath);
         _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage);
     }
@@ -132,40 +140,7 @@ public class DeepSeekSession : ILlmSessionAdapter
         try
         {
             _store.Bind(Info.ClaudeSessionId);
-            var preTokens = _store.EstimateTotalTokens();
-            await _onMessage(new CompactStatusMessage("compacting"));
-
-            // Запрос сводки: копия истории + инструкция, без tools и thinking
-            var messages = (JsonArray)_store.Messages.DeepClone();
-            messages.Add(new JsonObject
-            {
-                ["role"] = "user",
-                ["content"] =
-                    "Составь подробную сводку нашего диалога для продолжения работы с чистым контекстом: " +
-                    "ключевые факты, принятые решения, состояние задач, важные пути файлов и незавершённые шаги. " +
-                    "Только сводка, без вступлений.",
-            });
-            var req = new DsChatRequest(modelCfg.EffectiveApiModel, messages, Tools: null,
-                opts.MaxTokens, Thinking: modelCfg.Thinking ? false : null);
-
-            var summary = new System.Text.StringBuilder();
-            using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(turnCts.Token);
-            watchdog.CancelAfter(StreamIdleTimeout);
-            await foreach (var evt in _client.StreamChatAsync(req, watchdog.Token))
-            {
-                watchdog.CancelAfter(StreamIdleTimeout);
-                if (evt is DsContentDelta c) summary.Append(c.Text); // сводку в ленту не стримим
-            }
-
-            if (summary.Length == 0)
-                throw new InvalidOperationException("Модель вернула пустую сводку");
-
-            _store.ReplaceWithSummary(summary.ToString());
-            await _store.SaveAsync();
-            var postTokens = _store.EstimateTotalTokens();
-
-            await _onMessage(new CompactStatusMessage(null, "success"));
-            await _onMessage(new CompactBoundaryMessage("manual", preTokens, postTokens));
+            await SummarizeAndReplaceAsync(modelCfg, "manual", turnCts.Token);
         }
         catch (DeepSeekApiException ex)
         {
@@ -176,6 +151,47 @@ public class DeepSeekSession : ILlmSessionAdapter
             _currentTurnCts = null;
             await _onMessage(new ExitedMessage());
         }
+    }
+
+    // Ядро суммаризации: заменяет историю сводкой. trigger — "manual"/"auto".
+    // Не управляет _turnLock/_currentTurnCts/ExitedMessage — это делает вызывающий.
+    private async Task SummarizeAndReplaceAsync(DeepSeekModelConfig modelCfg, string trigger, CancellationToken ct)
+    {
+        var preTokens = _store.EstimateTotalTokens();
+        await _onMessage(new CompactStatusMessage("compacting"));
+
+        // Запрос сводки: копия истории + инструкция, без tools и thinking
+        var messages = (JsonArray)_store.Messages.DeepClone();
+        messages.Add(new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] =
+                "Составь подробную сводку нашего диалога для продолжения работы с чистым контекстом: " +
+                "ключевые факты, принятые решения, состояние задач, важные пути файлов и незавершённые шаги. " +
+                "Только сводка, без вступлений.",
+        });
+        var req = new DsChatRequest(modelCfg.EffectiveApiModel, messages, Tools: null,
+            _options.Value.MaxTokens, Thinking: modelCfg.Thinking ? false : null);
+
+        var summary = new System.Text.StringBuilder();
+        using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        watchdog.CancelAfter(StreamIdleTimeout);
+        await foreach (var evt in _client.StreamChatAsync(req, watchdog.Token))
+        {
+            watchdog.CancelAfter(StreamIdleTimeout);
+            if (evt is DsContentDelta c) summary.Append(c.Text); // сводку в ленту не стримим
+        }
+
+        if (summary.Length == 0)
+        {
+            await _onMessage(new CompactStatusMessage(null, "failed", "Модель вернула пустую сводку"));
+            return;
+        }
+
+        _store.ReplaceWithSummary(summary.ToString());
+        await _store.SaveAsync();
+        await _onMessage(new CompactStatusMessage(null, "success"));
+        await _onMessage(new CompactBoundaryMessage(trigger, preTokens, _store.EstimateTotalTokens()));
     }
 
     public void RespondPermission(string requestId, string behavior)
@@ -208,6 +224,18 @@ public class DeepSeekSession : ILlmSessionAdapter
         _questionWaiters.Clear();
         _planWaiters.Clear();
         _forceNonPlanNextTurn = false;
+    }
+
+    // Колбэк завершения фоновой команды: результат кладём в очередь (вольётся в следующий ход)
+    // + тост пользователю. Если сессия простаивает — досылаем ход, чтобы модель отреагировала.
+    private async Task OnBackgroundCommandDoneAsync(string label, string output)
+    {
+        _backgroundResults.Enqueue($"[Фоновая команда «{label}» завершилась]\n{output}");
+        await _onMessage(new NotificationMessage(
+            "Фоновая команда завершилась", label, Kind: "info"));
+        // Если ход уже не идёт — пнём модель отдельным ходом, чтобы она учла результат сразу
+        if (_turnLock.CurrentCount > 0)
+            _ = SendMessageAsync("Фоновая команда завершилась — учти её результат (он добавлен в контекст).");
     }
 
     // Ставит ход в очередь в фоне, чтобы не блокировать SignalR-соединение
@@ -257,6 +285,10 @@ public class DeepSeekSession : ILlmSessionAdapter
         _store.Bind(engineId);
         if (_store.Messages.Count == 0)
             _store.Append(new JsonObject { ["role"] = "system", ["content"] = BuildSystemPrompt() });
+
+        // Результаты фоновых команд, пришедшие между ходами — вливаем перед сообщением пользователя
+        while (_backgroundResults.TryDequeue(out var bg))
+            _store.Append(new JsonObject { ["role"] = "user", ["content"] = bg });
 
         _store.Append(new JsonObject { ["role"] = "user", ["content"] = text });
 
@@ -323,6 +355,26 @@ public class DeepSeekSession : ILlmSessionAdapter
             var usage = new UsageInfo((int)promptMiss, (int)completion, (int)cacheHit, 0);
             var cost = ComputeCost(modelCfg, promptMiss, cacheHit, completion);
             await _onMessage(new ResultMessage("success", sw.ElapsedMilliseconds, iterations, usage, cost));
+
+            // Гарантия исполнения плана: одобрили, но ход завершился без правок — дошлём команду
+            if (_awaitPlanExecution)
+            {
+                var needFollowUp = !_sawMutationSinceApprove;
+                _awaitPlanExecution = false;
+                if (needFollowUp)
+                {
+                    _forceNonPlanNextTurn = true;
+                    _ = SendMessageAsync("Одобренный план согласован. Реализуй его полностью сейчас — без повторного планирования.");
+                }
+            }
+
+            // Авто-компакт: если контекст переполнен — суммаризируем, чтобы следующий ход влез
+            if (opts.AutoCompactThresholdPct is > 0 and < 100 && !_forceNonPlanNextTurn)
+            {
+                var budget = modelCfg.ContextWindow * opts.AutoCompactThresholdPct / 100;
+                if (_store.EstimateTotalTokens() > budget)
+                    await SummarizeAndReplaceAsync(modelCfg, "auto", ct);
+            }
         }
         catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
         {
@@ -355,16 +407,79 @@ public class DeepSeekSession : ILlmSessionAdapter
         int PromptTokens, int CompletionTokens, int CacheHitTokens);
 
     // Полный набор инструментов хода: реестр (в план-фазе — только чтение) + MCP + виртуальные.
-    // MCP-инструменты в план-фазе не даём: среди них есть мутирующие (tasks_create и т.п.)
-    private JsonArray? BuildTurnTools(DeepSeekModelConfig modelCfg, bool planningNow)
+    // MCP-инструменты в план-фазе не даём: среди них есть мутирующие (tasks_create и т.п.).
+    // isSubAgent — набор для субагента: без вложенных spawn_agent/вопросов/плана
+    private JsonArray? BuildTurnTools(DeepSeekModelConfig modelCfg, bool planningNow, bool isSubAgent = false)
     {
         if (!modelCfg.SupportsTools) return null;
         var tools = _registry.BuildToolsJson(readOnlyOnly: planningNow);
         if (!planningNow) _mcp.AppendToolsJson(tools);
+        tools.Add(BuildTodoSchema());
+        if (isSubAgent) return tools; // субагенту — только рабочие инструменты
         tools.Add(BuildAskQuestionSchema());
+        tools.Add(BuildSpawnAgentSchema());
         if (planningNow) tools.Add(BuildExitPlanSchema());
         return tools;
     }
+
+    private static JsonObject BuildTodoSchema() => new()
+    {
+        ["type"] = "function",
+        ["function"] = new JsonObject
+        {
+            ["name"] = TodoTool,
+            ["description"] =
+                "Вести чек-лист текущей работы (показывается пользователю). Присылай ПОЛНЫЙ список " +
+                "при каждом изменении: помечай выполненные completed, текущий — in_progress.",
+            ["parameters"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["todos"] = new JsonObject
+                    {
+                        ["type"] = "array",
+                        ["items"] = new JsonObject
+                        {
+                            ["type"] = "object",
+                            ["properties"] = new JsonObject
+                            {
+                                ["content"] = new JsonObject { ["type"] = "string", ["description"] = "Что нужно сделать" },
+                                ["status"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "pending", "in_progress", "completed" } },
+                                ["activeForm"] = new JsonObject { ["type"] = "string", ["description"] = "Форма в процессе (например «Собираю проект»)" },
+                            },
+                            ["required"] = new JsonArray { "content", "status" },
+                        },
+                    },
+                },
+                ["required"] = new JsonArray { "todos" },
+            },
+        },
+    };
+
+    private static JsonObject BuildSpawnAgentSchema() => new()
+    {
+        ["type"] = "function",
+        ["function"] = new JsonObject
+        {
+            ["name"] = SpawnAgentTool,
+            ["description"] =
+                "Запустить субагента для автономной подзадачи в отдельном контексте. У него те же " +
+                "инструменты работы с файлами и командами, но нет доступа к этому диалогу — передай всё " +
+                "необходимое в prompt. Верни задачу, которую можно выполнить без уточнений. Субагент " +
+                "работает синхронно и возвращает итоговый результат.",
+            ["parameters"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["description"] = new JsonObject { ["type"] = "string", ["description"] = "Короткое описание задачи (3-6 слов)" },
+                    ["prompt"] = new JsonObject { ["type"] = "string", ["description"] = "Полное самодостаточное задание субагенту" },
+                },
+                ["required"] = new JsonArray { "prompt" },
+            },
+        },
+    };
 
     // Инструкция режима планирования — во временной копии messages, в историю не пишется
     private static JsonArray WithPlanInstruction(JsonArray messages)
@@ -513,7 +628,9 @@ public class DeepSeekSession : ILlmSessionAdapter
     }
 
     // Assistant-сообщение в историю: content + tool_calls, БЕЗ reasoning_content (API вернёт 400)
-    private void AppendAssistantMessage(TurnResult turn)
+    private void AppendAssistantMessage(TurnResult turn) => AppendAssistantMessageTo(_store.Messages, turn);
+
+    private static void AppendAssistantMessageTo(JsonArray target, TurnResult turn)
     {
         var msg = new JsonObject
         {
@@ -536,7 +653,94 @@ public class DeepSeekSession : ILlmSessionAdapter
                 });
             msg["tool_calls"] = arr;
         }
-        _store.Append(msg);
+        target.Add(msg);
+    }
+
+    // Стрим запроса субагента: дочерние tool_use идут с parentToolUseId (для панели «Агенты»),
+    // текст/thinking субагента в главную ленту НЕ выводим — он вернётся итогом в tool_result родителя
+    private async Task<TurnResult> StreamSubAgentRequestAsync(string parentId, DeepSeekModelConfig modelCfg,
+        JsonArray messages, JsonArray? tools, int maxTokens, CancellationToken ct)
+    {
+        var req = new DsChatRequest(modelCfg.EffectiveApiModel, messages, tools, maxTokens,
+            modelCfg.Thinking ? false : null); // субагенту reasoning не нужен — экономим
+
+        var contentSb = new System.Text.StringBuilder();
+        var toolCalls = new Dictionary<int, ToolCallAcc>();
+        string? finishReason = null;
+        int prompt = 0, compl = 0, hit = 0;
+
+        using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        watchdog.CancelAfter(StreamIdleTimeout);
+        await foreach (var evt in _client.StreamChatAsync(req, watchdog.Token))
+        {
+            watchdog.CancelAfter(StreamIdleTimeout);
+            switch (evt)
+            {
+                case DsContentDelta c: contentSb.Append(c.Text); break;
+                case DsToolCallStart s:
+                    toolCalls[s.Index] = new ToolCallAcc(s.Index, s.Id) { Name = s.Name };
+                    await _onMessage(new ToolUseMessage(s.Id, s.Name, new { }, parentId));
+                    break;
+                case DsToolCallArgsDelta a when toolCalls.TryGetValue(a.Index, out var acc):
+                    acc.Args.Append(a.Fragment);
+                    break;
+                case DsFinish f: finishReason = f.Reason; break;
+                case DsUsage u: prompt = u.PromptTokens; compl = u.CompletionTokens; hit = u.CacheHitTokens; break;
+            }
+        }
+        return new TurnResult(contentSb.ToString(),
+            toolCalls.Values.OrderBy(t => t.Index).ToList(), finishReason, prompt, compl, hit);
+    }
+
+    // Вызов инструмента субагентом: только рабочие инструменты (файлы/команды/MCP) с permission,
+    // дочерний tool_use/tool_result помечаем parentId
+    private async Task<DsToolResult> ExecuteSubAgentToolAsync(string parentId, ToolCallAcc call, CancellationToken ct)
+    {
+        var argsJson = call.Args.Length > 0 ? call.Args.ToString() : "{}";
+        JsonElement args;
+        try { args = JsonDocument.Parse(argsJson).RootElement.Clone(); }
+        catch (JsonException)
+        {
+            var err = new DsToolResult("Аргументы инструмента — некорректный JSON", IsError: true);
+            await _onMessage(new ToolResultMessage(call.Id, err.Content, true));
+            return err;
+        }
+
+        var input = JsonSerializer.Deserialize<object>(argsJson) ?? new object();
+        await _onMessage(new ToolUseMessage(call.Id, call.Name, input, parentId));
+
+        DsToolResult result;
+        if (call.Name.StartsWith(DeepSeekMcpManager.ToolPrefix, StringComparison.Ordinal))
+        {
+            var behavior = await ResolvePermissionAsync(call.Name, ToolPermissionClass.Edit, args, input, ct);
+            if (behavior == "deny")
+            {
+                result = new DsToolResult("Пользователь отклонил выполнение инструмента", IsError: true);
+            }
+            else
+            {
+                var (content, isErr) = await _mcp.CallAsync(call.Name, args, ct);
+                result = new DsToolResult(DeepSeekToolRegistry.Truncate(content), isErr);
+            }
+        }
+        else if (call.Name is TodoTool)
+        {
+            result = new DsToolResult("Чек-лист доступен только основному агенту");
+        }
+        else if (_registry.Get(call.Name) is not { } tool)
+        {
+            result = new DsToolResult($"Неизвестный инструмент: {call.Name}", IsError: true);
+        }
+        else
+        {
+            var behavior = await ResolvePermissionAsync(tool.Name, tool.PermissionClass, args, input, ct);
+            result = behavior == "deny"
+                ? new DsToolResult("Пользователь отклонил выполнение инструмента", IsError: true)
+                : await tool.ExecuteAsync(args, ct);
+        }
+
+        await _onMessage(new ToolResultMessage(call.Id, result.Content, result.IsError));
+        return result;
     }
 
     private async Task<DsToolResult> ExecuteToolCallAsync(ToolCallAcc call, CancellationToken ct)
@@ -554,6 +758,11 @@ public class DeepSeekSession : ILlmSessionAdapter
         // Виртуальные интерактивные инструменты — свои карточки, без permission-проверок
         if (call.Name == AskQuestionTool) return await HandleAskQuestionAsync(call.Id, argsJson, ct);
         if (call.Name == ExitPlanTool) return await HandleExitPlanAsync(call.Id, args, ct);
+        if (call.Name == TodoTool) return await HandleTodoAsync(call.Id, args, ct);
+        if (call.Name == SpawnAgentTool) return await HandleSpawnAgentAsync(call.Id, args, ct);
+
+        // Реальный инструмент — после одобрения плана считаем его началом реализации
+        if (_awaitPlanExecution) _sawMutationSinceApprove = true;
 
         // Финальная карточка с распарсенными аргументами (ранняя ушла с пустым input)
         var input = JsonSerializer.Deserialize<object>(argsJson) ?? new object();
@@ -655,6 +864,9 @@ public class DeepSeekSession : ILlmSessionAdapter
             {
                 _planApprovedInTurn = true;
                 _forceNonPlanNextTurn = true;
+                // Гарантия исполнения: если ход завершится без правок — дошлём команду
+                _awaitPlanExecution = true;
+                _sawMutationSinceApprove = false;
                 return new DsToolResult(
                     "План одобрен пользователем. Приступай к реализации немедленно, без повторного планирования.");
             }
@@ -670,6 +882,105 @@ public class DeepSeekSession : ILlmSessionAdapter
         {
             _planWaiters.TryRemove(callId, out _);
         }
+    }
+
+    // Чек-лист прогресса: карточку рендерит фронт по tool_use name=TodoWrite + input.todos.
+    // Модели просто подтверждаем приём; результат в ленту как есть.
+    private async Task<DsToolResult> HandleTodoAsync(string callId, JsonElement args, CancellationToken ct)
+    {
+        var input = JsonSerializer.Deserialize<object>(args.GetRawText()) ?? new object();
+        await _onMessage(new ToolUseMessage(callId, TodoTool, input));
+        var count = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("todos", out var t)
+            && t.ValueKind == JsonValueKind.Array ? t.GetArrayLength() : 0;
+        var result = new DsToolResult($"Чек-лист обновлён ({count} пунктов)");
+        await _onMessage(new ToolResultMessage(callId, result.Content, false));
+        return result;
+    }
+
+    // Субагент: изолированная под-сессия со своим контекстом. tool_use name=Task —
+    // фронт (useSessionArtifacts) показывает его карточкой на вкладке «Агенты»;
+    // дочерние вызовы инструментов идут с parentToolUseId = callId
+    private async Task<DsToolResult> HandleSpawnAgentAsync(string callId, JsonElement args, CancellationToken ct)
+    {
+        if (_awaitPlanExecution) _sawMutationSinceApprove = true;
+
+        var prompt = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("prompt", out var p)
+            && p.ValueKind == JsonValueKind.String ? p.GetString() ?? "" : "";
+        var description = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("description", out var d)
+            && d.ValueKind == JsonValueKind.String ? d.GetString() : null;
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            var err = new DsToolResult("Субагенту не передан prompt", IsError: true);
+            await _onMessage(new ToolResultMessage(callId, err.Content, true));
+            return err;
+        }
+
+        await _onMessage(new ToolUseMessage(callId, SpawnAgentTool,
+            new { description, prompt, subagent_type = "deepseek" }));
+
+        try
+        {
+            var result = await RunSubAgentAsync(callId, prompt, ct);
+            await _onMessage(new ToolResultMessage(callId, result.Content, result.IsError));
+            return result;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            var interrupted = new DsToolResult("Субагент прерван", IsError: true);
+            await _onMessage(new ToolResultMessage(callId, interrupted.Content, true));
+            return interrupted;
+        }
+    }
+
+    // Прогон субагента: свой messages[] (изолированный контекст), рабочие инструменты
+    // (файлы/команды/MCP, без вложенных субагентов/вопросов/плана), синхронно до финального текста
+    private async Task<DsToolResult> RunSubAgentAsync(string parentId, string prompt, CancellationToken ct)
+    {
+        var opts = _options.Value;
+        var modelCfg = opts.FindModel(Info.Model)!;
+        var tools = BuildTurnTools(modelCfg, planningNow: false, isSubAgent: true);
+
+        var messages = new JsonArray
+        {
+            new JsonObject
+            {
+                ["role"] = "system",
+                ["content"] = "Ты — автономный субагент. Рабочая папка: " + _rootPath +
+                    ". Выполни поставленную задачу инструментами и верни краткий итог. " +
+                    "Доступа к диалогу пользователя у тебя нет.",
+            },
+            new JsonObject { ["role"] = "user", ["content"] = prompt },
+        };
+
+        var finalText = new System.Text.StringBuilder();
+        for (var i = 0; i < opts.MaxToolIterations; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var turn = await StreamSubAgentRequestAsync(parentId, modelCfg, messages, tools, opts.MaxTokens, ct);
+            AppendAssistantMessageTo(messages, turn);
+            finalText.Clear();
+            finalText.Append(turn.Content);
+
+            if (turn.FinishReason == "tool_calls" && turn.ToolCalls.Count > 0)
+            {
+                foreach (var call in turn.ToolCalls)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var res = await ExecuteSubAgentToolAsync(parentId, call, ct);
+                    messages.Add(new JsonObject
+                    {
+                        ["role"] = "tool",
+                        ["tool_call_id"] = call.Id,
+                        ["content"] = res.Content,
+                    });
+                }
+                continue;
+            }
+            break;
+        }
+
+        var text = finalText.ToString().Trim();
+        return new DsToolResult(text.Length > 0 ? text : "Субагент завершил работу без текстового итога.");
     }
 
     // Разрешение на инструмент: правила проекта → «всегда разрешать» → режим сессии → спросить.

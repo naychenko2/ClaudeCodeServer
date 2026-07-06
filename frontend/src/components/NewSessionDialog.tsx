@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
-import { useModels, useModelCaps } from '../lib/models';
-import { EFFORTS } from '../lib/effort';
+import { useModels, useModelCaps, modelProvider } from '../lib/models';
+import { effortsForProvider } from '../lib/effort';
 import { C, R, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, TextArea, SegmentedControl } from './ui';
 import { type Mode, MODES, MODE_META, ModeIcon, isDangerMode } from '../lib/modes';
@@ -104,7 +104,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
 
       {caps.supportsEffort && (
         <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
-          <SegmentedControl value={effort} options={EFFORTS} onChange={setEffort} columns={3} />
+          <SegmentedControl value={effort} options={effortsForProvider(modelProvider(model))} onChange={setEffort} columns={3} />
         </Field>
       )}
 

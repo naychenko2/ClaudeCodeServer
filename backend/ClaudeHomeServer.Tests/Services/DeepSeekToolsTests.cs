@@ -77,6 +77,23 @@ public class DeepSeekToolsTests : IDisposable
     }
 
     [Fact]
+    public async Task RunCommand_ФоновыйЗапуск_ВозвращаетсяСразуИЗовётКолбэк()
+    {
+        var doneLabel = new TaskCompletionSource<string>();
+        var registry = new DeepSeekToolRegistry(_root, new FileService(),
+            onBackgroundDone: (label, _) => { doneLabel.TrySetResult(label); return Task.CompletedTask; });
+
+        var result = await registry.Get("run_command")!.ExecuteAsync(
+            Args(new { command = "echo фон", run_in_background = true }), CancellationToken.None);
+
+        result.IsError.Should().BeFalse();
+        result.Content.Should().Contain("в фоне");
+        // Колбэк вызывается по завершении процесса
+        var finished = await Task.WhenAny(doneLabel.Task, Task.Delay(10_000));
+        finished.Should().Be(doneLabel.Task);
+    }
+
+    [Fact]
     public void RunCommand_КлассExecute()
     {
         _registry.Get("run_command")!.PermissionClass.Should().Be(ToolPermissionClass.Execute);

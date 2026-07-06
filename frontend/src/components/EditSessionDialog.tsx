@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
-import { useModels, useModelCaps } from '../lib/models';
-import { EFFORTS } from '../lib/effort';
+import { useModels, useModelCaps, modelProvider } from '../lib/models';
+import { effortsForProvider } from '../lib/effort';
 import { C, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, SegmentedControl, Toggle } from './ui';
 import { isNotifySupported, isNotifyEnabled, setNotifyEnabled } from '../lib/notify';
@@ -103,7 +103,7 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
 
           {caps.supportsEffort && (
             <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
-              <SegmentedControl value={effort} options={EFFORTS} onChange={setEffort} columns={3} />
+              <SegmentedControl value={effort} options={effortsForProvider(modelProvider(model))} onChange={setEffort} columns={3} />
             </Field>
           )}
 

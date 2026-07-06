@@ -29,8 +29,10 @@ public sealed class DeepSeekToolRegistry
 
     private readonly Dictionary<string, IDeepSeekTool> _tools;
 
+    // onBackgroundDone — колбэк завершения фоновой команды (label, вывод); задаёт сессия
     public DeepSeekToolRegistry(string rootPath, FileService files,
-        bool enableShell = true, int shellTimeoutSeconds = 120)
+        bool enableShell = true, int shellTimeoutSeconds = 120,
+        Func<string, string, Task>? onBackgroundDone = null)
     {
         var list = new List<IDeepSeekTool>
         {
@@ -44,7 +46,7 @@ public sealed class DeepSeekToolRegistry
         };
         // Запуск команд (класс Execute) спрашивает разрешение везде,
         // кроме режимов Авто/Без ограничений (см. DeepSeekSession.AutoAllowedByMode)
-        if (enableShell) list.Add(new RunCommandTool(rootPath, shellTimeoutSeconds));
+        if (enableShell) list.Add(new RunCommandTool(rootPath, shellTimeoutSeconds, onBackgroundDone));
         _tools = list.ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
     }
 
@@ -570,13 +572,16 @@ internal sealed class WebFetchTool : IDeepSeekTool
     }
 }
 
-file sealed class RunCommandTool(string rootPath, int timeoutSeconds) : IDeepSeekTool
+// internal (не file) — доступен из DeepSeekSession для маркировки run_in_background
+internal sealed class RunCommandTool(string rootPath, int timeoutSeconds,
+    Func<string, string, Task>? onBackgroundDone) : IDeepSeekTool
 {
     public string Name => "run_command";
     public string Description =>
         "Выполнить команду оболочки в корне проекта (Windows — PowerShell, Linux — bash). " +
         $"Возвращает stdout/stderr и код выхода. Таймаут по умолчанию {timeoutSeconds} с. " +
-        "Вне режима «Авто» запуск требует разрешения пользователя.";
+        "Для долгих задач (сборка, тесты, сервер) ставь run_in_background=true — команда " +
+        "запустится в фоне, а её результат придёт позже. Вне режима «Авто» запуск требует разрешения.";
     public ToolPermissionClass PermissionClass => ToolPermissionClass.Execute;
 
     public JsonObject BuildSchema() => new()
@@ -586,17 +591,13 @@ file sealed class RunCommandTool(string rootPath, int timeoutSeconds) : IDeepSee
         {
             ["command"] = new JsonObject { ["type"] = "string", ["description"] = "Команда оболочки" },
             ["timeout_seconds"] = new JsonObject { ["type"] = "integer", ["description"] = "Таймаут в секундах (макс 600)" },
+            ["run_in_background"] = new JsonObject { ["type"] = "boolean", ["description"] = "Запустить в фоне, не дожидаясь завершения" },
         },
         ["required"] = new JsonArray { "command" },
     };
 
-    public async Task<DsToolResult> ExecuteAsync(JsonElement args, CancellationToken ct)
+    private static System.Diagnostics.ProcessStartInfo BuildPsi(string rootPath, string command)
     {
-        var command = DeepSeekToolRegistry.GetString(args, "command");
-        if (string.IsNullOrWhiteSpace(command))
-            return new DsToolResult("Не указан параметр command", IsError: true);
-        var timeout = Math.Clamp(DeepSeekToolRegistry.GetInt(args, "timeout_seconds") ?? timeoutSeconds, 1, 600);
-
         var utf8NoBom = new UTF8Encoding(false);
         var psi = new System.Diagnostics.ProcessStartInfo
         {
@@ -623,10 +624,32 @@ file sealed class RunCommandTool(string rootPath, int timeoutSeconds) : IDeepSee
             psi.ArgumentList.Add("-lc");
             psi.ArgumentList.Add(command);
         }
+        return psi;
+    }
+
+    private static string FormatOutput(string stdout, string stderr, int exitCode)
+    {
+        var sb = new StringBuilder();
+        if (stdout.Length > 0) sb.AppendLine(stdout.TrimEnd());
+        if (stderr.Length > 0) sb.Append("[stderr]\n").AppendLine(stderr.TrimEnd());
+        sb.Append("[exit code: ").Append(exitCode).Append(']');
+        return DeepSeekToolRegistry.Truncate(sb.ToString());
+    }
+
+    public async Task<DsToolResult> ExecuteAsync(JsonElement args, CancellationToken ct)
+    {
+        var command = DeepSeekToolRegistry.GetString(args, "command");
+        if (string.IsNullOrWhiteSpace(command))
+            return new DsToolResult("Не указан параметр command", IsError: true);
+        var timeout = Math.Clamp(DeepSeekToolRegistry.GetInt(args, "timeout_seconds") ?? timeoutSeconds, 1, 600);
+
+        // Фоновый запуск: стартуем, сразу возвращаемся, результат — через колбэк сессии
+        if (DeepSeekToolRegistry.GetBool(args, "run_in_background") && onBackgroundDone is not null)
+            return StartBackground(command);
 
         try
         {
-            using var process = System.Diagnostics.Process.Start(psi)
+            using var process = System.Diagnostics.Process.Start(BuildPsi(rootPath, command))
                 ?? throw new InvalidOperationException("Не удалось запустить процесс оболочки");
             var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
             var stderrTask = process.StandardError.ReadToEndAsync(ct);
@@ -644,18 +667,50 @@ file sealed class RunCommandTool(string rootPath, int timeoutSeconds) : IDeepSee
                 return new DsToolResult($"Команда не завершилась за {timeout} с и была прервана", IsError: true);
             }
 
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
-            var sb = new StringBuilder();
-            if (stdout.Length > 0) sb.AppendLine(stdout.TrimEnd());
-            if (stderr.Length > 0) sb.Append("[stderr]\n").AppendLine(stderr.TrimEnd());
-            sb.Append("[exit code: ").Append(process.ExitCode).Append(']');
-            return new DsToolResult(DeepSeekToolRegistry.Truncate(sb.ToString()), IsError: process.ExitCode != 0);
+            return new DsToolResult(
+                FormatOutput(await stdoutTask, await stderrTask, process.ExitCode),
+                IsError: process.ExitCode != 0);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             return new DsToolResult($"Ошибка запуска команды: {ex.Message}", IsError: true);
         }
+    }
+
+    // Фоновый процесс: не привязан к ct хода (переживает его). По завершении зовёт onBackgroundDone.
+    private DsToolResult StartBackground(string command)
+    {
+        System.Diagnostics.Process process;
+        try
+        {
+            process = System.Diagnostics.Process.Start(BuildPsi(rootPath, command))
+                ?? throw new InvalidOperationException("Не удалось запустить процесс оболочки");
+        }
+        catch (Exception ex)
+        {
+            return new DsToolResult($"Ошибка запуска команды: {ex.Message}", IsError: true);
+        }
+
+        var label = command.Length > 60 ? command[..60] + "…" : command;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var stdout = await process.StandardOutput.ReadToEndAsync();
+                var stderr = await process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                await onBackgroundDone!(label, FormatOutput(stdout, stderr, process.ExitCode));
+            }
+            catch (Exception ex)
+            {
+                await onBackgroundDone!(label, $"[ошибка фоновой команды] {ex.Message}");
+            }
+            finally { process.Dispose(); }
+        });
+
+        return new DsToolResult(
+            $"Команда «{label}» запущена в фоне. Её результат придёт отдельным сообщением по завершении — " +
+            "продолжай работу и учти его, когда он появится.");
     }
 }

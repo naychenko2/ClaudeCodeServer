@@ -42,10 +42,9 @@ ASP.NET Core 9 (:5000)
  ├── Services/
  │    ├── ProjectManager      in-memory + data/projects.json
  │    ├── SessionManager      реестр сессий + IHubContext broadcast
- │    ├── Llm/                слой LLM-адаптеров (см. раздел «LLM-адаптеры»)
- │    │    ├── ILlmSessionAdapter + LlmSessionAdapterFactory (провайдер из Session.Model)
- │    │    ├── Claude/ClaudeSession   Process-обёртка claude.exe
- │    │    └── DeepSeek/DeepSeekSession  HTTP/SSE + свой tool-цикл
+ │    ├── Llm/                слой LLM-провайдеров (см. раздел «LLM-провайдеры»)
+ │    │    ├── LlmProviderRegistry   CLI-провайдеры из конфига (env, цены, баланс)
+ │    │    └── Claude/ClaudeSession  Process-обёртка claude.exe (единый рантайм)
  │    └── FileService         файловый менеджер (SafeJoin защита)
  └── Protocol/ServerMessage   record-типы WS-событий
 
@@ -77,68 +76,44 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
 Шрифты: PT Serif (заголовки), Hanken Grotesk (UI), JetBrains Mono (код)
 Стили: только inline-objects, без Tailwind/CSS-modules
 
-## LLM-адаптеры (Services/Llm)
+## LLM-провайдеры (Services/Llm)
 
-Работа с моделью — за интерфейсом `ILlmSessionAdapter` (калька публичного контракта
-ClaudeSession + `LlmCapabilities`). `SessionManager` создаёт адаптер через
-`LlmSessionAdapterFactory`; провайдер вычисляется из `Session.Model`
-(`LlmProviderResolver`: `deepseek*` → DeepSeek, иначе Claude) и не персистится.
-`Session.ClaudeSessionId` — generic id сессии у провайдера (Claude — транскрипт CLI
-для `--resume`, DeepSeek — GUID истории). Смена провайдера у начатой сессии — 400.
+Единственный рантайм — claude CLI (`Llm/Claude/ClaudeSession`). Сторонние провайдеры
+с Anthropic-совместимым эндпоинтом (DeepSeek, GLM) подключаются env-оверрайдами
+процесса на каждый ход: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
+`ANTHROPIC_MODEL`/`ANTHROPIC_DEFAULT_OPUS|SONNET_MODEL` (= модель сессии),
+`ANTHROPIC_DEFAULT_HAIKU_MODEL`/`CLAUDE_CODE_SUBAGENT_MODEL` (= `SmallModel`),
+плюс `ExtraEnv` провайдера (у GLM — `API_TIMEOUT_MS`). Весь функционал CLI (скиллы,
+субагенты, workflow, план, compact, MCP, permissions, resume) работает одинаково
+у всех провайдеров.
 
-- **Claude** (`Llm/Claude/ClaudeSession`) — subprocess claude.exe (см. следующий раздел);
-  `ClaudeCliLocator` — общий поиск claude.exe.
-- **DeepSeek** (`Llm/DeepSeek/`) — официальный API (OpenAI-совместимый SSE,
-  `DeepSeekClient`), собственный tool-цикл (`DeepSeekSession`):
-  - инструменты read_file/list_dir/grep_search/glob_files/write_file/edit_file/web_fetch/
-    run_command (`DeepSeekTools`, поверх `FileService.SafeJoin`); классы опасности:
-    ReadOnly (авто), Edit (спрашивает в Default), Execute — run_command/web_fetch
-    спрашивают везде, кроме режимов Auto/Bypass. run_command умеет run_in_background:
-    возврат сразу, результат вливается в следующий ход + тост (NotificationMessage);
-  - виртуальные инструменты (не в реестре, имена совпадают с распознаваемыми фронтом):
-    `TodoWrite` (чек-лист прогресса → вкладка «Задачи»), `Task` (субагент —
-    изолированная под-сессия со своим messages[], дочерние вызовы с parentToolUseId →
-    панель «Агенты»; глубина 1, без вложенных субагентов/вопросов/плана),
-    `run_workflow` (декларативная оркестрация: фазы последовательно, агенты фазы —
-    параллельно с передачей результатов дальше; карточка `Workflow` + workflow_progress →
-    workflow-группа в панели «Агенты»; лимиты MaxWorkflowConcurrency/MaxWorkflowAgents;
-    НЕ JS-движок — только JSON-декларация фаз/агентов),
-    `ask_user_question`, `exit_plan_mode`;
-  - авто-compact при заполнении окна (`DeepSeek:AutoCompactThresholdPct`, дефолт 80%);
-    гарантия исполнения плана (approve без правок → досыл «реализуй»);
-  - permissions через те же `PermissionRequestMessage` (общий `PermissionRuleEvaluator`);
-  - **MCP** — свой клиент (`DeepSeekMcp.cs`: `IMcpClient` = McpStdioClient | McpHttpClient +
-    DeepSeekMcpManager): stdio-серверы (command/args/env) И remote HTTP/SSE-серверы (type: http/url +
-    headers, напр. fal.ai) из `McpConfigPath` + доп. `DeepSeek:McpConfigPath` (можно указать
-    ~/.claude.json, чтобы DeepSeek видел те же серверы, что Claude, без задвоения) + tasks-server;
-    инструменты в цикле как `mcp__<server>__<tool>`, класс Edit. Стоимость fal.ai отслеживается
-    автоматически (tool_result → SessionManager.TryTrackFalCost, тот же путь что у Claude);
-  - **режим «План»** — эмуляция: read-инструменты + виртуальный `exit_plan_mode` →
-    `PlanReviewMessage`; approve снимает ограничение до конца хода и на следующий ход;
-  - **вопросы** — виртуальный `ask_user_question` → `AskQuestionMessage` (та же карточка);
-  - **compact** — суммаризация истории отдельным запросом + `CompactBoundaryMessage`;
-  - effort → `thinking.reasoning_effort` (high/max, только thinking-модели); скиллы
-    (`TryExpandSkill`) и промпт агента — как у Claude; изображения API не поддерживает;
-  - история messages[] в `data/sessions/{id}/deepseek-messages.json`
-    (`DeepSeekConversationStore`, resume после рестарта); reasoning_content в историю
-    НЕ возвращается (API 400);
-  - баланс аккаунта: `GET /api/providers/deepseek/balance` (`DeepSeekBalanceService`,
-    кэш 5 мин) — показывается в попапе контекст-бейджа шапки чата.
-  Конфиг — секция `DeepSeek` (ApiKey в appsettings.Local.json — без него провайдер
-  выключен и модели скрыты). Каталог моделей: записи `DeepSeek:Models` (окна/цены/thinking;
-  алиасы deepseek-chat/reasoner выведены 24.07.2026, актуальны deepseek-v4-flash/pro,
-  окно 1M) + опрос `GET /models` их API — новые модели дописываются с дефолтами.
+- **Конфиг** — секция `LlmProviders` (словарь key → провайдер): `DisplayName`,
+  `AnthropicBaseUrl` (для CLI), `ApiBaseUrl` (нативный API — баланс, GET /models),
+  `ApiKey` (в appsettings.Local.json; пустой = провайдер выключен и модели скрыты),
+  `SmallModel`, `Balance` (вид источника баланса: `deepseek` = GET /user/balance;
+  пусто — без баланса, как у GLM), `QueryModelsApi`, `SupportsImages`, `Models`
+  (Id/DisplayName/ContextWindow/цены $ за 1M — по ним считается стоимость хода).
+- **`LlmProviderRegistry`** — резолв провайдера из `Session.Model` (по каталогу
+  моделей, затем по префиксу ключа; провайдер не персистится), `CapabilitiesFor`,
+  `BuildCliEnv`, `ComputeCost` (на стороннем эндпоинте total_cost_usd от CLI
+  считается по ценам Anthropic — пересчитываем по ценам конфига; без цен — null).
+- **Guard**: смена провайдера у начатой сессии — 400 (транскрипт живёт у эндпоинта).
+- **Баланс** — `ProviderBalanceService`, `GET /api/providers/{key}/balance|usage`
+  (кэш 5 мин; снапшоты 8 дней в data/provider-usage-{key}.json, legacy
+  deepseek-usage.json читается) — попап контекст-бейджа шапки чата + вкладка
+  провайдера на экране «Использование».
+- **Каталог моделей** — `ModelCatalogService`: записи `Models` конфига + при
+  `QueryModelsApi` опрос `GET {ApiBaseUrl}/models` (новые модели с дефолтами).
 
-Возможности провайдера (`LlmCapabilities`: plan/compact/mcp/effort/…) отдаются фронту
-в блоке `providers` из `GET /api/models` и в `session_started`; UI скрывает недоступное
-(`useModelCaps` в `lib/models.ts`). Общие хелперы адаптеров: `TurnFileWatcher`
-(file_changed на время хода), `AttachmentInliner` (инлайн вложений), `TasksServerLocator`.
-Модель Claude-исполнителя задач настраивается ключом `Tasks:ExecutorModel`
-(null — дефолт; deepseek-модель тоже валидна). AI-генерация описания/подзадач задач —
-`Tasks:AiModel` (deepseek-* → DeepSeek API вместо claude CLI); сводки «Что нового» —
-`Changelog:Model` (deepseek-* → DeepSeek). Одноразовые генерации — `DeepSeekClient.CompleteAsync`.
-История баланса DeepSeek: `GET /api/providers/deepseek/usage` (снапшоты 8 дней,
-data/deepseek-usage.json) — вкладка DeepSeek на экране «Использование» (видна при настроенном ключе).
+Возможности провайдера (`LlmCapabilities`: displayName/plan/compact/mcp/effort/images/…)
+отдаются фронту в блоке `providers` из `GET /api/models` и в `session_started`;
+у CLI-провайдеров всё как у Claude, кроме `SupportsImages` (из конфига; DeepSeek — false).
+UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), брендинг (assistantName,
+плашка стоимости/баланса, группы ModelPicker) — по `displayName`. Общие хелперы:
+`TurnFileWatcher` (file_changed на время хода), `AttachmentInliner` (инлайн вложений),
+`TasksServerLocator`. Модель Claude-исполнителя задач — `Tasks:ExecutorModel`; AI-генерация
+описания/подзадач — `Tasks:AiModel`; сводки «Что нового» — `Changelog:Model` (везде
+валидна модель любого провайдера: one-shot идёт через claude --print с теми же env).
 
 ## Claude Code CLI subprocess
 

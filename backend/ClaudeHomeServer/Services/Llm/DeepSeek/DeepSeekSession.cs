@@ -483,6 +483,7 @@ public class DeepSeekSession : ILlmSessionAdapter
                 {
                     ["description"] = new JsonObject { ["type"] = "string", ["description"] = "Короткое описание задачи (3-6 слов)" },
                     ["prompt"] = new JsonObject { ["type"] = "string", ["description"] = "Полное самодостаточное задание субагенту" },
+                    ["subagent_type"] = new JsonObject { ["type"] = "string", ["description"] = "Имя агента из .claude/agents проекта — его промпт станет системным контекстом субагента" },
                 },
                 ["required"] = new JsonArray { "prompt" },
             },
@@ -971,6 +972,8 @@ public class DeepSeekSession : ILlmSessionAdapter
             && p.ValueKind == JsonValueKind.String ? p.GetString() ?? "" : "";
         var description = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("description", out var d)
             && d.ValueKind == JsonValueKind.String ? d.GetString() : null;
+        var subagentType = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("subagent_type", out var st)
+            && st.ValueKind == JsonValueKind.String ? st.GetString() : null;
         if (string.IsNullOrWhiteSpace(prompt))
         {
             var err = new DsToolResult("Субагенту не передан prompt", IsError: true);
@@ -979,11 +982,11 @@ public class DeepSeekSession : ILlmSessionAdapter
         }
 
         await _onMessage(new ToolUseMessage(callId, SpawnAgentTool,
-            new { description, prompt, subagent_type = "deepseek" }));
+            new { description, prompt, subagent_type = subagentType ?? "deepseek" }));
 
         try
         {
-            var result = await RunSubAgentAsync(new SubAgentSink(callId, emitCards: true), prompt, ct);
+            var result = await RunSubAgentAsync(new SubAgentSink(callId, emitCards: true), prompt, ct, subagentType);
             await _onMessage(new ToolResultMessage(callId, result.Content, result.IsError));
             return result;
         }
@@ -1136,22 +1139,26 @@ public class DeepSeekSession : ILlmSessionAdapter
     }
 
     // Прогон субагента: свой messages[] (изолированный контекст), рабочие инструменты
-    // (файлы/команды/MCP, без вложенных субагентов/вопросов/плана), синхронно до финального текста
-    private async Task<DsToolResult> RunSubAgentAsync(SubAgentSink sink, string prompt, CancellationToken ct)
+    // (файлы/команды/MCP, без вложенных субагентов/вопросов/плана), синхронно до финального текста.
+    // subagentType — имя агента из .claude/agents: его промпт становится системным контекстом
+    private async Task<DsToolResult> RunSubAgentAsync(SubAgentSink sink, string prompt, CancellationToken ct,
+        string? subagentType = null)
     {
         var opts = _options.Value;
         var modelCfg = opts.FindModel(Info.Model)!;
         var tools = BuildTurnTools(modelCfg, planningNow: false, isSubAgent: true);
 
+        var systemPrompt = new System.Text.StringBuilder();
+        systemPrompt.Append("Ты — автономный субагент. Рабочая папка: ").Append(_rootPath)
+            .Append(". Выполни поставленную задачу инструментами и верни краткий итог. ")
+            .Append("Доступа к диалогу пользователя у тебя нет.");
+        if (!string.IsNullOrEmpty(subagentType)
+            && _skills?.GetAgentSystemPrompt(_rootPath, subagentType) is { } agentPrompt)
+            systemPrompt.Append("\n\n---\n\n").Append(agentPrompt);
+
         var messages = new JsonArray
         {
-            new JsonObject
-            {
-                ["role"] = "system",
-                ["content"] = "Ты — автономный субагент. Рабочая папка: " + _rootPath +
-                    ". Выполни поставленную задачу инструментами и верни краткий итог. " +
-                    "Доступа к диалогу пользователя у тебя нет.",
-            },
+            new JsonObject { ["role"] = "system", ["content"] = systemPrompt.ToString() },
             new JsonObject { ["role"] = "user", ["content"] = prompt },
         };
 
@@ -1294,6 +1301,9 @@ public class DeepSeekSession : ILlmSessionAdapter
         sb.Append("Ты — ассистент по работе с проектом. Рабочая папка: ").Append(_rootPath).Append('.');
         sb.Append(" Файловые инструменты принимают пути относительно корня проекта.");
         sb.Append(" Отвечай на языке пользователя.");
+        // read_file читает только текст; документы конвертируются MCP-сервером markitdown (если подключён)
+        sb.Append(" PDF, DOCX, XLSX и другие бинарные документы читай через инструмент")
+          .Append(" mcp__markitdown__convert_to_markdown (передай file:// URI с абсолютным путём), если он доступен.");
         if (!string.IsNullOrWhiteSpace(_rawSystemPrompt))
             sb.Append("\n\n").Append(_rawSystemPrompt);
         // Подсказка про систему задач — только когда tasks-server подключён (как у Claude)

@@ -6,14 +6,26 @@ namespace ClaudeHomeServer.Services.Llm.DeepSeek;
 
 public sealed record DeepSeekBalance(bool Available, string Currency, string TotalBalance);
 
-// Баланс аккаунта DeepSeek (GET /user/balance) с кэшем — для индикатора в шапке чата
-public class DeepSeekBalanceService(IHttpClientFactory httpFactory, IOptions<DeepSeekOptions> options)
+// Точка истории баланса — для графика на экране «Использование»
+public sealed record DeepSeekBalanceSnapshot(DateTime Timestamp, double Balance, string Currency);
+
+// Баланс аккаунта DeepSeek (GET /user/balance) с кэшем — для индикатора в шапке чата.
+// Каждое успешное обновление пишет снапшот в data/deepseek-usage.json (история для графика).
+public class DeepSeekBalanceService(IHttpClientFactory httpFactory, IOptions<DeepSeekOptions> options,
+    IConfiguration config)
 {
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan SnapshotRetention = TimeSpan.FromDays(8);
 
     private readonly SemaphoreSlim _lock = new(1, 1);
     private DeepSeekBalance? _cached;
     private DateTime _cachedAt;
+
+    private readonly string _usagePath = Path.Combine(
+        Path.GetDirectoryName(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
+            ?? Path.Combine(AppContext.BaseDirectory, "data"),
+        "deepseek-usage.json");
+    private readonly object _usageLock = new();
 
     public bool Enabled => options.Value.Enabled;
 
@@ -49,6 +61,7 @@ public class DeepSeekBalanceService(IHttpClientFactory httpFactory, IOptions<Dee
             }
             _cached = new DeepSeekBalance(available, currency, total);
             _cachedAt = DateTime.UtcNow;
+            RecordSnapshot(_cached);
             return _cached;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -58,5 +71,50 @@ public class DeepSeekBalanceService(IHttpClientFactory httpFactory, IOptions<Dee
             return _cached; // протухший лучше, чем ничего
         }
         finally { _lock.Release(); }
+    }
+
+    // История баланса за последние дни — для графика на экране «Использование»
+    public IReadOnlyList<DeepSeekBalanceSnapshot> GetSnapshots()
+    {
+        lock (_usageLock)
+            return LoadSnapshots();
+    }
+
+    private void RecordSnapshot(DeepSeekBalance balance)
+    {
+        if (!double.TryParse(balance.TotalBalance,
+            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture,
+            out var value)) return;
+        try
+        {
+            lock (_usageLock)
+            {
+                var list = LoadSnapshots();
+                var cutoff = DateTime.UtcNow - SnapshotRetention;
+                list = list.Where(s => s.Timestamp >= cutoff).ToList();
+                // Кэш баланса живёт 5 мин — каждое обновление и есть естественный троттлинг
+                list.Add(new DeepSeekBalanceSnapshot(DateTime.UtcNow, value, balance.Currency));
+                File.WriteAllText(_usagePath, JsonSerializer.Serialize(list));
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[DeepSeekBalance] Не удалось сохранить снапшот: {ex.Message}");
+        }
+    }
+
+    private List<DeepSeekBalanceSnapshot> LoadSnapshots()
+    {
+        try
+        {
+            if (File.Exists(_usagePath)
+                && JsonSerializer.Deserialize<List<DeepSeekBalanceSnapshot>>(File.ReadAllText(_usagePath)) is { } list)
+                return list;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[DeepSeekBalance] Не удалось прочитать снапшоты: {ex.Message}");
+        }
+        return [];
     }
 }

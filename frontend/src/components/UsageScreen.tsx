@@ -118,6 +118,62 @@ function ClaudeTab({ usage }: { usage: UsageResponse | null }) {
   );
 }
 
+type DeepSeekUsage = {
+  balance: { available: boolean; currency: string; totalBalance: string } | null;
+  snapshots: { timestamp: string; balance: number; currency: string }[];
+};
+
+function DeepSeekTab({ data }: { data: DeepSeekUsage | null | undefined }) {
+  if (data === undefined)
+    return <div style={{ padding: '40px 0', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>;
+  if (data === null)
+    return (
+      <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
+        <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.5 }}>◌</div>
+        DeepSeek не подключён. Добавьте API-ключ (<span style={{ fontFamily: FONT.mono }}>DeepSeek:ApiKey</span>), чтобы видеть баланс и расход.
+      </div>
+    );
+
+  const snaps = data.snapshots ?? [];
+  const cur = data.balance ? parseFloat(data.balance.totalBalance) : NaN;
+  const currency = data.balance?.currency ?? snaps[snaps.length - 1]?.currency ?? 'USD';
+  const low = !isNaN(cur) && cur < 1;
+  // Расход ≈ сумма падений баланса между снапшотами (пополнения не учитываются как «отрицательный расход»)
+  let spent = 0;
+  for (let i = 1; i < snaps.length; i++) {
+    const d = snaps[i - 1].balance - snaps[i].balance;
+    if (d > 0) spent += d;
+  }
+  const maxBal = Math.max(...snaps.map(s => s.balance), isNaN(cur) ? 0 : cur, 0.0001);
+  const points = snaps.map(s => ({ t: new Date(s.timestamp).getTime(), u: s.balance / maxBal }));
+
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+        <MetricCard
+          value={isNaN(cur) ? '—' : `${cur.toFixed(2)} ${currency}`}
+          label="баланс DeepSeek"
+          valueColor={low ? '#B4452F' : MONEY}
+          tone={low ? 'danger' : undefined}
+        >
+          <a href="https://platform.deepseek.com/top_up" target="_blank" rel="noopener noreferrer"
+            style={{ display: 'inline-block', marginTop: 8, color: C.accent, fontSize: 11, fontWeight: 600, textDecoration: 'none' }}>пополнить ↗</a>
+        </MetricCard>
+        <MetricCard value={spent > 0 ? `≈ ${spent.toFixed(2)} ${currency}` : '—'} label="расход за период наблюдения" valueColor={MONEY} />
+      </div>
+      {points.length >= 2 && (
+        <>
+          <div style={blockLabel}>Баланс во времени</div>
+          <Sparkline points={points} color={MONEY} />
+        </>
+      )}
+      <div style={{ fontSize: 11, color: C.textMuted, marginTop: 14, lineHeight: 1.5 }}>
+        Снимки баланса пишутся при каждом обновлении (примерно раз в 5 минут при активной работе), хранятся 8 дней.
+      </div>
+    </div>
+  );
+}
+
 function FalTab({ days, setDays }: { days: number; setDays: (d: number) => void }) {
   const [fal, setFal] = useState<FalAccountResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -226,15 +282,18 @@ function FalTab({ days, setDays }: { days: number; setDays: (d: number) => void 
 }
 
 export function UsageScreen({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<'claude' | 'fal'>('claude');
+  const [tab, setTab] = useState<'claude' | 'deepseek' | 'fal'>('claude');
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [days, setDays] = useState(7);
   const [falBalance, setFalBalance] = useState<number | null | undefined>(undefined); // для строки-сводки + бейджа вкладки
+  // DeepSeek: undefined — грузим, null — не подключён (вкладку не показываем)
+  const [dsData, setDsData] = useState<DeepSeekUsage | null | undefined>(undefined);
 
   useEffect(() => {
     let c = false;
     api.usage.get().then(d => { if (!c) setUsage(d); }).catch(() => { if (!c) setUsage({ snapshots: [] }); });
     api.fal.account(7).then(d => { if (!c) setFalBalance(d.enabled ? (d.balance ?? null) : null); }).catch(() => { if (!c) setFalBalance(null); });
+    api.providers.deepseekUsage().then(d => { if (!c) setDsData(d); }).catch(() => { if (!c) setDsData(null); });
     return () => { c = true; };
   }, []);
 
@@ -242,6 +301,12 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
   const worst = worstWindow(windows);
   const plan = usage?.plan;
   const lowBal = typeof falBalance === 'number' && falBalance < LOW_BALANCE;
+  const dsBalance = dsData?.balance ? parseFloat(dsData.balance.totalBalance) : NaN;
+  const dsLow = !isNaN(dsBalance) && dsBalance < 1;
+  // Вкладка DeepSeek — только когда провайдер настроен
+  const tabs = ([['claude', 'Claude']] as [typeof tab, string][])
+    .concat(dsData !== null ? [['deepseek', 'DeepSeek']] : [])
+    .concat([['fal', 'fal.ai']]);
 
   return (
     <div
@@ -258,23 +323,27 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
         <div style={{ padding: '0 20px 10px', fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, flexShrink: 0 }}>
           {plan && <span>{plan.label}</span>}
           {worst?.hasUtil && <span> · {windowLabel(worst.limitType)} <span style={{ color: RATE_COLORS[worst.level].text, fontWeight: 700 }}>{worst.pct}%</span></span>}
+          {!isNaN(dsBalance) && <span> · DeepSeek <span style={{ fontFamily: FONT.mono, color: dsLow ? '#B4452F' : MONEY, fontWeight: 700 }}>{dsBalance.toFixed(2)} {dsData?.balance?.currency}</span></span>}
           {typeof falBalance === 'number' && <span> · fal <span style={{ fontFamily: FONT.mono, color: lowBal ? '#B4452F' : MONEY, fontWeight: 700 }}>{money(falBalance)}</span></span>}
         </div>
         {/* Вкладки */}
         <div style={{ display: 'flex', gap: 6, padding: '0 18px', borderBottom: `1px solid ${C.bgInset}`, flexShrink: 0 }}>
-          {([['claude', 'Claude'], ['fal', 'fal.ai']] as const).map(([key, lbl]) => (
+          {tabs.map(([key, lbl]) => (
             <button key={key} type="button" onClick={() => setTab(key)}
               style={{ padding: '7px 14px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: FONT.sans, fontSize: 13,
                 fontWeight: tab === key ? 700 : 500, color: tab === key ? C.textHeading : C.textMuted,
                 borderBottom: `2px solid ${tab === key ? C.accent : 'transparent'}`, marginBottom: -1, display: 'flex', alignItems: 'center', gap: 6 }}>
               {lbl}
               {key === 'fal' && lowBal && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#B4452F' }} />}
+              {key === 'deepseek' && dsLow && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#B4452F' }} />}
             </button>
           ))}
         </div>
         {/* Тело вкладки */}
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px 18px' }}>
-          {tab === 'claude' ? <ClaudeTab usage={usage} /> : <FalTab days={days} setDays={setDays} />}
+          {tab === 'claude' ? <ClaudeTab usage={usage} />
+            : tab === 'deepseek' ? <DeepSeekTab data={dsData} />
+            : <FalTab days={days} setDays={setDays} />}
         </div>
       </div>
     </div>

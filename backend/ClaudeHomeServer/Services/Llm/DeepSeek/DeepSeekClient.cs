@@ -117,6 +117,23 @@ public class DeepSeekClient(IHttpClientFactory httpFactory, IOptions<DeepSeekOpt
         }
     }
 
+    // Одноразовая генерация без инструментов и thinking: промпт → полный текст ответа.
+    // Для сервисов вне сессий (генерация задач, сводки «Что нового»).
+    public async Task<string> CompleteAsync(string modelId, string prompt, CancellationToken ct)
+    {
+        var cfg = options.Value.FindModel(modelId);
+        var apiModel = cfg?.EffectiveApiModel ?? modelId;
+        var messages = new JsonArray { new JsonObject { ["role"] = "user", ["content"] = prompt } };
+        // thinking выключаем только если модель thinking-типа (для прочих параметр не шлём)
+        var req = new DsChatRequest(apiModel, messages, Tools: null, options.Value.MaxTokens,
+            Thinking: cfg?.Thinking == true ? false : null);
+
+        var sb = new System.Text.StringBuilder();
+        await foreach (var evt in StreamChatAsync(req, ct))
+            if (evt is DsContentDelta c) sb.Append(c.Text);
+        return sb.ToString().Trim();
+    }
+
     // Разбор одного SSE-чанка в события. Выделен статически для юнит-тестов на записанных чанках.
     internal static List<DsStreamEvent> ParseChunk(string json)
     {

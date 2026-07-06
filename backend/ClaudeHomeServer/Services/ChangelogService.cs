@@ -15,7 +15,8 @@ namespace ClaudeHomeServer.Services;
 /// всех проектов) — сводка одна для всех и перегенерируется только при новых
 /// коммитах дня.
 /// </summary>
-public class ChangelogService(FileService files, IConfiguration config, ILogger<ChangelogService> logger)
+public class ChangelogService(FileService files, IConfiguration config, ILogger<ChangelogService> logger,
+    Llm.DeepSeek.DeepSeekClient deepSeek, Microsoft.Extensions.Options.IOptions<DeepSeekOptions> deepSeekOptions)
 {
     private readonly string _cacheDir = Path.Combine(
         Path.GetDirectoryName(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
@@ -295,9 +296,30 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
         _ => "🔹",
     };
 
-    /// <summary>Запуск claude --print; вернуть текст результата либо null при любой ошибке.</summary>
+    /// <summary>Генерация сводки. Провайдер — по Changelog:Model: deepseek-* → DeepSeek API,
+    /// иначе claude --print. null при любой ошибке (наверху сработает фолбэк).</summary>
     private async Task<string?> RunClaude(string prompt)
     {
+        if (Llm.LlmProviderResolver.Resolve(_model) == Llm.LlmProvider.DeepSeek)
+        {
+            if (!deepSeekOptions.Value.Enabled)
+            {
+                logger.LogWarning("Генерация changelog: Changelog:Model = {Model}, но DeepSeek:ApiKey не задан", _model);
+                return null;
+            }
+            try
+            {
+                using var dsCts = new CancellationTokenSource(_claudeTimeoutMs);
+                var text = await deepSeek.CompleteAsync(_model, prompt, dsCts.Token);
+                return string.IsNullOrWhiteSpace(text) ? null : text;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Генерация changelog: ошибка DeepSeek");
+                return null;
+            }
+        }
+
         try
         {
             var psi = new ProcessStartInfo

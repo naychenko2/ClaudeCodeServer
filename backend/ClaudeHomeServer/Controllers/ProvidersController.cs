@@ -19,4 +19,14 @@ public class ProvidersController(DeepSeekBalanceService deepSeekBalance) : Contr
             ? StatusCode(502, new { error = "Баланс недоступен" })
             : Ok(balance);
     }
+
+    // История баланса DeepSeek (снапшоты последних дней) — для экрана «Использование».
+    // Обновляем текущий баланс перед отдачей, чтобы график включал свежую точку.
+    [HttpGet("deepseek/usage")]
+    public async Task<IActionResult> GetDeepSeekUsage(CancellationToken ct)
+    {
+        if (!deepSeekBalance.Enabled) return NotFound(new { error = "DeepSeek не настроен" });
+        var balance = await deepSeekBalance.GetAsync(ct);
+        return Ok(new { balance, snapshots = deepSeekBalance.GetSnapshots() });
+    }
 }

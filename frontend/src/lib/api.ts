@@ -74,6 +74,11 @@ export const api = {
   providers: {
     deepseekBalance: () =>
       request<{ available: boolean; currency: string; totalBalance: string }>('/providers/deepseek/balance'),
+    deepseekUsage: () =>
+      request<{
+        balance: { available: boolean; currency: string; totalBalance: string } | null;
+        snapshots: { timestamp: string; balance: number; currency: string }[];
+      }>('/providers/deepseek/usage'),
   },
 
   models: {

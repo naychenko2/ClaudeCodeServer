@@ -29,7 +29,10 @@ public class ChangelogServiceTests : IDisposable
                 ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json")
             }).Build();
 
-        _sut = new ChangelogService(new FileService(), config, NullLogger<ChangelogService>.Instance);
+        var dsOptions = Microsoft.Extensions.Options.Options.Create(new ClaudeHomeServer.Models.DeepSeekOptions());
+        _sut = new ChangelogService(new FileService(), config, NullLogger<ChangelogService>.Instance,
+            new ClaudeHomeServer.Services.Llm.DeepSeek.DeepSeekClient(
+                new Moq.Mock<IHttpClientFactory>().Object, dsOptions), dsOptions);
     }
 
     // ─── Источник не задан ──────────────────────────────────────────────────

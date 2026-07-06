@@ -3,16 +3,15 @@ using System.Diagnostics;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services;
 
-// Контекст MCP-сервера задач для сессии: адрес API, сервисный токен владельца
-// и проект (null — чат вне проекта, контекст личных задач)
-public record TasksMcpContext(string ApiUrl, string Token, string? ProjectId);
-
-public class ClaudeSession : IAsyncDisposable
+public class ClaudeSession : ILlmSessionAdapter
 {
     public Session Info { get; }
+
+    public LlmCapabilities Capabilities => LlmCapabilitiesCatalog.Claude;
 
     private readonly string _rootPath;
     private readonly Func<ServerMessage, Task> _onMessage;

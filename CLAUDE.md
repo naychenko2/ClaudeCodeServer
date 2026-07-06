@@ -93,7 +93,15 @@ ClaudeSession + `LlmCapabilities`). `SessionManager` создаёт адапте
   - инструменты read_file/list_dir/grep_search/glob_files/write_file/edit_file/web_fetch/
     run_command (`DeepSeekTools`, поверх `FileService.SafeJoin`); классы опасности:
     ReadOnly (авто), Edit (спрашивает в Default), Execute — run_command/web_fetch
-    спрашивают везде, кроме режимов Auto/Bypass;
+    спрашивают везде, кроме режимов Auto/Bypass. run_command умеет run_in_background:
+    возврат сразу, результат вливается в следующий ход + тост (NotificationMessage);
+  - виртуальные инструменты (не в реестре, имена совпадают с распознаваемыми фронтом):
+    `TodoWrite` (чек-лист прогресса → вкладка «Задачи»), `Task` (субагент —
+    изолированная под-сессия со своим messages[], дочерние вызовы с parentToolUseId →
+    панель «Агенты»; глубина 1, без вложенных субагентов/вопросов/плана),
+    `ask_user_question`, `exit_plan_mode`;
+  - авто-compact при заполнении окна (`DeepSeek:AutoCompactThresholdPct`, дефолт 80%);
+    гарантия исполнения плана (approve без правок → досыл «реализуй»);
   - permissions через те же `PermissionRequestMessage` (общий `PermissionRuleEvaluator`);
   - **MCP** — свой stdio-клиент (`DeepSeekMcp.cs`: McpStdioClient + DeepSeekMcpManager):
     серверы из `McpConfigPath` (Dify с инжекцией dataset id) + встроенный tasks-server;

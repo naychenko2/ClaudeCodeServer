@@ -71,6 +71,11 @@ export const api = {
     account: (days = 7) => request<FalAccountResponse>(`/fal/account?days=${days}`),
   },
 
+  providers: {
+    deepseekBalance: () =>
+      request<{ available: boolean; currency: string; totalBalance: string }>('/providers/deepseek/balance'),
+  },
+
   models: {
     list: () =>
       request<{

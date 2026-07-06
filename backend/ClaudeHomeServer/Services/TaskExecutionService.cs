@@ -17,16 +17,21 @@ public class TaskExecutionService
     private readonly IHubContext<SessionHub> _hub;
     private readonly PushService _push;
     private readonly ILogger<TaskExecutionService> _log;
+    // Модель сессии-исполнителя (Tasks:ExecutorModel): null → дефолт Claude;
+    // deepseek-модель тоже валидна — задачи доступны ей через MCP tasks-server
+    private readonly string? _executorModel;
 
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions,
-        IHubContext<SessionHub> hub, PushService push, ILogger<TaskExecutionService> log)
+        IHubContext<SessionHub> hub, PushService push, ILogger<TaskExecutionService> log,
+        IConfiguration config)
     {
         _tasks = tasks;
         _sessions = sessions;
         _hub = hub;
         _push = push;
         _log = log;
+        _executorModel = config["Tasks:ExecutorModel"];
         _sessions.OnSessionMessage += OnSessionMessageAsync;
     }
 
@@ -50,8 +55,8 @@ public class TaskExecutionService
 
         var name = "Задача: " + (task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title);
         var session = task.ProjectId is not null
-            ? await _sessions.CreateAsync(task.ProjectId, ClaudeMode.AcceptEdits, name: name)
-            : await _sessions.CreateChatAsync(task.OwnerId, ClaudeMode.AcceptEdits, name: name);
+            ? await _sessions.CreateAsync(task.ProjectId, ClaudeMode.AcceptEdits, name: name, model: _executorModel)
+            : await _sessions.CreateChatAsync(task.OwnerId, ClaudeMode.AcceptEdits, name: name, model: _executorModel);
 
         var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow)
             ?? throw new InvalidOperationException("Задача удалена");

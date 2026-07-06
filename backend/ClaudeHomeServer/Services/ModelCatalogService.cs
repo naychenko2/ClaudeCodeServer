@@ -7,8 +7,9 @@ namespace ClaudeHomeServer.Services;
 
 // Каталог моделей: у Claude спрашивает claude CLI актуальный список моделей аккаунта
 // (control request initialize → поле models в ответе) и кэширует его; если CLI недоступен —
-// отдаёт статический fallback. Модели DeepSeek добавляются из конфига (только при заданном ApiKey).
-public class ModelCatalogService(IOptions<DeepSeekOptions> deepSeekOptions)
+// отдаёт статический fallback. Модели DeepSeek (при заданном ApiKey): конфиг DeepSeek:Models
+// (окна/цены/thinking) + опрос GET /models их API — новые модели дописываются с дефолтами.
+public class ModelCatalogService(IOptions<DeepSeekOptions> deepSeekOptions, IHttpClientFactory httpFactory)
 {
     public record ModelInfo(string Value, string DisplayName, string? Description,
         string Provider = "claude", int? ContextWindow = null);
@@ -32,43 +33,110 @@ public class ModelCatalogService(IOptions<DeepSeekOptions> deepSeekOptions)
     // Последняя попытка опроса CLI провалилась → кэш живёт RetryTtl вместо CacheTtl
     private bool _lastQueryFailed;
 
+    // Кэш опроса DeepSeek API (GET /models) — отдельный от кэша claude CLI
+    private readonly SemaphoreSlim _dsLock = new(1, 1);
+    private List<string>? _dsApiIds;
+    private DateTime _dsCachedAt;
+    private bool _dsQueryFailed;
+
     public async Task<IReadOnlyList<ModelInfo>> GetModelsAsync(CancellationToken ct = default)
     {
-        if (IsCacheFresh()) return WithDeepSeek(_cached!);
-
-        await _lock.WaitAsync(ct);
-        try
+        List<ModelInfo> claude;
+        if (IsCacheFresh())
         {
-            if (IsCacheFresh()) return WithDeepSeek(_cached!);
-
-            List<ModelInfo>? fresh = null;
-            try { fresh = await QueryCliAsync(ct); }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[ModelCatalog] Не удалось получить список моделей: {ex.Message}");
-            }
-
-            _lastQueryFailed = fresh is null or { Count: 0 };
-            // При провале сохраняем прежний успешный список, если он был
-            if (!_lastQueryFailed) _cached = fresh;
-            _cached ??= Fallback;
-            _cachedAt = DateTime.UtcNow;
-            return WithDeepSeek(_cached);
+            claude = _cached!;
         }
-        finally { _lock.Release(); }
+        else
+        {
+            await _lock.WaitAsync(ct);
+            try
+            {
+                if (!IsCacheFresh())
+                {
+                    List<ModelInfo>? fresh = null;
+                    try { fresh = await QueryCliAsync(ct); }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[ModelCatalog] Не удалось получить список моделей: {ex.Message}");
+                    }
+
+                    _lastQueryFailed = fresh is null or { Count: 0 };
+                    // При провале сохраняем прежний успешный список, если он был
+                    if (!_lastQueryFailed) _cached = fresh;
+                    _cached ??= Fallback;
+                    _cachedAt = DateTime.UtcNow;
+                }
+                claude = _cached!;
+            }
+            finally { _lock.Release(); }
+        }
+
+        return await WithDeepSeekAsync(claude, ct);
     }
 
-    // Модели DeepSeek — статически из конфига (не кэшируем: options могут перечитаться).
-    // Без ApiKey провайдер выключен и модели не показываются.
-    private IReadOnlyList<ModelInfo> WithDeepSeek(List<ModelInfo> claudeModels)
+    // Модели DeepSeek: записи конфига (приоритет — несут окно/цены/thinking) + модели
+    // из их API, которых в конфиге нет (с дефолтами). Без ApiKey провайдер выключен.
+    private async Task<IReadOnlyList<ModelInfo>> WithDeepSeekAsync(List<ModelInfo> claudeModels, CancellationToken ct)
     {
         var opts = deepSeekOptions.Value;
-        if (!opts.Enabled || opts.Models.Count == 0) return claudeModels;
+        if (!opts.Enabled) return claudeModels;
+
         var result = new List<ModelInfo>(claudeModels);
         result.AddRange(opts.Models.Select(m =>
             new ModelInfo(m.Id, m.DisplayName, null, "deepseek", m.ContextWindow)));
+
+        var known = new HashSet<string>(
+            opts.Models.SelectMany(m => new[] { m.Id, m.EffectiveApiModel }),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var id in await QueryDeepSeekApiAsync(opts, ct))
+            if (!known.Contains(id))
+                result.Add(new ModelInfo(id, id, "из API DeepSeek — окно/цены не настроены", "deepseek"));
+
         return result;
+    }
+
+    private async Task<IReadOnlyList<string>> QueryDeepSeekApiAsync(DeepSeekOptions opts, CancellationToken ct)
+    {
+        var ttl = _dsQueryFailed ? RetryTtl : CacheTtl;
+        if (_dsApiIds is not null && DateTime.UtcNow - _dsCachedAt < ttl) return _dsApiIds;
+
+        await _dsLock.WaitAsync(ct);
+        try
+        {
+            if (_dsApiIds is not null && DateTime.UtcNow - _dsCachedAt < ttl) return _dsApiIds;
+            try
+            {
+                var client = httpFactory.CreateClient("deepseek");
+                using var req = new HttpRequestMessage(HttpMethod.Get, $"{opts.BaseUrl.TrimEnd('/')}/models");
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", opts.ApiKey);
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+                using var resp = await client.SendAsync(req, timeoutCts.Token);
+                resp.EnsureSuccessStatusCode();
+
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(timeoutCts.Token));
+                var ids = new List<string>();
+                if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
+                    foreach (var m in data.EnumerateArray())
+                        // Только deepseek-префикс: по нему резолвится провайдер (LlmProviderResolver)
+                        if (m.TryGetProperty("id", out var id) && id.GetString() is { } s
+                            && s.StartsWith("deepseek", StringComparison.OrdinalIgnoreCase))
+                            ids.Add(s);
+                _dsApiIds = ids;
+                _dsQueryFailed = false;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ModelCatalog] Опрос моделей DeepSeek не удался: {ex.Message}");
+                _dsApiIds ??= [];
+                _dsQueryFailed = true;
+            }
+            _dsCachedAt = DateTime.UtcNow;
+            return _dsApiIds;
+        }
+        finally { _dsLock.Release(); }
     }
 
     private bool IsCacheFresh()

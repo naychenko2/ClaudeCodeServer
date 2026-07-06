@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { Project, Session, ClaudeBilling } from '../../types';
 import { api } from '../../lib/api';
-import { modelLabel, useModelLabel } from '../../lib/models';
+import { modelLabel, modelProvider, useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from '../../lib/rateLimit';
 import { type ContextEstimate } from '../../lib/context';
@@ -202,9 +202,10 @@ function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
 // Индикатор заполнения контекстного окна: пилюля с мини-баром и процентом.
 // Клик — попап с деталями и кнопкой «Свернуть контекст» (/compact); пороги
 // подсветки настраиваются per-user (модалка «Настроить пороги…»).
-function ContextBadge({ estimate, isMobile, isWaiting, isCompacting, canCompact, compactNote, onCompact, online }: {
+function ContextBadge({ estimate, isMobile, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, deepseekBalance }: {
   estimate: ContextEstimate; isMobile?: boolean; isWaiting: boolean; isCompacting: boolean;
   canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean;
+  deepseekBalance?: string | null;
 }) {
   const [showThresholds, setShowThresholds] = useState(false);
   const c = RATE_COLORS[estimate.level];
@@ -254,6 +255,7 @@ function ContextBadge({ estimate, isMobile, isWaiting, isCompacting, canCompact,
             <BadgeRow k="Заполнено" v={`${estimate.pct}%`} />
             <BadgeRow k="≈ Токенов" v={`${fmtTokens(estimate.tokens!)} из ${fmtTokens(estimate.window)}`} />
             {estimate.model && <BadgeRow k="Модель" v={modelLabel(estimate.model)} />}
+            {deepseekBalance && <BadgeRow k="Баланс DeepSeek" v={deepseekBalance} />}
           </>
         ) : (
           <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
@@ -430,6 +432,16 @@ interface ChatHeaderBarProps {
 
 export function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact }: ChatHeaderBarProps) {
   const sessionModelLabel = useModelLabel(session.model);
+  // Баланс DeepSeek — только для deepseek-сессий, показывается в попапе контекст-бейджа
+  const [dsBalance, setDsBalance] = useState<string | null>(null);
+  useEffect(() => {
+    if (modelProvider(session.model) !== 'deepseek') { setDsBalance(null); return; }
+    let alive = true;
+    api.providers.deepseekBalance()
+      .then(b => { if (alive) setDsBalance(`${b.totalBalance} ${b.currency}`); })
+      .catch(() => { /* баланс — необязательная информация */ });
+    return () => { alive = false; };
+  }, [session.model]);
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -468,7 +480,7 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
   const ctxBadge = (
     <ContextBadge estimate={ctxEstimate} isMobile={isMobile} isWaiting={isWaiting}
       isCompacting={isCompacting} canCompact={canCompact} compactNote={compactNote}
-      onCompact={onCompact} online={online} />
+      onCompact={onCompact} online={online} deepseekBalance={dsBalance} />
   );
   const costBadges = isMobile ? (
     <>

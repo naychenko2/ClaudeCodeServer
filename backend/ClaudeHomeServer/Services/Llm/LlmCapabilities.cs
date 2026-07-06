@@ -28,7 +28,7 @@ public static class LlmCapabilitiesCatalog
         Provider: "deepseek",
         SupportsPlanMode: true,        // эмуляция: exit_plan_mode + только read-инструменты
         SupportsCompact: true,         // суммаризация истории отдельным запросом
-        SupportsMcp: false,            // включится с MCP stdio-клиентом
+        SupportsMcp: true,             // stdio-клиент: tasks-server, Dify и серверы из .mcp.json
         SupportsEffort: true,          // маппинг на thinking.reasoning_effort (high/max)
         SupportsPermissionModes: true, // полный набор режимов (Execute-инструменты всегда спрашивают)
         SupportsImages: false,         // ограничение API — изображений нет

@@ -82,7 +82,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // dataset id) + tasks-server с контекстом сессии. null → базовый конфиг как есть.
     private string? BuildTurnMcpConfig(string? datasetId)
     {
-        var tasksServerPath = _tasksMcp is not null ? FindTasksServerPath() : null;
+        var tasksServerPath = _tasksMcp is not null ? TasksServerLocator.FindTasksServerPath() : null;
         var hasTasks = tasksServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         if (!hasTasks && !hasDataset) return null;
@@ -138,17 +138,6 @@ public class ClaudeSession : ILlmSessionAdapter
             Console.Error.WriteLine($"[ClaudeSession] Не удалось собрать MCP-конфиг хода, используется базовый конфиг: {ex.Message}");
             return null;
         }
-    }
-
-    // index.js MCP-сервера задач: рядом с exe (prod) или в корне репо (dev)
-    private static string? FindTasksServerPath()
-    {
-        var nearExe = Path.Combine(AppContext.BaseDirectory, "mcp", "tasks-server", "index.js");
-        if (File.Exists(nearExe)) return nearExe;
-        var nearCwd = Path.GetFullPath(Path.Combine(
-            Directory.GetCurrentDirectory(), "..", "..", "mcp", "tasks-server", "index.js"));
-        if (File.Exists(nearCwd)) return nearCwd;
-        return null;
     }
 
     // Ничего не делаем при старте — процесс запускается при первом сообщении

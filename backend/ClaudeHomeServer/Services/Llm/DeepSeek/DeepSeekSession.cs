@@ -52,11 +52,13 @@ public class DeepSeekSession : ILlmSessionAdapter
     private static readonly TimeSpan PermissionTimeout = TimeSpan.FromMinutes(60);
 
     private readonly SkillsService? _skills;
-    private readonly string? _mcpConfigPath;
+    private readonly TasksMcpContext? _tasksMcp;
+    private readonly DeepSeekMcpManager _mcp;
 
     public DeepSeekSession(Session info, LlmSessionContext context, DeepSeekClient client,
         IOptions<DeepSeekOptions> options, FileService files, string sessionsBasePath,
-        SkillsService? skills = null, string? mcpConfigPath = null)
+        SkillsService? skills = null, string? mcpConfigPath = null,
+        WorkspaceKnowledgeStore? workspaceStore = null)
     {
         Info = info;
         _rootPath = context.RootPath;
@@ -66,7 +68,9 @@ public class DeepSeekSession : ILlmSessionAdapter
         _client = client;
         _options = options;
         _skills = skills;
-        _mcpConfigPath = mcpConfigPath;
+        _tasksMcp = context.TasksMcp;
+        _mcp = new DeepSeekMcpManager(mcpConfigPath, context.TasksMcp,
+            () => workspaceStore?.GetByPath(context.RootPath)?.DifyDatasetId);
         _registry = new DeepSeekToolRegistry(_rootPath, files,
             options.Value.EnableShellTool, options.Value.ShellTimeoutSeconds);
         _store = new DeepSeekConversationStore(sessionsBasePath);
@@ -256,8 +260,12 @@ public class DeepSeekSession : ILlmSessionAdapter
 
         _store.Append(new JsonObject { ["role"] = "user", ["content"] = text });
 
+        // MCP-серверы стартуют лениво на первом ходе (недоступные пропускаются с логом)
+        if (modelCfg.SupportsTools)
+            await _mcp.EnsureStartedAsync(ct);
+
         await _onMessage(new SessionStartedMessage(engineId, isResume, modelCfg.EffectiveApiModel,
-            Info.Mode.ToWireToken(), _rootPath, _registry.All.Count, null,
+            Info.Mode.ToWireToken(), _rootPath, _registry.All.Count, _mcp.ServerInfos,
             Capabilities.Provider, Capabilities));
 
         // Режим «План»: только чтение + exit_plan_mode; одобрение снимает ограничение
@@ -346,11 +354,13 @@ public class DeepSeekSession : ILlmSessionAdapter
     private sealed record TurnResult(string Content, List<ToolCallAcc> ToolCalls, string? FinishReason,
         int PromptTokens, int CompletionTokens, int CacheHitTokens);
 
-    // Полный набор инструментов хода: реестр (в план-фазе — только чтение) + виртуальные
+    // Полный набор инструментов хода: реестр (в план-фазе — только чтение) + MCP + виртуальные.
+    // MCP-инструменты в план-фазе не даём: среди них есть мутирующие (tasks_create и т.п.)
     private JsonArray? BuildTurnTools(DeepSeekModelConfig modelCfg, bool planningNow)
     {
         if (!modelCfg.SupportsTools) return null;
         var tools = _registry.BuildToolsJson(readOnlyOnly: planningNow);
+        if (!planningNow) _mcp.AppendToolsJson(tools);
         tools.Add(BuildAskQuestionSchema());
         if (planningNow) tools.Add(BuildExitPlanSchema());
         return tools;
@@ -550,14 +560,27 @@ public class DeepSeekSession : ILlmSessionAdapter
         await _onMessage(new ToolUseMessage(call.Id, call.Name, input));
 
         DsToolResult result;
-        var tool = _registry.Get(call.Name);
-        if (tool is null)
+        if (call.Name.StartsWith(DeepSeekMcpManager.ToolPrefix, StringComparison.Ordinal))
+        {
+            // MCP-инструменты: класс Edit — в Default спрашиваем, acceptEdits/auto разрешают
+            var behavior = await ResolvePermissionAsync(call.Name, ToolPermissionClass.Edit, args, input, ct);
+            if (behavior == "deny")
+            {
+                result = new DsToolResult("Пользователь отклонил выполнение инструмента", IsError: true);
+            }
+            else
+            {
+                var (content, isError) = await _mcp.CallAsync(call.Name, args, ct);
+                result = new DsToolResult(DeepSeekToolRegistry.Truncate(content), isError);
+            }
+        }
+        else if (_registry.Get(call.Name) is not { } tool)
         {
             result = new DsToolResult($"Неизвестный инструмент: {call.Name}", IsError: true);
         }
         else
         {
-            var behavior = await ResolvePermissionAsync(tool, args, input, ct);
+            var behavior = await ResolvePermissionAsync(tool.Name, tool.PermissionClass, args, input, ct);
             result = behavior == "deny"
                 ? new DsToolResult("Пользователь отклонил выполнение инструмента", IsError: true)
                 : await tool.ExecuteAsync(args, ct);
@@ -650,20 +673,20 @@ public class DeepSeekSession : ILlmSessionAdapter
     }
 
     // Разрешение на инструмент: правила проекта → «всегда разрешать» → режим сессии → спросить.
-    private async Task<string> ResolvePermissionAsync(IDeepSeekTool tool, JsonElement args, object input,
-        CancellationToken ct)
+    private async Task<string> ResolvePermissionAsync(string toolName, ToolPermissionClass cls,
+        JsonElement args, object input, CancellationToken ct)
     {
-        var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), tool.Name, args);
+        var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, args);
         if (ruleDecision == "deny") return "deny";
-        if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(tool.Name)) return "allow";
-        if (AutoAllowedByMode(tool.PermissionClass)) return "allow";
+        if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(toolName)) return "allow";
+        if (AutoAllowedByMode(cls)) return "allow";
 
         var requestId = Guid.NewGuid().ToString();
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         _permissionWaiters[requestId] = tcs;
 
         // Статус Waiting выставит SessionManager по PermissionRequestMessage
-        await _onMessage(new PermissionRequestMessage(requestId, tool.Name, input));
+        await _onMessage(new PermissionRequestMessage(requestId, toolName, input));
         string behavior;
         try
         {
@@ -684,7 +707,7 @@ public class DeepSeekSession : ILlmSessionAdapter
 
         if (behavior == "allow_always")
         {
-            _autoAllowTools.TryAdd(tool.Name, 0);
+            _autoAllowTools.TryAdd(toolName, 0);
             behavior = "allow";
         }
         return behavior;
@@ -757,6 +780,18 @@ public class DeepSeekSession : ILlmSessionAdapter
         sb.Append(" Отвечай на языке пользователя.");
         if (!string.IsNullOrWhiteSpace(_rawSystemPrompt))
             sb.Append("\n\n").Append(_rawSystemPrompt);
+        // Подсказка про систему задач — только когда tasks-server подключён (как у Claude)
+        if (_tasksMcp is not null)
+        {
+            var scope = _tasksMcp.ProjectId is not null
+                ? "Текущий контекст — задачи этого проекта."
+                : "Текущий контекст — личные задачи пользователя (вне проектов).";
+            sb.Append("\n\nУ пользователя есть встроенная система задач (вкладка «Задачи» и «Календарь»). ")
+              .Append("Управляй ею через инструменты mcp__tasks__* (tasks_list, tasks_search, tasks_get, tasks_create, ")
+              .Append("tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask). ")
+              .Append(scope)
+              .Append(" Даты — в формате YYYY-MM-DD, время HH:MM.");
+        }
         // Промпт агента (.claude/agents/<name>.md) — как у Claude, поверх базового
         if (!string.IsNullOrEmpty(Info.AgentName)
             && _skills?.GetAgentSystemPrompt(_rootPath, Info.AgentName) is { } agentPrompt)
@@ -775,6 +810,7 @@ public class DeepSeekSession : ILlmSessionAdapter
         _permissionWaiters.Clear();
         _questionWaiters.Clear();
         _planWaiters.Clear();
+        await _mcp.DisposeAsync();
         await _store.SaveAsync();
         _cts.Dispose();
         _turnLock.Dispose();

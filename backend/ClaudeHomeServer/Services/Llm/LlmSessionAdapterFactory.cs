@@ -61,7 +61,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             throw new InvalidOperationException(
                 "DeepSeek не настроен: задай DeepSeek:ApiKey в appsettings.Local.json");
         return new DeepSeekSession(session, context, _deepSeekClient, _deepSeekOptions, _files,
-            _sessionsBasePath, _skills, _mcpConfigPath);
+            _sessionsBasePath, _skills, _mcpConfigPath, _workspaceStore);
     }
 
     public LlmCapabilities GetCapabilities(LlmProvider provider) => LlmCapabilitiesCatalog.For(provider);

@@ -89,20 +89,37 @@ ClaudeSession + `LlmCapabilities`). `SessionManager` создаёт адапте
 - **Claude** (`Llm/Claude/ClaudeSession`) — subprocess claude.exe (см. следующий раздел);
   `ClaudeCliLocator` — общий поиск claude.exe.
 - **DeepSeek** (`Llm/DeepSeek/`) — официальный API (OpenAI-совместимый SSE,
-  `DeepSeekClient`), собственный tool-цикл (`DeepSeekSession`): инструменты
-  read_file/list_dir/grep_search/write_file/edit_file поверх `FileService.SafeJoin`
-  (`DeepSeekTools`), permissions через те же `PermissionRequestMessage` (общий
-  `PermissionRuleEvaluator` + маппинг Mode), история messages[] в
-  `data/sessions/{id}/deepseek-messages.json` (`DeepSeekConversationStore`, resume
-  после рестарта). reasoning_content в историю НЕ возвращается (API 400).
+  `DeepSeekClient`), собственный tool-цикл (`DeepSeekSession`):
+  - инструменты read_file/list_dir/grep_search/glob_files/write_file/edit_file/web_fetch/
+    run_command (`DeepSeekTools`, поверх `FileService.SafeJoin`); классы опасности:
+    ReadOnly (авто), Edit (спрашивает в Default), Execute — run_command/web_fetch
+    спрашивают ВСЕГДА, даже в auto/bypass;
+  - permissions через те же `PermissionRequestMessage` (общий `PermissionRuleEvaluator`);
+  - **MCP** — свой stdio-клиент (`DeepSeekMcp.cs`: McpStdioClient + DeepSeekMcpManager):
+    серверы из `McpConfigPath` (Dify с инжекцией dataset id) + встроенный tasks-server;
+    инструменты в цикле как `mcp__<server>__<tool>`, класс Edit;
+  - **режим «План»** — эмуляция: read-инструменты + виртуальный `exit_plan_mode` →
+    `PlanReviewMessage`; approve снимает ограничение до конца хода и на следующий ход;
+  - **вопросы** — виртуальный `ask_user_question` → `AskQuestionMessage` (та же карточка);
+  - **compact** — суммаризация истории отдельным запросом + `CompactBoundaryMessage`;
+  - effort → `thinking.reasoning_effort` (high/max, только thinking-модели); скиллы
+    (`TryExpandSkill`) и промпт агента — как у Claude; изображения API не поддерживает;
+  - история messages[] в `data/sessions/{id}/deepseek-messages.json`
+    (`DeepSeekConversationStore`, resume после рестарта); reasoning_content в историю
+    НЕ возвращается (API 400);
+  - баланс аккаунта: `GET /api/providers/deepseek/balance` (`DeepSeekBalanceService`,
+    кэш 5 мин) — показывается в попапе контекст-бейджа шапки чата.
   Конфиг — секция `DeepSeek` (ApiKey в appsettings.Local.json — без него провайдер
-  выключен и модели скрыты; список моделей строго из `DeepSeek:Models` — алиасы
-  deepseek-chat/reasoner выведены 24.07.2026, актуальны deepseek-v4-flash/pro, окно 1M).
+  выключен и модели скрыты). Каталог моделей: записи `DeepSeek:Models` (окна/цены/thinking;
+  алиасы deepseek-chat/reasoner выведены 24.07.2026, актуальны deepseek-v4-flash/pro,
+  окно 1M) + опрос `GET /models` их API — новые модели дописываются с дефолтами.
 
 Возможности провайдера (`LlmCapabilities`: plan/compact/mcp/effort/…) отдаются фронту
 в блоке `providers` из `GET /api/models` и в `session_started`; UI скрывает недоступное
 (`useModelCaps` в `lib/models.ts`). Общие хелперы адаптеров: `TurnFileWatcher`
-(file_changed на время хода), `AttachmentInliner` (инлайн вложений).
+(file_changed на время хода), `AttachmentInliner` (инлайн вложений), `TasksServerLocator`.
+Модель Claude-исполнителя задач настраивается ключом `Tasks:ExecutorModel`
+(null — дефолт; deepseek-модель тоже валидна).
 
 ## Claude Code CLI subprocess
 

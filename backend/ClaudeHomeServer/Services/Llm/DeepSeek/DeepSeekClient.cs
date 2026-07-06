@@ -23,7 +23,9 @@ public sealed record DsChatRequest(
     JsonArray? Tools,
     int MaxTokens,
     // null → параметр thinking не отправляем (совместимость с моделями без него)
-    bool? Thinking);
+    bool? Thinking,
+    // reasoning_effort ("high"|"max") — только вместе с Thinking=true
+    string? ReasoningEffort = null);
 
 public class DeepSeekApiException(int statusCode, string body)
     : Exception(FriendlyMessage(statusCode, body))
@@ -82,7 +84,12 @@ public class DeepSeekClient(IHttpClientFactory httpFactory, IOptions<DeepSeekOpt
             body["tool_choice"] = "auto";
         }
         if (req.Thinking is { } thinking)
-            body["thinking"] = new JsonObject { ["type"] = thinking ? "enabled" : "disabled" };
+        {
+            var t = new JsonObject { ["type"] = thinking ? "enabled" : "disabled" };
+            if (thinking && req.ReasoningEffort is { } effort)
+                t["reasoning_effort"] = effort;
+            body["thinking"] = t;
+        }
 
         var client = httpFactory.CreateClient("deepseek");
         client.Timeout = Timeout.InfiniteTimeSpan;

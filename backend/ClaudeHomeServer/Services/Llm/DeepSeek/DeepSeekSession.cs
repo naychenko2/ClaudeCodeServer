@@ -39,8 +39,12 @@ public class DeepSeekSession : ILlmSessionAdapter
     private static readonly TimeSpan StreamIdleTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan PermissionTimeout = TimeSpan.FromMinutes(60);
 
+    private readonly SkillsService? _skills;
+    private readonly string? _mcpConfigPath;
+
     public DeepSeekSession(Session info, LlmSessionContext context, DeepSeekClient client,
-        IOptions<DeepSeekOptions> options, FileService files, string sessionsBasePath)
+        IOptions<DeepSeekOptions> options, FileService files, string sessionsBasePath,
+        SkillsService? skills = null, string? mcpConfigPath = null)
     {
         Info = info;
         _rootPath = context.RootPath;
@@ -49,6 +53,8 @@ public class DeepSeekSession : ILlmSessionAdapter
         _rawSystemPrompt = context.RawSystemPrompt;
         _client = client;
         _options = options;
+        _skills = skills;
+        _mcpConfigPath = mcpConfigPath;
         _registry = new DeepSeekToolRegistry(_rootPath, files,
             options.Value.EnableShellTool, options.Value.ShellTimeoutSeconds);
         _store = new DeepSeekConversationStore(sessionsBasePath);
@@ -63,9 +69,11 @@ public class DeepSeekSession : ILlmSessionAdapter
         Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
         Info.UpdatedAt = DateTime.UtcNow;
 
+        // Вызов скилла (/skill-name [args]) разворачиваем в его содержимое
+        var effectiveText = _skills?.TryExpandSkill(text) ?? text;
         // Изображения DeepSeek не принимает — честная пометка; остальное инлайним в текст
         var (imagePaths, otherPaths) = AttachmentInliner.SplitImagePaths(attachedPaths);
-        var fullText = AttachmentInliner.BuildMessageText(_rootPath, text, otherPaths);
+        var fullText = AttachmentInliner.BuildMessageText(_rootPath, effectiveText, otherPaths);
         if (imagePaths.Count > 0)
             fullText += "\n\n---\n" + string.Join("\n", imagePaths.Select(p =>
                 $"Прикреплено изображение {p} — провайдер DeepSeek не поддерживает изображения, содержимое недоступно."));
@@ -230,7 +238,7 @@ public class DeepSeekSession : ILlmSessionAdapter
         int maxTokens, CancellationToken ct)
     {
         var req = new DsChatRequest(modelCfg.EffectiveApiModel, _store.Messages, tools, maxTokens,
-            modelCfg.Thinking ? true : null);
+            modelCfg.Thinking ? true : null, modelCfg.Thinking ? MapReasoningEffort(Info.Effort) : null);
 
         var contentSb = new System.Text.StringBuilder();
         var toolCalls = new Dictionary<int, ToolCallAcc>();
@@ -431,6 +439,16 @@ public class DeepSeekSession : ILlmSessionAdapter
         }
     }
 
+    // У DeepSeek два уровня reasoning_effort: high (дефолт) и max.
+    // Claude-шкалу low/medium/high/xhigh/max маппим: xhigh/max → max, остальное → дефолт API
+    private static string? MapReasoningEffort(string? effort) =>
+        effort?.ToLowerInvariant() switch
+        {
+            "xhigh" or "max" => "max",
+            "high" => "high",
+            _ => null,
+        };
+
     private static double? ComputeCost(DeepSeekModelConfig m, long miss, long hit, long completion)
     {
         if (m.PriceInMissPer1M <= 0 && m.PriceInHitPer1M <= 0 && m.PriceOutPer1M <= 0) return null;
@@ -445,6 +463,10 @@ public class DeepSeekSession : ILlmSessionAdapter
         sb.Append(" Отвечай на языке пользователя.");
         if (!string.IsNullOrWhiteSpace(_rawSystemPrompt))
             sb.Append("\n\n").Append(_rawSystemPrompt);
+        // Промпт агента (.claude/agents/<name>.md) — как у Claude, поверх базового
+        if (!string.IsNullOrEmpty(Info.AgentName)
+            && _skills?.GetAgentSystemPrompt(_rootPath, Info.AgentName) is { } agentPrompt)
+            sb.Append("\n\n---\n\n").Append(agentPrompt);
         return sb.ToString();
     }
 

@@ -6,7 +6,7 @@ import { effortLabel } from '../../lib/effort';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from '../../lib/rateLimit';
 import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, R, SHADOW, TB } from '../../lib/design';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { BackButton } from '../ui';
 
@@ -130,17 +130,28 @@ function BadgeShell({ label, amount, title, isMobile, tone, stacked, wide, child
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-          <div style={{
-            position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 41,
-            width: wide && isMobile ? 340 : undefined,
-            minWidth: isMobile ? (wide ? 300 : 200) : 240,
-            // не вылезать за края экрана по ширине и высоте; при переполнении — скролл внутри
-            maxWidth: 'calc(100vw - 24px)',
-            maxHeight: isMobile ? 'calc(100dvh - 130px)' : undefined,
-            overflowY: isMobile ? 'auto' : undefined,
-            padding: '12px 14px',
-            background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, boxShadow: SHADOW.dropdown,
-          }}>
+          <div style={
+            // Широкий мобильный поповер: absolute+right:0 привязан к правому краю чипа,
+            // а чип не у края экрана (справа кнопки) → широкий блок уезжал влево за экран.
+            // Крепим fixed к правому краю ВЬЮПОРТА под тулбаром — всегда на экране.
+            wide && isMobile
+              ? {
+                  position: 'fixed', top: TB.heightMobile + 6, right: 8, zIndex: 41,
+                  width: 'min(340px, calc(100vw - 16px))',
+                  maxHeight: 'calc(100dvh - 130px)', overflowY: 'auto',
+                  padding: '12px 14px',
+                  background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, boxShadow: SHADOW.dropdown,
+                }
+              : {
+                  position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 41,
+                  minWidth: isMobile ? 200 : 240,
+                  maxWidth: 'calc(100vw - 24px)',
+                  maxHeight: isMobile ? 'calc(100dvh - 130px)' : undefined,
+                  overflowY: isMobile ? 'auto' : undefined,
+                  padding: '12px 14px',
+                  background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, boxShadow: SHADOW.dropdown,
+                }
+          }>
             {children}
           </div>
         </>

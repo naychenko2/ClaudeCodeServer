@@ -54,6 +54,11 @@ public class DeepSeekSession : ILlmSessionAdapter
     private const string ExitPlanTool = "exit_plan_mode";
     private const string TodoTool = "TodoWrite";
     private const string SpawnAgentTool = "Task";
+    private const string WorkflowTool = "run_workflow";
+    private const string WorkflowCardName = "Workflow"; // имя, которое распознаёт панель «Агенты»
+    // Предохранители оркестрации
+    private const int MaxWorkflowConcurrency = 6;
+    private const int MaxWorkflowAgents = 24;
 
     // Если API не выдаёт ни одного события дольше этого — считаем зависшим
     private static readonly TimeSpan StreamIdleTimeout = TimeSpan.FromMinutes(5);
@@ -418,6 +423,7 @@ public class DeepSeekSession : ILlmSessionAdapter
         if (isSubAgent) return tools; // субагенту — только рабочие инструменты
         tools.Add(BuildAskQuestionSchema());
         tools.Add(BuildSpawnAgentSchema());
+        if (!planningNow) tools.Add(BuildWorkflowSchema());
         if (planningNow) tools.Add(BuildExitPlanSchema());
         return tools;
     }
@@ -464,10 +470,11 @@ public class DeepSeekSession : ILlmSessionAdapter
         {
             ["name"] = SpawnAgentTool,
             ["description"] =
-                "Запустить субагента для автономной подзадачи в отдельном контексте. У него те же " +
+                "Запустить одного субагента для автономной подзадачи в отдельном контексте. У него те же " +
                 "инструменты работы с файлами и командами, но нет доступа к этому диалогу — передай всё " +
                 "необходимое в prompt. Верни задачу, которую можно выполнить без уточнений. Субагент " +
-                "работает синхронно и возвращает итоговый результат.",
+                "работает синхронно и возвращает итоговый результат. Для нескольких параллельных агентов " +
+                "или многофазной работы используй run_workflow.",
             ["parameters"] = new JsonObject
             {
                 ["type"] = "object",
@@ -477,6 +484,59 @@ public class DeepSeekSession : ILlmSessionAdapter
                     ["prompt"] = new JsonObject { ["type"] = "string", ["description"] = "Полное самодостаточное задание субагенту" },
                 },
                 ["required"] = new JsonArray { "prompt" },
+            },
+        },
+    };
+
+    private static JsonObject BuildWorkflowSchema() => new()
+    {
+        ["type"] = "function",
+        ["function"] = new JsonObject
+        {
+            ["name"] = WorkflowTool,
+            ["description"] =
+                "Оркестрация нескольких субагентов по фазам. Каждая фаза — список агентов, которые " +
+                "выполняются ПАРАЛЛЕЛЬНО; фазы идут последовательно, и результаты предыдущих фаз " +
+                "передаются агентам следующей. Используй для декомпозиции: параллельный сбор/анализ, " +
+                "затем синтез. Каждому агенту дай самодостаточный prompt (доступа к диалогу у него нет). " +
+                $"Максимум {MaxWorkflowAgents} агентов суммарно. По завершении верни сводный результат.",
+            ["parameters"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["name"] = new JsonObject { ["type"] = "string", ["description"] = "Название workflow (человекочитаемое)" },
+                    ["phases"] = new JsonObject
+                    {
+                        ["type"] = "array",
+                        ["description"] = "Фазы по порядку",
+                        ["items"] = new JsonObject
+                        {
+                            ["type"] = "object",
+                            ["properties"] = new JsonObject
+                            {
+                                ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Название фазы" },
+                                ["agents"] = new JsonObject
+                                {
+                                    ["type"] = "array",
+                                    ["description"] = "Агенты фазы (выполняются параллельно)",
+                                    ["items"] = new JsonObject
+                                    {
+                                        ["type"] = "object",
+                                        ["properties"] = new JsonObject
+                                        {
+                                            ["label"] = new JsonObject { ["type"] = "string", ["description"] = "Короткая метка агента" },
+                                            ["prompt"] = new JsonObject { ["type"] = "string", ["description"] = "Самодостаточное задание агенту" },
+                                        },
+                                        ["required"] = new JsonArray { "prompt" },
+                                    },
+                                },
+                            },
+                            ["required"] = new JsonArray { "agents" },
+                        },
+                    },
+                },
+                ["required"] = new JsonArray { "phases" },
             },
         },
     };
@@ -658,7 +718,7 @@ public class DeepSeekSession : ILlmSessionAdapter
 
     // Стрим запроса субагента: дочерние tool_use идут с parentToolUseId (для панели «Агенты»),
     // текст/thinking субагента в главную ленту НЕ выводим — он вернётся итогом в tool_result родителя
-    private async Task<TurnResult> StreamSubAgentRequestAsync(string parentId, DeepSeekModelConfig modelCfg,
+    private async Task<TurnResult> StreamSubAgentRequestAsync(SubAgentSink sink, DeepSeekModelConfig modelCfg,
         JsonArray messages, JsonArray? tools, int maxTokens, CancellationToken ct)
     {
         var req = new DsChatRequest(modelCfg.EffectiveApiModel, messages, tools, maxTokens,
@@ -679,7 +739,8 @@ public class DeepSeekSession : ILlmSessionAdapter
                 case DsContentDelta c: contentSb.Append(c.Text); break;
                 case DsToolCallStart s:
                     toolCalls[s.Index] = new ToolCallAcc(s.Index, s.Id) { Name = s.Name };
-                    await _onMessage(new ToolUseMessage(s.Id, s.Name, new { }, parentId));
+                    if (sink.EmitCards)
+                        await _onMessage(new ToolUseMessage(s.Id, s.Name, new { }, sink.ParentId));
                     break;
                 case DsToolCallArgsDelta a when toolCalls.TryGetValue(a.Index, out var acc):
                     acc.Args.Append(a.Fragment);
@@ -693,8 +754,8 @@ public class DeepSeekSession : ILlmSessionAdapter
     }
 
     // Вызов инструмента субагентом: только рабочие инструменты (файлы/команды/MCP) с permission,
-    // дочерний tool_use/tool_result помечаем parentId
-    private async Task<DsToolResult> ExecuteSubAgentToolAsync(string parentId, ToolCallAcc call, CancellationToken ct)
+    // дочерний tool_use/tool_result помечаем parentId (в тихом режиме карточки не шлём)
+    private async Task<DsToolResult> ExecuteSubAgentToolAsync(SubAgentSink sink, ToolCallAcc call, CancellationToken ct)
     {
         var argsJson = call.Args.Length > 0 ? call.Args.ToString() : "{}";
         JsonElement args;
@@ -702,12 +763,12 @@ public class DeepSeekSession : ILlmSessionAdapter
         catch (JsonException)
         {
             var err = new DsToolResult("Аргументы инструмента — некорректный JSON", IsError: true);
-            await _onMessage(new ToolResultMessage(call.Id, err.Content, true));
+            if (sink.EmitCards) await _onMessage(new ToolResultMessage(call.Id, err.Content, true));
             return err;
         }
 
         var input = JsonSerializer.Deserialize<object>(argsJson) ?? new object();
-        await _onMessage(new ToolUseMessage(call.Id, call.Name, input, parentId));
+        if (sink.EmitCards) await _onMessage(new ToolUseMessage(call.Id, call.Name, input, sink.ParentId));
 
         DsToolResult result;
         if (call.Name.StartsWith(DeepSeekMcpManager.ToolPrefix, StringComparison.Ordinal))
@@ -760,6 +821,7 @@ public class DeepSeekSession : ILlmSessionAdapter
         if (call.Name == ExitPlanTool) return await HandleExitPlanAsync(call.Id, args, ct);
         if (call.Name == TodoTool) return await HandleTodoAsync(call.Id, args, ct);
         if (call.Name == SpawnAgentTool) return await HandleSpawnAgentAsync(call.Id, args, ct);
+        if (call.Name == WorkflowTool) return await HandleWorkflowAsync(call.Id, args, ct);
 
         // Реальный инструмент — после одобрения плана считаем его началом реализации
         if (_awaitPlanExecution) _sawMutationSinceApprove = true;
@@ -920,7 +982,7 @@ public class DeepSeekSession : ILlmSessionAdapter
 
         try
         {
-            var result = await RunSubAgentAsync(callId, prompt, ct);
+            var result = await RunSubAgentAsync(new SubAgentSink(callId, emitCards: true), prompt, ct);
             await _onMessage(new ToolResultMessage(callId, result.Content, result.IsError));
             return result;
         }
@@ -932,9 +994,149 @@ public class DeepSeekSession : ILlmSessionAdapter
         }
     }
 
+    // Первая строка текста для метки/подписи
+    private static string firstLine(string s)
+    {
+        var line = s.Split('\n')[0].Trim();
+        return line.Length > 80 ? line[..77] + "…" : line;
+    }
+
+    // Состояние одного агента workflow — снапшотится в WorkflowAgentDto для панели «Агенты»
+    private sealed class WfAgentState(string id, string prompt, string label)
+    {
+        public string Id { get; } = id;
+        public string Prompt { get; } = prompt;
+        public string Label { get; } = label;
+        public volatile bool Done;
+        public string? Summary;
+        public List<string> Tools = [];
+    }
+
+    // Оркестрация субагентов по фазам: агенты фазы — параллельно, фазы — последовательно,
+    // результаты предыдущих фаз передаются следующей. Прогресс — через WorkflowProgressMessage.
+    private async Task<DsToolResult> HandleWorkflowAsync(string callId, JsonElement args, CancellationToken ct)
+    {
+        if (_awaitPlanExecution) _sawMutationSinceApprove = true;
+
+        var name = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("name", out var n)
+            && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
+        if (!args.TryGetProperty("phases", out var phasesEl) || phasesEl.ValueKind != JsonValueKind.Array
+            || phasesEl.GetArrayLength() == 0)
+        {
+            var err = new DsToolResult("Workflow без фаз", IsError: true);
+            await _onMessage(new ToolUseMessage(callId, WorkflowCardName, new { name }));
+            await _onMessage(new ToolResultMessage(callId, err.Content, true));
+            return err;
+        }
+
+        // Карточка workflow: имя распознаётся фронтом (workflowName по input.name)
+        await _onMessage(new ToolUseMessage(callId, WorkflowCardName, new { name = name ?? "Workflow" }));
+
+        var allStates = new List<WfAgentState>();
+        var stateLock = new object();
+        var gate = new SemaphoreSlim(MaxWorkflowConcurrency);
+
+        // Снимок всех агентов в WorkflowProgressMessage (потокобезопасно)
+        async Task PublishAsync(bool done)
+        {
+            List<WorkflowAgentDto> dtos;
+            lock (stateLock)
+                dtos = allStates.Select(s => new WorkflowAgentDto(
+                    s.Id, s.Prompt, s.Summary,
+                    s.Tools.GroupBy(t => t).Select(g => new WorkflowToolDto(g.Key, g.Count())).ToList(),
+                    Files: null, IsDone: s.Done)).ToList();
+            await _onMessage(new WorkflowProgressMessage(callId, dtos, done));
+        }
+
+        var phaseSummaries = new List<string>(); // «фаза N (title): агент → итог» для передачи дальше
+        var totalAgents = 0;
+        var phaseIdx = 0;
+
+        foreach (var phaseEl in phasesEl.EnumerateArray())
+        {
+            ct.ThrowIfCancellationRequested();
+            phaseIdx++;
+            var title = phaseEl.TryGetProperty("title", out var t) && t.ValueKind == JsonValueKind.String
+                ? t.GetString() ?? $"Фаза {phaseIdx}" : $"Фаза {phaseIdx}";
+            if (!phaseEl.TryGetProperty("agents", out var agentsEl) || agentsEl.ValueKind != JsonValueKind.Array)
+                continue;
+
+            var priorContext = phaseSummaries.Count > 0
+                ? "Результаты предыдущих фаз:\n" + string.Join("\n", phaseSummaries) + "\n\n"
+                : "";
+
+            var phaseAgents = new List<(WfAgentState State, string Prompt)>();
+            var agentIdx = 0;
+            foreach (var agentEl in agentsEl.EnumerateArray())
+            {
+                if (totalAgents >= MaxWorkflowAgents) break;
+                agentIdx++;
+                var prompt = agentEl.TryGetProperty("prompt", out var pr) && pr.ValueKind == JsonValueKind.String
+                    ? pr.GetString() ?? "" : "";
+                if (string.IsNullOrWhiteSpace(prompt)) continue;
+                var label = agentEl.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String
+                    ? l.GetString() ?? "" : firstLine(prompt);
+                var state = new WfAgentState($"{callId}:p{phaseIdx}a{agentIdx}", prompt, label);
+                lock (stateLock) allStates.Add(state);
+                phaseAgents.Add((state, priorContext + prompt));
+                totalAgents++;
+            }
+
+            if (phaseAgents.Count == 0) continue;
+            await PublishAsync(false);
+
+            // Агенты фазы — параллельно (с ограничением конкурентности)
+            var tasks = phaseAgents.Select(async pa =>
+            {
+                await gate.WaitAsync(ct);
+                try
+                {
+                    var sink = new SubAgentSink(pa.State.Id, emitCards: false);
+                    DsToolResult res;
+                    try { res = await RunSubAgentAsync(sink, pa.Prompt, ct); }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                    catch (Exception ex) { res = new DsToolResult($"Агент упал: {ex.Message}", IsError: true); }
+                    lock (stateLock)
+                    {
+                        pa.State.Summary = res.Content;
+                        pa.State.Tools = sink.ToolNames;
+                        pa.State.Done = true;
+                    }
+                    await PublishAsync(false);
+                }
+                finally { gate.Release(); }
+            });
+            await Task.WhenAll(tasks);
+
+            lock (stateLock)
+                foreach (var pa in phaseAgents)
+                    phaseSummaries.Add($"[Фаза «{title}» · {pa.State.Label}]: {pa.State.Summary}");
+        }
+
+        await PublishAsync(true);
+
+        // Сводный результат родителю — для синтеза финального ответа пользователю
+        var sb = new System.Text.StringBuilder("Workflow завершён. Итоги агентов:\n");
+        lock (stateLock)
+            foreach (var s in allStates)
+                sb.Append("\n— ").Append(s.Label).Append(":\n").Append(s.Summary).Append('\n');
+        var result = new DsToolResult(DeepSeekToolRegistry.Truncate(sb.ToString()));
+        await _onMessage(new ToolResultMessage(callId, "Workflow завершён", false));
+        return result;
+    }
+
+    // Приёмник событий субагента: карточки в ленту (обычный субагент) либо тихий сбор
+    // счётчиков инструментов (агент внутри workflow — показывается через workflow_progress)
+    private sealed class SubAgentSink(string parentId, bool emitCards)
+    {
+        public string ParentId { get; } = parentId;
+        public bool EmitCards { get; } = emitCards;
+        public readonly List<string> ToolNames = [];
+    }
+
     // Прогон субагента: свой messages[] (изолированный контекст), рабочие инструменты
     // (файлы/команды/MCP, без вложенных субагентов/вопросов/плана), синхронно до финального текста
-    private async Task<DsToolResult> RunSubAgentAsync(string parentId, string prompt, CancellationToken ct)
+    private async Task<DsToolResult> RunSubAgentAsync(SubAgentSink sink, string prompt, CancellationToken ct)
     {
         var opts = _options.Value;
         var modelCfg = opts.FindModel(Info.Model)!;
@@ -956,7 +1158,7 @@ public class DeepSeekSession : ILlmSessionAdapter
         for (var i = 0; i < opts.MaxToolIterations; i++)
         {
             ct.ThrowIfCancellationRequested();
-            var turn = await StreamSubAgentRequestAsync(parentId, modelCfg, messages, tools, opts.MaxTokens, ct);
+            var turn = await StreamSubAgentRequestAsync(sink, modelCfg, messages, tools, opts.MaxTokens, ct);
             AppendAssistantMessageTo(messages, turn);
             finalText.Clear();
             finalText.Append(turn.Content);
@@ -966,7 +1168,8 @@ public class DeepSeekSession : ILlmSessionAdapter
                 foreach (var call in turn.ToolCalls)
                 {
                     ct.ThrowIfCancellationRequested();
-                    var res = await ExecuteSubAgentToolAsync(parentId, call, ct);
+                    sink.ToolNames.Add(call.Name);
+                    var res = await ExecuteSubAgentToolAsync(sink, call, ct);
                     messages.Add(new JsonObject
                     {
                         ["role"] = "tool",

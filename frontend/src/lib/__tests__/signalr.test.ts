@@ -38,6 +38,8 @@ vi.mock('@microsoft/signalr', () => ({
   HubConnectionState: h.HubConnectionState,
   HubConnectionBuilder: class {
     withUrl() { return this; }
+    withServerTimeout() { return this; }
+    withKeepAliveInterval() { return this; }
     withAutomaticReconnect() { return this; }
     build() { return h.fake; }
   },

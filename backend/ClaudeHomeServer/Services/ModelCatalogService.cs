@@ -12,8 +12,10 @@ namespace ClaudeHomeServer.Services;
 // (OpenAI-совместимый) — новые модели дописываются с дефолтами.
 public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFactory httpFactory)
 {
+    // IsCurated=false — модель обнаружена опросом API провайдера, без ручной карточки
+    // (нет описания/цен); UI может свернуть такие в «другие модели»
     public record ModelInfo(string Value, string DisplayName, string? Description,
-        string Provider = "claude", int? ContextWindow = null);
+        string Provider = "claude", int? ContextWindow = null, bool IsCurated = true);
 
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(6);
     private static readonly TimeSpan RetryTtl = TimeSpan.FromMinutes(5);
@@ -89,14 +91,16 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
     private async Task AppendProviderModelsAsync(List<ModelInfo> result, LlmProviderConfig p, CancellationToken ct)
     {
         result.AddRange(p.Models.Select(m =>
-            new ModelInfo(m.Id, m.DisplayName, null, p.Key, m.ContextWindow)));
+            new ModelInfo(m.Id, m.DisplayName, m.Description, p.Key, m.ContextWindow)));
 
         if (!p.QueryModelsApi || string.IsNullOrWhiteSpace(p.ApiBaseUrl)) return;
 
+        // API-обнаруженные модели без ручной карточки: описания нет (UI решает, как показывать —
+        // напр. свернуть в «другие модели»); IsCurated=false отличает их от курируемых
         var known = new HashSet<string>(p.Models.Select(m => m.Id), StringComparer.OrdinalIgnoreCase);
         foreach (var id in await QueryProviderApiAsync(p, ct))
             if (!known.Contains(id))
-                result.Add(new ModelInfo(id, id, $"из API {p.DisplayName} — окно/цены не настроены", p.Key));
+                result.Add(new ModelInfo(id, id, null, p.Key, IsCurated: false));
     }
 
     private async Task<IReadOnlyList<string>> QueryProviderApiAsync(LlmProviderConfig p, CancellationToken ct)

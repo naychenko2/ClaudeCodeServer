@@ -48,6 +48,9 @@ public class LlmModelConfig
     // Значение в каталоге моделей (хранится в Session.Model)
     public string Id { get; set; } = "";
     public string DisplayName { get; set; } = "";
+    // Короткое задаче-ориентированное описание для UI (для каких задач модель).
+    // У Claude приходит из CLI; у сторонних API его нет — задаём здесь.
+    public string? Description { get; set; }
     public int ContextWindow { get; set; } = 1_000_000;
     // Цены $/1M токенов — для расчёта стоимости из usage; 0 → стоимость не считаем
     public double PriceInMissPer1M { get; set; }

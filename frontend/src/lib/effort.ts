@@ -14,16 +14,9 @@ export const EFFORTS: EffortOption[] = [
   { value: 'max', label: 'Максимум' },
 ];
 
-// У DeepSeek reasoning_effort только high/max — остальные уровни модель игнорирует.
-// Показываем сокращённый список; провайдер определяется по модели.
-const DEEPSEEK_EFFORTS: EffortOption[] = [
-  { value: '', label: 'По умолчанию' },
-  { value: 'high', label: 'Высокий' },
-  { value: 'max', label: 'Максимум' },
-];
-
-export function effortsForProvider(provider: string): EffortOption[] {
-  return provider === 'deepseek' ? DEEPSEEK_EFFORTS : EFFORTS;
+// Все провайдеры работают через claude CLI — набор уровней --effort единый
+export function effortsForProvider(_provider: string): EffortOption[] {
+  return EFFORTS;
 }
 
 // Короткая подпись уровня для отображения (value → label).

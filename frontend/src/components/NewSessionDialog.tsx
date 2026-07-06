@@ -26,7 +26,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Возможности провайдера выбранной модели: у DeepSeek нет plan-режима и effort
+  // Возможности провайдера выбранной модели (недоступное скрываем)
   const caps = useModelCaps(model);
   const availableModes = MODES.filter(m => m !== 'plan' || caps.supportsPlanMode);
   useEffect(() => {

@@ -91,9 +91,9 @@ export interface SessionArtifacts {
 
 // Инструменты, которые меняют файл — путь берём из их аргументов как запасной источник
 // (на случай, если file_changed не пришёл, например файл вне зоны watcher'а).
-// Claude: Write/Edit/…; DeepSeek: write_file/edit_file.
+// write_file/edit_file — имена из историй старого DeepSeek-адаптера (replay старых чатов).
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'write_file', 'edit_file']);
-// Инструменты загрузки веба — источник ссылок. Claude: WebFetch; DeepSeek: web_fetch.
+// Инструменты загрузки веба — источник ссылок (web_fetch — legacy старого DeepSeek-адаптера).
 const WEBFETCH_TOOLS = new Set(['WebFetch', 'web_fetch']);
 
 const URL_RE = /https?:\/\/[^\s<>()[\]"'`]+/g;

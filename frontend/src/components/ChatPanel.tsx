@@ -96,7 +96,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Оценка заполнения контекстного окна — по последнему result-элементу ленты
   const ctxThresholds = useCtxThresholds();
   const ctxEstimate = useMemo(() => estimateContext(items, session.model, ctxThresholds), [items, session.model, ctxThresholds]);
-  // Возможности провайдера модели: у DeepSeek нет compact и plan-режима
+  // Возможности провайдера модели (UI скрывает недоступное)
   const caps = useModelCaps(session.model);
   // Имя ассистента сессии для строк UI (провайдится в контекст ниже)
   const asstName = assistantName(session.model);

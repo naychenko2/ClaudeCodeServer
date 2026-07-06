@@ -3,7 +3,7 @@ import { createContext, useContext } from 'react';
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
 export const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
 
-// Имя ассистента сессии (Claude | DeepSeek) — для строк в UI, чтобы не тащить проп
+// Имя ассистента сессии (Claude | DeepSeek | GLM | …) — для строк в UI, чтобы не тащить проп
 // через все вложенные компоненты ленты. Провайдится в ChatPanel по session.model.
 export const AssistantNameContext = createContext<string>('Claude');
 export function useAssistantName(): string {

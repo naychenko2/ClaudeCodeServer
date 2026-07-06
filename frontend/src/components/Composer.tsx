@@ -14,7 +14,7 @@ export interface ComposerProps {
   isGenerating: boolean;
   mode: Mode;
   onModeChange: (mode: Mode) => void;
-  // false → провайдер модели не поддерживает режим «План» (DeepSeek) — прячем его из списка
+  // false → провайдер модели не поддерживает режим «План» — прячем его из списка
   planAvailable?: boolean;
   attachments: string[];
   onRemoveAttachment: (path: string) => void;

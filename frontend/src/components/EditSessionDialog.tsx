@@ -28,7 +28,7 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
   const [notifyOn, setNotifyOn] = useState(isNotifyEnabled());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // У DeepSeek нет reasoning effort — поле скрываем
+  // Поле effort скрываем, если провайдер модели его не поддерживает
   const caps = useModelCaps(model);
 
   const handleSave = async () => {

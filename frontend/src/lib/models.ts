@@ -10,13 +10,14 @@ export interface ModelOption {
   value: string;
   label: string;
   description?: string;
-  provider?: string;       // "claude" | "deepseek"; отсутствует у fallback = claude
-  contextWindow?: number;  // точное окно с бэка (модели DeepSeek); иначе regex-фолбэк
+  provider?: string;       // "claude" | ключ CLI-провайдера (deepseek/glm/…); отсутствует у fallback = claude
+  contextWindow?: number;  // точное окно с бэка (модели CLI-провайдеров); иначе regex-фолбэк
 }
 
 // Возможности провайдера (блок providers из /api/models) — UI скрывает недоступное
 export interface ProviderCapabilities {
   provider: string;
+  displayName: string;
   supportsPlanMode: boolean;
   supportsCompact: boolean;
   supportsMcp: boolean;
@@ -29,6 +30,7 @@ export interface ProviderCapabilities {
 // У Claude доступно всё — это и дефолт до загрузки списка с бэка
 const CLAUDE_CAPS: ProviderCapabilities = {
   provider: 'claude',
+  displayName: 'Claude',
   supportsPlanMode: true,
   supportsCompact: true,
   supportsMcp: true,
@@ -83,11 +85,14 @@ export async function loadModels(): Promise<void> {
   }
 }
 
-// Провайдер модели: из динамического списка, иначе по префиксу id (deepseek-*)
+// Провайдер модели: из динамического списка, иначе по префиксу id
+// (ключи известных провайдеров: deepseek-* → deepseek, glm-* → glm)
 export function modelProvider(value?: string | null): string {
   if (!value) return 'claude';
-  return _models.find(m => m.value === value)?.provider
-    ?? (value.toLowerCase().startsWith('deepseek') ? 'deepseek' : 'claude');
+  const fromCatalog = _models.find(m => m.value === value)?.provider;
+  if (fromCatalog) return fromCatalog;
+  const v = value.toLowerCase();
+  return Object.keys(_providers).find(key => key !== 'claude' && v.startsWith(key)) ?? 'claude';
 }
 
 // Возможности провайдера выбранной модели; неизвестный провайдер = как Claude
@@ -97,7 +102,18 @@ export function modelCaps(value?: string | null): ProviderCapabilities {
 
 // Отображаемое имя ассистента по модели сессии — для строк в UI («… закончил», «Спросите …»)
 export function assistantName(value?: string | null): string {
-  return modelProvider(value) === 'deepseek' ? 'DeepSeek' : 'Claude';
+  return modelCaps(value).displayName || 'Claude';
+}
+
+// Подпись провайдера по ключу (для группировки в ModelPicker, вкладок и т.п.)
+export function providerLabel(key: string): string {
+  return _providers[key]?.displayName
+    ?? (key === 'claude' ? 'Claude' : key.charAt(0).toUpperCase() + key.slice(1));
+}
+
+// Ключи настроенных CLI-провайдеров (без claude) — для generic-обвязки (вкладки «Использования»)
+export function cliProviderKeys(): string[] {
+  return Object.keys(_providers).filter(k => k !== 'claude');
 }
 
 // Реактивные возможности: ре-рендер после догрузки списка моделей/провайдеров
@@ -152,13 +168,14 @@ const CONTEXT_WINDOWS: Array<{ match: RegExp; window: number }> = [
   { match: /sonnet-(4-6|5)|sonnet-4\.6/i, window: CONTEXT_1M },
   { match: /fable|mythos/i, window: CONTEXT_1M },
   { match: /deepseek/i, window: CONTEXT_1M }, // V4-модели — 1M (точное окно приходит с бэка)
+  { match: /glm.*\[1m\]/i, window: CONTEXT_1M }, // glm-5.2[1m] — окно 1M
   // Общий фолбэк для opus/sonnet без узнаваемой версии — консервативно 200k
   { match: /opus|sonnet/i, window: 200_000 },
 ];
 
 export function contextWindowFor(model?: string | null): number {
   if (!model) return DEFAULT_CONTEXT_WINDOW;
-  // Точное значение из каталога (модели DeepSeek несут окно с бэка) приоритетнее regex
+  // Точное значение из каталога (модели CLI-провайдеров несут окно с бэка) приоритетнее regex
   const exact = _models.find(m => m.value === model)?.contextWindow;
   if (exact) return exact;
   return CONTEXT_WINDOWS.find(m => m.match.test(model))?.window ?? DEFAULT_CONTEXT_WINDOW;

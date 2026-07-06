@@ -29,8 +29,8 @@ export interface FalCostStats {
   byModel: Map<string, { count: number; cost: number }>;
 }
 
-// Баланс аккаунта DeepSeek (GET /api/providers/deepseek/balance)
-interface DeepSeekBalance { available: boolean; currency: string; totalBalance: string }
+// Баланс аккаунта CLI-провайдера (GET /api/providers/{key}/balance)
+interface ProviderBalance { available: boolean; currency: string; totalBalance: string }
 
 const fmtUsd = (c: number) => '$' + (c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2));
 const fmtTokens = (n: number) =>
@@ -202,11 +202,12 @@ function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
   );
 }
 
-// Бейдж статистики DeepSeek: стоимость сессии + токены + баланс аккаунта.
-// У DeepSeek нет лимитов подписки (балансовая модель) — вместо окон показываем остаток
-// средств с подсветкой при низком балансе. Заменяет CostBadge для deepseek-сессий.
-function DeepSeekBadge({ stats, balance, isMobile }: {
-  stats: CostStats; balance: DeepSeekBalance | null; isMobile?: boolean;
+// Бейдж статистики CLI-провайдера (DeepSeek/GLM): стоимость сессии + токены + баланс.
+// У таких провайдеров нет лимитов подписки Claude — вместо окон показываем остаток
+// средств (если провайдер отдаёт баланс) с подсветкой при низком уровне.
+// Заменяет CostBadge для сессий сторонних провайдеров.
+function ProviderCostBadge({ providerName, stats, balance, isMobile }: {
+  providerName: string; stats: CostStats; balance: ProviderBalance | null; isMobile?: boolean;
 }) {
   if (stats.cost <= 0 && !balance) return null;
   const balNum = balance ? parseFloat(balance.totalBalance) : NaN;
@@ -224,13 +225,13 @@ function DeepSeekBadge({ stats, balance, isMobile }: {
   );
   return (
     <BadgeShell
-      label="DeepSeek"
+      label={providerName}
       amount={amountNode}
       isMobile={isMobile}
       tone={tone}
-      title="Стоимость сессии и баланс DeepSeek — нажмите для разбивки"
+      title={`Стоимость сессии и баланс ${providerName} — нажмите для разбивки`}
     >
-      <div style={badgeTitleStyle}>Стоимость DeepSeek</div>
+      <div style={badgeTitleStyle}>Стоимость {providerName}</div>
       {stats.cost > 0 && <>
         <BadgeRow k="Всего" v={fmtUsd(stats.cost)} />
         <BadgeRow k="Ходов" v={String(stats.turns || stats.results)} />
@@ -250,7 +251,7 @@ function DeepSeekBadge({ stats, balance, isMobile }: {
         </>
       )}
       <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 8, lineHeight: 1.4 }}>
-        DeepSeek работает по балансовой модели — стоимость списывается с аккаунта по факту.
+        {providerName} работает по балансовой модели — стоимость списывается с аккаунта по факту.
       </div>
     </BadgeShell>
   );
@@ -489,17 +490,19 @@ interface ChatHeaderBarProps {
 export function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact }: ChatHeaderBarProps) {
   const sessionModelLabel = useModelLabel(session.model);
   const asstName = assistantName(session.model);
-  const isDeepSeek = modelProvider(session.model) === 'deepseek';
-  // Баланс DeepSeek — только для deepseek-сессий (для плашки статистики)
-  const [dsBalance, setDsBalance] = useState<DeepSeekBalance | null>(null);
+  const providerKey = modelProvider(session.model);
+  const isCliProvider = providerKey !== 'claude';
+  // Баланс провайдера — только для сессий сторонних провайдеров (для плашки статистики);
+  // 404 (провайдер без источника баланса, напр. GLM) — просто без блока баланса
+  const [provBalance, setProvBalance] = useState<ProviderBalance | null>(null);
   useEffect(() => {
-    if (!isDeepSeek) { setDsBalance(null); return; }
+    if (!isCliProvider) { setProvBalance(null); return; }
     let alive = true;
-    api.providers.deepseekBalance()
-      .then(b => { if (alive) setDsBalance(b); })
+    api.providers.balance(providerKey)
+      .then(b => { if (alive) setProvBalance(b); })
       .catch(() => { /* баланс — необязательная информация */ });
     return () => { alive = false; };
-  }, [session.model, isDeepSeek]);
+  }, [session.model, providerKey, isCliProvider]);
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -540,15 +543,16 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
       isCompacting={isCompacting} canCompact={canCompact} compactNote={compactNote}
       onCompact={onCompact} online={online} assistantName={asstName} />
   );
-  // Плашка стоимости: у DeepSeek — своя (стоимость + баланс), у Claude — CostBadge с лимитами
-  const providerCostBadge = isDeepSeek
-    ? <DeepSeekBadge stats={cost} balance={dsBalance} isMobile={isMobile} />
+  // Плашка стоимости: у стороннего провайдера — своя (стоимость + баланс),
+  // у Claude — CostBadge с лимитами подписки
+  const providerCostBadge = isCliProvider
+    ? <ProviderCostBadge providerName={asstName} stats={cost} balance={provBalance} isMobile={isMobile} />
     : <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />;
   const costBadges = isMobile ? (
     <>
       {ctxBadge}
-      {isDeepSeek
-        ? <DeepSeekBadge stats={cost} balance={dsBalance} isMobile={isMobile} />
+      {isCliProvider
+        ? <ProviderCostBadge providerName={asstName} stats={cost} balance={provBalance} isMobile={isMobile} />
         : <CombinedCostBadge cost={cost} falCost={falCost} billing={billing} windows={rateWindows} />}
     </>
   ) : (

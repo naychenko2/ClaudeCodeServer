@@ -4,7 +4,7 @@ import { type Mode, MODE_META, ModeIcon } from '../lib/modes';
 
 interface DangerModeConfirmProps {
   mode: Mode;            // опасный режим, который пытаются включить (сейчас — только bypass)
-  assistantName?: string; // имя ассистента сессии (Claude | DeepSeek)
+  assistantName?: string; // имя ассистента сессии (Claude | DeepSeek | GLM | …)
   onConfirm: () => void;
   onCancel: () => void;
 }

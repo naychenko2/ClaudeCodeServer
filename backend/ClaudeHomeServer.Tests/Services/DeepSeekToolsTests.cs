@@ -35,7 +35,7 @@ public class DeepSeekToolsTests : IDisposable
     public void Registry_СодержитВесьНабор()
     {
         _registry.All.Select(t => t.Name).Should().BeEquivalentTo(
-            ["read_file", "list_dir", "grep_search", "write_file", "edit_file", "run_command"]);
+            ["read_file", "list_dir", "grep_search", "glob_files", "write_file", "edit_file", "web_fetch", "run_command"]);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class DeepSeekToolsTests : IDisposable
     {
         var json = _registry.BuildToolsJson();
 
-        json.Should().HaveCount(6);
+        json.Should().HaveCount(8);
         var fn = json[0]!["function"]!;
         json[0]!["type"]!.GetValue<string>().Should().Be("function");
         fn["name"]!.GetValue<string>().Should().NotBeNullOrEmpty();
@@ -80,6 +80,32 @@ public class DeepSeekToolsTests : IDisposable
     public void RunCommand_КлассExecute()
     {
         _registry.Get("run_command")!.PermissionClass.Should().Be(ToolPermissionClass.Execute);
+        _registry.Get("web_fetch")!.PermissionClass.Should().Be(ToolPermissionClass.Execute);
+    }
+
+    [Fact]
+    public async Task GlobFiles_НаходитПоМаскеСВложеннымиПапками()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "src", "deep"));
+        File.WriteAllText(Path.Combine(_root, "src", "deep", "a.cs"), "x");
+        File.WriteAllText(Path.Combine(_root, "src", "b.ts"), "x");
+        File.WriteAllText(Path.Combine(_root, "c.cs"), "x");
+
+        var result = await RunAsync("glob_files", new { pattern = "**/*.cs" });
+
+        result.Content.Should().Contain("src/deep/a.cs").And.Contain("c.cs").And.NotContain("b.ts");
+    }
+
+    [Fact]
+    public void HtmlToText_УбираетРазметкуИСкрипты()
+    {
+        var html = "<html><head><style>.x{}</style><script>var a=1;</script></head>" +
+                   "<body><h1>Заголовок</h1><p>Текст &amp; ещё</p></body></html>";
+
+        var text = WebFetchTool.HtmlToText(html);
+
+        text.Should().Contain("Заголовок").And.Contain("Текст & ещё")
+            .And.NotContain("var a=1").And.NotContain("<p>");
     }
 
     [Theory]

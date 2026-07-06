@@ -47,7 +47,8 @@ public static class PermissionRuleEvaluator
             "bash" or "run_command" => new[] { "command" },
             "edit" or "write" or "read" or "notebookedit" => new[] { "file_path", "path" },
             "glob" or "grep" => new[] { "pattern", "path" },
-            "webfetch" => new[] { "url" },
+            "webfetch" or "web_fetch" => new[] { "url" },
+            "glob_files" => new[] { "pattern" },
             "websearch" => new[] { "query" },
             _ => [],
         };

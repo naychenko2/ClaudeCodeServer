@@ -37,8 +37,10 @@ public sealed class DeepSeekToolRegistry
             new ReadFileTool(rootPath),
             new ListDirTool(rootPath, files),
             new GrepSearchTool(rootPath),
+            new GlobFilesTool(rootPath),
             new WriteFileTool(rootPath, files),
             new EditFileTool(rootPath, files),
+            new WebFetchTool(),
         };
         // Запуск команд (класс Execute) спрашивает разрешение на КАЖДЫЙ вызов —
         // даже в auto/bypass (см. DeepSeekSession.AutoAllowedByMode)
@@ -403,6 +405,166 @@ file sealed class EditFileTool(string rootPath, FileService files) : IDeepSeekTo
         {
             return Task.FromResult(new DsToolResult($"Ошибка правки {path}: {ex.Message}", IsError: true));
         }
+    }
+}
+
+file sealed class GlobFilesTool(string rootPath) : IDeepSeekTool
+{
+    private const int MaxResults = 200;
+
+    public string Name => "glob_files";
+    public string Description =>
+        "Найти файлы по маске пути (glob): ** — любые папки, * — часть имени, ? — один символ. " +
+        "Например: **/*.cs, src/**/test?.ts. Результат отсортирован по дате изменения (новые первыми).";
+    public ToolPermissionClass PermissionClass => ToolPermissionClass.ReadOnly;
+
+    public JsonObject BuildSchema() => new()
+    {
+        ["type"] = "object",
+        ["properties"] = new JsonObject
+        {
+            ["pattern"] = new JsonObject { ["type"] = "string", ["description"] = "Glob-маска относительно корня проекта" },
+        },
+        ["required"] = new JsonArray { "pattern" },
+    };
+
+    public Task<DsToolResult> ExecuteAsync(JsonElement args, CancellationToken ct)
+    {
+        var pattern = DeepSeekToolRegistry.GetString(args, "pattern");
+        if (string.IsNullOrWhiteSpace(pattern))
+            return Task.FromResult(new DsToolResult("Не указан параметр pattern", IsError: true));
+        try
+        {
+            var rx = GlobToRegex(pattern);
+            var hits = new List<(string Rel, DateTime Mtime)>();
+            foreach (var file in EnumerateFiles(rootPath))
+            {
+                ct.ThrowIfCancellationRequested();
+                var rel = Path.GetRelativePath(rootPath, file).Replace('\\', '/');
+                if (!rx.IsMatch(rel)) continue;
+                hits.Add((rel, File.GetLastWriteTimeUtc(file)));
+            }
+            if (hits.Count == 0)
+                return Task.FromResult(new DsToolResult("Файлы по маске не найдены"));
+            var sb = new StringBuilder();
+            foreach (var (rel, _) in hits.OrderByDescending(h => h.Mtime).Take(MaxResults))
+                sb.AppendLine(rel);
+            if (hits.Count > MaxResults) sb.Append($"…(показаны первые {MaxResults} из {hits.Count})");
+            return Task.FromResult(new DsToolResult(DeepSeekToolRegistry.Truncate(sb.ToString())));
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(new DsToolResult($"Ошибка поиска по маске: {ex.Message}", IsError: true));
+        }
+    }
+
+    // ** — любые сегменты пути, * — в пределах сегмента, ? — один символ
+    private static Regex GlobToRegex(string glob)
+    {
+        var rx = Regex.Escape(glob.Replace('\\', '/'))
+            .Replace(@"\*\*/", "(?:.*/)?")
+            .Replace(@"\*\*", ".*")
+            .Replace(@"\*", "[^/]*")
+            .Replace(@"\?", "[^/]");
+        return new Regex("^" + rx + "$", RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2));
+    }
+
+    // Обход с исключением служебных папок — как у grep_search
+    private static IEnumerable<string> EnumerateFiles(string dir)
+    {
+        var stack = new Stack<string>();
+        stack.Push(dir);
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            string[] files, dirs;
+            try
+            {
+                files = Directory.GetFiles(current);
+                dirs = Directory.GetDirectories(current);
+            }
+            catch (UnauthorizedAccessException) { continue; }
+            catch (IOException) { continue; }
+            foreach (var f in files) yield return f;
+            foreach (var d in dirs)
+                if (!FileService.TreeExcludes.Contains(Path.GetFileName(d)))
+                    stack.Push(d);
+        }
+    }
+}
+
+// internal (не file) — HtmlToText покрыт юнит-тестами через InternalsVisibleTo
+internal sealed class WebFetchTool : IDeepSeekTool
+{
+    // Общий клиент на приложение: инструменты создаются per-session, плодить клиентов не нужно
+    private static readonly HttpClient _http = new(new HttpClientHandler { AllowAutoRedirect = true })
+    {
+        Timeout = TimeSpan.FromSeconds(30),
+    };
+    private const int MaxBytes = 5 * 1024 * 1024;
+
+    public string Name => "web_fetch";
+    public string Description =>
+        "Загрузить веб-страницу по URL (http/https) и вернуть её текст (HTML очищается от разметки). " +
+        "Каждый запрос требует разрешения пользователя.";
+    // Запрос во внешний мир — спрашиваем всегда, как run_command
+    public ToolPermissionClass PermissionClass => ToolPermissionClass.Execute;
+
+    public JsonObject BuildSchema() => new()
+    {
+        ["type"] = "object",
+        ["properties"] = new JsonObject
+        {
+            ["url"] = new JsonObject { ["type"] = "string", ["description"] = "Полный URL (http/https)" },
+        },
+        ["required"] = new JsonArray { "url" },
+    };
+
+    public async Task<DsToolResult> ExecuteAsync(JsonElement args, CancellationToken ct)
+    {
+        var url = DeepSeekToolRegistry.GetString(args, "url");
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            return new DsToolResult("Нужен корректный http/https URL", IsError: true);
+        try
+        {
+            using var resp = await _http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!resp.IsSuccessStatusCode)
+                return new DsToolResult($"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}", IsError: true);
+
+            await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+            using var limited = new MemoryStream();
+            var buf = new byte[81920];
+            int read;
+            while ((read = await stream.ReadAsync(buf, ct)) > 0)
+            {
+                limited.Write(buf, 0, read);
+                if (limited.Length > MaxBytes) break;
+            }
+            var raw = Encoding.UTF8.GetString(limited.ToArray());
+
+            var mediaType = resp.Content.Headers.ContentType?.MediaType ?? "";
+            var text = mediaType.Contains("html", StringComparison.OrdinalIgnoreCase) || raw.Contains("<html", StringComparison.OrdinalIgnoreCase)
+                ? HtmlToText(raw)
+                : raw;
+            return new DsToolResult(DeepSeekToolRegistry.Truncate(text));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            return new DsToolResult($"Ошибка загрузки {url}: {ex.Message}", IsError: true);
+        }
+    }
+
+    // Грубая, но достаточная очистка HTML: script/style долой, теги в пробелы, entities по минимуму
+    internal static string HtmlToText(string html)
+    {
+        var noScripts = Regex.Replace(html, @"<(script|style|noscript)\b[\s\S]*?</\1>", " ",
+            RegexOptions.IgnoreCase, TimeSpan.FromSeconds(5));
+        var noTags = Regex.Replace(noScripts, @"<[^>]+>", " ", RegexOptions.None, TimeSpan.FromSeconds(5));
+        var decoded = System.Net.WebUtility.HtmlDecode(noTags);
+        return Regex.Replace(decoded, @"[ \t]*\n[ \t\n]*", "\n", RegexOptions.None, TimeSpan.FromSeconds(5))
+            .Replace("  ", " ").Trim();
     }
 }
 

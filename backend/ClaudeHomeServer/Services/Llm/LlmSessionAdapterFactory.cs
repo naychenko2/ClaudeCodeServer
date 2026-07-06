@@ -35,7 +35,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         LlmProviderResolver.Resolve(session.Model) switch
         {
             LlmProvider.DeepSeek => throw new NotSupportedException("Адаптер DeepSeek ещё не подключён"),
-            _ => new ClaudeSession(session, context, _mcpConfigPath, _skills, _workspaceStore, _disallowedTools),
+            _ => new Claude.ClaudeSession(session, context, _mcpConfigPath, _skills, _workspaceStore, _disallowedTools),
         };
 
     public LlmCapabilities GetCapabilities(LlmProvider provider) => LlmCapabilitiesCatalog.For(provider);

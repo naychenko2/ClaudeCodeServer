@@ -69,7 +69,7 @@ public class ModelCatalogService
         var utf8NoBom = new System.Text.UTF8Encoding(false);
         var psi = new ProcessStartInfo
         {
-            FileName = ClaudeSession.FindClaudeExecutable(),
+            FileName = Llm.Claude.ClaudeCliLocator.FindClaudeExecutable(),
             WorkingDirectory = Path.GetTempPath(),
             UseShellExecute = false,
             RedirectStandardInput = true,

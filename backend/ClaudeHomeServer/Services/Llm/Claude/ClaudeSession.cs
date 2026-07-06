@@ -3,9 +3,8 @@ using System.Diagnostics;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Llm;
 
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Services.Llm.Claude;
 
 public class ClaudeSession : ILlmSessionAdapter
 {
@@ -51,10 +50,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // через --disallowedTools; список задаётся из конфига (Claude:DisallowedTools).
     private readonly string[] _disallowedTools;
 
-    // Отслеживание изменений файлов
-    private FileSystemWatcher? _watcher;
-    private readonly ConcurrentDictionary<string, string?> _fileCache = new();
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _debounce = new();
+    // Отслеживание изменений файлов на время хода
+    private readonly TurnFileWatcher _fileWatcher;
 
     private readonly string? _rawSystemPrompt;
     private readonly string? _mcpConfigPath;
@@ -78,6 +75,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _permissionRules = context.PermissionRules;
         _tasksMcp = context.TasksMcp;
         _disallowedTools = disallowedTools ?? [];
+        _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage);
     }
 
     // Объединённый MCP-конфиг хода: серверы из базового конфига (Dify с инжекцией
@@ -517,7 +515,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
         var psi = new ProcessStartInfo
         {
-            FileName = FindClaudeExecutable(),
+            FileName = ClaudeCliLocator.FindClaudeExecutable(),
             WorkingDirectory = _rootPath,
             UseShellExecute = false,
             RedirectStandardInput = true,
@@ -545,7 +543,7 @@ public class ClaudeSession : ILlmSessionAdapter
         if (_currentProcess.HasExited)
             throw new InvalidOperationException("Не удалось запустить claude process");
 
-        StartFileWatcher();
+        _fileWatcher.Start();
 
         // Читаем stderr асинхронно, иначе при переполнении буфера процесс зависнет
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
@@ -609,7 +607,7 @@ public class ClaudeSession : ILlmSessionAdapter
         catch (OperationCanceledException) { /* отмена сессии — штатно */ }
         finally
         {
-            StopFileWatcher();
+            _fileWatcher.Stop();
             CloseStdin(process);
             if (!process.HasExited)
             {
@@ -647,35 +645,6 @@ public class ClaudeSession : ILlmSessionAdapter
             // Статусом владеет SessionManager: Finished/Active он выставит по ExitedMessage
             await _onMessage(new ExitedMessage());
         }
-    }
-
-    // На Windows ищем claude.exe напрямую — cmd.exe /c не проксирует stdin корректно
-    // (используется также ModelCatalogService для опроса списка моделей)
-    internal static string FindClaudeExecutable()
-    {
-        if (!OperatingSystem.IsWindows()) return "claude";
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var exePath = Path.Combine(appData, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
-        if (File.Exists(exePath)) return exePath;
-        // Новый путь standalone-установки: %USERPROFILE%\.local\bin\claude.exe
-        var localBin = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "claude.exe");
-        if (File.Exists(localBin)) return localBin;
-        try
-        {
-            using var where = Process.Start(new ProcessStartInfo("where.exe", "claude.exe")
-                { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true });
-            if (where is not null)
-            {
-                var line = where.StandardOutput.ReadLine();
-                where.WaitForExit(3000);
-                if (!string.IsNullOrEmpty(line) && File.Exists(line)) return line.Trim();
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[ClaudeSession] Поиск claude.exe через where.exe не удался: {ex.Message}");
-        }
-        return "claude.exe";
     }
 
     private async Task ProcessLineAsync(string line)
@@ -1133,76 +1102,9 @@ public class ClaudeSession : ILlmSessionAdapter
         );
     }
 
-    private void StartFileWatcher()
-    {
-        if (!Directory.Exists(_rootPath)) return;
-        _watcher = new FileSystemWatcher(_rootPath)
-        {
-            IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName,
-            EnableRaisingEvents = true,
-        };
-        _watcher.Changed += OnFileSystemEvent;
-        _watcher.Created += OnFileSystemEvent;
-    }
-
-    private void StopFileWatcher()
-    {
-        _watcher?.Dispose();
-        _watcher = null;
-        foreach (var cts in _debounce.Values) cts.Cancel();
-        _debounce.Clear();
-    }
-
-    private void OnFileSystemEvent(object _, FileSystemEventArgs e)
-    {
-        var fullPath = e.FullPath;
-        var fileName = Path.GetFileName(fullPath);
-        // Игнорируем .git, временные файлы компиляторов, служебные директории
-        var sep = Path.DirectorySeparatorChar;
-        if (fullPath.Contains(sep + ".git" + sep) ||
-            fullPath.EndsWith(sep + ".git") ||
-            fullPath.Contains(sep + ".playwright") ||
-            fullPath.Contains(sep + "obj" + sep) ||
-            fullPath.Contains(sep + "node_modules" + sep) ||
-            fileName.EndsWith("~") ||
-            fileName.EndsWith(".tmp") ||
-            fileName.Contains(".tmp.")) return;
-
-        if (_debounce.TryRemove(fullPath, out var old)) old.Cancel();
-        var cts = new CancellationTokenSource();
-        _debounce[fullPath] = cts;
-
-        Task.Delay(400, cts.Token).ContinueWith(t =>
-        {
-            if (t.IsCanceled) return;
-            _debounce.TryRemove(fullPath, out CancellationTokenSource? _);
-            try
-            {
-                if (!File.Exists(fullPath) && !_fileCache.ContainsKey(fullPath)) return;
-
-                var rel = Path.GetRelativePath(_rootPath, fullPath).Replace('\\', '/');
-                var newContent = File.Exists(fullPath) ? File.ReadAllText(fullPath) : null;
-                _fileCache.TryGetValue(fullPath, out var oldContent);
-                _fileCache[fullPath] = newContent;
-                var (added, removed) = CountLineDiff(oldContent, newContent);
-                if (added == 0 && removed == 0) return;
-                _ = _onMessage(new FileChangedMessage(rel, added, removed));
-            }
-            catch { /* файл занят/удалён между событиями watcher-а — пропускаем */ }
-        }, TaskScheduler.Default);
-    }
-
-    private static (int added, int removed) CountLineDiff(string? oldContent, string? newContent)
-    {
-        var oldCount = oldContent?.Split('\n').Length ?? 0;
-        var newCount = newContent?.Split('\n').Length ?? 0;
-        return (Math.Max(0, newCount - oldCount), Math.Max(0, oldCount - newCount));
-    }
-
     public async ValueTask DisposeAsync()
     {
-        StopFileWatcher();
+        _fileWatcher.Dispose();
         lock (_workflowWatchers)
         {
             foreach (var w in _workflowWatchers) w.Dispose();

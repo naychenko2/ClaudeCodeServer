@@ -76,7 +76,7 @@ public class TaskAiService(ProjectManager projects)
         var utf8NoBom = new UTF8Encoding(false);
         var psi = new ProcessStartInfo
         {
-            FileName = ClaudeSession.FindClaudeExecutable(),
+            FileName = Llm.Claude.ClaudeCliLocator.FindClaudeExecutable(),
             WorkingDirectory = workDir,
             UseShellExecute = false,
             RedirectStandardInput = true,

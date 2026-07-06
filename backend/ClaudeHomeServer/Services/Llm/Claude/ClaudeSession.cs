@@ -86,17 +86,27 @@ public class ClaudeSession : ILlmSessionAdapter
     }
 
     // Объединённый MCP-конфиг хода: серверы из базового конфига (Dify с инжекцией
-    // dataset id) + tasks-server с контекстом сессии. null → базовый конфиг как есть.
+    // dataset id) + tasks-server с контекстом сессии; для сессий сторонних провайдеров —
+    // ещё и user-scope серверы из ~/.claude.json (fal-ai и др.: изолированный
+    // CLAUDE_CONFIG_DIR их не видит). null → базовый конфиг как есть.
     private string? BuildTurnMcpConfig(string? datasetId)
     {
         var tasksServerPath = _tasksMcp is not null ? TasksServerLocator.FindTasksServerPath() : null;
         var hasTasks = tasksServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
-        if (!hasTasks && !hasDataset) return null;
+        var userServers = LoadUserScopeMcpServers();
+        if (!hasTasks && !hasDataset && userServers is null) return null;
 
         try
         {
             var servers = new System.Text.Json.Nodes.JsonObject();
+
+            // User-scope серверы (только у сторонних провайдеров) — первыми:
+            // одноимённые из базового конфига ниже их перекроют
+            if (userServers is not null)
+                foreach (var (key, val) in userServers)
+                    if (val?.DeepClone() is { } clone)
+                        servers[key] = clone;
 
             // Серверы из базового конфига (+ dataset id в env Dify)
             if (!string.IsNullOrEmpty(_mcpConfigPath) && File.Exists(_mcpConfigPath))
@@ -143,6 +153,27 @@ public class ClaudeSession : ILlmSessionAdapter
         {
             // Без лога сессия молча пойдёт без MCP-серверов (tasks/dify) — обязательно сообщаем
             Console.Error.WriteLine($"[ClaudeSession] Не удалось собрать MCP-конфиг хода, используется базовый конфиг: {ex.Message}");
+            return null;
+        }
+    }
+
+    // User-scope MCP-серверы (~/.claude.json, mcpServers) — только для сессий сторонних
+    // провайдеров: у Claude CLI сам читает user-scope, дублировать нельзя (задвоение).
+    // null — сессия Claude, файла нет или mcpServers пуст.
+    private System.Text.Json.Nodes.JsonObject? LoadUserScopeMcpServers()
+    {
+        if (_providers is null || _providers.ResolveByModel(Info.Model) is null) return null;
+        var path = _providers.UserClaudeJsonPath;
+        try
+        {
+            if (!File.Exists(path)) return null;
+            var doc = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path));
+            return doc?["mcpServers"] is System.Text.Json.Nodes.JsonObject o && o.Count > 0 ? o : null;
+        }
+        catch (Exception ex)
+        {
+            // Без user-scope серверов ход пойдёт, но fal-ai и др. пропадут — сообщаем
+            Console.Error.WriteLine($"[ClaudeSession] Не удалось прочитать user-scope MCP из {path}: {ex.Message}");
             return null;
         }
     }

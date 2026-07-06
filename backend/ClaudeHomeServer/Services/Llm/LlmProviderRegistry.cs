@@ -38,6 +38,10 @@ public class LlmProviderRegistry
 
     public IReadOnlyCollection<LlmProviderConfig> All => _providers.Values;
 
+    // Пользовательский .claude.json (сосед папки ~/.claude) — источник user-scope
+    // MCP-серверов (claude mcp add), которые изолированный профиль провайдера не видит
+    public string UserClaudeJsonPath => _userProfileDir + ".json";
+
     public IEnumerable<LlmProviderConfig> Enabled => _providers.Values.Where(p => p.Enabled);
 
     public LlmProviderConfig? GetByKey(string? key) =>
@@ -66,12 +70,13 @@ public class LlmProviderRegistry
         ResolveByModel(model) is { } p ? CapabilitiesOf(p) : LlmCapabilitiesCatalog.Claude;
 
     // CLI-провайдер наследует весь функционал claude CLI; провайдеро-специфичны
-    // только изображения (ограничение API) и имя для UI
+    // только изображения (ограничение API), имя для UI и наличие балансового API
     public static LlmCapabilities CapabilitiesOf(LlmProviderConfig p) => LlmCapabilitiesCatalog.Claude with
     {
         Provider = p.Key,
         DisplayName = string.IsNullOrWhiteSpace(p.DisplayName) ? p.Key : p.DisplayName,
         SupportsImages = p.SupportsImages,
+        HasBalance = !string.IsNullOrWhiteSpace(p.Balance) && !string.IsNullOrWhiteSpace(p.ApiBaseUrl),
     };
 
     // Env процесса claude CLI для стороннего провайдера (per-turn: модель может меняться).

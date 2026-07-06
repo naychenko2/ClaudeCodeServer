@@ -25,6 +25,7 @@ export interface ProviderCapabilities {
   supportsPermissionModes: boolean;
   supportsImages: boolean;
   supportsAgents: boolean;
+  hasBalance?: boolean; // провайдер отдаёт баланс аккаунта (/api/providers/{key}/balance)
 }
 
 // У Claude доступно всё — это и дефолт до загрузки списка с бэка
@@ -109,6 +110,11 @@ export function assistantName(value?: string | null): string {
 export function providerLabel(key: string): string {
   return _providers[key]?.displayName
     ?? (key === 'claude' ? 'Claude' : key.charAt(0).toUpperCase() + key.slice(1));
+}
+
+// Возможности провайдера по ключу (для вкладок «Использования» и т.п.)
+export function providerCapsByKey(key: string): ProviderCapabilities {
+  return _providers[key] ?? CLAUDE_CAPS;
 }
 
 // Ключи настроенных CLI-провайдеров (без claude) — для generic-обвязки (вкладки «Использования»)

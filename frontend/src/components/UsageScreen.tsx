@@ -3,7 +3,7 @@ import { api } from '../lib/api';
 import type { UsageResponse, FalAccountResponse } from '../types';
 import { C, FONT, SHADOW } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, seriesByWindow, worstWindow } from '../lib/rateLimit';
-import { cliProviderKeys, providerLabel } from '../lib/models';
+import { cliProviderKeys, providerCapsByKey, providerLabel } from '../lib/models';
 
 const STALE_MS = 30 * 60 * 1000;
 const MONEY = '#B05C38';
@@ -124,13 +124,31 @@ type ProviderUsage = {
   snapshots: { timestamp: string; balance: number; currency: string }[];
 };
 
-// Ссылки пополнения по провайдерам (для карточки баланса)
+// Ссылки пополнения и кабинетов по провайдерам (для карточки баланса / заглушки)
 const TOPUP_URL: Record<string, string> = {
   deepseek: 'https://platform.deepseek.com/top_up',
+};
+const CABINET_URL: Record<string, string> = {
+  glm: 'https://z.ai/manage-apikey/rate-limits',
+  deepseek: 'https://platform.deepseek.com/usage',
 };
 
 function ProviderTab({ providerKey, data }: { providerKey: string; data: ProviderUsage | null | undefined }) {
   const name = providerLabel(providerKey);
+  // Провайдер без балансового API (GLM): показываем пояснение вместо пустой вкладки
+  if (!providerCapsByKey(providerKey).hasBalance)
+    return (
+      <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
+        <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.5 }}>◌</div>
+        {name} не предоставляет API баланса и расхода — квоты и статистику смотрите в кабинете провайдера.
+        {CABINET_URL[providerKey] && (
+          <div style={{ marginTop: 10 }}>
+            <a href={CABINET_URL[providerKey]} target="_blank" rel="noopener noreferrer"
+              style={{ color: C.accent, fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>кабинет {name} ↗</a>
+          </div>
+        )}
+      </div>
+    );
   if (data === undefined)
     return <div style={{ padding: '40px 0', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>;
   if (data === null)
@@ -295,7 +313,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [days, setDays] = useState(7);
   const [falBalance, setFalBalance] = useState<number | null | undefined>(undefined); // для строки-сводки + бейджа вкладки
-  // По каждому CLI-провайдеру: undefined — грузим, null — не подключён/без баланса (вкладку не показываем)
+  // По каждому CLI-провайдеру с балансовым API: undefined — грузим, null — недоступен
   const [provData, setProvData] = useState<Record<string, ProviderUsage | null | undefined>>({});
   const providerKeys = cliProviderKeys();
 
@@ -304,6 +322,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
     api.usage.get().then(d => { if (!c) setUsage(d); }).catch(() => { if (!c) setUsage({ snapshots: [] }); });
     api.fal.account(7).then(d => { if (!c) setFalBalance(d.enabled ? (d.balance ?? null) : null); }).catch(() => { if (!c) setFalBalance(null); });
     for (const key of cliProviderKeys()) {
+      if (!providerCapsByKey(key).hasBalance) continue; // без балансового API — заглушка в ProviderTab
       api.providers.usage(key)
         .then(d => { if (!c) setProvData(prev => ({ ...prev, [key]: d })); })
         .catch(() => { if (!c) setProvData(prev => ({ ...prev, [key]: null })); });
@@ -320,9 +339,10 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
     return b ? parseFloat(b.totalBalance) : NaN;
   };
   const provLow = (key: string) => { const b = provBalanceOf(key); return !isNaN(b) && b < 1; };
-  // Вкладки провайдеров — только у настроенных с источником баланса
+  // Вкладка на каждый настроенный CLI-провайдер (в каталог попадают только с ApiKey);
+  // у провайдера без балансового API внутри — пояснение с ссылкой на кабинет
   const tabs = ([['claude', 'Claude']] as [string, string][])
-    .concat(providerKeys.filter(k => provData[k] !== null).map(k => [k, providerLabel(k)] as [string, string]))
+    .concat(providerKeys.map(k => [k, providerLabel(k)] as [string, string]))
     .concat([['fal', 'fal.ai']]);
 
   return (

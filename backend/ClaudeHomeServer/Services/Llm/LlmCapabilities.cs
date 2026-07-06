@@ -12,7 +12,8 @@ public sealed record LlmCapabilities(
     bool SupportsEffort,           // уровень reasoning effort
     bool SupportsPermissionModes,  // весь набор ClaudeMode; false → только базовые режимы
     bool SupportsImages,           // image-блоки во вложениях
-    bool SupportsAgents);          // инжекция промпта .claude/agents/<name>.md
+    bool SupportsAgents,           // инжекция промпта .claude/agents/<name>.md
+    bool HasBalance = false);      // провайдер отдаёт баланс аккаунта (/api/providers/{key}/balance)
 
 public static class LlmCapabilitiesCatalog
 {
@@ -25,5 +26,5 @@ public static class LlmCapabilitiesCatalog
         SupportsEffort: true,
         SupportsPermissionModes: true,
         SupportsImages: true,
-        SupportsAgents: true);
+        SupportsAgents: true);     // HasBalance=false: у Claude подписка и rate-limit окна
 }

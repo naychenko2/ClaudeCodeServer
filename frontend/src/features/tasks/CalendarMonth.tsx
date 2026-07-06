@@ -283,7 +283,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
               >
                 <span style={{
                   fontFamily: FONT.sans, fontSize: 14, fontWeight: selected || iso === today ? 700 : 400,
-                  color: selected ? '#fff' : !inMonth ? C.textMuted + '80' : iso === today ? C.accent : C.textPrimary,
+                  color: selected ? C.bgCard : !inMonth ? C.textMuted + '80' : iso === today ? C.accent : C.textPrimary,
                 }}>
                   {day}
                 </span>
@@ -293,7 +293,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
                     {dayTasksHere.slice(0, 3).map((t, i) => (
                       <span key={i} style={{
                         width: 4, height: 4, borderRadius: '50%',
-                        background: selected ? '#fff' : projectColor(t.projectId).main,
+                        background: selected ? C.bgCard : projectColor(t.projectId).main,
                       }} />
                     ))}
                   </span>
@@ -376,7 +376,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
               } : undefined}
               style={{
                 minHeight: 86, minWidth: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '7px 8px',
-                background: isToday ? '#FBEBE0' : inMonth ? C.bgWhite : 'transparent',
+                background: isToday ? C.accentLight : inMonth ? C.bgWhite : 'transparent',
                 border: `1px solid ${isToday ? C.accentMuted : inMonth ? C.borderLight : C.borderLight + '90'}`,
                 borderRadius: 10,
                 opacity: inMonth ? 1 : 0.55,

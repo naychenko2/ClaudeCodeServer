@@ -68,9 +68,11 @@ builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
 builder.Services.AddHostedService<TaskSchedulerService>();
+builder.Services.Configure<DeepSeekOptions>(builder.Configuration.GetSection(DeepSeekOptions.Section));
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");
 builder.Services.AddHttpClient("fal");
+builder.Services.AddHttpClient("deepseek");
 builder.Services.AddHttpForwarder();
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));

@@ -683,7 +683,8 @@ public class ClaudeSession : ILlmSessionAdapter
                         }
                     }
                     await _onMessage(new SessionStartedMessage(
-                        Info.ClaudeSessionId!, isResume, model, Info.Mode.ToWireToken(), cwd, toolCount, mcp));
+                        Info.ClaudeSessionId!, isResume, model, Info.Mode.ToWireToken(), cwd, toolCount, mcp,
+                        Capabilities.Provider, Capabilities));
                 }
                 else if (sysSubtype == "compact_boundary")
                 {

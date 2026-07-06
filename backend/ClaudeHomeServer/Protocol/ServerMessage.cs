@@ -11,8 +11,12 @@ public abstract record ServerMessage(string Type)
 
 public record McpServerInfo(string Name, string Status);
 
+// ClaudeSessionId — id сессии у провайдера (у Claude — транскрипт CLI, у DeepSeek — GUID истории);
+// имя поля историческое, не меняем ради обратной совместимости фронта.
+// Provider/Capabilities — хвостовые optional-поля, старый фронт их игнорирует.
 public record SessionStartedMessage(string ClaudeSessionId, bool IsResume, string Model, string Mode,
-    string? Cwd = null, int ToolCount = 0, IReadOnlyList<McpServerInfo>? McpServers = null)
+    string? Cwd = null, int ToolCount = 0, IReadOnlyList<McpServerInfo>? McpServers = null,
+    string Provider = "claude", Services.Llm.LlmCapabilities? Capabilities = null)
     : ServerMessage("session_started");
 
 public record TextDeltaMessage(string Text)

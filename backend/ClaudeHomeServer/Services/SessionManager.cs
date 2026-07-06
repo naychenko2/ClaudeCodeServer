@@ -281,8 +281,11 @@ public class SessionManager
 
         // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
         // пересоздаётся в RunTurnAsync и читает --permission-mode из Info.Mode.
+        // Режим «План» у провайдера без поддержки тихо игнорируем (защита от рассинхрона UI).
+        var caps = LlmCapabilitiesCatalog.For(LlmProviderResolver.Resolve(entry.Info.Model));
         if (mode is not null && Enum.TryParse<ClaudeMode>(mode, true, out var parsedMode)
-            && entry.Info.Mode != parsedMode)
+            && entry.Info.Mode != parsedMode
+            && (parsedMode != ClaudeMode.Plan || caps.SupportsPlanMode))
         {
             entry.Info.Mode = parsedMode;
             SaveSessions();
@@ -315,6 +318,8 @@ public class SessionManager
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
         if (entry.Info.ClaudeSessionId is null) return; // ходов ещё не было — сворачивать нечего
+        if (!LlmCapabilitiesCatalog.For(LlmProviderResolver.Resolve(entry.Info.Model)).SupportsCompact)
+            return; // провайдер не умеет compact — защита от рассинхрона UI
 
         await EnsureProcessAsync(sessionId, entry);
 

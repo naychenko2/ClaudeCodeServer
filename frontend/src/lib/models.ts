@@ -12,6 +12,7 @@ export interface ModelOption {
   description?: string;
   provider?: string;       // "claude" | ключ CLI-провайдера (deepseek/glm/…); отсутствует у fallback = claude
   contextWindow?: number;  // точное окно с бэка (модели CLI-провайдеров); иначе regex-фолбэк
+  curated?: boolean;       // false — модель из опроса API провайдера (без карточки/описания)
 }
 
 // Возможности провайдера (блок providers из /api/models) — UI скрывает недоступное
@@ -64,6 +65,22 @@ function emit() {
   _listeners.forEach(fn => fn());
 }
 
+// Русские описания моделей Claude по стабильному id-алиасу: описания из CLI приходят
+// на английском, а UI русский. Формулировки версионно-нейтральные (без номеров версий),
+// чтобы не устаревать при обновлении моделей Claude; незнакомый алиас → описание из CLI.
+const CLAUDE_DESC_RU: Record<string, string> = {
+  'default': 'Универсальная · сложные повседневные задачи',
+  'opus': 'Универсальная · сложные повседневные задачи',
+  'claude-fable-5': 'Самая мощная · трудные и долгие задачи',
+  'sonnet': 'Экономичная · рутинные задачи',
+  'haiku': 'Самая быстрая · короткие ответы',
+};
+
+// Ключ описания — алиас без суффикса окна («opus[1m]» → «opus»)
+function claudeDescKey(value: string): string {
+  return value.replace(/\[1m\]$/i, '');
+}
+
 // Загрузить список с сервера (вызывается при старте после проверки auth).
 // value 'default' у CLI означает «модель по умолчанию» — маппим в '' (не передавать --model).
 export async function loadModels(): Promise<void> {
@@ -72,9 +89,13 @@ export async function loadModels(): Promise<void> {
     const opts: ModelOption[] = res.models.map(m => ({
       value: m.value === 'default' ? '' : m.value,
       label: m.value === 'default' ? 'По умолчанию' : m.displayName,
-      description: m.description ?? undefined,
+      // Claude: русский перевод по алиасу, иначе описание из CLI как есть
+      description: (m.provider ?? 'claude') === 'claude'
+        ? (CLAUDE_DESC_RU[claudeDescKey(m.value)] ?? m.description ?? undefined)
+        : (m.description ?? undefined),
       provider: m.provider ?? undefined,
       contextWindow: m.contextWindow ?? undefined,
+      curated: m.isCurated ?? true,
     }));
     if (opts.length > 0) {
       _models = opts;

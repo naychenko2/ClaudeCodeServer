@@ -84,7 +84,7 @@ export const api = {
   models: {
     list: () =>
       request<{
-        models: { value: string; displayName: string; description?: string | null; provider?: string | null; contextWindow?: number | null }[];
+        models: { value: string; displayName: string; description?: string | null; provider?: string | null; contextWindow?: number | null; isCurated?: boolean }[];
         providers?: Record<string, import('./models').ProviderCapabilities>;
       }>('/models'),
   },

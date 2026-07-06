@@ -10,7 +10,9 @@ public class ClaudeSession : ILlmSessionAdapter
 {
     public Session Info { get; }
 
-    public LlmCapabilities Capabilities => LlmCapabilitiesCatalog.Claude;
+    // По модели: сторонний CLI-провайдер отдаёт свои возможности (SupportsImages и т.п.)
+    public LlmCapabilities Capabilities =>
+        _providers?.CapabilitiesFor(Info.Model) ?? LlmCapabilitiesCatalog.Claude;
 
     private readonly string _rootPath;
     private readonly Func<ServerMessage, Task> _onMessage;
@@ -60,11 +62,16 @@ public class ClaudeSession : ILlmSessionAdapter
     // Провайдер правил разрешений проекта — резолвим каждый запрос (правила могут меняться)
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
     private readonly TasksMcpContext? _tasksMcp;
+    // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
+    // для сторонних моделей; null — всегда родной Claude
+    private readonly LlmProviderRegistry? _providers;
 
     public ClaudeSession(Session info, LlmSessionContext context,
         string? mcpConfigPath = null, SkillsService? skills = null,
-        WorkspaceKnowledgeStore? workspaceStore = null, string[]? disallowedTools = null)
+        WorkspaceKnowledgeStore? workspaceStore = null, string[]? disallowedTools = null,
+        LlmProviderRegistry? providers = null)
     {
+        _providers = providers;
         Info = info;
         _rootPath = context.RootPath;
         _onMessage = context.OnMessage;
@@ -457,6 +464,13 @@ public class ClaudeSession : ILlmSessionAdapter
         // ограничения по времени; нас страхует watchdog IdleTimeout (если claude замолчит дольше — прервём сами).
         psi.Environment["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] = "0";
 
+        // Сторонний провайдер (DeepSeek/GLM): перенаправляем CLI на его Anthropic-совместимый
+        // эндпоинт. Env считаются каждый ход — модель сессии могла смениться между ходами.
+        var cliEnv = _providers?.BuildCliEnv(Info.Model);
+        if (cliEnv is not null)
+            foreach (var (k, v) in cliEnv)
+                psi.Environment[k] = v;
+
         var process = new Process { StartInfo = psi };
 
         process.Start();
@@ -659,8 +673,13 @@ public class ClaudeSession : ILlmSessionAdapter
                     foreach (var x in pd.EnumerateArray())
                         denials.Add(x.TryGetProperty("tool_name", out var tnm) ? tnm.GetString() ?? "?" : "?");
                 }
+                var usage = ParseUsage(root);
+                // На стороннем эндпоинте CLI считает total_cost_usd по ценам Anthropic —
+                // пересчитываем по ценам конфига модели (нет цен → стоимость не показываем)
+                if (_providers is not null && _providers.ResolveByModel(Info.Model) is not null)
+                    totalCost = _providers.ComputeCost(Info.Model, usage);
                 // Статус Error/Active выставит SessionManager по ResultMessage
-                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, ParseUsage(root), totalCost, apiErr, denials));
+                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials));
                 // Закрываем stdin: все permission-запросы уже обработаны, Claude может завершить процесс
                 CloseStdin(_currentProcess);
                 // Гарантия исполнения одобренного плана: если ход завершился, а Claude так и не

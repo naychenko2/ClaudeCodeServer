@@ -16,7 +16,7 @@ namespace ClaudeHomeServer.Services;
 /// коммитах дня.
 /// </summary>
 public class ChangelogService(FileService files, IConfiguration config, ILogger<ChangelogService> logger,
-    Llm.DeepSeek.DeepSeekClient deepSeek, Microsoft.Extensions.Options.IOptions<DeepSeekOptions> deepSeekOptions)
+    Llm.LlmProviderRegistry llmProviders)
 {
     private readonly string _cacheDir = Path.Combine(
         Path.GetDirectoryName(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
@@ -296,28 +296,15 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
         _ => "🔹",
     };
 
-    /// <summary>Генерация сводки. Провайдер — по Changelog:Model: deepseek-* → DeepSeek API,
-    /// иначе claude --print. null при любой ошибке (наверху сработает фолбэк).</summary>
+    /// <summary>Генерация сводки через claude --print; модель стороннего провайдера
+    /// подключается env-оверрайдами. null при любой ошибке (наверху сработает фолбэк).</summary>
     private async Task<string?> RunClaude(string prompt)
     {
-        if (Llm.LlmProviderResolver.Resolve(_model) == Llm.LlmProvider.DeepSeek)
+        if (llmProviders.ResolveByModel(_model) is { Enabled: false } disabled)
         {
-            if (!deepSeekOptions.Value.Enabled)
-            {
-                logger.LogWarning("Генерация changelog: Changelog:Model = {Model}, но DeepSeek:ApiKey не задан", _model);
-                return null;
-            }
-            try
-            {
-                using var dsCts = new CancellationTokenSource(_claudeTimeoutMs);
-                var text = await deepSeek.CompleteAsync(_model, prompt, dsCts.Token);
-                return string.IsNullOrWhiteSpace(text) ? null : text;
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Генерация changelog: ошибка DeepSeek");
-                return null;
-            }
+            logger.LogWarning("Генерация changelog: Changelog:Model = {Model}, но провайдер «{Provider}» не настроен",
+                _model, disabled.DisplayName);
+            return null;
         }
 
         try
@@ -335,6 +322,11 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
             };
             foreach (var arg in new[] { "--print", "--output-format", "text", "--model", _model })
                 psi.ArgumentList.Add(arg);
+
+            // Модель стороннего провайдера → CLI на его Anthropic-совместимый эндпоинт
+            if (llmProviders.BuildCliEnv(_model) is { } env)
+                foreach (var (k, v) in env)
+                    psi.Environment[k] = v;
 
             using var proc = Process.Start(psi);
             if (proc is null) return null;

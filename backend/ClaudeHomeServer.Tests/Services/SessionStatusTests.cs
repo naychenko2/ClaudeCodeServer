@@ -61,12 +61,9 @@ public class SessionStatusTests : IDisposable
 
     private SessionManager CreateSessionManager()
     {
-        var deepSeekOptions = Microsoft.Extensions.Options.Options.Create(new DeepSeekOptions());
+        var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(_config);
         var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
-            _config, new SkillsService(), new WorkspaceKnowledgeStore(_config),
-            new ClaudeHomeServer.Services.Llm.DeepSeek.DeepSeekClient(
-                new Mock<IHttpClientFactory>().Object, deepSeekOptions),
-            deepSeekOptions, new FileService(), new Mock<IHttpClientFactory>().Object);
+            _config, new SkillsService(), new WorkspaceKnowledgeStore(_config), llmProviders);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, _config);
         var usage = new UsageService(_config);
         var userStore = new UserStore(_config, NullLogger<UserStore>.Instance);
@@ -75,7 +72,7 @@ public class SessionStatusTests : IDisposable
         var featureFlags = new FeatureFlagService(userStore);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
-        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, featureFlags, server.Object);
+        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, featureFlags, server.Object, llmProviders);
     }
 
     private void WriteSessions(IEnumerable<Session> sessions)

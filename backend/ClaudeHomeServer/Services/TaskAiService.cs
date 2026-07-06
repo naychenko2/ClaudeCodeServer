@@ -5,12 +5,13 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
-// Генерация контента задач одноразовым вызовом LLM (без сессии).
-// Провайдер — по Tasks:AiModel: deepseek-* → DeepSeek API, иначе claude --print.
+// Генерация контента задач одноразовым вызовом claude --print (без сессии).
+// Модель — Tasks:AiModel; модель стороннего провайдера (DeepSeek/GLM) подключается
+// env-оверрайдами процесса (LlmProviderRegistry.BuildCliEnv).
 // Контекст проекта передаётся в промпте (имя + выдержка из CLAUDE.md) — инструменты
 // не нужны, поэтому у claude cwd — пустая temp-папка, ответ приходит одним текстом.
 public class TaskAiService(ProjectManager projects, IConfiguration config,
-    Llm.DeepSeek.DeepSeekClient deepSeek, Microsoft.Extensions.Options.IOptions<DeepSeekOptions> deepSeekOptions)
+    Llm.LlmProviderRegistry llmProviders)
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(120);
 
@@ -68,22 +69,18 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
         catch { /* контекст опционален */ }
     }
 
-    // Выбор провайдера: Tasks:AiModel = deepseek-модель → DeepSeek API, иначе claude CLI
     private async Task<string> RunAsync(string prompt, CancellationToken ct)
     {
+        // Модель ненастроенного провайдера тихо заменяем дефолтом claude —
+        // как и раньше, генерация не должна падать из-за отсутствующего ключа
         var aiModel = config["Tasks:AiModel"];
-        if (Llm.LlmProviderResolver.Resolve(aiModel) == Llm.LlmProvider.DeepSeek
-            && deepSeekOptions.Value.Enabled)
-        {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(Timeout);
-            return await deepSeek.CompleteAsync(aiModel!, prompt, cts.Token);
-        }
-        return await RunClaudeAsync(prompt, ct);
+        if (llmProviders.ResolveByModel(aiModel) is { Enabled: false })
+            aiModel = null;
+        return await RunClaudeAsync(aiModel, prompt, ct);
     }
 
     // Запуск claude --print: промпт через stdin, ответ — stdout целиком
-    private static async Task<string> RunClaudeAsync(string prompt, CancellationToken ct)
+    private async Task<string> RunClaudeAsync(string? model, string prompt, CancellationToken ct)
     {
         // Пустая рабочая папка: генерации не нужны файлы, а claude не получает лишний доступ
         var workDir = Path.Combine(Path.GetTempPath(), "claude-task-ai");
@@ -106,6 +103,16 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
         psi.ArgumentList.Add("--print");
         psi.ArgumentList.Add("--output-format");
         psi.ArgumentList.Add("text");
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            psi.ArgumentList.Add("--model");
+            psi.ArgumentList.Add(model);
+        }
+
+        // Модель стороннего провайдера → CLI на его Anthropic-совместимый эндпоинт
+        if (llmProviders.BuildCliEnv(model) is { } env)
+            foreach (var (k, v) in env)
+                psi.Environment[k] = v;
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Не удалось запустить claude");

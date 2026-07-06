@@ -8,21 +8,21 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/models")]
-public class ModelsController(ModelCatalogService catalog, ILlmSessionAdapterFactory adapters) : ControllerBase
+public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry providers) : ControllerBase
 {
-    // Актуальный список моделей (Claude — из CLI с кэшем; DeepSeek — из конфига, только при ApiKey)
-    // + возможности провайдеров, чтобы UI скрывал недоступное (план, effort, compact).
-    // DeepSeek в providers — только когда провайдер настроен (иначе UI его не предлагает).
+    // Актуальный список моделей (Claude — из CLI с кэшем; CLI-провайдеры — из конфига
+    // LlmProviders, только при ApiKey) + возможности провайдеров, чтобы UI скрывал
+    // недоступное. Ненастроенные провайдеры не попадают в ответ — UI их не предлагает.
     [HttpGet]
     public async Task<IActionResult> Get(CancellationToken ct)
     {
-        var providers = new Dictionary<string, LlmCapabilities>
+        var caps = new Dictionary<string, LlmCapabilities>
         {
             [LlmCapabilitiesCatalog.Claude.Provider] = LlmCapabilitiesCatalog.Claude,
         };
-        if (adapters.IsProviderAvailable(LlmProvider.DeepSeek))
-            providers[LlmCapabilitiesCatalog.DeepSeek.Provider] = LlmCapabilitiesCatalog.DeepSeek;
+        foreach (var p in providers.Enabled)
+            caps[p.Key] = LlmProviderRegistry.CapabilitiesOf(p);
 
-        return Ok(new { models = await catalog.GetModelsAsync(ct), providers });
+        return Ok(new { models = await catalog.GetModelsAsync(ct), providers = caps });
     }
 }

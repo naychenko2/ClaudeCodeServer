@@ -60,8 +60,8 @@ builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
 builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<FalAccountService>();
 builder.Services.AddSingleton<UsageService>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.DeepSeek.DeepSeekClient>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.DeepSeek.DeepSeekBalanceService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderBalanceService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory,
     ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory>();
 builder.Services.AddSingleton<SessionManager>();
@@ -70,12 +70,10 @@ builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
 builder.Services.AddHostedService<TaskSchedulerService>();
-builder.Services.Configure<DeepSeekOptions>(builder.Configuration.GetSection(DeepSeekOptions.Section));
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");
 builder.Services.AddHttpClient("fal");
-builder.Services.AddHttpClient("deepseek");
-builder.Services.AddHttpClient("deepseek-mcp");
+builder.Services.AddHttpClient("llm-provider");
 builder.Services.AddHttpForwarder();
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));

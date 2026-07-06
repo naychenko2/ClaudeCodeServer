@@ -36,6 +36,7 @@ public class SessionManager
     };
 
     private readonly ILlmSessionAdapterFactory _adapters;
+    private readonly LlmProviderRegistry _llmProviders;
     private readonly FalCostService _falCost;
     private readonly UsageService _usage;
     private readonly AppSettingsService _appSettings;
@@ -55,12 +56,14 @@ public class SessionManager
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
         FalCostService falCost, UsageService usage,
         AppSettingsService appSettings, UserStore users, JwtService jwt,
-        FeatureFlagService featureFlags, Microsoft.AspNetCore.Hosting.Server.IServer server)
+        FeatureFlagService featureFlags, Microsoft.AspNetCore.Hosting.Server.IServer server,
+        LlmProviderRegistry llmProviders)
     {
         _projects = projects;
         _hub = hub;
         _history = history;
         _adapters = adapters;
+        _llmProviders = llmProviders;
         _falCost = falCost;
         _usage = usage;
         _appSettings = appSettings;
@@ -282,7 +285,7 @@ public class SessionManager
         // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
         // пересоздаётся в RunTurnAsync и читает --permission-mode из Info.Mode.
         // Режим «План» у провайдера без поддержки тихо игнорируем (защита от рассинхрона UI).
-        var caps = LlmCapabilitiesCatalog.For(LlmProviderResolver.Resolve(entry.Info.Model));
+        var caps = _llmProviders.CapabilitiesFor(entry.Info.Model);
         if (mode is not null && Enum.TryParse<ClaudeMode>(mode, true, out var parsedMode)
             && entry.Info.Mode != parsedMode
             && (parsedMode != ClaudeMode.Plan || caps.SupportsPlanMode))
@@ -318,7 +321,7 @@ public class SessionManager
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
         if (entry.Info.ClaudeSessionId is null) return; // ходов ещё не было — сворачивать нечего
-        if (!LlmCapabilitiesCatalog.For(LlmProviderResolver.Resolve(entry.Info.Model)).SupportsCompact)
+        if (!_llmProviders.CapabilitiesFor(entry.Info.Model).SupportsCompact)
             return; // провайдер не умеет compact — защита от рассинхрона UI
 
         await EnsureProcessAsync(sessionId, entry);
@@ -384,9 +387,9 @@ public class SessionManager
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         var newModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
 
-        // Смена провайдера: контекст сессии живёт у провайдера (транскрипт CLI / история messages),
+        // Смена провайдера: контекст сессии живёт у провайдера (транскрипт эндпоинта),
         // «переехавшая» сессия молча потеряла бы его — для начатых сессий запрещаем.
-        if (LlmProviderResolver.Resolve(newModel) != LlmProviderResolver.Resolve(entry.Info.Model))
+        if (_llmProviders.ProviderKey(newModel) != _llmProviders.ProviderKey(entry.Info.Model))
         {
             if (entry.Info.ClaudeSessionId is not null)
                 throw new InvalidOperationException(

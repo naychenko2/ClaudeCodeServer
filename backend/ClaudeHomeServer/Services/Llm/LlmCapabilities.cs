@@ -1,9 +1,11 @@
 namespace ClaudeHomeServer.Services.Llm;
 
-// Возможности LLM-провайдера. Provider — wire-токен для фронта ("claude" | "deepseek").
-// Отдаётся в GET /api/models (блок providers) и в session_started.
+// Возможности LLM-провайдера. Provider — wire-токен для фронта ("claude" | ключ из
+// LlmProviders). Отдаётся в GET /api/models (блок providers) и в session_started.
+// CLI-провайдеры строятся из конфига (LlmProviderRegistry.CapabilitiesOf).
 public sealed record LlmCapabilities(
     string Provider,
+    string DisplayName,            // имя провайдера для UI («Claude», «DeepSeek», «GLM»)
     bool SupportsPlanMode,         // режим «План» + карточки plan_review
     bool SupportsCompact,          // /compact + compact_boundary
     bool SupportsMcp,              // MCP-серверы (tasks/dify)
@@ -16,6 +18,7 @@ public static class LlmCapabilitiesCatalog
 {
     public static readonly LlmCapabilities Claude = new(
         Provider: "claude",
+        DisplayName: "Claude",
         SupportsPlanMode: true,
         SupportsCompact: true,
         SupportsMcp: true,
@@ -23,17 +26,4 @@ public static class LlmCapabilitiesCatalog
         SupportsPermissionModes: true,
         SupportsImages: true,
         SupportsAgents: true);
-
-    public static readonly LlmCapabilities DeepSeek = new(
-        Provider: "deepseek",
-        SupportsPlanMode: true,        // эмуляция: exit_plan_mode + только read-инструменты
-        SupportsCompact: true,         // суммаризация истории отдельным запросом
-        SupportsMcp: true,             // stdio-клиент: tasks-server, Dify и серверы из .mcp.json
-        SupportsEffort: true,          // маппинг на thinking.reasoning_effort (high/max)
-        SupportsPermissionModes: true, // полный набор режимов (Execute-инструменты всегда спрашивают)
-        SupportsImages: false,         // ограничение API — изображений нет
-        SupportsAgents: true);         // промпт .claude/agents/<name>.md в системный контекст
-
-    public static LlmCapabilities For(LlmProvider provider) =>
-        provider == LlmProvider.DeepSeek ? DeepSeek : Claude;
 }

@@ -13,6 +13,9 @@ public class LlmProviderRegistry
     private readonly Dictionary<string, LlmProviderConfig> _providers;
     // Папка изолированных профилей CLI (CLAUDE_CONFIG_DIR) — по одному на провайдера
     private readonly string _profilesDir;
+    // Пользовательский профиль CLI (~/.claude) — источник общих настроек для профилей
+    // провайдеров; переопределяется ключом ClaudeUserProfileDir (тесты, docker)
+    private readonly string _userProfileDir;
 
     public LlmProviderRegistry(IConfiguration config)
     {
@@ -29,6 +32,8 @@ public class LlmProviderRegistry
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
             ?? Path.Combine(AppContext.BaseDirectory, "data");
         _profilesDir = Path.Combine(dataDir, "claude-profiles");
+        _userProfileDir = config["ClaudeUserProfileDir"]
+            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
     }
 
     public IReadOnlyCollection<LlmProviderConfig> All => _providers.Values;
@@ -102,15 +107,68 @@ public class LlmProviderRegistry
         return env;
     }
 
+    // Общие настройки пользователя, докладываемые в профиль провайдера (ТОЛЬКО белый
+    // список: глобальная память, настройки, правила, скиллы, агенты, команды).
+    // Креденшалы (.credentials.json) НЕ копируем никогда — иначе изоляция теряет смысл
+    // и OAuth-токен подписки утёк бы на сторонний эндпоинт.
+    private static readonly string[] SyncFiles = ["CLAUDE.md", "settings.json"];
+    private static readonly string[] SyncDirs = ["rules", "skills", "agents", "commands"];
+
+    // Троттлинг синка: не чаще раза в 5 минут на провайдера
+    private static readonly TimeSpan SyncTtl = TimeSpan.FromMinutes(5);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _lastSync = new();
+
     private string ProfileDir(string key)
     {
         var dir = Path.Combine(_profilesDir, key);
-        try { Directory.CreateDirectory(dir); }
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var last = _lastSync.GetOrAdd(key, DateTime.MinValue);
+            if (DateTime.UtcNow - last >= SyncTtl && _lastSync.TryUpdate(key, DateTime.UtcNow, last))
+                SyncUserProfile(dir);
+        }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[LlmProviders] Не удалось создать профиль CLI {dir}: {ex.Message}");
+            Console.Error.WriteLine($"[LlmProviders] Не удалось подготовить профиль CLI {dir}: {ex.Message}");
         }
         return dir;
+    }
+
+    // Копирует общие настройки из ~/.claude в профиль провайдера (только новее по mtime —
+    // дешёвый инкрементальный синк на каждый ход с троттлингом)
+    private void SyncUserProfile(string profileDir)
+    {
+        if (!Directory.Exists(_userProfileDir)) return;
+
+        foreach (var name in SyncFiles)
+            CopyIfNewer(Path.Combine(_userProfileDir, name), Path.Combine(profileDir, name));
+
+        foreach (var sub in SyncDirs)
+        {
+            var srcDir = Path.Combine(_userProfileDir, sub);
+            if (!Directory.Exists(srcDir)) continue;
+            foreach (var src in Directory.EnumerateFiles(srcDir, "*", SearchOption.AllDirectories))
+            {
+                var rel = Path.GetRelativePath(_userProfileDir, src);
+                CopyIfNewer(src, Path.Combine(profileDir, rel));
+            }
+        }
+    }
+
+    private static void CopyIfNewer(string src, string dst)
+    {
+        try
+        {
+            if (!File.Exists(src)) return;
+            if (File.Exists(dst) && File.GetLastWriteTimeUtc(src) <= File.GetLastWriteTimeUtc(dst)) return;
+            Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+            File.Copy(src, dst, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LlmProviders] Синк настройки {src} → {dst} не удался: {ex.Message}");
+        }
     }
 
     // Стоимость хода по ценам конфига модели. CLI на чужом эндпоинте считает

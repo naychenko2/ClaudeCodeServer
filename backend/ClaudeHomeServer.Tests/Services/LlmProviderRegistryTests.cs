@@ -103,6 +103,38 @@ public class LlmProviderRegistryTests
     }
 
     [Fact]
+    public void BuildCliEnv_СинкОбщихНастроекВПрофиль_БезКреденшалов()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "llmreg_" + Guid.NewGuid().ToString("N"));
+        var userDir = Path.Combine(tmp, "user-claude");
+        Directory.CreateDirectory(Path.Combine(userDir, "rules"));
+        File.WriteAllText(Path.Combine(userDir, "CLAUDE.md"), "# память");
+        File.WriteAllText(Path.Combine(userDir, "settings.json"), "{}");
+        File.WriteAllText(Path.Combine(userDir, "rules", "style.md"), "правила");
+        // Креденшалы и транскрипты копироваться НЕ должны
+        File.WriteAllText(Path.Combine(userDir, ".credentials.json"), "{\"oauth\":\"секрет\"}");
+
+        try
+        {
+            var reg = Create(new()
+            {
+                ["ClaudeUserProfileDir"] = userDir,
+                ["DataPath"] = Path.Combine(tmp, "data", "projects.json"),
+            });
+            var profile = reg.BuildCliEnv("deepseek-v4-pro")!["CLAUDE_CONFIG_DIR"];
+
+            File.Exists(Path.Combine(profile, "CLAUDE.md")).Should().BeTrue();
+            File.Exists(Path.Combine(profile, "settings.json")).Should().BeTrue();
+            File.Exists(Path.Combine(profile, "rules", "style.md")).Should().BeTrue();
+            File.Exists(Path.Combine(profile, ".credentials.json")).Should().BeFalse();
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void ComputeCost_ПоЦенамКонфига()
     {
         // 1M miss-входа + 1M hit-кэша + 1M выхода = 0.5 + 0.1 + 1.0

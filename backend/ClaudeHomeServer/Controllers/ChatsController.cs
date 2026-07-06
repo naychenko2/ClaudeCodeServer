@@ -44,8 +44,12 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
     {
         if (OwnedChat(id) is null) return NotFound();
         if (req.Pinned is bool pinned) sessions.SetPinned(id, pinned);
-        var updated = sessions.Update(id, req.Name, req.Model, req.Effort);
-        return updated is null ? NotFound() : Ok(updated);
+        try
+        {
+            var updated = sessions.Update(id, req.Name, req.Model, req.Effort);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     [HttpGet("{id}/history")]

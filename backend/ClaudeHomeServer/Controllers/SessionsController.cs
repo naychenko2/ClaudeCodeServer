@@ -30,8 +30,12 @@ public class SessionsController(SessionManager sessions) : ControllerBase
     {
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
-        var updated = sessions.Update(sessionId, req.Name, req.Model, req.Effort);
-        return updated == null ? NotFound() : Ok(updated);
+        try
+        {
+            var updated = sessions.Update(sessionId, req.Name, req.Model, req.Effort);
+            return updated == null ? NotFound() : Ok(updated);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     [HttpGet("{sessionId}/history")]

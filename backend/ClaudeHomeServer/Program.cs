@@ -60,6 +60,8 @@ builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
 builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<FalAccountService>();
 builder.Services.AddSingleton<UsageService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory,
+    ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<PushSubscriptionStore>();

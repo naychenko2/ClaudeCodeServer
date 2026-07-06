@@ -61,8 +61,8 @@ public class SessionStatusTests : IDisposable
 
     private SessionManager CreateSessionManager()
     {
-        var skills = new SkillsService();
-        var workspaceStore = new WorkspaceKnowledgeStore(_config);
+        var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
+            _config, new SkillsService(), new WorkspaceKnowledgeStore(_config));
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, _config);
         var usage = new UsageService(_config);
         var userStore = new UserStore(_config, NullLogger<UserStore>.Instance);
@@ -71,7 +71,7 @@ public class SessionStatusTests : IDisposable
         var featureFlags = new FeatureFlagService(userStore);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
-        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, skills, workspaceStore, falCost, usage, appSettings, userStore, jwt, featureFlags, server.Object);
+        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, featureFlags, server.Object);
     }
 
     private void WriteSessions(IEnumerable<Session> sessions)

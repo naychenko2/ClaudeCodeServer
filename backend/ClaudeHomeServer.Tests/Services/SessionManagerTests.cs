@@ -46,15 +46,15 @@ public class SessionManagerTests : IDisposable
         var hub = new Mock<IHubContext<SessionHub>>();
         hub.Setup(h => h.Clients).Returns(clients.Object);
 
-        var skills = new SkillsService();
-        var workspaceStore = new WorkspaceKnowledgeStore(config);
+        var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
+            config, new SkillsService(), new WorkspaceKnowledgeStore(config));
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var jwt = new JwtService(config, NullLogger<JwtService>.Instance);
         var featureFlags = new FeatureFlagService(userStore);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, skills, workspaceStore, falCost, usage, appSettings, userStore, jwt, featureFlags, server.Object);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, featureFlags, server.Object);
     }
 
     public void Dispose()

@@ -13,7 +13,7 @@ public class SessionManager
     private class SessionEntry
     {
         public required Session Info;
-        public ClaudeSession? Process;
+        public ILlmSessionAdapter? Process;
         public TurnAccumulator? Accumulator;
         // Кэш последних workflow_progress для replay при подключении нового клиента
         public Dictionary<string, WorkflowProgressMessage> WorkflowProgress = new();
@@ -35,10 +35,7 @@ public class SessionManager
         Converters = { new JsonStringEnumConverter() },
     };
 
-    private readonly string? _mcpConfigPath;
-    private readonly string[] _disallowedTools;
-    private readonly SkillsService _skills;
-    private readonly WorkspaceKnowledgeStore _workspaceStore;
+    private readonly ILlmSessionAdapterFactory _adapters;
     private readonly FalCostService _falCost;
     private readonly UsageService _usage;
     private readonly AppSettingsService _appSettings;
@@ -55,16 +52,15 @@ public class SessionManager
     public event Func<Session, ServerMessage, Task>? OnSessionMessage;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
-        ChatHistoryService history, IConfiguration config, SkillsService skills,
-        WorkspaceKnowledgeStore workspaceStore, FalCostService falCost, UsageService usage,
+        ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
+        FalCostService falCost, UsageService usage,
         AppSettingsService appSettings, UserStore users, JwtService jwt,
         FeatureFlagService featureFlags, Microsoft.AspNetCore.Hosting.Server.IServer server)
     {
         _projects = projects;
         _hub = hub;
         _history = history;
-        _skills = skills;
-        _workspaceStore = workspaceStore;
+        _adapters = adapters;
         _falCost = falCost;
         _usage = usage;
         _appSettings = appSettings;
@@ -80,9 +76,6 @@ public class SessionManager
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
             ?? Path.Combine(AppContext.BaseDirectory, "data");
         _sessionsFilePath = Path.Combine(dataDir, "sessions.json");
-
-        _mcpConfigPath = config["McpConfigPath"];
-        _disallowedTools = config.GetSection("Claude:DisallowedTools").Get<string[]>() ?? [];
 
         LoadSessions();
     }
@@ -271,15 +264,13 @@ public class SessionManager
         var ownerId = session.ProjectId is not null
             ? _projects.GetById(session.ProjectId)?.OwnerId
             : session.OwnerId;
-        var claudeSession = new ClaudeSession(session, rootPath,
+        var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
-            _mcpConfigPath, rawSystemPrompt,
-            _skills, _workspaceStore,
-            permissionRules,
-            BuildTasksContext(ownerId, session.ProjectId), _disallowedTools);
-        entry.Process = claudeSession;
+            rawSystemPrompt, permissionRules,
+            BuildTasksContext(ownerId, session.ProjectId)));
+        entry.Process = adapter;
 
-        await claudeSession.StartAsync();
+        await adapter.StartAsync();
         SaveSessions();
     }
 
@@ -345,30 +336,29 @@ public class SessionManager
 
         // Чат вне проекта — рабочая папка Chats, без проектного промпта и правил;
         // проектная сессия — RootPath/SystemPrompt/PermissionRules из проекта.
-        ClaudeSession claudeSession;
+        LlmSessionContext context;
         if (entry.Info.ProjectId is null)
         {
             var rootPath = ResolveChatRoot(entry.Info.OwnerId
                 ?? throw new InvalidOperationException("У чата не задан владелец"));
-            claudeSession = new ClaudeSession(entry.Info, rootPath,
+            context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
-                _mcpConfigPath, rawSystemPrompt: null,
-                _skills, _workspaceStore, permissionRules: null,
-                BuildTasksContext(entry.Info.OwnerId, null), _disallowedTools);
+                RawSystemPrompt: null, PermissionRules: null,
+                BuildTasksContext(entry.Info.OwnerId, null));
         }
         else
         {
             var project = _projects.GetById(entry.Info.ProjectId)
                 ?? throw new InvalidOperationException("Проект не найден");
-            claudeSession = new ClaudeSession(entry.Info, project.RootPath,
+            context = new LlmSessionContext(project.RootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
-                _mcpConfigPath, project.SystemPrompt,
-                _skills, _workspaceStore,
+                project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                BuildTasksContext(project.OwnerId, project.Id), _disallowedTools);
+                BuildTasksContext(project.OwnerId, project.Id));
         }
-        entry.Process = claudeSession;
-        await claudeSession.StartAsync();
+        var adapter = _adapters.Create(entry.Info, context);
+        entry.Process = adapter;
+        await adapter.StartAsync();
     }
 
     // Заголовок чата из первого сообщения: первая строка, обрезанная до разумной длины.
@@ -383,12 +373,30 @@ public class SessionManager
     }
 
     // Редактирование названия и модели. Модель применяется со следующего хода
-    // (процесс claude пересоздаётся в RunTurnAsync), Info — общая ссылка с ClaudeSession.
+    // (процесс claude пересоздаётся в RunTurnAsync), Info — общая ссылка с адаптером.
     public Session? Update(string sessionId, string? name, string? model, string? effort)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        var newModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+
+        // Смена провайдера: контекст сессии живёт у провайдера (транскрипт CLI / история messages),
+        // «переехавшая» сессия молча потеряла бы его — для начатых сессий запрещаем.
+        if (LlmProviderResolver.Resolve(newModel) != LlmProviderResolver.Resolve(entry.Info.Model))
+        {
+            if (entry.Info.ClaudeSessionId is not null)
+                throw new InvalidOperationException(
+                    "Нельзя сменить провайдера у начатой сессии — создайте новый чат");
+            // Ходов ещё не было — пересоздаём адаптер нужного типа при следующем сообщении
+            if (entry.Process is { } old)
+            {
+                entry.Process = null;
+                FireAndForget(old.DisposeAsync().AsTask(),
+                    $"остановка адаптера при смене провайдера ({sessionId})");
+            }
+        }
+
         entry.Info.Name = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
-        entry.Info.Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+        entry.Info.Model = newModel;
         entry.Info.Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim();
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
@@ -678,13 +686,13 @@ public class SessionManager
             t => Console.Error.WriteLine($"[SessionManager] {context}: {t.Exception?.GetBaseException().Message}"),
             TaskContinuationOptions.OnlyOnFaulted);
 
-    // Остановка всех живых процессов claude — вызывается при graceful shutdown приложения,
+    // Остановка всех живых адаптеров — вызывается при graceful shutdown приложения,
     // иначе после остановки сервера остаются зомби-процессы (claude + node MCP-серверов)
     public void KillAllProcesses()
     {
         var tasks = _sessions.Values
             .Select(e => e.Process)
-            .OfType<ClaudeSession>()
+            .OfType<ILlmSessionAdapter>()
             .Select(p => p.DisposeAsync().AsTask())
             .ToArray();
         if (tasks.Length == 0) return;

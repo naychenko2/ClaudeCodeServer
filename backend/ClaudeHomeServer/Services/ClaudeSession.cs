@@ -64,22 +64,19 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
     private readonly TasksMcpContext? _tasksMcp;
 
-    public ClaudeSession(Session info, string rootPath, Func<ServerMessage, Task> onMessage,
-        string? mcpConfigPath = null, string? rawSystemPrompt = null,
-        SkillsService? skills = null, WorkspaceKnowledgeStore? workspaceStore = null,
-        Func<IReadOnlyList<PermissionRule>>? permissionRules = null,
-        TasksMcpContext? tasksMcp = null,
-        string[]? disallowedTools = null)
+    public ClaudeSession(Session info, LlmSessionContext context,
+        string? mcpConfigPath = null, SkillsService? skills = null,
+        WorkspaceKnowledgeStore? workspaceStore = null, string[]? disallowedTools = null)
     {
         Info = info;
-        _rootPath = rootPath;
-        _onMessage = onMessage;
+        _rootPath = context.RootPath;
+        _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
-        _rawSystemPrompt = rawSystemPrompt;
+        _rawSystemPrompt = context.RawSystemPrompt;
         _skills = skills;
         _wkStore = workspaceStore;
-        _permissionRules = permissionRules;
-        _tasksMcp = tasksMcp;
+        _permissionRules = context.PermissionRules;
+        _tasksMcp = context.TasksMcp;
         _disallowedTools = disallowedTools ?? [];
     }
 

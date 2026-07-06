@@ -1,21 +1,21 @@
 ﻿#Requires -Version 5.1
 <#
-    Быстрый деплой ClaudeCodeServer на порт 8080 (хостовый, среда Production8080).
+    Быстрый деплой ClaudeCodeServer на порт 80 (хостовый, среда Production80).
     Пайплайн повторяет Dockerfile: собрать фронт -> опубликовать бэк -> фронт в wwwroot -> запуск.
 
     Переносимо: корень репы берётся от места скрипта ($PSScriptRoot), пути-параметры имеют дефолты.
 
     Использование (из любой папки):
-      powershell -ExecutionPolicy Bypass -File deploy8080.ps1                 # полный деплой + перезапуск
-      powershell -ExecutionPolicy Bypass -File deploy8080.ps1 -SkipFrontend   # без пересборки фронта
-      powershell -ExecutionPolicy Bypass -File deploy8080.ps1 -NoRestart      # только собрать, без запуска
+      powershell -ExecutionPolicy Bypass -File deploy80.ps1                 # полный деплой + перезапуск
+      powershell -ExecutionPolicy Bypass -File deploy80.ps1 -SkipFrontend   # без пересборки фронта
+      powershell -ExecutionPolicy Bypass -File deploy80.ps1 -NoRestart      # только собрать, без запуска
       ... -PublishDir 'D:\deploy\claude'   # другая папка публикации
 #>
 param(
     [switch]$SkipFrontend,
     [switch]$NoRestart,
     [string]$PublishDir  = 'C:\deploy\claude',
-    [string]$Environment = 'Production8080'
+    [string]$Environment = 'Production80'
 )
 # НЕ 'Stop' глобально: npm/dotnet пишут предупреждения в stderr, а на Windows PowerShell это
 # со 'Stop' ложно роняет скрипт (npm.ps1 наследует preference). Нативные проверяем по
@@ -72,4 +72,4 @@ if ($NoRestart) {
 }
 
 Write-Host ''
-Write-Host 'Готово. Сервер запущен на порту 8080.' -ForegroundColor Green
+Write-Host 'Готово. Сервер запущен на порту 80.' -ForegroundColor Green

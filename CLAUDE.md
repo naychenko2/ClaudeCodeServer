@@ -98,6 +98,11 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
   `BuildCliEnv`, `ComputeCost` (на стороннем эндпоинте total_cost_usd от CLI
   считается по ценам Anthropic — пересчитываем по ценам конфига; без цен — null).
 - **Guard**: смена провайдера у начатой сессии — 400 (транскрипт живёт у эндпоинта).
+- **Профили CLI** — `data/claude-profiles/{key}` (CLAUDE_CONFIG_DIR): изоляция от
+  OAuth-логина ~/.claude (иначе CLI шлёт провайдеру токен подписки → 401); туда же
+  докладываются общие настройки пользователя по белому списку (CLAUDE.md,
+  settings.json, rules/skills/agents/commands; креденшалы — никогда), источник —
+  `ClaudeUserProfileDir` (дефолт ~/.claude), троттлинг 5 мин.
 - **Баланс** — `ProviderBalanceService`, `GET /api/providers/{key}/balance|usage`
   (кэш 5 мин; снапшоты 8 дней в data/provider-usage-{key}.json, legacy
   deepseek-usage.json читается) — попап контекст-бейджа шапки чата + вкладка

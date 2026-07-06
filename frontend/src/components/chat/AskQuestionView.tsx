@@ -10,15 +10,15 @@ interface QuestionDef { question: string; header?: string; multiSelect?: boolean
 function ChoiceMarker({ multi, selected }: { multi: boolean; selected: boolean }) {
   if (multi) {
     return selected ? (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="4" fill="#D97757" /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="4" fill={C.accent} /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
     ) : (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="1.5" width="13" height="13" rx="4" stroke="#9A8F7E" strokeWidth="1.5" /></svg>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="1.5" width="13" height="13" rx="4" stroke={C.textMuted} strokeWidth="1.5" /></svg>
     );
   }
   return selected ? (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" fill="#D97757" /><circle cx="8" cy="8" r="2.6" fill="#FBF1EA" /></svg>
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" fill={C.accent} /><circle cx="8" cy="8" r="2.6" fill={C.onAccent} /></svg>
   ) : (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#9A8F7E" strokeWidth="1.5" /></svg>
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke={C.textMuted} strokeWidth="1.5" /></svg>
   );
 }
 
@@ -45,9 +45,9 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
   // Отвеченный вопрос — компактная зелёная плашка «принято» со сводкой выбора по всем вопросам
   if (item.resolved) {
     return (
-      <div style={{ border: '1px solid #CADFC4', borderLeft: '3px solid #5E8B4E', borderRadius: 12, padding: '13px 14px', background: '#EEF4EA' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10, fontSize: 13, fontWeight: 600, color: '#3F6B33' }}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill="#5E8B4E" /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      <div style={{ border: `1px solid ${C.success}`, borderLeft: `3px solid ${C.success}`, borderRadius: 12, padding: '13px 14px', background: C.successBg }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10, fontSize: 13, fontWeight: 600, color: C.successText }}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill={C.success} /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
           Ответ передан {asstName}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -60,8 +60,8 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
                 <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 4 }}>{q.header || q.question}</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {chosen.map((label, li) => (
-                    <span key={li} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#3F6B33', background: C.bgWhite, border: '1px solid #CADFC4', borderRadius: 7, padding: '3px 9px' }}>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#5E8B4E" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                    <span key={li} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: C.successText, background: C.bgWhite, border: `1px solid ${C.success}`, borderRadius: 7, padding: '3px 9px' }}>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
                       {label}
                     </span>
                   ))}
@@ -145,10 +145,10 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
           const open = !!customOpen[qi];
           const filled = open && (customText[qi]?.trim().length ?? 0) > 0;
           return (
-            <div style={{ borderRadius: 9, overflow: 'hidden', border: open ? `1.5px solid ${C.accent}` : '1px dashed #C9A98F', background: open ? C.accentLight : 'transparent' }}>
+            <div style={{ borderRadius: 9, overflow: 'hidden', border: open ? `1.5px solid ${C.accent}` : `1px dashed ${C.dashed}`, background: open ? C.accentLight : 'transparent' }}>
               <div onClick={() => !disabled && toggleCustom(qi, !!q.multiSelect)}
                 style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', minHeight: 44, boxSizing: 'border-box', cursor: disabled ? 'default' : 'pointer' }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A8F7E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
                 <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: open ? C.textHeading : C.textMuted }}>Свой вариант{open ? '' : '…'}</span>
                 {q.multiSelect && <span style={{ flexShrink: 0, display: 'flex' }}><ChoiceMarker multi selected={filled} /></span>}
               </div>
@@ -187,10 +187,10 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
   );
 
   return (
-    <div style={{ border: '1px solid #E6C9B8', borderLeft: `3px solid ${C.accent}`, borderRadius: 12, padding: '13px 14px', background: '#FBF1EA' }}>
+    <div style={{ border: `1px solid ${C.accentMuted}`, borderLeft: `3px solid ${C.accent}`, borderRadius: 12, padding: '13px 14px', background: C.accentLight }}>
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 11 }}>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 600, color: C.textHeading }}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
           </svg>
           {asstName} уточняет
@@ -214,8 +214,8 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
                 }}
               >
                 {ans
-                  ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-                  : <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? C.accent : '#C9BEAD', flexShrink: 0 }} />}
+                  ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                  : <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? C.accent : C.textMuted, flexShrink: 0 }} />}
                 {q.header || `Q${qi + 1}`}
               </button>
             );

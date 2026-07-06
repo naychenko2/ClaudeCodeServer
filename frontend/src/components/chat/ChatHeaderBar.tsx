@@ -64,7 +64,7 @@ function RateRow({ w }: { w: RateWindow }) {
         </span>
         <span style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: c.text }}>{w.pct}%{w.isUsingOverage ? '+' : ''}</span>
       </div>
-      <div style={{ height: 4, borderRadius: 2, background: '#E5DCCB', overflow: 'hidden', margin: '3px 0' }}>
+      <div style={{ height: 4, borderRadius: 2, background: C.track, overflow: 'hidden', margin: '3px 0' }}>
         <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
       </div>
       {reset && <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted }}>сброс {reset}</div>}
@@ -86,7 +86,7 @@ export function RateLimitBar({ w }: { w: RateWindow }) {
       <span style={{ flexShrink: 0, fontFamily: FONT.sans, whiteSpace: 'nowrap' }}>
         {windowLabel(w.limitType)} — {reached ? 'лимит достигнут' : 'лимит близко'}
       </span>
-      <div style={{ flex: 1, minWidth: 30, height: 5, borderRadius: 3, background: '#E5DCCB', overflow: 'hidden' }}>
+      <div style={{ flex: 1, minWidth: 30, height: 5, borderRadius: 3, background: C.track, overflow: 'hidden' }}>
         <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
       </div>
       <span style={{ flexShrink: 0, fontFamily: FONT.mono, fontWeight: 700 }}>{w.pct}%{w.isUsingOverage ? '+' : ''}</span>
@@ -121,7 +121,7 @@ function BadgeShell({ label, amount, title, isMobile, tone, stacked, wide, child
           gap: stacked ? 1 : 4, padding: stacked ? '2px 9px' : '3px 9px',
           lineHeight: stacked ? 1.2 : undefined,
           background: toneBg, border: `1px solid ${toneBorder}`, borderRadius: R.lg,
-          cursor: 'pointer', fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: '#B05C38',
+          cursor: 'pointer', fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: C.accent,
         }}
       >
         {label && <span style={{ fontFamily: FONT.sans, fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</span>}
@@ -200,9 +200,9 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
             style={{
               padding: '2px 9px', borderRadius: 6, cursor: 'pointer', fontSize: 11,
               fontFamily: FONT.sans, fontWeight: billing === b ? 700 : 500,
-              border: `1px solid ${billing === b ? '#B05C38' : C.border}`,
-              background: billing === b ? '#F1DDD1' : C.bgWhite,
-              color: billing === b ? '#B05C38' : C.textMuted,
+              border: `1px solid ${billing === b ? C.accent : C.border}`,
+              background: billing === b ? C.accentLight : C.bgWhite,
+              color: billing === b ? C.accent : C.textMuted,
             }}>
             {b === 'subscription' ? 'Подписка' : 'API-ключ'}
           </button>
@@ -349,7 +349,7 @@ function ContextAmount({ estimate, isCompacting, isMobile }: {
       {isCompacting ? (
         <div className="tool-spinner" style={{ width: 10, height: 10 }} />
       ) : hasPct ? (
-        <span style={{ width: isMobile ? 18 : 26, height: 5, borderRadius: 3, background: '#E5DCCB', overflow: 'hidden', display: 'inline-block' }}>
+        <span style={{ width: isMobile ? 18 : 26, height: 5, borderRadius: 3, background: C.track, overflow: 'hidden', display: 'inline-block' }}>
           <span style={{ display: 'block', width: `${estimate.pct}%`, height: '100%', background: c.fill }} />
         </span>
       ) : null}
@@ -383,7 +383,7 @@ function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, com
       <div style={badgeTitleStyle}>Контекст сессии</div>
       {hasPct ? (
         <>
-          <div style={{ height: 5, borderRadius: 3, background: '#E5DCCB', overflow: 'hidden', margin: '2px 0 6px' }}>
+          <div style={{ height: 5, borderRadius: 3, background: C.track, overflow: 'hidden', margin: '2px 0 6px' }}>
             <div style={{ width: `${estimate.pct}%`, height: '100%', background: c.fill }} />
           </div>
           <BadgeRow k="Заполнено" v={`${estimate.pct}%`} />
@@ -412,10 +412,10 @@ function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, com
         title={compactTitle}
         style={{
           marginTop: 10, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-          padding: '6px 10px', borderRadius: 7, border: `1px solid ${compactDisabled ? C.border : '#C9BEAD'}`,
+          padding: '6px 10px', borderRadius: 7, border: `1px solid ${compactDisabled ? C.border : C.borderLight}`,
           background: C.bgWhite, cursor: compactDisabled ? 'default' : 'pointer',
           fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
-          color: compactDisabled ? C.textMuted : '#5A5043', opacity: compactDisabled ? 0.65 : 1,
+          color: compactDisabled ? C.textMuted : C.textHeading, opacity: compactDisabled ? 0.65 : 1,
         }}
       >
         {isCompacting && <div className="tool-spinner" style={{ width: 11, height: 11 }} />}
@@ -493,7 +493,7 @@ function FalPopoverBody({ stats }: { stats: FalCostStats }) {
         <span>Траты fal.ai · этот чат</span>
         <span style={{ letterSpacing: 0 }}>{stats.count} ген.</span>
       </div>
-      <div style={{ fontFamily: FONT.mono, fontSize: 22, fontWeight: 700, color: '#B05C38', margin: '2px 0 4px' }}>{fmtUsd(stats.total)}</div>
+      <div style={{ fontFamily: FONT.mono, fontSize: 22, fontWeight: 700, color: C.accent, margin: '2px 0 4px' }}>{fmtUsd(stats.total)}</div>
       {inline && (
         <div style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textSecondary, marginBottom: 4, lineHeight: 1.4 }}>
           {inline}{moreCount > 0 ? `  ·  +${moreCount} в статистике` : ''}
@@ -502,11 +502,11 @@ function FalPopoverBody({ stats }: { stats: FalCostStats }) {
       {/* Баланс аккаунта — отдельной плашкой (другая сущность). Краснеет при низком остатке. */}
       <div style={{
         marginTop: 8, padding: '8px 10px', borderRadius: R.lg,
-        background: lowBal ? '#FBF1EC' : C.bgInset, border: lowBal ? '1px solid #F5C6BF' : 'none',
+        background: lowBal ? C.warningBg : C.bgInset, border: lowBal ? `1px solid ${C.warning}` : 'none',
         display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
-        fontFamily: FONT.sans, fontSize: 12, color: lowBal ? '#B4452F' : C.textSecondary,
+        fontFamily: FONT.sans, fontSize: 12, color: lowBal ? C.warningText : C.textSecondary,
       }}>
-        <span>Счёт fal.ai <span style={{ fontFamily: FONT.mono, fontWeight: 700, color: lowBal ? '#B4452F' : '#B05C38' }}>{balanceText}</span></span>
+        <span>Счёт fal.ai <span style={{ fontFamily: FONT.mono, fontWeight: 700, color: lowBal ? C.warningText : C.accent }}>{balanceText}</span></span>
         <a href="https://fal.ai/dashboard/billing" target="_blank" rel="noopener noreferrer"
           style={{ color: C.accent, fontWeight: 600, textDecoration: 'none', flexShrink: 0, marginLeft: 8 }}>пополнить ↗</a>
       </div>

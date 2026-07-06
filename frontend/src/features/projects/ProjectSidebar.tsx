@@ -52,7 +52,7 @@ export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, o
       />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '13px 4px 9px' }}>
-        <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 10, letterSpacing: '0.08em', color: '#9A8F7E' }}>
+        <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 10, letterSpacing: '0.08em', color: C.textMuted }}>
           ГРУППЫ
         </span>
         {onManageGroups && (
@@ -84,7 +84,7 @@ export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, o
             }}>
               {g.name}
             </span>
-            <span style={{ fontSize: 11.5, color: '#9A8F7E', flexShrink: 0 }}>{count}</span>
+            <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>{count}</span>
           </div>
         );
       })}
@@ -118,16 +118,16 @@ function Row({ selected, onClick, icon, label, count, muted }: {
         background: selected ? C.bgWhite : 'transparent', boxShadow: selected ? SHADOW.card : 'none',
       }}
     >
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={muted && !selected ? '#A89C88' : C.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={muted && !selected ? C.textMuted : C.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
         {icon}
       </svg>
       <span style={{
         flex: 1, fontSize: 13.5, fontWeight: selected ? 700 : 600,
-        color: selected ? C.textHeading : (muted ? '#8A8072' : C.textPrimary),
+        color: selected ? C.textHeading : (muted ? C.textMuted : C.textPrimary),
       }}>
         {label}
       </span>
-      <span style={{ fontSize: 11.5, color: '#9A8F7E', flexShrink: 0 }}>{count}</span>
+      <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>{count}</span>
     </div>
   );
 }

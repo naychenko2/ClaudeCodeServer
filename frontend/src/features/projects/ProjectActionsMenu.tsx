@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { MouseEvent } from 'react';
 import type { Project } from '../../types';
+import { C } from '../../lib/design';
 import { IconButton, Menu, MenuItem } from '../../components/ui';
 
 interface Props {
@@ -12,7 +13,7 @@ interface Props {
 }
 
 // Меню действий карточки проекта: «⋯» → переместить / редактировать / удалить.
-export function ProjectActionsMenu({ project: p, color = '#B0A697', onMove, onEdit, onDelete }: Props) {
+export function ProjectActionsMenu({ project: p, color = C.textMuted, onMove, onEdit, onDelete }: Props) {
   const [open, setOpen] = useState(false);
   return (
     <div style={{ position: 'relative', flexShrink: 0 }} onClick={e => e.stopPropagation()}>

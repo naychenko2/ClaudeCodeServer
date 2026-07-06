@@ -227,7 +227,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
           width: 40, height: 40, borderRadius: 10, background: C.accent,
           display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
         }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.onAccent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
           </svg>
         </div>
@@ -267,7 +267,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
           onClick={toggle}
           style={{
             width: 60, height: 60, borderRadius: '50%', border: 'none',
-            background: C.accent, color: '#FFF', cursor: 'pointer',
+            background: C.accent, color: C.onAccent, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             boxShadow: '0 4px 14px rgba(217,119,87,0.40)', flexShrink: 0,
           }}
@@ -518,8 +518,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
         {isOfficeFile && (
           officeSwitching ? (
             // Загрузка
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid #E0D7C8', background: '#E0D7C8', color: 'rgba(57,51,43,0.4)', fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
-              <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(57,51,43,0.2)', borderTopColor: 'rgba(57,51,43,0.4)', animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.border, color: C.textMuted, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
+              <span style={{ width: 13, height: 13, borderRadius: '50%', border: `2px solid ${C.dashed}`, borderTopColor: C.textMuted, animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
               {!isMobile && <span>Открываю…</span>}
             </div>
           ) : officeMode === 'view' ? (
@@ -527,7 +527,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             <button
               title="Редактировать"
               onClick={() => { setOfficeCacheKey(undefined); setOfficeSwitching(true); setOfficeMode('edit'); }}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid #E0D7C8', background: '#EDE7DC', color: '#39332B', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textHeading, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.7 }}>
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -547,7 +547,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   try { await api.files.officeDiscard(project.id, filePath); } catch {}
                   setOfficeMode('view');
                 }}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid rgba(180,60,40,0.3)', background: '#FEF0ED', color: '#B43C28', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.dangerBorder}`, background: C.dangerBg, color: C.dangerText, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
                 <DiscardIcon />
                 {!isMobile && <span>Откатить</span>}
@@ -555,7 +555,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
               <button
                 title="Нет, продолжить редактирование"
                 onClick={() => setOfficeDiscardConfirm(false)}
-                style={{ display: 'flex', alignItems: 'center', padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid #E0D7C8', background: '#EDE7DC', color: '#39332B', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                style={{ display: 'flex', alignItems: 'center', padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textHeading, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
                 {!isMobile ? 'Нет' : '✕'}
               </button>
@@ -574,7 +574,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                     }
                   : () => setOfficeDiscardConfirm(true)
                 }
-                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid #E0D7C8', background: '#EDE7DC', color: '#39332B', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textHeading, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
                 <DiscardIcon />
                 {!isMobile && <span>Отмена</span>}
@@ -587,7 +587,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   setOfficeCacheKey(String(Date.now()));
                   setOfficeMode('view');
                 }}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.08)', background: '#D97757', color: '#FFFFFF', fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.08)', background: C.accent, color: C.onAccent, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
                 <SaveIcon />
                 {!isMobile && <span>Сохранить</span>}
@@ -647,11 +647,11 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             pending ? (
               syncState === 'direct' ? (
                 <ToolbarIconButton isMobile={isMobile} onClick={handleToggleSync} title="Отменить синхронизацию">
-                  <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2.5px solid #DACDB9', borderTopColor: C.accent, animation: 'spin 0.6s linear infinite' }} />
+                  <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2.5px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite' }} />
                 </ToolbarIconButton>
               ) : (
                 <span title="Загружается…" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? 40 : 32, height: isMobile ? 40 : 32 }}>
-                  <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2.5px solid #DACDB9', borderTopColor: C.accent, animation: 'spin 0.6s linear infinite' }} />
+                  <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2.5px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite' }} />
                 </span>
               )
             ) : syncState === 'inherited' ? (
@@ -838,8 +838,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   onReady={() => setOfficeSwitching(false)}
                 />
                 {officeSwitching && (
-                  <div style={{ position: 'absolute', inset: 0, background: 'rgba(244,240,232,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
-                    <span style={{ width: 32, height: 32, borderRadius: '50%', border: '3px solid #E0D7C8', borderTopColor: '#D97757', animation: 'spin 0.7s linear infinite' }} />
+                  <div style={{ position: 'absolute', inset: 0, background: C.bgMain, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
+                    <span style={{ width: 32, height: 32, borderRadius: '50%', border: `3px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.7s linear infinite' }} />
                   </div>
                 )}
               </div>
@@ -894,7 +894,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                       customStyle={{ margin: 0, padding: 0, background: 'transparent', fontSize: 13, lineHeight: '1.6', fontFamily: FONT.mono }}
                       codeTagProps={{ style: { fontFamily: FONT.mono } }}
                       showLineNumbers
-                      lineNumberStyle={{ minWidth: '2.6em', paddingRight: '1.1em', textAlign: 'right', color: '#C4BBA9', userSelect: 'none' }}
+                      lineNumberStyle={{ minWidth: '2.6em', paddingRight: '1.1em', textAlign: 'right', color: C.textMuted, userSelect: 'none' }}
                       wrapLongLines
                     >
                       {content}
@@ -906,7 +906,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
         {!loading && !loadError && tab === 'diff' && (
           diff
             ? <DiffView diff={diff} />
-            : <div style={{ color: '#8A8070', fontSize: 13, padding: 16 }}>Файл не изменён</div>
+            : <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Файл не изменён</div>
         )}
       </div>
 

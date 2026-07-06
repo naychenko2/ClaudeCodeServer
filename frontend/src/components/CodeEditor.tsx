@@ -1,11 +1,12 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter,
   highlightSpecialChars, drawSelection, dropCursor,
   rectangularSelection, crosshairCursor, highlightActiveLine } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { indentOnInput, syntaxHighlighting, defaultHighlightStyle,
-  bracketMatching, foldGutter, foldKeymap, StreamLanguage } from '@codemirror/language';
+  HighlightStyle, bracketMatching, foldGutter, foldKeymap, StreamLanguage } from '@codemirror/language';
+import { tags as t } from '@lezer/highlight';
 import { closeBrackets, autocompletion,
   closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
 import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search';
@@ -25,6 +26,7 @@ import { csharp } from '@codemirror/legacy-modes/mode/clike';
 import { shell } from '@codemirror/legacy-modes/mode/shell';
 import type { Extension } from '@codemirror/state';
 import { FONT, C } from '../lib/design';
+import { getEffectiveTheme, subscribeThemeMode } from '../lib/themeMode';
 
 function getEditorLanguage(filePath: string): Extension | null {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
@@ -63,7 +65,10 @@ function getEditorLanguage(filePath: string): Extension | null {
   }
 }
 
-const editorTheme = EditorView.theme({
+// Тема оформления редактора. Цвета берём из CSS-переменных дизайн-системы
+// (C.*), поэтому одна тема годится и для света, и для тьмы. Флаг dark влияет
+// только на служебные дефолты CodeMirror.
+const makeEditorTheme = (dark: boolean) => EditorView.theme({
   '&': { height: '100%' },
   '.cm-scroller': {
     overflow: 'auto',
@@ -76,7 +81,7 @@ const editorTheme = EditorView.theme({
   '.cm-gutters': {
     background: C.bgMain,
     borderRight: `1px solid ${C.border}`,
-    color: '#C4BBA9',
+    color: C.textMuted,
     userSelect: 'none',
   },
   '.cm-lineNumbers .cm-gutterElement': {
@@ -147,9 +152,30 @@ const editorTheme = EditorView.theme({
   },
   '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
     background: C.accent,
-    color: '#fff',
+    color: C.onAccent,
   },
-}, { dark: false });
+}, { dark });
+
+// Подсветка синтаксиса для тёмной темы: тёплая палитра под тёмный фон.
+// Светлая тема использует стандартный defaultHighlightStyle.
+const darkHighlightStyle = HighlightStyle.define([
+  { tag: [t.keyword, t.moduleKeyword, t.operatorKeyword], color: '#E38A6A' },
+  { tag: [t.name, t.deleted, t.character, t.macroName], color: '#EDE6DB' },
+  { tag: [t.propertyName], color: '#9FC7E8' },
+  { tag: [t.function(t.variableName), t.labelName], color: '#9FC7E8' },
+  { tag: [t.color, t.constant(t.name), t.standard(t.name)], color: '#E0AC5A' },
+  { tag: [t.definition(t.name), t.separator], color: '#EDE6DB' },
+  { tag: [t.typeName, t.className, t.number, t.changed, t.annotation, t.self, t.namespace], color: '#E0AC5A' },
+  { tag: [t.string, t.inserted], color: '#8FCB79' },
+  { tag: [t.regexp, t.escape, t.special(t.string)], color: '#7CB86A' },
+  { tag: [t.meta, t.comment], color: '#8A8072', fontStyle: 'italic' },
+  { tag: t.link, color: '#9FC7E8', textDecoration: 'underline' },
+  { tag: t.heading, fontWeight: 'bold', color: '#E38A6A' },
+  { tag: [t.atom, t.bool, t.special(t.variableName)], color: '#E0AC5A' },
+  { tag: t.invalid, color: '#EE8A72' },
+  { tag: t.strong, fontWeight: 'bold' },
+  { tag: t.emphasis, fontStyle: 'italic' },
+]);
 
 interface Props {
   value: string;
@@ -160,10 +186,15 @@ interface Props {
 export function CodeEditor({ value, onChange, filePath }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  // Текущая эффективная тема: при её смене пересоздаём редактор (CodeMirror
+  // применяет highlight-стиль при инициализации, не реактивно).
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => getEffectiveTheme());
+  useEffect(() => subscribeThemeMode(() => setTheme(getEffectiveTheme())), []);
 
   useEffect(() => {
     if (!containerRef.current) return;
 
+    const dark = theme === 'dark';
     const lang = getEditorLanguage(filePath);
 
     const state = EditorState.create({
@@ -178,7 +209,7 @@ export function CodeEditor({ value, onChange, filePath }: Props) {
         dropCursor(),
         EditorState.allowMultipleSelections.of(true),
         indentOnInput(),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(dark ? darkHighlightStyle : defaultHighlightStyle, { fallback: true }),
         bracketMatching(),
         closeBrackets(),
         autocompletion(),
@@ -198,7 +229,7 @@ export function CodeEditor({ value, onChange, filePath }: Props) {
         search({ top: true }),
         EditorView.lineWrapping,
         ...(lang ? [lang] : []),
-        editorTheme,
+        makeEditorTheme(dark),
         EditorView.updateListener.of(update => {
           if (update.docChanged) onChange(update.state.doc.toString());
         }),
@@ -214,7 +245,7 @@ export function CodeEditor({ value, onChange, filePath }: Props) {
       viewRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // смена файла — через key на уровне FileViewer
+  }, [theme]); // смена файла — через key на уровне FileViewer; тема — пересоздаёт редактор
 
   return <div ref={containerRef} style={{ height: '100%' }} />;
 }

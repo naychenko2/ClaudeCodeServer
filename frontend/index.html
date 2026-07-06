@@ -8,6 +8,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#D97757" />
     <title>AI Home</title>
+    <!-- Тема до рендера: ставим data-theme из localStorage, чтобы не мигала
+         светлая тема при загрузке в тёмном режиме. Логика дублирует
+         lib/themeMode.ts (там источник правды после загрузки модулей). -->
+    <script>
+      (function () {
+        try {
+          var m = localStorage.getItem('theme-mode');
+          var dark =
+            m === 'dark' ||
+            ((m === 'system' || m === null) &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

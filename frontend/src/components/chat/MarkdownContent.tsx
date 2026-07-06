@@ -99,7 +99,7 @@ export function MarkdownContent({ text }: { text: string }) {
             );
           }
           return (
-            <code style={{ fontFamily: FONT.mono, background: '#EDE7DA', padding: '1px 5px', borderRadius: 4, fontSize: '0.88em', color: '#5A3322' }} {...props}>
+            <code style={{ fontFamily: FONT.mono, background: C.bgInset, padding: '1px 5px', borderRadius: 4, fontSize: '0.88em', color: C.accent }} {...props}>
               {children}
             </code>
           );
@@ -130,7 +130,7 @@ export function MarkdownContent({ text }: { text: string }) {
           </div>
         ),
         th: ({ children }) => (
-          <th style={{ border: `1px solid ${C.border}`, padding: '6px 10px', background: '#EDE7DA', fontWeight: 600, textAlign: 'left' }}>{children}</th>
+          <th style={{ border: `1px solid ${C.border}`, padding: '6px 10px', background: C.bgInset, fontWeight: 600, textAlign: 'left' }}>{children}</th>
         ),
         td: ({ children }) => (
           <td style={{ border: `1px solid ${C.border}`, padding: '6px 10px' }}>{children}</td>

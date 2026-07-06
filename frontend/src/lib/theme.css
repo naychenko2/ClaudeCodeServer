@@ -1,0 +1,181 @@
+/*
+ * Тема приложения через CSS custom properties.
+ * Источник правды по семантике токенов — объект C в lib/design.ts (там ключи
+ * ссылаются на эти переменные). Здесь — конкретные значения для светлой и
+ * тёмной тем.
+ *
+ * Светлая тема (:root) = РОВНО текущие исторические значения C (визуально
+ * ничего не меняется). Тёмная (:root[data-theme="dark"]) — тёплый тёмный
+ * в духе Claude/Anthropic: тёмные тёплые нейтрали, тот же accent, off-white
+ * текст. Значение data-theme проставляет lib/themeMode.ts (и inline-скрипт
+ * в index.html до рендера, чтобы не мигало).
+ */
+
+:root {
+  /* Фоны */
+  --c-bg-main:     #F4F0E8;
+  --c-bg-panel:    #EDE7DC;
+  --c-bg-card:     #FBF8F2;
+  --c-bg-white:    #FFFFFF;
+  --c-bg-selected: #E8E1D4;
+  --c-bg-inset:    #E7E0D2;
+
+  /* Текст */
+  --c-text-heading:   #2A251F;
+  --c-text-primary:   #39332B;
+  --c-text-secondary: #756B5E;
+  --c-text-muted:     #9A8F7E;
+  --c-on-accent:      #FBF8F2;
+
+  /* Акцент */
+  --c-accent:       #D97757;
+  --c-accent-light: #F4ECE1;
+  --c-accent-muted: #EAD3C5;
+  --c-accent-soft:  #E8A990;
+
+  /* Границы */
+  --c-border:       #E0D7C8;
+  --c-border-light: #E8E1D4;
+  --c-divider:      #DDD4C4;
+  --c-dashed:       #D0C6B4;
+  --c-track:        #D8CFBE;
+
+  /* Оверлей модалок */
+  --c-overlay: rgba(23, 19, 15, 0.42);
+
+  /* Статусы */
+  --c-success:      #5E8B4E;
+  --c-success-bg:   #E9F1E8;
+  --c-success-text: #3F7A4F;
+  --c-warning:      #C9923E;
+  --c-warning-bg:   #FBEFE0;
+  --c-warning-text: #8A6A28;
+  --c-danger:        #B4452F;
+  --c-danger-bg:     #FBF1EC;
+  --c-danger-text:   #B4452F;
+  --c-danger-border: #F5C6BF;
+  --c-info:    #3E7CA6;
+  --c-info-bg: #E7EFF5;
+
+  /* Режим «План» */
+  --c-plan:        #6C5CB0;
+  --c-plan-light:  #EEEBF8;
+  --c-plan-text:   #4E4196;
+  --c-plan-border: #D6CFEF;
+
+  /* Diff */
+  --c-diff-add-bg:   #E8F5E9;
+  --c-diff-add-text: #1B5E20;
+  --c-diff-rem-bg:   #FFEBEE;
+  --c-diff-rem-text: #B71C1C;
+
+  /* Вывод инструментов */
+  --c-term-bg:      #2A251F;
+  --c-term-text:    #D8CFC0;
+  --c-term-error:   #F0B8AC;
+  --c-output-bg:    #FFFFFF;
+  --c-output-border:#DED4C2;
+
+  /* Тени (rgba построены под светлый фон) */
+  --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);
+  --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+  --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+  --shadow-modal:    0 24px 60px rgba(23, 19, 15, 0.40);
+  --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
+  --shadow-button:   0 4px 14px rgba(217, 119, 87, 0.30);
+  --shadow-fab:      0 6px 18px rgba(217, 119, 87, 0.42);
+  --shadow-thumb:    0 1px 3px rgba(42, 37, 31, 0.12);
+
+  /* Скроллбар (index.css) */
+  --c-scrollbar-thumb:       #D4CFC4;
+  --c-scrollbar-thumb-hover: #BDB7AC;
+}
+
+/*
+ * === Тёмная тема ===
+ * Иерархия светлоты сохранена как в светлой, но инвертирована: bgMain — самый
+ * тёмный, панели чуть светлее, карточки ещё светлее (читаются как «поднятые»
+ * поверхности). Всё в тёплых коричнево-серых, не в холодном сине-чёрном.
+ */
+:root[data-theme="dark"] {
+  /* Фоны: тёплые тёмные нейтрали, восходящая светлота от main к card */
+  --c-bg-main:     #201C18;  /* самый тёмный — фон страниц */
+  --c-bg-panel:    #272320;  /* боковые панели, тулбары */
+  --c-bg-card:     #2E2A25;  /* карточки/поднятые поверхности */
+  --c-bg-white:    #2E2A25;  /* «белые» поля ввода → карточный тон */
+  --c-bg-selected: #38332D;  /* выбранная строка/hover */
+  --c-bg-inset:    #1B1815;  /* утопленные зоны/футеры — темнее main */
+
+  /* Текст: тёплый off-white для основного, приглушённые для остального.
+     Основной #EDE6DB на #201C18 ≈ 12.6:1, secondary #B3A897 ≈ 6.8:1 — AA+ */
+  --c-text-heading:   #F2ECE1;
+  --c-text-primary:   #EDE6DB;
+  --c-text-secondary: #B3A897;
+  --c-text-muted:     #8A8072;
+  --c-on-accent:      #201C18;  /* тёмный текст поверх яркого accent */
+
+  /* Акцент: чуть ярче для контраста на тёмном */
+  --c-accent:       #E38A6A;
+  --c-accent-light: #3A2E27;  /* тёмный тёплый фон для accent-подсветок */
+  --c-accent-muted: #4A362C;
+  --c-accent-soft:  #9A5E48;  /* disabled/loading accent-кнопки */
+
+  /* Границы: чуть светлее фона, мягкие */
+  --c-border:       #3D3830;
+  --c-border-light: #34302A;
+  --c-divider:      #454037;
+  --c-dashed:       #4A443B;
+  --c-track:        #453F37;  /* дорожка выключенного тумблера */
+
+  /* Оверлей — плотнее, чтобы модалка читалась над тёмным фоном */
+  --c-overlay: rgba(0, 0, 0, 0.62);
+
+  /* Статусы: приглушённые тёмные фоны, светлые читаемые тексты */
+  --c-success:      #7CB86A;
+  --c-success-bg:   #232E20;
+  --c-success-text: #8FCB79;
+  --c-warning:      #E0AC5A;
+  --c-warning-bg:   #322717;
+  --c-warning-text: #E7B96E;
+  --c-danger:        #E8785E;
+  --c-danger-bg:     #331F1B;
+  --c-danger-text:   #EE8A72;
+  --c-danger-border: #5A302A;
+  --c-info:    #5FA0CC;
+  --c-info-bg: #1E2A33;
+
+  /* Режим «План» (индиго) */
+  --c-plan:        #9385D8;
+  --c-plan-light:  #2A2540;
+  --c-plan-text:   #B0A4E6;
+  --c-plan-border: #45406A;
+
+  /* Diff: тёмные подложки, яркие тексты */
+  --c-diff-add-bg:   #1E2E1E;
+  --c-diff-add-text: #8FCB79;
+  --c-diff-rem-bg:   #33201E;
+  --c-diff-rem-text: #EE8A72;
+
+  /* Вывод инструментов: терминал уже тёмный — оставляем почти как есть.
+     Светлая «панель вывода» → карточный тёмный тон */
+  --c-term-bg:      #17140F;
+  --c-term-text:    #C9C0B0;
+  --c-term-error:   #F0B8AC;
+  --c-output-bg:    #262320;
+  --c-output-border:#3D3830;
+
+  /* Тени: на тёмном усилены (плотнее чёрный, больше blur).
+     Accent-свечения кнопок оставлены выразительными */
+  --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+  --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+  --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.55);
+  --shadow-modal:    0 28px 70px rgba(0, 0, 0, 0.65);
+  --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
+  --shadow-button:   0 4px 16px rgba(227, 138, 106, 0.34);
+  --shadow-fab:      0 6px 20px rgba(227, 138, 106, 0.46);
+  --shadow-thumb:    0 1px 3px rgba(0, 0, 0, 0.45);
+
+  /* Скроллбар */
+  --c-scrollbar-thumb:       #45403A;
+  --c-scrollbar-thumb-hover: #57514A;
+}

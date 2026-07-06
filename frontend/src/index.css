@@ -22,8 +22,8 @@ html, body, #root {
 
 body {
   font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  color: #39332B;
-  background: #F4F0E8;
+  color: var(--c-text-primary);
+  background: var(--c-bg-main);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -74,7 +74,7 @@ body {
 .cc-wave-bar {
   width: 3px;
   border-radius: 2px;
-  background: #D97757;
+  background: var(--c-accent);
   transform-origin: center;
   animation: cc-wave 0.9s ease-in-out infinite;
 }
@@ -88,7 +88,7 @@ body {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #9A8F7E;
+  background: var(--c-text-muted);
   animation: composer-dot-bounce 1.2s ease-in-out infinite;
 }
 .composer-dot:nth-child(2) { animation-delay: 0.2s; }
@@ -99,7 +99,7 @@ body {
 .cc-composer-input {
   scrollbar-width: none;        /* Firefox */
   -ms-overflow-style: none;     /* старый Edge */
-  caret-color: #D97757;
+  caret-color: var(--c-accent);
 }
 .cc-composer-input::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
@@ -114,8 +114,8 @@ body {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  border: 2px solid #E0D7C8;
-  border-top-color: #D97757;
+  border: 2px solid var(--c-border);
+  border-top-color: var(--c-accent);
   animation: spin 0.8s linear infinite;
   flex-shrink: 0;
 }
@@ -133,7 +133,7 @@ body {
   100% { background-position: -200% 0; }
 }
 .cc-shimmer-text {
-  background: linear-gradient(90deg, #9A8F7E 0%, #9A8F7E 35%, #D97757 50%, #9A8F7E 65%, #9A8F7E 100%);
+  background: linear-gradient(90deg, var(--c-text-muted) 0%, var(--c-text-muted) 35%, var(--c-accent) 50%, var(--c-text-muted) 65%, var(--c-text-muted) 100%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -177,7 +177,7 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .cc-pulse-ring { animation: none; }
-  .cc-shimmer-text { animation: none; -webkit-text-fill-color: #9A8F7E; color: #9A8F7E; }
+  .cc-shimmer-text { animation: none; -webkit-text-fill-color: var(--c-text-muted); color: var(--c-text-muted); }
   .cc-overlay, .cc-modal-card, .cc-sheet-card { animation: none; }
 }
 
@@ -188,7 +188,7 @@ body {
   width: 100%;
   height: 6px;
   border-radius: 3px;
-  background: linear-gradient(to right, #D97757 var(--seek-pct, 0%), #E0D7C8 var(--seek-pct, 0%));
+  background: linear-gradient(to right, var(--c-accent) var(--seek-pct, 0%), var(--c-border) var(--seek-pct, 0%));
   outline: none;
   cursor: pointer;
 }
@@ -199,7 +199,7 @@ body {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: #D97757;
+  background: var(--c-accent);
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(217, 119, 87, 0.45);
 }
@@ -207,10 +207,10 @@ body {
 .audio-seek::-moz-range-track {
   height: 6px;
   border-radius: 3px;
-  background: #E0D7C8;
+  background: var(--c-border);
 }
 .audio-seek::-moz-range-progress {
-  background: #D97757;
+  background: var(--c-accent);
   border-radius: 3px;
   height: 6px;
 }
@@ -218,7 +218,7 @@ body {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: #D97757;
+  background: var(--c-accent);
   border: none;
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(217, 119, 87, 0.45);
@@ -235,7 +235,7 @@ body {
   /* Firefox */
   * {
     scrollbar-width: thin;
-    scrollbar-color: #D4CFC4 transparent;
+    scrollbar-color: var(--c-scrollbar-thumb) transparent;
   }
 
   /* WebKit / Chromium */
@@ -249,14 +249,14 @@ body {
   }
 
   *::-webkit-scrollbar-thumb {
-    background-color: #D4CFC4;
+    background-color: var(--c-scrollbar-thumb);
     border-radius: 8px;
     border: 3px solid transparent;
     background-clip: padding-box;
   }
 
   *::-webkit-scrollbar-thumb:hover {
-    background-color: #BDB7AC;
+    background-color: var(--c-scrollbar-thumb-hover);
   }
 
   *::-webkit-scrollbar-button {

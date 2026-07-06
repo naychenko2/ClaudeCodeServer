@@ -120,14 +120,14 @@ export default function PdfViewer({ base64 }: { base64: string }) {
         }}
       >
         {error ? (
-          <div style={{ color: '#8A8070', fontSize: 13, padding: 40 }}>Не удалось отобразить PDF</div>
+          <div style={{ color: C.textMuted, fontSize: 13, padding: 40 }}>Не удалось отобразить PDF</div>
         ) : (
           <Document
             file={file}
             onLoadSuccess={({ numPages }) => setNumPages(numPages)}
             onLoadError={() => setError(true)}
             loading={<Spinner label="Загружаю PDF…" />}
-            error={<div style={{ color: '#8A8070', fontSize: 13, padding: 40 }}>Не удалось отобразить PDF</div>}
+            error={<div style={{ color: C.textMuted, fontSize: 13, padding: 40 }}>Не удалось отобразить PDF</div>}
           >
             {Array.from({ length: numPages }, (_, i) => (
               <div key={i} style={{ margin: '0 0 16px', boxShadow: '0 2px 12px rgba(42,37,31,0.12)', borderRadius: 4, overflow: 'hidden' }}>
@@ -148,10 +148,10 @@ export default function PdfViewer({ base64 }: { base64: string }) {
           display: 'flex',
           alignItems: 'center',
           height: 40,
-          background: 'rgba(251,248,242,0.94)',
+          background: C.bgCard,
           backdropFilter: 'blur(8px)',
           WebkitBackdropFilter: 'blur(8px)',
-          border: '1px solid rgba(224,215,200,0.6)',
+          border: `1px solid ${C.border}`,
           borderRadius: 10,
           boxShadow: '0 4px 16px rgba(42,37,31,0.18)',
           padding: '0 6px',
@@ -165,7 +165,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
             onMouseLeave={() => setHover(null)}
             style={{
               ...btnBase,
-              background: hover === 'minus' ? 'rgba(232,225,212,0.5)' : 'none',
+              background: hover === 'minus' ? C.bgSelected : 'none',
               color: hover === 'minus' ? C.textPrimary : C.textSecondary,
             }}
           >
@@ -189,7 +189,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
               fontFamily: FONT.mono,
               fontWeight: 600,
               color: modified ? C.accent : hover === 'pct' ? C.textPrimary : C.textSecondary,
-              background: hover === 'pct' ? 'rgba(232,225,212,0.5)' : 'none',
+              background: hover === 'pct' ? C.bgSelected : 'none',
             }}
           >
             {Math.round(scale * 100)}%
@@ -203,7 +203,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
             onMouseLeave={() => setHover(null)}
             style={{
               ...btnBase,
-              background: hover === 'plus' ? 'rgba(232,225,212,0.5)' : 'none',
+              background: hover === 'plus' ? C.bgSelected : 'none',
               color: hover === 'plus' ? C.textPrimary : C.textSecondary,
             }}
           >

@@ -1,18 +1,55 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { C, FONT } from '../lib/design';
+import { getEffectiveTheme, subscribeThemeMode } from '../lib/themeMode';
 
 // Диаграмма Mermaid: клиентский рендер в SVG. Библиотека грузится лениво (тяжёлая),
 // только когда реально встретился блок ```mermaid или открыт .mmd-файл.
-let mermaidInited = false;
+// Mermaid запекает цвета в SVG на этапе render — CSS-переменные тут не помогают,
+// поэтому держим два набора themeVariables (свет/тьма) и переинициализируем
+// библиотеку при смене темы, а кэш SVG ключуем с учётом активной темы.
+let mermaidInitedFor: 'light' | 'dark' | null = null;
 let mermaidSeq = 0;
-// Кэш отрендеренного SVG по исходному коду: при ремоунте компонента (на мобиле скролл
+// Кэш отрендеренного SVG по «код + тема»: при ремоунте компонента (на мобиле скролл
 // прячет адресную строку → resize → ремоунт поддерева) диаграмма берётся синхронно
-// из кэша, без вспышки код-фолбэка. Рендер mermaid детерминирован по коду + фикс. теме.
+// из кэша, без вспышки код-фолбэка.
 const mermaidSvgCache = new Map<string, string>();
+const cacheKey = (code: string) => `${getEffectiveTheme()}\n${code}`;
+
+// Палитры Mermaid под тему (свет/тьма). Значения — конкретные hex, т.к. mermaid
+// не понимает var(). Держим их в тон дизайн-системе.
+const MERMAID_VARS = {
+  light: {
+    primaryColor: '#EDE7DA',
+    primaryBorderColor: '#E0D7C8',
+    primaryTextColor: '#39332B',
+    lineColor: '#D97757',
+    secondaryColor: '#F4F0E8',
+    tertiaryColor: '#F4F0E8',
+    titleColor: '#2A251F',
+    axisColor: '#E0D7C8',
+    axisTextColor: '#39332B',
+    plotColorPalette: '#D97757, #5B8C6E, #4A7BA8, #B5843B, #9A5B3B',
+  },
+  dark: {
+    primaryColor: '#38332D',
+    primaryBorderColor: '#4A443B',
+    primaryTextColor: '#EDE6DB',
+    lineColor: '#E38A6A',
+    secondaryColor: '#2E2A25',
+    tertiaryColor: '#272320',
+    titleColor: '#F2ECE1',
+    axisColor: '#4A443B',
+    axisTextColor: '#EDE6DB',
+    plotColorPalette: '#E38A6A, #7CB86A, #5FA0CC, #E0AC5A, #C98A6A',
+  },
+} as const;
+
 async function loadMermaid() {
   const mermaid = (await import('mermaid')).default;
-  if (!mermaidInited) {
+  const theme = getEffectiveTheme();
+  if (mermaidInitedFor !== theme) {
+    const v = MERMAID_VARS[theme];
     mermaid.initialize({
       startOnLoad: false,
       securityLevel: 'strict', // санитизация SVG, без исполнения click-биндингов
@@ -20,31 +57,31 @@ async function loadMermaid() {
       fontFamily: FONT.sans,
       themeVariables: {
         background: 'transparent',
-        primaryColor: '#EDE7DA',
-        primaryBorderColor: C.border,
-        primaryTextColor: C.textPrimary,
-        lineColor: C.accent,
-        secondaryColor: '#F4F0E8',
-        tertiaryColor: '#F4F0E8',
+        primaryColor: v.primaryColor,
+        primaryBorderColor: v.primaryBorderColor,
+        primaryTextColor: v.primaryTextColor,
+        lineColor: v.lineColor,
+        secondaryColor: v.secondaryColor,
+        tertiaryColor: v.tertiaryColor,
         fontSize: '13px',
         // xychart-beta: дефолт темы base — plotColorPalette #FFF4DD (бледно-жёлтый),
-        // не виден на светлом фоне. Задаём читаемую палитру и цвета осей под тему.
+        // не виден на фоне. Задаём читаемую палитру и цвета осей под тему.
         xyChart: {
           backgroundColor: 'transparent',
-          titleColor: C.textHeading,
-          xAxisLabelColor: C.textPrimary,
-          xAxisTitleColor: C.textPrimary,
-          xAxisTickColor: C.border,
-          xAxisLineColor: C.border,
-          yAxisLabelColor: C.textPrimary,
-          yAxisTitleColor: C.textPrimary,
-          yAxisTickColor: C.border,
-          yAxisLineColor: C.border,
-          plotColorPalette: '#D97757, #5B8C6E, #4A7BA8, #B5843B, #9A5B3B',
+          titleColor: v.titleColor,
+          xAxisLabelColor: v.axisTextColor,
+          xAxisTitleColor: v.axisTextColor,
+          xAxisTickColor: v.axisColor,
+          xAxisLineColor: v.axisColor,
+          yAxisLabelColor: v.axisTextColor,
+          yAxisTitleColor: v.axisTextColor,
+          yAxisTickColor: v.axisColor,
+          yAxisLineColor: v.axisColor,
+          plotColorPalette: v.plotColorPalette,
         },
       },
     });
-    mermaidInited = true;
+    mermaidInitedFor = theme;
   }
   return mermaid;
 }
@@ -92,7 +129,7 @@ function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void })
 
   const btn: React.CSSProperties = {
     width: 34, height: 34, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    cursor: 'pointer', background: 'rgba(255,255,255,0.92)', border: `1px solid ${C.border}`,
+    cursor: 'pointer', background: C.bgCard, border: `1px solid ${C.border}`,
     borderRadius: 8, fontFamily: FONT.sans, fontSize: 16, color: C.textPrimary, lineHeight: 1,
   };
 
@@ -149,8 +186,8 @@ function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void })
             transform: `translate(${tf.x}px, ${tf.y}px) scale(${tf.s})`,
             transition: (gesturing || drag.current) ? 'none' : 'transform 0.08s',
             maxWidth: '92vw', maxHeight: '92vh',
-            // Светлая подложка-лист: SVG прозрачный, иначе диаграмма висит на чёрном фоне
-            background: '#F4F0E8', padding: 20, borderRadius: 10, boxShadow: '0 8px 40px rgba(0,0,0,0.45)',
+            // Подложка-лист под тему: SVG прозрачный, иначе диаграмма висит на чёрном фоне
+            background: C.bgMain, padding: 20, borderRadius: 10, boxShadow: '0 8px 40px rgba(0,0,0,0.45)',
           }}
           dangerouslySetInnerHTML={{ __html: svg }}
         />
@@ -174,14 +211,18 @@ function sanitizeMermaid(code: string): string {
 export function MermaidDiagram({ code }: { code: string }) {
   // Ленивая инициализация из кэша — если диаграмма уже рендерилась, показываем её
   // сразу первым кадром (без вспышки кода при ремоунте).
-  const [svg, setSvg] = useState<string | null>(() => mermaidSvgCache.get(code) ?? null);
+  const [svg, setSvg] = useState<string | null>(() => mermaidSvgCache.get(cacheKey(code)) ?? null);
   const [failed, setFailed] = useState(false);
   const [view, setView] = useState<'diagram' | 'code'>('diagram');
   const [zoom, setZoom] = useState(false);
+  // Тик перерисовки при смене темы: заставляет useEffect ниже перерендерить SVG
+  // под новую палитру (mermaid запекает цвета в SVG, CSS-переменные не спасают).
+  const [themeTick, setThemeTick] = useState(0);
+  useEffect(() => subscribeThemeMode(() => setThemeTick(t => t + 1)), []);
 
   useEffect(() => {
-    // Уже в кэше — перерисовывать нечего, берём готовый SVG (не мигаем при ремоунте).
-    const cached = mermaidSvgCache.get(code);
+    // Уже в кэше (для текущей темы) — перерисовывать нечего, берём готовый SVG.
+    const cached = mermaidSvgCache.get(cacheKey(code));
     if (cached) { setSvg(cached); setFailed(false); return; }
     let cancelled = false;
     setFailed(false);
@@ -202,14 +243,14 @@ export function MermaidDiagram({ code }: { code: string }) {
         }
         if (!ok) { setFailed(true); return; }
         const { svg: rendered } = await mermaid.render(`mermaid-svg-${++mermaidSeq}`, src);
-        // Кэшируем по ОРИГИНАЛЬНОМУ коду (ключ = проп code).
-        if (!cancelled) { mermaidSvgCache.set(code, rendered); setSvg(rendered); setFailed(false); }
+        // Кэшируем по «тема + код».
+        if (!cancelled) { mermaidSvgCache.set(cacheKey(code), rendered); setSvg(rendered); setFailed(false); }
       } catch {
         if (!cancelled) setFailed(true);
       }
     }, 120);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [code]);
+  }, [code, themeTick]);
 
   const codeBlock = (
     <pre style={{ background: C.outputBg, border: `1px solid ${C.outputBorder}`, borderRadius: 8, padding: '10px 14px', margin: 0, overflowX: 'auto' }}>
@@ -222,7 +263,7 @@ export function MermaidDiagram({ code }: { code: string }) {
   if (failed) {
     return (
       <div style={{ margin: '6px 0' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontFamily: FONT.sans, fontSize: 12, color: '#9A5B3B' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontFamily: FONT.sans, fontSize: 12, color: C.warningText }}>
           ⚠ Не удалось построить диаграмму — показан исходный код
         </div>
         {codeBlock}

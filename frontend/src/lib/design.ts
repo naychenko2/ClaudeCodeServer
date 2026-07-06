@@ -9,72 +9,76 @@ export const FONT = {
 } as const
 
 // === Цвета ===
+// Значения — ссылки на CSS custom properties (см. lib/theme.css). Так все
+// компоненты, читающие C.bgMain и т.п., автоматически переключаются между
+// светлой и тёмной темой в рантайме без пересборки инлайн-стилей.
+// Конкретные hex-значения обеих тем — в theme.css.
 export const C = {
   // Фоны
-  bgMain:      '#F4F0E8',
-  bgPanel:     '#EDE7DC',
-  bgCard:      '#FBF8F2',
-  bgWhite:     '#FFFFFF',
-  bgSelected:  '#E8E1D4',
-  bgInset:     '#E7E0D2',   // утопленные зоны/футеры панелей
+  bgMain:      'var(--c-bg-main)',
+  bgPanel:     'var(--c-bg-panel)',
+  bgCard:      'var(--c-bg-card)',
+  bgWhite:     'var(--c-bg-white)',
+  bgSelected:  'var(--c-bg-selected)',
+  bgInset:     'var(--c-bg-inset)',   // утопленные зоны/футеры панелей
 
   // Текст
-  textHeading:   '#2A251F',   // заголовки и акцентный текст
-  textPrimary:   '#39332B',
-  textSecondary: '#756B5E',
-  textMuted:     '#9A8F7E',
-  onAccent:      '#FBF8F2',   // текст/иконки поверх accent-фона
+  textHeading:   'var(--c-text-heading)',   // заголовки и акцентный текст
+  textPrimary:   'var(--c-text-primary)',
+  textSecondary: 'var(--c-text-secondary)',
+  textMuted:     'var(--c-text-muted)',
+  onAccent:      'var(--c-on-accent)',   // текст/иконки поверх accent-фона
 
   // Акцентный (ОСНОВНОЙ — оранжевый)
-  accent:        '#D97757',
-  accentLight:   '#F4ECE1',
-  accentMuted:   '#EAD3C5',
-  accentSoft:    '#E8A990',   // disabled/loading состояние accent-кнопки
+  accent:        'var(--c-accent)',
+  accentLight:   'var(--c-accent-light)',
+  accentMuted:   'var(--c-accent-muted)',
+  accentSoft:    'var(--c-accent-soft)',   // disabled/loading состояние accent-кнопки
 
   // Границы
-  border:      '#E0D7C8',
-  borderLight: '#E8E1D4',
-  divider:     '#DDD4C4',   // выраженная граница между панелями
-  dashed:      '#D0C6B4',   // пунктирные границы кнопок «создать»
-  track:       '#D8CFBE',   // дорожка выключенного переключателя
+  border:      'var(--c-border)',
+  borderLight: 'var(--c-border-light)',
+  divider:     'var(--c-divider)',   // выраженная граница между панелями
+  dashed:      'var(--c-dashed)',   // пунктирные границы кнопок «создать»
+  track:       'var(--c-track)',   // дорожка выключенного переключателя
 
   // Оверлей модальных окон
-  overlay:     'rgba(23,19,15,0.42)',
+  overlay:     'var(--c-overlay)',
 
   // Статусы
-  success:     '#5E8B4E',
-  successBg:   '#E9F1E8',
-  successText: '#3F7A4F',
-  warning:     '#C9923E',
-  warningBg:   '#FBEFE0',
-  warningText: '#8A6A28',
-  danger:       '#B4452F',
-  dangerBg:     '#FBF1EC',
-  dangerText:   '#B4452F',
-  dangerBorder: '#F5C6BF',
-  info:        '#3E7CA6',
-  infoBg:      '#E7EFF5',
+  success:     'var(--c-success)',
+  successBg:   'var(--c-success-bg)',
+  successText: 'var(--c-success-text)',
+  warning:     'var(--c-warning)',
+  warningBg:   'var(--c-warning-bg)',
+  warningText: 'var(--c-warning-text)',
+  danger:       'var(--c-danger)',
+  dangerBg:     'var(--c-danger-bg)',
+  dangerText:   'var(--c-danger-text)',
+  dangerBorder: 'var(--c-danger-border)',
+  info:        'var(--c-info)',
+  infoBg:      'var(--c-info-bg)',
 
   // Режим «План» (индиго-фиолет) — отдельный от accent
-  plan:        '#6C5CB0',
-  planLight:   '#EEEBF8',   // фон чипа/карточки плана
-  planText:    '#4E4196',   // текст на planLight
-  planBorder:  '#D6CFEF',
+  plan:        'var(--c-plan)',
+  planLight:   'var(--c-plan-light)',   // фон чипа/карточки плана
+  planText:    'var(--c-plan-text)',   // текст на planLight
+  planBorder:  'var(--c-plan-border)',
 
   // Diff
-  diffAddBg:   '#E8F5E9',
-  diffAddText: '#1B5E20',
-  diffRemBg:   '#FFEBEE',
-  diffRemText: '#B71C1C',
+  diffAddBg:   'var(--c-diff-add-bg)',
+  diffAddText: 'var(--c-diff-add-text)',
+  diffRemBg:   'var(--c-diff-rem-bg)',
+  diffRemText: 'var(--c-diff-rem-text)',
 
   // Вывод инструментов в чате
   // Тёмный «терминал» — только для консольных команд (Bash) и превью команд на запуск
-  termBg:      '#2A251F',   // тёмный фон терминала
-  termText:    '#D8CFC0',   // обычный вывод на тёмном
-  termError:   '#F0B8AC',   // вывод с ошибкой на тёмном
+  termBg:      'var(--c-term-bg)',   // тёмный фон терминала
+  termText:    'var(--c-term-text)',   // обычный вывод на тёмном
+  termError:   'var(--c-term-error)',   // вывод с ошибкой на тёмном
   // Светлая «панель вывода» — для текстовых результатов (Read/Grep/Glob и пр.)
-  outputBg:    '#FFFFFF',   // белый фон панели вывода
-  outputBorder:'#DED4C2',   // граница панели вывода
+  outputBg:    'var(--c-output-bg)',   // белый фон панели вывода
+  outputBorder:'var(--c-output-border)',   // граница панели вывода
 } as const
 
 // === Радиусы (единая шкала) ===
@@ -91,15 +95,16 @@ export const R = {
 } as const
 
 // === Тени ===
+// Значения — CSS-переменные (theme.css): на тёмной теме тени усилены.
 export const SHADOW = {
-  focus:    '0 0 0 3px rgba(217,119,87,0.14)',   // focus-ring контролов
-  card:     '0 2px 8px rgba(60,50,35,0.05)',     // лёгкая тень карточек
-  dropdown: '0 8px 28px rgba(60,50,35,0.16)',    // выпадающие меню
-  modal:    '0 24px 60px rgba(23,19,15,0.40)',   // модальные окна
-  sheet:    '0 -8px 40px rgba(23,19,15,0.22)',   // мобильная шторка (тень кверху)
-  button:   '0 4px 14px rgba(217,119,87,0.30)',  // свечение основной кнопки
-  fab:      '0 6px 18px rgba(217,119,87,0.42)',  // плавающая круглая кнопка (FAB)
-  thumb:    '0 1px 3px rgba(42,37,31,0.12)',     // бегунок переключателя
+  focus:    'var(--shadow-focus)',      // focus-ring контролов
+  card:     'var(--shadow-card)',       // лёгкая тень карточек
+  dropdown: 'var(--shadow-dropdown)',   // выпадающие меню
+  modal:    'var(--shadow-modal)',      // модальные окна
+  sheet:    'var(--shadow-sheet)',      // мобильная шторка (тень кверху)
+  button:   'var(--shadow-button)',     // свечение основной кнопки
+  fab:      'var(--shadow-fab)',        // плавающая круглая кнопка (FAB)
+  thumb:    'var(--shadow-thumb)',      // бегунок переключателя
 } as const
 
 // === Слои (z-index) ===

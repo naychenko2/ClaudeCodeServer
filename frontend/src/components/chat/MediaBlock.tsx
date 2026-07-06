@@ -2,6 +2,7 @@ import { useState, useRef, useContext } from 'react';
 import { getExplorerCreateInDir } from '../FileExplorer';
 import { api } from '../../lib/api';
 import { C, FONT, SHADOW } from '../../lib/design';
+import { getEffectiveTheme } from '../../lib/themeMode';
 import { Modal, ModalActions } from '../ui';
 import { proxyUrl } from './MarkdownContent';
 import { ChatProjectContext } from './contexts';
@@ -248,7 +249,7 @@ export function MediaBlock({
             <span style={{ flex: 1, fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {metaParts.join(' · ')}
             </span>
-            {renderButtons()}
+            {renderButtons(getEffectiveTheme() === 'dark')}
           </div>
         </div>
       ) : (
@@ -274,7 +275,7 @@ export function MediaBlock({
             <span style={{ flex: 1, fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {metaParts.join(' · ')}
             </span>
-            {renderButtons()}
+            {renderButtons(getEffectiveTheme() === 'dark')}
           </div>
         </>
       )}

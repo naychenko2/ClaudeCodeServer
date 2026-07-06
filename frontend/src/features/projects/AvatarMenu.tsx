@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
+import { SegmentedControl } from '../../components/ui';
+import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
+
+const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
+  { value: 'light', label: 'Светлая' },
+  { value: 'dark', label: 'Тёмная' },
+  { value: 'system', label: 'Системная' },
+];
 
 const dropdownItem: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 9,
@@ -29,6 +37,7 @@ interface Props {
 export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const themeMode = useThemeMode();
 
   useEffect(() => {
     if (!open) return;
@@ -153,6 +162,23 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
             </svg>
             Экспериментальные функции
           </button>
+          {/* Оформление: светлая / тёмная / системная тема */}
+          <div style={{
+            padding: '10px 14px 12px', margin: '4px 0',
+            borderTop: `1px solid ${C.borderLight}`,
+            borderBottom: `1px solid ${C.borderLight}`,
+          }}>
+            <div style={{
+              fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 8,
+            }}>
+              Оформление
+            </div>
+            <SegmentedControl<ThemeMode>
+              value={themeMode}
+              options={THEME_OPTIONS}
+              onChange={setThemeMode}
+            />
+          </div>
           <button
             onClick={() => { setOpen(false); onLogout(); }}
             style={{ ...dropdownItem, color: C.danger }}

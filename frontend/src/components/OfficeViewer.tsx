@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { C } from '../lib/design';
+import { getEffectiveTheme } from '../lib/themeMode';
 
 interface OfficeConfig {
   serverUrl: string;
@@ -144,6 +145,114 @@ const CLAUDE_HOME_THEME = {
   },
 };
 
+// Тёмный аналог темы OnlyOffice в тон тёмной теме приложения. Тулбары/панели —
+// тёплые тёмные нейтрали; сам лист документа (canvas-content-background) остаётся
+// белым — документ печатается на белом, инвертировать его содержимое неправильно.
+const CLAUDE_HOME_THEME_DARK = {
+  id: 'theme-claude-home-dark',
+  type: 'dark',
+  name: 'AI Home Dark',
+  colors: {
+    'toolbar-header-document': '#272320',
+    'toolbar-header-spreadsheet': '#272320',
+    'toolbar-header-presentation': '#272320',
+    'toolbar-header-pdf': '#272320',
+    'toolbar-header-visio': '#272320',
+    'text-toolbar-header-on-background-document': '#EDE6DB',
+    'text-toolbar-header-on-background-spreadsheet': '#EDE6DB',
+    'text-toolbar-header-on-background-presentation': '#EDE6DB',
+    'text-toolbar-header-on-background-pdf': '#EDE6DB',
+    'text-toolbar-header-on-background-visio': '#EDE6DB',
+    'background-normal': '#201C18',
+    'background-toolbar': '#272320',
+    'background-toolbar-tab': '#272320',
+    'background-toolbar-additional': '#1B1815',
+    'background-primary-dialog-button': '#E38A6A',
+    'background-accent-button': '#E38A6A',
+    'background-pane': '#272320',
+    'background-contrast-popover': '#2E2A25',
+    'highlight-button-hover': '#38332D',
+    'highlight-button-pressed': '#454037',
+    'highlight-button-pressed-hover': '#4F4940',
+    'highlight-primary-dialog-button-hover': '#C4623C',
+    'highlight-primary-dialog-button-pressed': '#B55530',
+    'highlight-header-button-hover': '#38332D',
+    'highlight-header-button-pressed': '#454037',
+    'highlight-text-select': 'rgba(227,138,106,0.35)',
+    'highlight-category-button-hover': 'rgba(227,138,106,0.10)',
+    'highlight-category-button-pressed': 'rgba(227,138,106,0.20)',
+    'highlight-header-tab-underline-document': '#E38A6A',
+    'highlight-header-tab-underline-spreadsheet': '#E38A6A',
+    'highlight-header-tab-underline-presentation': '#E38A6A',
+    'highlight-header-tab-underline-pdf': '#E38A6A',
+    'highlight-header-tab-underline-visio': '#E38A6A',
+    'highlight-toolbar-tab-underline-document': '#E38A6A',
+    'highlight-toolbar-tab-underline-spreadsheet': '#E38A6A',
+    'highlight-toolbar-tab-underline-presentation': '#E38A6A',
+    'highlight-toolbar-tab-underline-pdf': '#E38A6A',
+    'highlight-toolbar-tab-underline-visio': '#E38A6A',
+    'border-toolbar': '#3D3830',
+    'border-toolbar-active-panel-top': '#272320',
+    'border-divider': '#3D3830',
+    'border-regular-control': '#454037',
+    'border-preview-hover': '#9A5E48',
+    'border-preview-select': '#E38A6A',
+    'border-control-focus': '#E38A6A',
+    'border-button-pressed-focus': '#E38A6A',
+    'border-fill-input-focused': '#E38A6A',
+    'border-contrast-popover': '#3D3830',
+    'text-normal': 'rgba(237,230,219,0.90)',
+    'text-normal-pressed': 'rgba(237,230,219,0.90)',
+    'text-secondary': 'rgba(237,230,219,0.62)',
+    'text-tertiary': 'rgba(237,230,219,0.42)',
+    'text-link': '#E38A6A',
+    'text-link-hover': '#EE9E80',
+    'text-link-active': '#EE9E80',
+    'text-link-visited': '#E38A6A',
+    'text-toolbar-header': '#EDE6DB',
+    'text-alt-key-hint': 'rgba(237,230,219,0.90)',
+    'icon-normal': '#EDE6DB',
+    'icon-normal-pressed': '#EDE6DB',
+    'icon-toolbar-header': '#EDE6DB',
+    'icon-gray-primary': '#EDE6DB',
+    'icon-blue-primary': '#E38A6A',
+    'icon-blue-secondary': '#4A362C',
+    'canvas-background': '#201C18',
+    'canvas-content-background': '#FFFFFF',
+    'canvas-page-border': '#3D3830',
+    'canvas-ruler-background': '#201C18',
+    'canvas-ruler-border': '#3D3830',
+    'canvas-ruler-margins-background': '#272320',
+    'canvas-ruler-mark': '#8A8072',
+    'canvas-ruler-handle-border': '#EDE6DB',
+    'canvas-ruler-handle-border-disabled': '#4F4940',
+    'canvas-cell-title-background': '#272320',
+    'canvas-cell-title-background-hover': '#38332D',
+    'canvas-cell-title-background-selected': '#454037',
+    'canvas-cell-title-border': '#3D3830',
+    'canvas-cell-title-border-hover': '#454037',
+    'canvas-scroll-thumb': '#45403A',
+    'canvas-scroll-thumb-hover': '#57514A',
+    'canvas-scroll-thumb-pressed': '#635C53',
+    'canvas-scroll-thumb-border': '#45403A',
+    'canvas-scroll-thumb-border-hover': '#57514A',
+    'canvas-scroll-thumb-border-pressed': '#635C53',
+    'slider-track-background-filled': '#E38A6A',
+    'slider-thumb-background-normal': '#E38A6A',
+    'slider-thumb-background-hover': '#EE9E80',
+    'slider-thumb-background-active': '#C4623C',
+    'chb-border-normal-focus': '#E38A6A',
+    'chb-border-checked-focus': '#E38A6A',
+    'rb-border-normal-focus': '#E38A6A',
+    'rb-border-checked-focus': '#E38A6A',
+    'shadow-fill-input': '0 0 0 1px #E38A6A',
+    'shadow-control-focus': 'inset 0 0 0 1px #E38A6A,0 0 0 1px #E38A6A',
+  },
+};
+
+// Активная тема OO по эффективной теме приложения.
+const ooTheme = () => (getEffectiveTheme() === 'dark' ? CLAUDE_HOME_THEME_DARK : CLAUDE_HOME_THEME);
+
 let ooIdCounter = 0;
 
 export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onReady }: Props) {
@@ -200,8 +309,11 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
 
       if (cancelled || !window.DocsAPI) return;
 
+      // Тема OO под текущую тему приложения (свет/тьма). Фиксируем на момент
+      // инициализации редактора — смена темы применится при следующем открытии.
+      const theme = ooTheme();
       // Предзаполняем кеш темы до создания iframe — themeinit.js внутри OO применит наши цвета сразу
-      try { localStorage.setItem('ui-theme', JSON.stringify(CLAUDE_HOME_THEME)); } catch { /* игнорируем */ }
+      try { localStorage.setItem('ui-theme', JSON.stringify(theme)); } catch { /* игнорируем */ }
 
       const ext = cfg.document.fileType;
       const docType = DOC_TYPES[ext] ?? 'word';
@@ -236,10 +348,11 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
         // Уже инжектировали — не дублируем
         if (idoc.querySelector('style[data-claude-home]')) { clearInterval(themeInterval); return; }
         clearInterval(themeInterval);
-        const css = Object.entries(CLAUDE_HOME_THEME.colors).map(([k, v]) => `--${k}:${v}`).join(';');
+        const css = Object.entries(theme.colors).map(([k, v]) => `--${k}:${v}`).join(';');
         const style = idoc.createElement('style');
         style.setAttribute('data-claude-home', '1');
-        style.textContent = `.theme-claude-home{${css}} #header-logo{display:none!important}`;
+        // OO вешает на body класс по id темы (.theme-claude-home / .theme-claude-home-dark)
+        style.textContent = `.${theme.id}{${css}} #header-logo{display:none!important}`;
         idoc.head.appendChild(style);
       }, 300);
       setTimeout(() => { clearInterval(themeInterval); callReady(); }, 30000);

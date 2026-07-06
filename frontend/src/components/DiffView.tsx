@@ -43,19 +43,19 @@ export function diffFileNames(diff: string): string[] {
 
 export function DiffView({ diff }: { diff: string }) {
   const rows = parseDiff(diff);
-  const gutter: React.CSSProperties = { width: 40, textAlign: 'right', padding: '0 7px', color: '#C4BBA9', userSelect: 'none', flexShrink: 0 };
+  const gutter: React.CSSProperties = { width: 40, textAlign: 'right', padding: '0 7px', color: C.textMuted, userSelect: 'none', flexShrink: 0 };
   return (
     <div style={{ fontFamily: FONT.mono, fontSize: 12, lineHeight: '1.55' }}>
       {rows.map((r, i) => {
         if (r.type === 'hunk') return (
-          <div key={i} style={{ background: '#EEF2F6', color: '#5C7390', padding: '2px 10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{r.text}</div>
+          <div key={i} style={{ background: C.infoBg, color: C.info, padding: '2px 10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{r.text}</div>
         );
         if (r.type === 'meta') return (
           <div key={i} style={{ color: C.textMuted, padding: '0 10px', fontStyle: 'italic' }}>{r.text}</div>
         );
-        const bg = r.type === 'add' ? '#EAF3E7' : r.type === 'del' ? '#F8E7E1' : 'transparent';
+        const bg = r.type === 'add' ? C.diffAddBg : r.type === 'del' ? C.diffRemBg : 'transparent';
         const sign = r.type === 'add' ? '+' : r.type === 'del' ? '−' : '';
-        const signColor = r.type === 'add' ? '#37722B' : '#A8392C';
+        const signColor = r.type === 'add' ? C.diffAddText : C.diffRemText;
         return (
           <div key={i} style={{ display: 'flex', background: bg, alignItems: 'flex-start' }}>
             <span style={gutter}>{r.oldNo ?? ''}</span>

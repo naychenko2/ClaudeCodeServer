@@ -8,11 +8,16 @@ import { C, R, FONT } from '../lib/design';
 // заголовок группы над её моделями. Курируемые модели видны сразу; легаси
 // (curated:false, без описания) свёрнуты под «Другие модели <провайдер> (N)».
 // Выбранная модель — accent-рамка и accentLight-фон.
+//
+// collapsible (по умолчанию true): если модель уже выбрана, показываем только её
+// строку-карточку + кнопку «Сменить»; полный список групп раскрывается по клику.
+// Держит формы компактными (в EditSessionDialog модель всегда выбрана → нет скролла).
 interface Props {
   value: string;
   options: ModelOption[];
   onChange: (v: string) => void;
-  columns?: number; // не используется — оставлен для совместимости вызовов
+  columns?: number;      // не используется — оставлен для совместимости вызовов
+  collapsible?: boolean; // сворачивать до выбранной модели (по умолчанию true)
 }
 
 const groupHeaderStyle: React.CSSProperties = {
@@ -83,9 +88,11 @@ function ModelRow({
   );
 }
 
-export function ModelPicker({ value, options, onChange }: Props) {
+export function ModelPicker({ value, options, onChange, collapsible = true }: Props) {
   // Развёрнутость блоков легаси, по ключу провайдера
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // Показ полного списка при сворачивании (collapsible)
+  const [listOpen, setListOpen] = useState(false);
 
   const providerOf = (o: ModelOption) => o.provider ?? modelProvider(o.value);
 
@@ -97,13 +104,60 @@ export function ModelPicker({ value, options, onChange }: Props) {
   }
   keys.sort((a, b) => (a === 'claude' ? -1 : b === 'claude' ? 1 : 0));
 
+  // Выбор модели: применяем и (в collapsible-режиме) сворачиваем список обратно
+  const handlePick = (v: string) => {
+    onChange(v);
+    if (collapsible) setListOpen(false);
+  };
+
   const renderRows = (list: ModelOption[]) =>
     list.map(o => (
-      <ModelRow key={o.value} option={o} active={o.value === value} onClick={() => onChange(o.value)} />
+      <ModelRow key={o.value} option={o} active={o.value === value} onClick={() => handlePick(o.value)} />
     ));
+
+  // Свёрнутый вид: выбранная модель одной строкой + «Сменить». Работает, только
+  // когда выбранная опция есть в списке (иначе показываем полный список).
+  const selected = options.find(o => o.value === value);
+  if (collapsible && !listOpen && selected) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <ModelRow option={selected} active onClick={() => setListOpen(true)} />
+        </div>
+        <button
+          type="button"
+          onClick={() => setListOpen(true)}
+          style={{
+            flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5, padding: '0 12px',
+            borderRadius: R.md, cursor: 'pointer',
+            border: `1px solid ${C.border}`, background: C.bgWhite,
+            fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, color: C.accent,
+          }}
+        >
+          Сменить
+          <span style={{ fontSize: 10, display: 'inline-block', transform: 'rotate(90deg)' }}>▶</span>
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: keys.length > 1 ? 12 : 5 }}>
+      {/* Кнопка «свернуть» — только в collapsible-режиме, когда список раскрыт над выбранным */}
+      {collapsible && selected && (
+        <button
+          type="button"
+          onClick={() => setListOpen(false)}
+          style={{
+            alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 6,
+            border: 'none', background: 'none', padding: '2px 2px', cursor: 'pointer',
+            fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, color: C.textMuted,
+          }}
+        >
+          <span style={{ fontSize: 10, display: 'inline-block', transform: 'rotate(-90deg)' }}>▶</span>
+          Свернуть
+        </button>
+      )}
       {keys.map(key => {
         const inGroup = options.filter(o => providerOf(o) === key);
         // Курируемые (с карточкой) отдельно от легаси (без описания)
@@ -149,7 +203,7 @@ export function ModelPicker({ value, options, onChange }: Props) {
                         option={o}
                         active={o.value === value}
                         compact
-                        onClick={() => onChange(o.value)}
+                        onClick={() => handlePick(o.value)}
                       />
                     ))}
                   </div>

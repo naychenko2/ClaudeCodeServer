@@ -5,6 +5,7 @@ import { useModels, useModelCaps, modelProvider, assistantName } from '../lib/mo
 import { effortsForProvider } from '../lib/effort';
 import { C, R, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, TextArea, SegmentedControl } from './ui';
+import { ModelPicker } from './ModelPicker';
 import { type Mode, MODES, MODE_META, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
 
@@ -99,7 +100,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
       </Field>
 
       <Field label="Модель">
-        <SegmentedControl value={model} options={models} onChange={setModel} columns={2} />
+        <ModelPicker value={model} options={models} onChange={setModel} columns={2} />
       </Field>
 
       {caps.supportsEffort && (

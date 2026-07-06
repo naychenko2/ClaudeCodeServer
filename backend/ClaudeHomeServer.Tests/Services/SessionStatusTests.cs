@@ -66,7 +66,7 @@ public class SessionStatusTests : IDisposable
             _config, new SkillsService(), new WorkspaceKnowledgeStore(_config),
             new ClaudeHomeServer.Services.Llm.DeepSeek.DeepSeekClient(
                 new Mock<IHttpClientFactory>().Object, deepSeekOptions),
-            deepSeekOptions, new FileService());
+            deepSeekOptions, new FileService(), new Mock<IHttpClientFactory>().Object);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, _config);
         var usage = new UsageService(_config);
         var userStore = new UserStore(_config, NullLogger<UserStore>.Instance);

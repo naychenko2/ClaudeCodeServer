@@ -91,7 +91,10 @@ export interface SessionArtifacts {
 
 // Инструменты, которые меняют файл — путь берём из их аргументов как запасной источник
 // (на случай, если file_changed не пришёл, например файл вне зоны watcher'а).
-const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+// Claude: Write/Edit/…; DeepSeek: write_file/edit_file.
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'write_file', 'edit_file']);
+// Инструменты загрузки веба — источник ссылок. Claude: WebFetch; DeepSeek: web_fetch.
+const WEBFETCH_TOOLS = new Set(['WebFetch', 'web_fetch']);
 
 const URL_RE = /https?:\/\/[^\s<>()[\]"'`]+/g;
 // Хвостовая пунктуация, прилипающая к URL в тексте (точка в конце предложения, запятая, скобка)
@@ -358,7 +361,7 @@ export function computeArtifacts(items: ChatItem[], rootPath: string): SessionAr
           const raw = extractToolPath(it.input);
           const rel = raw ? toRelative(raw, rootPath) : null;
           if (rel) touchChanged(rel, 0, 0, false);
-        } else if (it.name === 'WebFetch') {
+        } else if (WEBFETCH_TOOLS.has(it.name)) {
           const o = it.input as Record<string, unknown> | null;
           const u = o?.url;
           if (typeof u === 'string') addLink(u);

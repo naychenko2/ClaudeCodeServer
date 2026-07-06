@@ -71,7 +71,7 @@ public class DeepSeekSession : ILlmSessionAdapter
     public DeepSeekSession(Session info, LlmSessionContext context, DeepSeekClient client,
         IOptions<DeepSeekOptions> options, FileService files, string sessionsBasePath,
         SkillsService? skills = null, string? mcpConfigPath = null,
-        WorkspaceKnowledgeStore? workspaceStore = null)
+        WorkspaceKnowledgeStore? workspaceStore = null, IHttpClientFactory? httpFactory = null)
     {
         Info = info;
         _rootPath = context.RootPath;
@@ -82,8 +82,9 @@ public class DeepSeekSession : ILlmSessionAdapter
         _options = options;
         _skills = skills;
         _tasksMcp = context.TasksMcp;
-        _mcp = new DeepSeekMcpManager(mcpConfigPath, context.TasksMcp,
-            () => workspaceStore?.GetByPath(context.RootPath)?.DifyDatasetId);
+        _mcp = new DeepSeekMcpManager(
+            [mcpConfigPath, options.Value.McpConfigPath], context.TasksMcp,
+            () => workspaceStore?.GetByPath(context.RootPath)?.DifyDatasetId, httpFactory);
         _registry = new DeepSeekToolRegistry(_rootPath, files,
             options.Value.EnableShellTool, options.Value.ShellTimeoutSeconds, OnBackgroundCommandDoneAsync);
         _store = new DeepSeekConversationStore(sessionsBasePath);

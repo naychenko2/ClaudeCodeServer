@@ -17,6 +17,10 @@ public class DeepSeekOptions
     public int ShellTimeoutSeconds { get; set; } = 120;
     // Порог авто-сворачивания контекста (% окна). 0 или ≥100 — авто-компакт выключен
     public int AutoCompactThresholdPct { get; set; } = 80;
+    // Доп. конфиг MCP-серверов только для DeepSeek (в формате { mcpServers: {...} }, stdio и http).
+    // Читается вдобавок к общему McpConfigPath. Можно указать свой ~/.claude.json, чтобы DeepSeek
+    // видел те же серверы, что Claude (fal.ai и др.), не задваивая их у Claude. Секрет — в Local.
+    public string McpConfigPath { get; set; } = "";
     public List<DeepSeekModelConfig> Models { get; set; } = [];
 
     public bool Enabled => !string.IsNullOrWhiteSpace(ApiKey);

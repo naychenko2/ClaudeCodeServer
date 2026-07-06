@@ -30,9 +30,11 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Папка историй сессий (та же, что у ChatHistoryService) — для deepseek-messages.json
     private readonly string _sessionsBasePath;
 
+    private readonly IHttpClientFactory _httpFactory;
+
     public LlmSessionAdapterFactory(IConfiguration config, SkillsService skills,
         WorkspaceKnowledgeStore workspaceStore, DeepSeekClient deepSeekClient,
-        IOptions<DeepSeekOptions> deepSeekOptions, FileService files)
+        IOptions<DeepSeekOptions> deepSeekOptions, FileService files, IHttpClientFactory httpFactory)
     {
         _mcpConfigPath = config["McpConfigPath"];
         _disallowedTools = config.GetSection("Claude:DisallowedTools").Get<string[]>() ?? [];
@@ -41,6 +43,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         _deepSeekClient = deepSeekClient;
         _deepSeekOptions = deepSeekOptions;
         _files = files;
+        _httpFactory = httpFactory;
 
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
@@ -61,7 +64,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             throw new InvalidOperationException(
                 "DeepSeek не настроен: задай DeepSeek:ApiKey в appsettings.Local.json");
         return new DeepSeekSession(session, context, _deepSeekClient, _deepSeekOptions, _files,
-            _sessionsBasePath, _skills, _mcpConfigPath, _workspaceStore);
+            _sessionsBasePath, _skills, _mcpConfigPath, _workspaceStore, _httpFactory);
     }
 
     public LlmCapabilities GetCapabilities(LlmProvider provider) => LlmCapabilitiesCatalog.For(provider);

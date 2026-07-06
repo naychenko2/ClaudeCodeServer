@@ -5,6 +5,7 @@ import { useModels, useModelCaps, modelProvider } from '../lib/models';
 import { effortsForProvider } from '../lib/effort';
 import { C, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, SegmentedControl, Toggle } from './ui';
+import { ModelPicker } from './ModelPicker';
 import { isNotifySupported, isNotifyEnabled, setNotifyEnabled } from '../lib/notify';
 import { SkillsPanel } from './SkillsPanel';
 
@@ -98,7 +99,7 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
           </Field>
 
           <Field label="Модель" hint="Применится со следующего сообщения.">
-            <SegmentedControl value={model} options={models} onChange={setModel} columns={2} />
+            <ModelPicker value={model} options={models} onChange={setModel} columns={2} />
           </Field>
 
           {caps.supportsEffort && (

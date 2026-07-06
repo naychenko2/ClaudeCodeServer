@@ -75,6 +75,7 @@ builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");
 builder.Services.AddHttpClient("fal");
 builder.Services.AddHttpClient("deepseek");
+builder.Services.AddHttpClient("deepseek-mcp");
 builder.Services.AddHttpForwarder();
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));

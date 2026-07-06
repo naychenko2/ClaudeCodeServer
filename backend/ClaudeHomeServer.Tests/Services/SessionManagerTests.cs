@@ -51,7 +51,7 @@ public class SessionManagerTests : IDisposable
             config, new SkillsService(), new WorkspaceKnowledgeStore(config),
             new ClaudeHomeServer.Services.Llm.DeepSeek.DeepSeekClient(
                 new Mock<IHttpClientFactory>().Object, deepSeekOptions),
-            deepSeekOptions, new FileService());
+            deepSeekOptions, new FileService(), new Mock<IHttpClientFactory>().Object);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var jwt = new JwtService(config, NullLogger<JwtService>.Instance);

@@ -93,8 +93,86 @@ public class DeepSeekSession : ILlmSessionAdapter
         return QueueTurnAsync(fullText);
     }
 
-    // Compact не поддержан (Capabilities.SupportsCompact=false, SessionManager не вызывает)
-    public Task CompactAsync() => Task.CompletedTask;
+    // Ручное сворачивание контекста: суммаризация истории отдельным запросом (без инструментов),
+    // затем замена messages на [system, сводка]. Выполняется как ход — под _turnLock.
+    public Task CompactAsync()
+    {
+        _ = Task.Run(async () =>
+        {
+            if (_cts.IsCancellationRequested) return;
+            await _turnLock.WaitAsync(_cts.Token);
+            try { await RunCompactAsync(); }
+            catch (OperationCanceledException) { /* остановка сессии — штатно */ }
+            catch (Exception ex)
+            {
+                await _onMessage(new CompactStatusMessage(null, "failed", ex.Message));
+                await _onMessage(new ExitedMessage());
+            }
+            finally { _turnLock.Release(); }
+        });
+        return Task.CompletedTask;
+    }
+
+    private async Task RunCompactAsync()
+    {
+        var opts = _options.Value;
+        var modelCfg = opts.FindModel(Info.Model);
+        if (modelCfg is null || Info.ClaudeSessionId is null)
+        {
+            await _onMessage(new ExitedMessage());
+            return;
+        }
+
+        using var turnCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        _currentTurnCts = turnCts;
+        try
+        {
+            _store.Bind(Info.ClaudeSessionId);
+            var preTokens = _store.EstimateTotalTokens();
+            await _onMessage(new CompactStatusMessage("compacting"));
+
+            // Запрос сводки: копия истории + инструкция, без tools и thinking
+            var messages = (JsonArray)_store.Messages.DeepClone();
+            messages.Add(new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] =
+                    "Составь подробную сводку нашего диалога для продолжения работы с чистым контекстом: " +
+                    "ключевые факты, принятые решения, состояние задач, важные пути файлов и незавершённые шаги. " +
+                    "Только сводка, без вступлений.",
+            });
+            var req = new DsChatRequest(modelCfg.EffectiveApiModel, messages, Tools: null,
+                opts.MaxTokens, Thinking: modelCfg.Thinking ? false : null);
+
+            var summary = new System.Text.StringBuilder();
+            using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(turnCts.Token);
+            watchdog.CancelAfter(StreamIdleTimeout);
+            await foreach (var evt in _client.StreamChatAsync(req, watchdog.Token))
+            {
+                watchdog.CancelAfter(StreamIdleTimeout);
+                if (evt is DsContentDelta c) summary.Append(c.Text); // сводку в ленту не стримим
+            }
+
+            if (summary.Length == 0)
+                throw new InvalidOperationException("Модель вернула пустую сводку");
+
+            _store.ReplaceWithSummary(summary.ToString());
+            await _store.SaveAsync();
+            var postTokens = _store.EstimateTotalTokens();
+
+            await _onMessage(new CompactStatusMessage(null, "success"));
+            await _onMessage(new CompactBoundaryMessage("manual", preTokens, postTokens));
+        }
+        catch (DeepSeekApiException ex)
+        {
+            await _onMessage(new CompactStatusMessage(null, "failed", ex.Message));
+        }
+        finally
+        {
+            _currentTurnCts = null;
+            await _onMessage(new ExitedMessage());
+        }
+    }
 
     public void RespondPermission(string requestId, string behavior)
     {

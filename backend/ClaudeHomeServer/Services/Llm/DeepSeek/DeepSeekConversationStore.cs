@@ -92,6 +92,23 @@ public sealed class DeepSeekConversationStore(string sessionsBasePath)
         }
     }
 
+    // Замена истории сводкой (/compact): system-промпт сохраняется, остальное — одним user-сообщением
+    public void ReplaceWithSummary(string summary)
+    {
+        var fresh = new JsonArray();
+        if (Messages.Count > 0 && RoleOf(Messages[0]) == "system")
+            fresh.Add(Messages[0]!.DeepClone());
+        fresh.Add(new JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = "[Сводка предыдущего диалога — используй как контекст]\n\n" + summary,
+        });
+        Messages = fresh;
+    }
+
+    // Оценка текущего размера истории в токенах (для pre/post compact-статистики)
+    public int EstimateTotalTokens() => EstimateTotal();
+
     private const string TrimPlaceholderText = "[ранняя часть диалога усечена из-за лимита контекста]";
 
     private static string? RoleOf(JsonNode? msg) => msg?["role"]?.GetValue<string>();

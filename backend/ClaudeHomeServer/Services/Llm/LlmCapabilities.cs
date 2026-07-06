@@ -26,13 +26,13 @@ public static class LlmCapabilitiesCatalog
 
     public static readonly LlmCapabilities DeepSeek = new(
         Provider: "deepseek",
-        SupportsPlanMode: false,
-        SupportsCompact: false,
-        SupportsMcp: false,
-        SupportsEffort: false,
-        SupportsPermissionModes: false,
-        SupportsImages: false,
-        SupportsAgents: false);
+        SupportsPlanMode: true,        // эмуляция: exit_plan_mode + только read-инструменты
+        SupportsCompact: true,         // суммаризация истории отдельным запросом
+        SupportsMcp: false,            // включится с MCP stdio-клиентом
+        SupportsEffort: true,          // маппинг на thinking.reasoning_effort (high/max)
+        SupportsPermissionModes: true, // полный набор режимов (Execute-инструменты всегда спрашивают)
+        SupportsImages: false,         // ограничение API — изображений нет
+        SupportsAgents: true);         // промпт .claude/agents/<name>.md в системный контекст
 
     public static LlmCapabilities For(LlmProvider provider) =>
         provider == LlmProvider.DeepSeek ? DeepSeek : Claude;

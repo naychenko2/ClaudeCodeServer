@@ -35,6 +35,10 @@ services:
       # Platform API-ключ fal.ai для учёта стоимости генераций (billing-events).
       # Это НЕ тот токен, что у MCP fal-ai — отдельный ключ key:secret. Значение в .env.
       Fal__ApiKey: ${FAL_API_KEY:-}
+      # Ключи сторонних LLM-провайдеров (DeepSeek, GLM). Пусто = провайдер скрыт.
+      # Остальной их конфиг (эндпоинты/модели) — в appsettings.json (секция LlmProviders).
+      LlmProviders__deepseek__ApiKey: ${DEEPSEEK_API_KEY:-}
+      LlmProviders__glm__ApiKey: ${GLM_API_KEY:-}
       # ServerUrl уходит В БРАУЗЕР (грузит api.js, создаёт iframe) → нужен адрес,
       # видимый с хоста, а не контейнерный host.docker.internal. Указываем на сам
       # бэкенд: YARP проксирует /web-apps/* и версионные пути в OnlyOffice DS.

@@ -42,7 +42,10 @@ ASP.NET Core 9 (:5000)
  ├── Services/
  │    ├── ProjectManager      in-memory + data/projects.json
  │    ├── SessionManager      реестр сессий + IHubContext broadcast
- │    ├── ClaudeSession       Process-обёртка claude.exe
+ │    ├── Llm/                слой LLM-адаптеров (см. раздел «LLM-адаптеры»)
+ │    │    ├── ILlmSessionAdapter + LlmSessionAdapterFactory (провайдер из Session.Model)
+ │    │    ├── Claude/ClaudeSession   Process-обёртка claude.exe
+ │    │    └── DeepSeek/DeepSeekSession  HTTP/SSE + свой tool-цикл
  │    └── FileService         файловый менеджер (SafeJoin защита)
  └── Protocol/ServerMessage   record-типы WS-событий
 
@@ -73,6 +76,33 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
 
 Шрифты: PT Serif (заголовки), Hanken Grotesk (UI), JetBrains Mono (код)
 Стили: только inline-objects, без Tailwind/CSS-modules
+
+## LLM-адаптеры (Services/Llm)
+
+Работа с моделью — за интерфейсом `ILlmSessionAdapter` (калька публичного контракта
+ClaudeSession + `LlmCapabilities`). `SessionManager` создаёт адаптер через
+`LlmSessionAdapterFactory`; провайдер вычисляется из `Session.Model`
+(`LlmProviderResolver`: `deepseek*` → DeepSeek, иначе Claude) и не персистится.
+`Session.ClaudeSessionId` — generic id сессии у провайдера (Claude — транскрипт CLI
+для `--resume`, DeepSeek — GUID истории). Смена провайдера у начатой сессии — 400.
+
+- **Claude** (`Llm/Claude/ClaudeSession`) — subprocess claude.exe (см. следующий раздел);
+  `ClaudeCliLocator` — общий поиск claude.exe.
+- **DeepSeek** (`Llm/DeepSeek/`) — официальный API (OpenAI-совместимый SSE,
+  `DeepSeekClient`), собственный tool-цикл (`DeepSeekSession`): инструменты
+  read_file/list_dir/grep_search/write_file/edit_file поверх `FileService.SafeJoin`
+  (`DeepSeekTools`), permissions через те же `PermissionRequestMessage` (общий
+  `PermissionRuleEvaluator` + маппинг Mode), история messages[] в
+  `data/sessions/{id}/deepseek-messages.json` (`DeepSeekConversationStore`, resume
+  после рестарта). reasoning_content в историю НЕ возвращается (API 400).
+  Конфиг — секция `DeepSeek` (ApiKey в appsettings.Local.json — без него провайдер
+  выключен и модели скрыты; список моделей строго из `DeepSeek:Models` — алиасы
+  deepseek-chat/reasoner выведены 24.07.2026, актуальны deepseek-v4-flash/pro, окно 1M).
+
+Возможности провайдера (`LlmCapabilities`: plan/compact/mcp/effort/…) отдаются фронту
+в блоке `providers` из `GET /api/models` и в `session_started`; UI скрывает недоступное
+(`useModelCaps` в `lib/models.ts`). Общие хелперы адаптеров: `TurnFileWatcher`
+(file_changed на время хода), `AttachmentInliner` (инлайн вложений).
 
 ## Claude Code CLI subprocess
 

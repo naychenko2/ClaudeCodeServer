@@ -13,6 +13,8 @@ export interface ComposerProps {
   isGenerating: boolean;
   mode: Mode;
   onModeChange: (mode: Mode) => void;
+  // false → провайдер модели не поддерживает режим «План» (DeepSeek) — прячем его из списка
+  planAvailable?: boolean;
   attachments: string[];
   onRemoveAttachment: (path: string) => void;
   // Вставка/перетаскивание картинок (скриншоты) — File-объекты для загрузки и отправки
@@ -106,6 +108,7 @@ export function Composer({
   isGenerating,
   mode,
   onModeChange,
+  planAvailable = true,
   attachments,
   onRemoveAttachment,
   onAttachImages,
@@ -468,7 +471,7 @@ export function Composer({
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
           boxShadow: SHADOW.dropdown, padding: 5, zIndex: Z.dropdown,
         }}>
-          {MODES.map(m => {
+          {MODES.filter(m => m !== 'plan' || planAvailable).map(m => {
             const active = m === mode;
             const danger = MODE_META[m].danger;
             return (

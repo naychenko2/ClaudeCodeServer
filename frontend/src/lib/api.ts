@@ -73,7 +73,10 @@ export const api = {
 
   models: {
     list: () =>
-      request<{ models: { value: string; displayName: string; description?: string | null }[] }>('/models'),
+      request<{
+        models: { value: string; displayName: string; description?: string | null; provider?: string | null; contextWindow?: number | null }[];
+        providers?: Record<string, import('./models').ProviderCapabilities>;
+      }>('/models'),
   },
 
   featureFlags: {

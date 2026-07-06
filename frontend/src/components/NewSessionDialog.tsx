@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
-import { useModels } from '../lib/models';
+import { useModels, useModelCaps } from '../lib/models';
 import { EFFORTS } from '../lib/effort';
 import { C, R, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, TextArea, SegmentedControl } from './ui';
@@ -24,6 +24,14 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
   const [effort, setEffort] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Возможности провайдера выбранной модели: у DeepSeek нет plan-режима и effort
+  const caps = useModelCaps(model);
+  const availableModes = MODES.filter(m => m !== 'plan' || caps.supportsPlanMode);
+  useEffect(() => {
+    if (!availableModes.includes(mode)) setMode('acceptEdits');
+    if (!caps.supportsEffort && effort) setEffort('');
+  }, [model]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmit = async () => {
     setLoading(true);
@@ -66,7 +74,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
 
       <Field label="Режим">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          {MODES.map(m => {
+          {availableModes.map(m => {
             const active = m === mode;
             const danger = MODE_META[m].danger;
             return (
@@ -94,9 +102,11 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
         <SegmentedControl value={model} options={models} onChange={setModel} columns={2} />
       </Field>
 
-      <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
-        <SegmentedControl value={effort} options={EFFORTS} onChange={setEffort} columns={3} />
-      </Field>
+      {caps.supportsEffort && (
+        <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
+          <SegmentedControl value={effort} options={EFFORTS} onChange={setEffort} columns={3} />
+        </Field>
+      )}
 
       {error && <p style={{ margin: 0, fontSize: 13, color: C.danger }}>{error}</p>}
     </Modal>

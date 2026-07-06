@@ -11,6 +11,7 @@ import { estimateContext } from '../lib/context';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { type Mode, ModeIcon } from '../lib/modes';
+import { useModelCaps } from '../lib/models';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
@@ -95,8 +96,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Оценка заполнения контекстного окна — по последнему result-элементу ленты
   const ctxThresholds = useCtxThresholds();
   const ctxEstimate = useMemo(() => estimateContext(items, session.model, ctxThresholds), [items, session.model, ctxThresholds]);
+  // Возможности провайдера модели: у DeepSeek нет compact и plan-режима
+  const caps = useModelCaps(session.model);
   // Сжимать имеет смысл только когда набралось достаточно ходов (иначе CLI вернёт «not enough messages»)
-  const canCompact = useMemo(() => items.filter(it => it.kind === 'result').length >= 2, [items]);
+  const canCompact = useMemo(
+    () => caps.supportsCompact && items.filter(it => it.kind === 'result').length >= 2,
+    [items, caps.supportsCompact]);
   const online = useOnline();
 
   // Число изменённых файлов — для бейджа на кнопке «Артефакты» (только когда тумблер проброшен)
@@ -755,6 +760,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             isGenerating={isWaiting}
             mode={mode}
             onModeChange={setMode}
+            planAvailable={caps.supportsPlanMode}
             attachments={attachedFiles}
             onRemoveAttachment={path => onAttachedFilesChange(attachedFiles.filter(p => p !== path))}
             onAttachImages={project ? handleAttachImages : handleChatUpload}

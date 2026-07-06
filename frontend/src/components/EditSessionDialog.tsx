@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
-import { useModels } from '../lib/models';
+import { useModels, useModelCaps } from '../lib/models';
 import { EFFORTS } from '../lib/effort';
 import { C, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, SegmentedControl, Toggle } from './ui';
@@ -27,6 +27,8 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
   const [notifyOn, setNotifyOn] = useState(isNotifyEnabled());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // У DeepSeek нет reasoning effort — поле скрываем
+  const caps = useModelCaps(model);
 
   const handleSave = async () => {
     setLoading(true);
@@ -99,9 +101,11 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
             <SegmentedControl value={model} options={models} onChange={setModel} columns={2} />
           </Field>
 
-          <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
-            <SegmentedControl value={effort} options={EFFORTS} onChange={setEffort} columns={3} />
-          </Field>
+          {caps.supportsEffort && (
+            <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
+              <SegmentedControl value={effort} options={EFFORTS} onChange={setEffort} columns={3} />
+            </Field>
+          )}
 
           {isNotifySupported() && (
             <Field label="Уведомления браузера" hint="Сигнал, когда нужно решение или ход завершён (если вкладка не в фокусе).">

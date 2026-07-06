@@ -10,7 +10,33 @@ export interface ModelOption {
   value: string;
   label: string;
   description?: string;
+  provider?: string;       // "claude" | "deepseek"; отсутствует у fallback = claude
+  contextWindow?: number;  // точное окно с бэка (модели DeepSeek); иначе regex-фолбэк
 }
+
+// Возможности провайдера (блок providers из /api/models) — UI скрывает недоступное
+export interface ProviderCapabilities {
+  provider: string;
+  supportsPlanMode: boolean;
+  supportsCompact: boolean;
+  supportsMcp: boolean;
+  supportsEffort: boolean;
+  supportsPermissionModes: boolean;
+  supportsImages: boolean;
+  supportsAgents: boolean;
+}
+
+// У Claude доступно всё — это и дефолт до загрузки списка с бэка
+const CLAUDE_CAPS: ProviderCapabilities = {
+  provider: 'claude',
+  supportsPlanMode: true,
+  supportsCompact: true,
+  supportsMcp: true,
+  supportsEffort: true,
+  supportsPermissionModes: true,
+  supportsImages: true,
+  supportsAgents: true,
+};
 
 // Алиасы вместо конкретных версий — не протухают при выходе новых моделей
 export const FALLBACK_MODELS: ModelOption[] = [
@@ -28,6 +54,7 @@ const LEGACY_LABELS: Record<string, string> = {
 };
 
 let _models: ModelOption[] = FALLBACK_MODELS;
+let _providers: Record<string, ProviderCapabilities> = { claude: CLAUDE_CAPS };
 const _listeners = new Set<() => void>();
 
 function emit() {
@@ -43,14 +70,35 @@ export async function loadModels(): Promise<void> {
       value: m.value === 'default' ? '' : m.value,
       label: m.value === 'default' ? 'По умолчанию' : m.displayName,
       description: m.description ?? undefined,
+      provider: m.provider ?? undefined,
+      contextWindow: m.contextWindow ?? undefined,
     }));
     if (opts.length > 0) {
       _models = opts;
+      if (res.providers) _providers = { claude: CLAUDE_CAPS, ...res.providers };
       emit();
     }
   } catch {
     // сервер недоступен/ошибка — остаёмся на fallback
   }
+}
+
+// Провайдер модели: из динамического списка, иначе по префиксу id (deepseek-*)
+export function modelProvider(value?: string | null): string {
+  if (!value) return 'claude';
+  return _models.find(m => m.value === value)?.provider
+    ?? (value.toLowerCase().startsWith('deepseek') ? 'deepseek' : 'claude');
+}
+
+// Возможности провайдера выбранной модели; неизвестный провайдер = как Claude
+export function modelCaps(value?: string | null): ProviderCapabilities {
+  return _providers[modelProvider(value)] ?? CLAUDE_CAPS;
+}
+
+// Реактивные возможности: ре-рендер после догрузки списка моделей/провайдеров
+export function useModelCaps(value?: string | null): ProviderCapabilities {
+  useModels();
+  return modelCaps(value);
 }
 
 export function getModels(): ModelOption[] {
@@ -98,11 +146,15 @@ const CONTEXT_WINDOWS: Array<{ match: RegExp; window: number }> = [
   { match: /opus-4-(6|7|8)|opus-4\.[678]/i, window: CONTEXT_1M },
   { match: /sonnet-(4-6|5)|sonnet-4\.6/i, window: CONTEXT_1M },
   { match: /fable|mythos/i, window: CONTEXT_1M },
+  { match: /deepseek/i, window: CONTEXT_1M }, // V4-модели — 1M (точное окно приходит с бэка)
   // Общий фолбэк для opus/sonnet без узнаваемой версии — консервативно 200k
   { match: /opus|sonnet/i, window: 200_000 },
 ];
 
 export function contextWindowFor(model?: string | null): number {
   if (!model) return DEFAULT_CONTEXT_WINDOW;
+  // Точное значение из каталога (модели DeepSeek несут окно с бэка) приоритетнее regex
+  const exact = _models.find(m => m.value === model)?.contextWindow;
+  if (exact) return exact;
   return CONTEXT_WINDOWS.find(m => m.match.test(model))?.window ?? DEFAULT_CONTEXT_WINDOW;
 }

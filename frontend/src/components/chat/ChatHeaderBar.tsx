@@ -496,7 +496,10 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
   // 404 (провайдер без источника баланса, напр. GLM) — просто без блока баланса
   const [provBalance, setProvBalance] = useState<ProviderBalance | null>(null);
   useEffect(() => {
-    if (!isCliProvider) { setProvBalance(null); return; }
+    // Сброс всегда: при смене провайдера (deepseek → glm) 404 не перезаписал бы
+    // стейт в catch — и в плашке остался бы чужой баланс
+    setProvBalance(null);
+    if (!isCliProvider) return;
     let alive = true;
     api.providers.balance(providerKey)
       .then(b => { if (alive) setProvBalance(b); })

@@ -99,6 +99,10 @@ ClaudeSession + `LlmCapabilities`). `SessionManager` создаёт адапте
     `TodoWrite` (чек-лист прогресса → вкладка «Задачи»), `Task` (субагент —
     изолированная под-сессия со своим messages[], дочерние вызовы с parentToolUseId →
     панель «Агенты»; глубина 1, без вложенных субагентов/вопросов/плана),
+    `run_workflow` (декларативная оркестрация: фазы последовательно, агенты фазы —
+    параллельно с передачей результатов дальше; карточка `Workflow` + workflow_progress →
+    workflow-группа в панели «Агенты»; лимиты MaxWorkflowConcurrency/MaxWorkflowAgents;
+    НЕ JS-движок — только JSON-декларация фаз/агентов),
     `ask_user_question`, `exit_plan_mode`;
   - авто-compact при заполнении окна (`DeepSeek:AutoCompactThresholdPct`, дефолт 80%);
     гарантия исполнения плана (approve без правок → досыл «реализуй»);

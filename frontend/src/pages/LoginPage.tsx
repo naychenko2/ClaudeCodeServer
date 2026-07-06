@@ -97,7 +97,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
           fontFamily: FONT.serif, fontSize: 34, fontWeight: 500, color: C.textHeading,
           margin: '0 0 8px', textAlign: 'center', lineHeight: 1.1, letterSpacing: '-0.01em',
         }}>
-          Вход в Claude Home
+          Вход в AI Home
         </h1>
 
         <p style={{ fontSize: 15, color: C.textSecondary, margin: '0 0 30px', textAlign: 'center', lineHeight: 1.55 }}>

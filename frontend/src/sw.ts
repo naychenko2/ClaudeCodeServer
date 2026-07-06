@@ -40,7 +40,7 @@ self.addEventListener('push', e => {
   try { payload = e.data.json() as PushPayload; }
   catch { payload = { body: e.data.text() }; }
 
-  e.waitUntil(self.registration.showNotification(payload.title ?? 'Claude Home', {
+  e.waitUntil(self.registration.showNotification(payload.title ?? 'AI Home', {
     body: payload.body ?? '',
     tag: payload.tag,           // одинаковый tag → уведомление заменяется, а не дублируется
     icon: '/pwa-192x192.png',

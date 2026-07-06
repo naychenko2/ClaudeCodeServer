@@ -81,7 +81,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
       <img src="/favicon.svg" alt="" width={30} height={30} style={{ display: 'block', flexShrink: 0 }} />
       <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        Claude Home
+        AI Home
       </span>
     </div>
   );

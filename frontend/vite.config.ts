@@ -22,9 +22,9 @@ export default defineConfig({
         globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,webmanifest}'],
       },
       manifest: {
-        name: 'Claude Home',
-        short_name: 'ClaudeHome',
-        description: 'Веб-интерфейс для Claude Code CLI',
+        name: 'AI Home',
+        short_name: 'AIHome',
+        description: 'Веб-интерфейс для AI-ассистентов',
         theme_color: '#D97757',
         background_color: '#F4F0E8',
         display: 'standalone',

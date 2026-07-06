@@ -45,7 +45,7 @@ const DOC_TYPES: Record<string, string> = {
 const CLAUDE_HOME_THEME = {
   id: 'theme-claude-home',
   type: 'light',
-  name: 'Claude Home',
+  name: 'AI Home',
   colors: {
     'toolbar-header-document': '#EDE7DC',
     'toolbar-header-spreadsheet': '#EDE7DC',

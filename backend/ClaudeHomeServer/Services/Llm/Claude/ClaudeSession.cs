@@ -678,6 +678,13 @@ public class ClaudeSession : ILlmSessionAdapter
                 // пересчитываем по ценам конфига модели (нет цен → стоимость не показываем)
                 if (_providers is not null && _providers.ResolveByModel(Info.Model) is not null)
                     totalCost = _providers.ComputeCost(Info.Model, usage);
+                // API-ошибка (напр. 429 у провайдера): CLI отдаёт subtype=success, но is_error=true
+                // и текст в result; синтетический assistant-текст не стримится дельтами —
+                // без этого пользователь увидел бы пустой «успешный» ход
+                if (root.TryGetProperty("is_error", out var isErr) && isErr.ValueKind == JsonValueKind.True
+                    && root.TryGetProperty("result", out var resText) && resText.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(resText.GetString()))
+                    await _onMessage(new ErrorMessage(resText.GetString()!));
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials));
                 // Закрываем stdin: все permission-запросы уже обработаны, Claude может завершить процесс

@@ -11,6 +11,8 @@ public class LlmProviderRegistry
     public const string Section = "LlmProviders";
 
     private readonly Dictionary<string, LlmProviderConfig> _providers;
+    // Папка изолированных профилей CLI (CLAUDE_CONFIG_DIR) — по одному на провайдера
+    private readonly string _profilesDir;
 
     public LlmProviderRegistry(IConfiguration config)
     {
@@ -22,6 +24,11 @@ public class LlmProviderRegistry
             cfg.Key = child.Key.ToLowerInvariant();
             _providers[cfg.Key] = cfg;
         }
+
+        var dataDir = Path.GetDirectoryName(
+            config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
+            ?? Path.Combine(AppContext.BaseDirectory, "data");
+        _profilesDir = Path.Combine(dataDir, "claude-profiles");
     }
 
     public IReadOnlyCollection<LlmProviderConfig> All => _providers.Values;
@@ -76,8 +83,14 @@ public class LlmProviderRegistry
         var small = string.IsNullOrWhiteSpace(p.SmallModel) ? main : p.SmallModel;
         var env = new Dictionary<string, string>
         {
+            // Изолированный профиль CLI: при живом OAuth-логине по подписке CLI предпочитает
+            // сохранённый токен и игнорирует ANTHROPIC_AUTH_TOKEN → 401 у провайдера.
+            // Отдельный CLAUDE_CONFIG_DIR не видит ~/.claude с OAuth (там же живут
+            // транскрипты провайдера для --resume — консистентно, провайдер у сессии фиксирован)
+            ["CLAUDE_CONFIG_DIR"] = ProfileDir(p.Key),
             ["ANTHROPIC_BASE_URL"] = p.AnthropicBaseUrl,
             ["ANTHROPIC_AUTH_TOKEN"] = p.ApiKey,
+            ["ANTHROPIC_API_KEY"] = p.ApiKey,
             ["ANTHROPIC_MODEL"] = main,
             ["ANTHROPIC_DEFAULT_OPUS_MODEL"] = main,
             ["ANTHROPIC_DEFAULT_SONNET_MODEL"] = main,
@@ -87,6 +100,17 @@ public class LlmProviderRegistry
         foreach (var (k, v) in p.ExtraEnv)
             env[k] = v;
         return env;
+    }
+
+    private string ProfileDir(string key)
+    {
+        var dir = Path.Combine(_profilesDir, key);
+        try { Directory.CreateDirectory(dir); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LlmProviders] Не удалось создать профиль CLI {dir}: {ex.Message}");
+        }
+        return dir;
     }
 
     // Стоимость хода по ценам конфига модели. CLI на чужом эндпоинте считает

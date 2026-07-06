@@ -4,7 +4,7 @@ import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { C, FONT } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
-import { ChatProjectContext } from './contexts';
+import { ChatProjectContext, useAssistantName } from './contexts';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView } from './ToolUseView';
 import { AskQuestionView } from './AskQuestionView';
@@ -181,6 +181,7 @@ interface ItemProps {
 // (useCallback в ChatPanel) — при дописывании ленты старые элементы не перерендериваются.
 export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan }: ItemProps) {
   const project = useContext(ChatProjectContext);
+  const asstName = useAssistantName();
   switch (item.kind) {
     case 'user_message':
       return (
@@ -332,7 +333,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             Запрос разрешения
           </div>
           <div style={{ fontSize: 12, color: '#5A5040', marginBottom: 10 }}>
-            Claude хочет выполнить <span style={{ fontWeight: 600 }}>{item.toolName}</span>:
+            {asstName} хочет выполнить <span style={{ fontWeight: 600 }}>{item.toolName}</span>:
           </div>
           <div style={{
             background: isConsoleReq ? C.termBg : C.outputBg,
@@ -663,7 +664,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
           background: '#FDECEA', border: '1px solid #F5C6CB', borderRadius: 8, padding: '7px 12px', fontSize: 12.5, color: '#C0392B',
         }}>
-          <span>⚠ Сессия прервана — Claude завершился неожиданно</span>
+          <span>⚠ Сессия прервана — {asstName} завершился неожиданно</span>
           {online && (
             <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: '1px solid #C0392B', background: '#FFF', cursor: 'pointer', color: '#C0392B', whiteSpace: 'nowrap' }}>Повторить</button>
           )}

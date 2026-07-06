@@ -11,12 +11,12 @@ import { estimateContext } from '../lib/context';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { type Mode, ModeIcon } from '../lib/modes';
-import { useModelCaps } from '../lib/models';
+import { useModelCaps, assistantName } from '../lib/models';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { ChatHeaderBar, RateLimitBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
-import { ChatProjectContext, FalCostContext } from './chat/contexts';
+import { ChatProjectContext, FalCostContext, AssistantNameContext } from './chat/contexts';
 import { WaitingIndicator } from './chat/WaitingIndicator';
 import { ChatEmptyState } from './chat/EmptyState';
 import { AttachPicker } from './chat/AttachPicker';
@@ -98,6 +98,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const ctxEstimate = useMemo(() => estimateContext(items, session.model, ctxThresholds), [items, session.model, ctxThresholds]);
   // Возможности провайдера модели: у DeepSeek нет compact и plan-режима
   const caps = useModelCaps(session.model);
+  // Имя ассистента сессии для строк UI (провайдится в контекст ниже)
+  const asstName = assistantName(session.model);
   // Сжимать имеет смысл только когда набралось достаточно ходов (иначе CLI вернёт «not enough messages»)
   const canCompact = useMemo(
     () => caps.supportsCompact && items.filter(it => it.kind === 'result').length >= 2,
@@ -199,9 +201,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   useEffect(() => {
     const rc = items.reduce((acc, it) => acc + (it.kind === 'result' ? 1 : 0), 0);
     if (resultCountRef.current !== null && rc > resultCountRef.current)
-      notify('Claude закончил', `${session.name ?? 'Чат'}: ход завершён`);
+      notify(`${asstName} закончил`, `${session.name ?? 'Чат'}: ход завершён`);
     resultCountRef.current = rc;
-  }, [items, session.name]);
+  }, [items, session.name, asstName]);
   const pendingRef = useRef<string | undefined>(pendingMessage);
   pendingRef.current = pendingMessage;
   // «Свежие» значения для стабильных колбэков (useCallback без лишних пересозданий):
@@ -619,6 +621,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert]);
 
   return (
+    <AssistantNameContext.Provider value={asstName}>
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', background: C.bgMain }}>
       <ChatHeaderBar
         session={session}
@@ -684,7 +687,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               <span style={{ fontSize: 13, color: C.textSecondary, textAlign: 'center' }}>
                 {hasPending
                   ? 'Чат ожидал вашего ответа. После возобновления ответьте на незакрытый запрос.'
-                  : 'Чат был прерван при перезапуске сервера. Claude продолжит с того же места.'}
+                  : `Чат был прерван при перезапуске сервера. ${asstName} продолжит с того же места.`}
               </span>
               {onResume && (
                 <button
@@ -738,7 +741,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               borderRadius: R.lg, background: C.dangerBg, color: C.danger, fontSize: 12, fontWeight: 600,
             }}>
               <span style={{ display: 'flex' }}><ModeIcon mode="bypass" /></span>
-              Режим «Без ограничений» — Claude действует без подтверждений
+              Режим «Без ограничений» — {asstName} действует без подтверждений
             </div>
           )}
           {/* Вариант В: строка-предупреждение о лимите подписки у места отправки (warning/rejected) */}
@@ -795,5 +798,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         />
       )}
     </div>
+    </AssistantNameContext.Provider>
   );
 }

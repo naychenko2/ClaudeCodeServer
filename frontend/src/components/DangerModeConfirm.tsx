@@ -4,6 +4,7 @@ import { type Mode, MODE_META, ModeIcon } from '../lib/modes';
 
 interface DangerModeConfirmProps {
   mode: Mode;            // опасный режим, который пытаются включить (сейчас — только bypass)
+  assistantName?: string; // имя ассистента сессии (Claude | DeepSeek)
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -17,7 +18,7 @@ const BYPASS_BULLETS = [
 
 // Подтверждение включения опасного режима прав — замена системного window.confirm.
 // Сдержанное предупреждение в стиле дизайн-системы: danger дозированно (иконка-бейдж + кнопка).
-export function DangerModeConfirm({ mode, onConfirm, onCancel }: DangerModeConfirmProps) {
+export function DangerModeConfirm({ mode, assistantName = 'Ассистент', onConfirm, onCancel }: DangerModeConfirmProps) {
   const isMobile = useIsMobileModal();
   const label = MODE_META[mode].label;
 
@@ -55,7 +56,7 @@ export function DangerModeConfirm({ mode, onConfirm, onCancel }: DangerModeConfi
 
         {/* Описание */}
         <div style={{ fontSize: 14, lineHeight: 1.5, color: C.textSecondary }}>
-          Claude будет выполнять любые действия без запроса разрешения. Проверки прав полностью отключаются.
+          {assistantName} будет выполнять любые действия без запроса разрешения. Проверки прав полностью отключаются.
         </div>
 
         {/* Что разрешается без подтверждения */}

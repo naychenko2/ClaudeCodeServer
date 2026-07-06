@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
-import { useModels, useModelCaps, modelProvider } from '../lib/models';
+import { useModels, useModelCaps, modelProvider, assistantName } from '../lib/models';
 import { effortsForProvider } from '../lib/effort';
 import { C, R, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, TextArea, SegmentedControl } from './ui';
@@ -113,6 +113,7 @@ export function NewSessionDialog({ projectId, onCreated, onClose }: NewSessionDi
     {pendingMode && (
       <DangerModeConfirm
         mode={pendingMode}
+        assistantName={assistantName(model)}
         onConfirm={() => { setMode(pendingMode); setPendingMode(null); }}
         onCancel={() => setPendingMode(null)}
       />

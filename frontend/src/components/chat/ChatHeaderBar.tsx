@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { Project, Session, ClaudeBilling } from '../../types';
 import { api } from '../../lib/api';
-import { modelLabel, modelProvider, useModelLabel } from '../../lib/models';
+import { modelLabel, modelProvider, assistantName, useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from '../../lib/rateLimit';
 import { type ContextEstimate } from '../../lib/context';
@@ -28,6 +28,9 @@ export interface FalCostStats {
   count: number;
   byModel: Map<string, { count: number; cost: number }>;
 }
+
+// Баланс аккаунта DeepSeek (GET /api/providers/deepseek/balance)
+interface DeepSeekBalance { available: boolean; currency: string; totalBalance: string }
 
 const fmtUsd = (c: number) => '$' + (c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2));
 const fmtTokens = (n: number) =>
@@ -199,13 +202,67 @@ function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
   );
 }
 
+// Бейдж статистики DeepSeek: стоимость сессии + токены + баланс аккаунта.
+// У DeepSeek нет лимитов подписки (балансовая модель) — вместо окон показываем остаток
+// средств с подсветкой при низком балансе. Заменяет CostBadge для deepseek-сессий.
+function DeepSeekBadge({ stats, balance, isMobile }: {
+  stats: CostStats; balance: DeepSeekBalance | null; isMobile?: boolean;
+}) {
+  if (stats.cost <= 0 && !balance) return null;
+  const balNum = balance ? parseFloat(balance.totalBalance) : NaN;
+  // Подсветка: < $1 — предупреждение, < $0.2 — критично
+  const tone = !isNaN(balNum) ? (balNum < 0.2 ? 'danger' : balNum < 1 ? 'warn' : undefined) : undefined;
+  const amountNode = (
+    <>
+      <span>{stats.cost > 0 ? fmtUsd(stats.cost) : '—'}</span>
+      {tone && balance && (
+        <span style={{ marginLeft: 5, color: RATE_COLORS[tone].text, fontWeight: 700 }}>
+          · {balance.totalBalance} {balance.currency}
+        </span>
+      )}
+    </>
+  );
+  return (
+    <BadgeShell
+      label="DeepSeek"
+      amount={amountNode}
+      isMobile={isMobile}
+      tone={tone}
+      title="Стоимость сессии и баланс DeepSeek — нажмите для разбивки"
+    >
+      <div style={badgeTitleStyle}>Стоимость DeepSeek</div>
+      {stats.cost > 0 && <>
+        <BadgeRow k="Всего" v={fmtUsd(stats.cost)} />
+        <BadgeRow k="Ходов" v={String(stats.turns || stats.results)} />
+        <BadgeRow k="Входные токены" v={fmtTokens(stats.input)} />
+        <BadgeRow k="Выходные токены" v={fmtTokens(stats.output)} />
+        <BadgeRow k="Кэш (чтение)" v={fmtTokens(stats.cacheRead)} />
+      </>}
+      {balance && (
+        <>
+          <div style={badgeSectionStyle}>Баланс аккаунта</div>
+          <BadgeRow k="Остаток" v={`${balance.totalBalance} ${balance.currency}`} />
+          {tone && (
+            <div style={{ fontFamily: FONT.sans, fontSize: 11, color: RATE_COLORS[tone].text, marginTop: 4, lineHeight: 1.4 }}>
+              {tone === 'danger' ? 'Баланс почти исчерпан — пополните аккаунт.' : 'Баланс на исходе.'}
+            </div>
+          )}
+        </>
+      )}
+      <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 8, lineHeight: 1.4 }}>
+        DeepSeek работает по балансовой модели — стоимость списывается с аккаунта по факту.
+      </div>
+    </BadgeShell>
+  );
+}
+
 // Индикатор заполнения контекстного окна: пилюля с мини-баром и процентом.
 // Клик — попап с деталями и кнопкой «Свернуть контекст» (/compact); пороги
 // подсветки настраиваются per-user (модалка «Настроить пороги…»).
-function ContextBadge({ estimate, isMobile, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, deepseekBalance }: {
+function ContextBadge({ estimate, isMobile, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, assistantName = 'Claude' }: {
   estimate: ContextEstimate; isMobile?: boolean; isWaiting: boolean; isCompacting: boolean;
   canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean;
-  deepseekBalance?: string | null;
+  assistantName?: string;
 }) {
   const [showThresholds, setShowThresholds] = useState(false);
   const c = RATE_COLORS[estimate.level];
@@ -255,17 +312,16 @@ function ContextBadge({ estimate, isMobile, isWaiting, isCompacting, canCompact,
             <BadgeRow k="Заполнено" v={`${estimate.pct}%`} />
             <BadgeRow k="≈ Токенов" v={`${fmtTokens(estimate.tokens!)} из ${fmtTokens(estimate.window)}`} />
             {estimate.model && <BadgeRow k="Модель" v={modelLabel(estimate.model)} />}
-            {deepseekBalance && <BadgeRow k="Баланс DeepSeek" v={deepseekBalance} />}
           </>
         ) : (
           <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
             {estimate.fresh
               ? 'Контекст сжат — точная оценка появится после следующего хода.'
-              : 'Оценка появится после первого ответа Claude.'}
+              : `Оценка появится после первого ответа ${assistantName}.`}
           </div>
         )}
         <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 6, lineHeight: 1.4 }}>
-          Сжимает историю диалога в саммари, освобождая место в окне. При заполнении Claude делает это автоматически.
+          Сжимает историю диалога в саммари, освобождая место в окне. При заполнении {assistantName} делает это автоматически.
         </div>
         {compactNote && (
           <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, marginTop: 8, padding: '6px 9px', background: C.bgInset, borderRadius: 6, lineHeight: 1.4 }}>
@@ -432,16 +488,18 @@ interface ChatHeaderBarProps {
 
 export function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact }: ChatHeaderBarProps) {
   const sessionModelLabel = useModelLabel(session.model);
-  // Баланс DeepSeek — только для deepseek-сессий, показывается в попапе контекст-бейджа
-  const [dsBalance, setDsBalance] = useState<string | null>(null);
+  const asstName = assistantName(session.model);
+  const isDeepSeek = modelProvider(session.model) === 'deepseek';
+  // Баланс DeepSeek — только для deepseek-сессий (для плашки статистики)
+  const [dsBalance, setDsBalance] = useState<DeepSeekBalance | null>(null);
   useEffect(() => {
-    if (modelProvider(session.model) !== 'deepseek') { setDsBalance(null); return; }
+    if (!isDeepSeek) { setDsBalance(null); return; }
     let alive = true;
     api.providers.deepseekBalance()
-      .then(b => { if (alive) setDsBalance(`${b.totalBalance} ${b.currency}`); })
+      .then(b => { if (alive) setDsBalance(b); })
       .catch(() => { /* баланс — необязательная информация */ });
     return () => { alive = false; };
-  }, [session.model]);
+  }, [session.model, isDeepSeek]);
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   const titleBlock = (
     <div style={{ minWidth: 0, flex: 1 }}>
@@ -480,17 +538,23 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
   const ctxBadge = (
     <ContextBadge estimate={ctxEstimate} isMobile={isMobile} isWaiting={isWaiting}
       isCompacting={isCompacting} canCompact={canCompact} compactNote={compactNote}
-      onCompact={onCompact} online={online} deepseekBalance={dsBalance} />
+      onCompact={onCompact} online={online} assistantName={asstName} />
   );
+  // Плашка стоимости: у DeepSeek — своя (стоимость + баланс), у Claude — CostBadge с лимитами
+  const providerCostBadge = isDeepSeek
+    ? <DeepSeekBadge stats={cost} balance={dsBalance} isMobile={isMobile} />
+    : <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />;
   const costBadges = isMobile ? (
     <>
       {ctxBadge}
-      <CombinedCostBadge cost={cost} falCost={falCost} billing={billing} windows={rateWindows} />
+      {isDeepSeek
+        ? <DeepSeekBadge stats={cost} balance={dsBalance} isMobile={isMobile} />
+        : <CombinedCostBadge cost={cost} falCost={falCost} billing={billing} windows={rateWindows} />}
     </>
   ) : (
     <>
       {ctxBadge}
-      <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />
+      {providerCostBadge}
       <FalCostBadge stats={falCost} isMobile={isMobile} />
     </>
   );

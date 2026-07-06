@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ChatItem } from '../../types';
 import { C, FONT } from '../../lib/design';
+import { useAssistantName } from './contexts';
 
 // Уточняющий вопрос Claude (AskUserQuestion) — интерактивная карточка выбора
 interface QuestionDef { question: string; header?: string; multiSelect?: boolean; options: Array<{ label: string; description?: string }> }
@@ -27,6 +28,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
   onAnswer: (toolUseId: string, answerText: string) => void;
   onInterrupt?: () => void;
 }) {
+  const asstName = useAssistantName();
   const questions = (() => {
     const q = (item.input as { questions?: unknown } | null)?.questions;
     return Array.isArray(q) ? (q as QuestionDef[]) : [];
@@ -46,7 +48,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
       <div style={{ border: '1px solid #CADFC4', borderLeft: '3px solid #5E8B4E', borderRadius: 12, padding: '13px 14px', background: '#EEF4EA' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10, fontSize: 13, fontWeight: 600, color: '#3F6B33' }}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill="#5E8B4E" /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
-          Ответ передан Claude
+          Ответ передан {asstName}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {questions.map((q, qi) => {
@@ -191,7 +193,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
           </svg>
-          Claude уточняет
+          {asstName} уточняет
         </div>
         {multiQ && <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, fontFamily: FONT.mono }}>{activeTab + 1} / {questions.length}</span>}
       </div>

@@ -4,6 +4,7 @@ import { SkillsDropdown } from './SkillsDropdown';
 import { AgentSelector } from './AgentSelector';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
+import { useAssistantName } from './chat/contexts';
 import type { SkillInfo, AgentInfo } from '../types';
 
 export interface ComposerProps {
@@ -119,6 +120,7 @@ export function Composer({
   selectedAgent = null,
   onAgentChange,
 }: ComposerProps) {
+  const asstName = useAssistantName();
   const [text, setText] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
@@ -419,7 +421,7 @@ export function Composer({
       onKeyDown={handleKeyDown}
       onInput={autoResize}
       onPaste={handlePaste}
-      placeholder="Спросите Claude…"
+      placeholder={`Спросите ${asstName}…`}
       rows={1}
       style={{
         flex: 1,
@@ -722,6 +724,7 @@ export function Composer({
       {pendingMode && (
         <DangerModeConfirm
           mode={pendingMode}
+          assistantName={asstName}
           onConfirm={() => { onModeChange(pendingMode); setPendingMode(null); }}
           onCancel={() => setPendingMode(null)}
         />

@@ -3,7 +3,7 @@ import type { ChatItem } from '../../types';
 import { type Mode, MODE_META, ModeIcon } from '../../lib/modes';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { stripRoot } from '../../lib/paths';
-import { ChatProjectContext } from './contexts';
+import { ChatProjectContext, useAssistantName } from './contexts';
 import { MarkdownContent } from './MarkdownContent';
 
 // Иконка режима «План» — прямоугольник с линиями (как ModeIcon plan в Composer)
@@ -57,6 +57,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
 }) {
   const [rejecting, setRejecting] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const asstName = useAssistantName();
   const project = useContext(ChatProjectContext);
   // В тексте плана пути показываем относительно корня проекта
   const plan = stripRoot(item.plan, project?.rootPath);
@@ -140,7 +141,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
             План готов
           </div>
           <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
-            Claude предлагает план. Файлы пока не изменялись.
+            {asstName} предлагает план. Файлы пока не изменялись.
           </div>
         </div>
         {showBadge && version && (
@@ -176,7 +177,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
       ) : rejecting ? (
         <div>
           <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 7 }}>
-            Claude учтёт это и предложит новый план
+            {asstName} учтёт это и предложит новый план
           </div>
           <textarea
             value={feedback}

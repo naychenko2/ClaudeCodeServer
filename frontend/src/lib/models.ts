@@ -95,6 +95,11 @@ export function modelCaps(value?: string | null): ProviderCapabilities {
   return _providers[modelProvider(value)] ?? CLAUDE_CAPS;
 }
 
+// Отображаемое имя ассистента по модели сессии — для строк в UI («… закончил», «Спросите …»)
+export function assistantName(value?: string | null): string {
+  return modelProvider(value) === 'deepseek' ? 'DeepSeek' : 'Claude';
+}
+
 // Реактивные возможности: ре-рендер после догрузки списка моделей/провайдеров
 export function useModelCaps(value?: string | null): ProviderCapabilities {
   useModels();

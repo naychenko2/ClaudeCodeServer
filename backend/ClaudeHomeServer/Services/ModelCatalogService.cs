@@ -1,21 +1,24 @@
 using System.Diagnostics;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
+using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Services;
 
-// Каталог моделей Claude: спрашивает у claude CLI актуальный список моделей аккаунта
-// (control request initialize → поле models в ответе) и кэширует его.
-// Если CLI недоступен — отдаём статический fallback и повторяем попытку позже.
-public class ModelCatalogService
+// Каталог моделей: у Claude спрашивает claude CLI актуальный список моделей аккаунта
+// (control request initialize → поле models в ответе) и кэширует его; если CLI недоступен —
+// отдаёт статический fallback. Модели DeepSeek добавляются из конфига (только при заданном ApiKey).
+public class ModelCatalogService(IOptions<DeepSeekOptions> deepSeekOptions)
 {
-    public record ClaudeModel(string Value, string DisplayName, string? Description);
+    public record ModelInfo(string Value, string DisplayName, string? Description,
+        string Provider = "claude", int? ContextWindow = null);
 
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(6);
     private static readonly TimeSpan RetryTtl = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(60);
 
     // Алиасы вместо конкретных версий — не протухают при выходе новых моделей
-    private static readonly List<ClaudeModel> Fallback =
+    private static readonly List<ModelInfo> Fallback =
     [
         new("default", "Default", null),
         new("opus", "Opus", null),
@@ -24,21 +27,21 @@ public class ModelCatalogService
     ];
 
     private readonly SemaphoreSlim _lock = new(1, 1);
-    private List<ClaudeModel>? _cached;
+    private List<ModelInfo>? _cached;
     private DateTime _cachedAt;
     // Последняя попытка опроса CLI провалилась → кэш живёт RetryTtl вместо CacheTtl
     private bool _lastQueryFailed;
 
-    public async Task<IReadOnlyList<ClaudeModel>> GetModelsAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<ModelInfo>> GetModelsAsync(CancellationToken ct = default)
     {
-        if (IsCacheFresh()) return _cached!;
+        if (IsCacheFresh()) return WithDeepSeek(_cached!);
 
         await _lock.WaitAsync(ct);
         try
         {
-            if (IsCacheFresh()) return _cached!;
+            if (IsCacheFresh()) return WithDeepSeek(_cached!);
 
-            List<ClaudeModel>? fresh = null;
+            List<ModelInfo>? fresh = null;
             try { fresh = await QueryCliAsync(ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
@@ -51,9 +54,21 @@ public class ModelCatalogService
             if (!_lastQueryFailed) _cached = fresh;
             _cached ??= Fallback;
             _cachedAt = DateTime.UtcNow;
-            return _cached;
+            return WithDeepSeek(_cached);
         }
         finally { _lock.Release(); }
+    }
+
+    // Модели DeepSeek — статически из конфига (не кэшируем: options могут перечитаться).
+    // Без ApiKey провайдер выключен и модели не показываются.
+    private IReadOnlyList<ModelInfo> WithDeepSeek(List<ModelInfo> claudeModels)
+    {
+        var opts = deepSeekOptions.Value;
+        if (!opts.Enabled || opts.Models.Count == 0) return claudeModels;
+        var result = new List<ModelInfo>(claudeModels);
+        result.AddRange(opts.Models.Select(m =>
+            new ModelInfo(m.Id, m.DisplayName, null, "deepseek", m.ContextWindow)));
+        return result;
     }
 
     private bool IsCacheFresh()
@@ -64,7 +79,7 @@ public class ModelCatalogService
     }
 
     // Короткоживущий процесс claude: шлём initialize в stdin, ждём control_response с models
-    private static async Task<List<ClaudeModel>?> QueryCliAsync(CancellationToken ct)
+    private static async Task<List<ModelInfo>?> QueryCliAsync(CancellationToken ct)
     {
         var utf8NoBom = new System.Text.UTF8Encoding(false);
         var psi = new ProcessStartInfo
@@ -123,7 +138,7 @@ public class ModelCatalogService
         }
     }
 
-    private static List<ClaudeModel>? TryParseModels(string line, string requestId)
+    private static List<ModelInfo>? TryParseModels(string line, string requestId)
     {
         try
         {
@@ -138,14 +153,14 @@ public class ModelCatalogService
                 modelsEl.ValueKind != JsonValueKind.Array)
                 return null;
 
-            var result = new List<ClaudeModel>();
+            var result = new List<ModelInfo>();
             foreach (var m in modelsEl.EnumerateArray())
             {
                 var value = m.TryGetProperty("value", out var v) ? v.GetString() : null;
                 if (string.IsNullOrWhiteSpace(value)) continue;
                 var displayName = m.TryGetProperty("displayName", out var d) ? d.GetString() : null;
                 var description = m.TryGetProperty("description", out var ds) ? ds.GetString() : null;
-                result.Add(new ClaudeModel(value, displayName ?? value, description));
+                result.Add(new ModelInfo(value, displayName ?? value, description));
             }
             return result.Count > 0 ? result : null;
         }

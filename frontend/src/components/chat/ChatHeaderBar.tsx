@@ -135,34 +135,19 @@ function BadgeShell({ label, amount, title, isMobile, tone, children }: {
   );
 }
 
-// Бейдж стоимости Claude (токены/ходы). Клик раскрывает разбивку (аналог /cost).
-// В режиме подписки сумма — это ≈ API-эквивалент (отдельно не списывается), что и поясняется.
-function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
-  stats: CostStats; isMobile?: boolean; billing: ClaudeBilling; onBillingChange: (b: ClaudeBilling) => void;
-  windows: RateWindow[];
+// Есть ли что показывать в Claude-cost бейдже (стоимость или активный лимит)
+function hasClaudeCostInfo(stats: CostStats, windows: RateWindow[]): boolean {
+  return stats.cost > 0 || !!worstWindow(windows);
+}
+
+// Тело поповера стоимости Claude (разбивка токенов/ходов + лимиты подписки + переключатель оплаты).
+// Вынесено для переиспользования в отдельном CostBadge и в объединённом мобильном чипе.
+function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
+  stats: CostStats; billing: ClaudeBilling; onBillingChange: (b: ClaudeBilling) => void; windows: RateWindow[];
 }) {
-  const worst = worstWindow(windows);
-  if (stats.cost <= 0 && !worst) return null;
   const sub = billing === 'subscription';
-  const tone = worst && worst.level !== 'normal' ? worst.level : undefined;
-  const amountNode = (
-    <>
-      <span>{stats.cost > 0 ? (sub ? '≈ ' : '') + fmtUsd(stats.cost) : '—'}</span>
-      {tone && worst && (
-        <span style={{ marginLeft: 5, color: RATE_COLORS[worst.level].text, fontWeight: 700 }}>· {worst.pct}%</span>
-      )}
-    </>
-  );
   return (
-    <BadgeShell
-      label="Claude"
-      amount={amountNode}
-      isMobile={isMobile}
-      tone={tone}
-      title={sub
-        ? 'Claude ≈ по API-тарифу · по подписке отдельно не списывается'
-        : 'Стоимость Claude — нажмите для разбивки'}
-    >
+    <>
       <div style={badgeTitleStyle}>{sub ? 'Claude · ≈ по API-тарифу' : 'Стоимость Claude'}</div>
       {sub && (
         <div style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, marginBottom: 8, lineHeight: 1.45 }}>
@@ -198,6 +183,39 @@ function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
           </button>
         ))}
       </div>
+    </>
+  );
+}
+
+// Бейдж стоимости Claude (токены/ходы). Клик раскрывает разбивку (аналог /cost).
+// В режиме подписки сумма — это ≈ API-эквивалент (отдельно не списывается), что и поясняется.
+function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
+  stats: CostStats; isMobile?: boolean; billing: ClaudeBilling; onBillingChange: (b: ClaudeBilling) => void;
+  windows: RateWindow[];
+}) {
+  const worst = worstWindow(windows);
+  if (!hasClaudeCostInfo(stats, windows)) return null;
+  const sub = billing === 'subscription';
+  const tone = worst && worst.level !== 'normal' ? worst.level : undefined;
+  const amountNode = (
+    <>
+      <span>{stats.cost > 0 ? (sub ? '≈ ' : '') + fmtUsd(stats.cost) : '—'}</span>
+      {tone && worst && (
+        <span style={{ marginLeft: 5, color: RATE_COLORS[worst.level].text, fontWeight: 700 }}>· {worst.pct}%</span>
+      )}
+    </>
+  );
+  return (
+    <BadgeShell
+      label="Claude"
+      amount={amountNode}
+      isMobile={isMobile}
+      tone={tone}
+      title={sub
+        ? 'Claude ≈ по API-тарифу · по подписке отдельно не списывается'
+        : 'Стоимость Claude — нажмите для разбивки'}
+    >
+      <ClaudeCostPopoverBody stats={stats} billing={billing} onBillingChange={onBillingChange} windows={windows} />
     </BadgeShell>
   );
 }
@@ -207,35 +225,27 @@ function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
 // средств (если провайдер отдаёт баланс) с подсветкой при низком уровне.
 // Провайдер без цен и баланса (GLM) — показываем токены как меру расхода.
 // Заменяет CostBadge для сессий сторонних провайдеров.
-function ProviderCostBadge({ providerName, stats, balance, isMobile }: {
-  providerName: string; stats: CostStats; balance: ProviderBalance | null; isMobile?: boolean;
+// Есть ли что показывать в provider-cost бейдже (активность или баланс)
+function hasProviderCostInfo(stats: CostStats, balance: ProviderBalance | null): boolean {
+  return stats.results > 0 || !!balance;
+}
+
+// Подсветка по балансу CLI-провайдера: < $1 — предупреждение, < $0.2 — критично
+function providerBalanceTone(balance: ProviderBalance | null): 'warn' | 'danger' | undefined {
+  if (!balance) return undefined;
+  const balNum = parseFloat(balance.totalBalance);
+  if (isNaN(balNum)) return undefined;
+  return balNum < 0.2 ? 'danger' : balNum < 1 ? 'warn' : undefined;
+}
+
+// Тело поповера статистики CLI-провайдера (стоимость/токены/ходы + баланс аккаунта).
+function ProviderCostPopoverBody({ providerName, stats, balance }: {
+  providerName: string; stats: CostStats; balance: ProviderBalance | null;
 }) {
-  // Есть активность (хотя бы один ход) или баланс — иначе в начале сессии прячем
-  if (stats.results === 0 && !balance) return null;
-  const balNum = balance ? parseFloat(balance.totalBalance) : NaN;
-  // Подсветка: < $1 — предупреждение, < $0.2 — критично
-  const tone = !isNaN(balNum) ? (balNum < 0.2 ? 'danger' : balNum < 1 ? 'warn' : undefined) : undefined;
+  const tone = providerBalanceTone(balance);
   const hasCost = stats.cost > 0;
-  const totalTokens = stats.input + stats.output;
-  // Сумма в пилюле: деньги, если считаем стоимость; иначе токены; иначе прочерк
-  const amountNode = (
-    <>
-      <span>{hasCost ? fmtUsd(stats.cost) : totalTokens > 0 ? `${fmtTokens(totalTokens)} ток.` : '—'}</span>
-      {tone && balance && (
-        <span style={{ marginLeft: 5, color: RATE_COLORS[tone].text, fontWeight: 700 }}>
-          · {balance.totalBalance} {balance.currency}
-        </span>
-      )}
-    </>
-  );
   return (
-    <BadgeShell
-      label={providerName}
-      amount={amountNode}
-      isMobile={isMobile}
-      tone={tone}
-      title={`Статистика сессии ${providerName} — нажмите для разбивки`}
-    >
+    <>
       <div style={badgeTitleStyle}>{hasCost ? 'Стоимость' : 'Расход'} {providerName}</div>
       {stats.results > 0 && <>
         {hasCost && <BadgeRow k="Всего" v={fmtUsd(stats.cost)} />}
@@ -260,27 +270,56 @@ function ProviderCostBadge({ providerName, stats, balance, isMobile }: {
           ? `${providerName} работает по балансовой модели — стоимость списывается с аккаунта по факту.`
           : `${providerName} не отдаёт цены через API — показываем расход в токенах. Квоты смотрите в кабинете провайдера.`}
       </div>
+    </>
+  );
+}
+
+function ProviderCostBadge({ providerName, stats, balance, isMobile }: {
+  providerName: string; stats: CostStats; balance: ProviderBalance | null; isMobile?: boolean;
+}) {
+  // Есть активность (хотя бы один ход) или баланс — иначе в начале сессии прячем
+  if (!hasProviderCostInfo(stats, balance)) return null;
+  const tone = providerBalanceTone(balance);
+  const hasCost = stats.cost > 0;
+  const totalTokens = stats.input + stats.output;
+  // Сумма в пилюле: деньги, если считаем стоимость; иначе токены; иначе прочерк
+  const amountNode = (
+    <>
+      <span>{hasCost ? fmtUsd(stats.cost) : totalTokens > 0 ? `${fmtTokens(totalTokens)} ток.` : '—'}</span>
+      {tone && balance && (
+        <span style={{ marginLeft: 5, color: RATE_COLORS[tone].text, fontWeight: 700 }}>
+          · {balance.totalBalance} {balance.currency}
+        </span>
+      )}
+    </>
+  );
+  return (
+    <BadgeShell
+      label={providerName}
+      amount={amountNode}
+      isMobile={isMobile}
+      tone={tone}
+      title={`Статистика сессии ${providerName} — нажмите для разбивки`}
+    >
+      <ProviderCostPopoverBody providerName={providerName} stats={stats} balance={balance} />
     </BadgeShell>
   );
 }
 
-// Индикатор заполнения контекстного окна: пилюля с мини-баром и процентом.
-// Клик — попап с деталями и кнопкой «Свернуть контекст» (/compact); пороги
-// подсветки настраиваются per-user (модалка «Настроить пороги…»).
-function ContextBadge({ estimate, isMobile, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, assistantName = 'Claude' }: {
-  estimate: ContextEstimate; isMobile?: boolean; isWaiting: boolean; isCompacting: boolean;
-  canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean;
-  assistantName?: string;
+// Показывать ли контекст-пилюлю: в начале сессии (нет оценки и не свёрнут) — нет
+function hasContextInfo(estimate: ContextEstimate): boolean {
+  return estimate.pct !== undefined || estimate.fresh;
+}
+
+// Компактная сводка контекста для пилюли (мини-бар + процент). Используется как в
+// отдельном ContextBadge, так и в объединённом мобильном чипе.
+function ContextAmount({ estimate, isCompacting, isMobile }: {
+  estimate: ContextEstimate; isCompacting: boolean; isMobile?: boolean;
 }) {
-  const [showThresholds, setShowThresholds] = useState(false);
   const c = RATE_COLORS[estimate.level];
   const tone = estimate.level !== 'normal' ? estimate.level : undefined;
   const hasPct = estimate.pct !== undefined;
-
-  // В начале сессии показывать нечего (нет оценки и контекст не свёрнут) — прячем пилюлю
-  if (!hasPct && !estimate.fresh) return null;
-
-  const amountNode = (
+  return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
       {isCompacting ? (
         <div className="tool-spinner" style={{ width: 10, height: 10 }} />
@@ -294,6 +333,18 @@ function ContextBadge({ estimate, isMobile, isWaiting, isCompacting, canCompact,
       </span>
     </span>
   );
+}
+
+// Тело поповера контекста (детали заполнения + «Сжать контекст» + «Настроить пороги»).
+// Вынесено, чтобы переиспользовать в отдельном ContextBadge и в объединённом чипе.
+function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, assistantName = 'Claude' }: {
+  estimate: ContextEstimate; isWaiting: boolean; isCompacting: boolean;
+  canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean;
+  assistantName?: string;
+}) {
+  const [showThresholds, setShowThresholds] = useState(false);
+  const c = RATE_COLORS[estimate.level];
+  const hasPct = estimate.pct !== undefined;
 
   // Кнопка сжатия недоступна: ход идёт, компакт идёт, оценки нет, контекст только что сжат,
   // или сжимать ещё нечего (слишком мало ходов — CLI вернёт «not enough messages»)
@@ -304,75 +355,94 @@ function ContextBadge({ estimate, isMobile, isWaiting, isCompacting, canCompact,
 
   return (
     <>
-      <BadgeShell
-        label={isMobile ? 'Ctx' : 'Контекст'}
-        amount={amountNode}
-        isMobile={isMobile}
-        tone={tone}
-        title="Заполнение контекста сессии — нажмите для деталей"
-      >
-        <div style={badgeTitleStyle}>Контекст сессии</div>
-        {hasPct ? (
-          <>
-            <div style={{ height: 5, borderRadius: 3, background: '#E5DCCB', overflow: 'hidden', margin: '2px 0 6px' }}>
-              <div style={{ width: `${estimate.pct}%`, height: '100%', background: c.fill }} />
-            </div>
-            <BadgeRow k="Заполнено" v={`${estimate.pct}%`} />
-            <BadgeRow k="≈ Токенов" v={`${fmtTokens(estimate.tokens!)} из ${fmtTokens(estimate.window)}`} />
-            {estimate.model && <BadgeRow k="Модель" v={modelLabel(estimate.model)} />}
-          </>
-        ) : (
-          <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
-            {estimate.fresh
-              ? 'Контекст сжат — точная оценка появится после следующего хода.'
-              : `Оценка появится после первого ответа ${assistantName}.`}
+      <div style={badgeTitleStyle}>Контекст сессии</div>
+      {hasPct ? (
+        <>
+          <div style={{ height: 5, borderRadius: 3, background: '#E5DCCB', overflow: 'hidden', margin: '2px 0 6px' }}>
+            <div style={{ width: `${estimate.pct}%`, height: '100%', background: c.fill }} />
           </div>
-        )}
-        <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 6, lineHeight: 1.4 }}>
-          Сжимает историю диалога в саммари, освобождая место в окне. При заполнении {assistantName} делает это автоматически.
+          <BadgeRow k="Заполнено" v={`${estimate.pct}%`} />
+          <BadgeRow k="≈ Токенов" v={`${fmtTokens(estimate.tokens!)} из ${fmtTokens(estimate.window)}`} />
+          {estimate.model && <BadgeRow k="Модель" v={modelLabel(estimate.model)} />}
+        </>
+      ) : (
+        <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+          {estimate.fresh
+            ? 'Контекст сжат — точная оценка появится после следующего хода.'
+            : `Оценка появится после первого ответа ${assistantName}.`}
         </div>
-        {compactNote && (
-          <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, marginTop: 8, padding: '6px 9px', background: C.bgInset, borderRadius: 6, lineHeight: 1.4 }}>
-            {compactNote}
-          </div>
-        )}
+      )}
+      <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 6, lineHeight: 1.4 }}>
+        Сжимает историю диалога в саммари, освобождая место в окне. При заполнении {assistantName} делает это автоматически.
+      </div>
+      {compactNote && (
+        <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, marginTop: 8, padding: '6px 9px', background: C.bgInset, borderRadius: 6, lineHeight: 1.4 }}>
+          {compactNote}
+        </div>
+      )}
+      <button
+        type="button"
+        disabled={compactDisabled}
+        onClick={onCompact}
+        title={compactTitle}
+        style={{
+          marginTop: 10, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+          padding: '6px 10px', borderRadius: 7, border: `1px solid ${compactDisabled ? C.border : '#C9BEAD'}`,
+          background: C.bgWhite, cursor: compactDisabled ? 'default' : 'pointer',
+          fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
+          color: compactDisabled ? C.textMuted : '#5A5043', opacity: compactDisabled ? 0.65 : 1,
+        }}
+      >
+        {isCompacting && <div className="tool-spinner" style={{ width: 11, height: 11 }} />}
+        {isCompacting ? 'Сжимаю…' : 'Сжать контекст'}
+      </button>
+      <div style={{ marginTop: 8, textAlign: 'center' }}>
         <button
           type="button"
-          disabled={compactDisabled}
-          onClick={onCompact}
-          title={compactTitle}
+          onClick={() => setShowThresholds(true)}
           style={{
-            marginTop: 10, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-            padding: '6px 10px', borderRadius: 7, border: `1px solid ${compactDisabled ? C.border : '#C9BEAD'}`,
-            background: C.bgWhite, cursor: compactDisabled ? 'default' : 'pointer',
-            fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
-            color: compactDisabled ? C.textMuted : '#5A5043', opacity: compactDisabled ? 0.65 : 1,
+            border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+            fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, textDecoration: 'underline',
           }}
         >
-          {isCompacting && <div className="tool-spinner" style={{ width: 11, height: 11 }} />}
-          {isCompacting ? 'Сжимаю…' : 'Сжать контекст'}
+          Настроить пороги…
         </button>
-        <div style={{ marginTop: 8, textAlign: 'center' }}>
-          <button
-            type="button"
-            onClick={() => setShowThresholds(true)}
-            style={{
-              border: 'none', background: 'none', padding: 0, cursor: 'pointer',
-              fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, textDecoration: 'underline',
-            }}
-          >
-            Настроить пороги…
-          </button>
-        </div>
-      </BadgeShell>
+      </div>
       {showThresholds && <ContextThresholdsDialog onClose={() => setShowThresholds(false)} />}
     </>
   );
 }
 
-// Бейдж трат на fal.ai (медиа). Отдельная от Claude цифра. Разбивка по моделям.
-// В выпадашке: остаток баланса аккаунта (асинхронно) сверху + траты этого чата + ссылка на статистику.
-function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boolean }) {
+// Индикатор заполнения контекстного окна: пилюля с мини-баром и процентом.
+// Клик — попап с деталями и кнопкой «Свернуть контекст» (/compact); пороги
+// подсветки настраиваются per-user (модалка «Настроить пороги…»).
+function ContextBadge(props: {
+  estimate: ContextEstimate; isMobile?: boolean; isWaiting: boolean; isCompacting: boolean;
+  canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean;
+  assistantName?: string;
+}) {
+  const { estimate, isMobile, isCompacting } = props;
+  const tone = estimate.level !== 'normal' ? estimate.level : undefined;
+
+  // В начале сессии показывать нечего (нет оценки и контекст не свёрнут) — прячем пилюлю
+  if (!hasContextInfo(estimate)) return null;
+
+  return (
+    <BadgeShell
+      label={isMobile ? 'Ctx' : 'Контекст'}
+      amount={<ContextAmount estimate={estimate} isCompacting={isCompacting} isMobile={isMobile} />}
+      isMobile={isMobile}
+      tone={tone}
+      title="Заполнение контекста сессии — нажмите для деталей"
+    >
+      <ContextPopoverBody {...props} />
+    </BadgeShell>
+  );
+}
+
+// Тело поповера трат fal.ai: остаток баланса (асинхронно) + траты чата + ссылка на статистику.
+// Вынесено для переиспользования в отдельном FalCostBadge и в объединённом мобильном чипе.
+function FalPopoverBody({ stats }: { stats: FalCostStats }) {
   // undefined = грузится, null = недоступно, number = баланс
   const [balance, setBalance] = useState<number | null | undefined>(undefined);
   useEffect(() => {
@@ -382,7 +452,6 @@ function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boo
       .catch(() => { if (!cancelled) setBalance(null); });
     return () => { cancelled = true; };
   }, []);
-  if (stats.total <= 0) return null;
   const lowBal = typeof balance === 'number' && balance < 5;
   const balanceText = balance === undefined ? '…' : typeof balance === 'number' ? fmtUsd(balance) : '—';
   // Разбивка по моделям одной inline-строкой: топ-2 + «+N в статистике»
@@ -393,8 +462,7 @@ function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boo
     .map(([ep, m]) => `${ep.split('/').pop()}${m.count > 1 ? ` ×${m.count}` : ''} ${fmtUsd(m.cost)}`)
     .join('  ·  ');
   return (
-    <BadgeShell label="fal.ai" amount={fmtUsd(stats.total)} isMobile={isMobile}
-      title="Траты на fal.ai (медиа) — нажмите для разбивки">
+    <>
       {/* Герой — траты этого чата (за этим и кликнули) */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
         <span>Траты fal.ai · этот чат</span>
@@ -423,49 +491,105 @@ function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boo
           Подробная статистика →
         </button>
       </div>
+    </>
+  );
+}
+
+// Бейдж трат на fal.ai (медиа). Отдельная от Claude цифра. Разбивка по моделям.
+function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boolean }) {
+  if (stats.total <= 0) return null;
+  return (
+    <BadgeShell label="fal.ai" amount={fmtUsd(stats.total)} isMobile={isMobile}
+      title="Траты на fal.ai (медиа) — нажмите для разбивки">
+      <FalPopoverBody stats={stats} />
     </BadgeShell>
   );
 }
 
-// Мобильный объединённый бейдж: Claude и fal.ai одной компактной пилюлей с разделителем.
-// Сжимается (minWidth:0 + ellipsis), не распирает узкий тулбар. Клик открывает окно «Использование».
-function CombinedCostBadge({ cost, falCost, billing, windows }: {
-  cost: CostStats; falCost: FalCostStats; billing: ClaudeBilling; windows: RateWindow[];
+// Приоритет tone: danger важнее warn (для объединения подсветок контекста и стоимости)
+function worseTone(a?: 'warn' | 'danger', b?: 'warn' | 'danger'): 'warn' | 'danger' | undefined {
+  if (a === 'danger' || b === 'danger') return 'danger';
+  if (a === 'warn' || b === 'warn') return 'warn';
+  return undefined;
+}
+
+// Мобильный объединённый бейдж: контекст + стоимость/расход одной пилюлей и одним
+// поповером с двумя секциями. Экономит ширину узкого тулбара (вместо двух чипов — один).
+// Провайдер: Claude → стоимость + лимиты подписки + fal; CLI (DeepSeek/GLM) → стоимость/токены + баланс.
+function MobileCombinedBadge(props: {
+  // контекст
+  estimate: ContextEstimate; isWaiting: boolean; isCompacting: boolean;
+  canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean; assistantName: string;
+  // стоимость
+  isCliProvider: boolean; providerName: string; cost: CostStats; falCost: FalCostStats;
+  balance: ProviderBalance | null; billing: ClaudeBilling; onBillingChange: (b: ClaudeBilling) => void;
+  windows: RateWindow[];
 }) {
+  const {
+    estimate, isCompacting, isCliProvider, providerName, cost, falCost, balance, billing, windows,
+  } = props;
+
+  // Что доступно к показу в каждой секции
+  const showCtx = hasContextInfo(estimate);
+  const showCost = isCliProvider
+    ? hasProviderCostInfo(cost, balance)
+    : hasClaudeCostInfo(cost, windows);
+  const hasFal = !isCliProvider && falCost.total > 0;
+  // Совсем нечего показывать — прячем чип
+  if (!showCtx && !showCost && !hasFal) return null;
+
+  // Подсветка пилюли — худшая из контекста и стоимости
+  const ctxTone = estimate.level !== 'normal' ? estimate.level : undefined;
   const worst = worstWindow(windows);
-  const hasClaude = cost.cost > 0 || !!worst;
-  const hasFal = falCost.total > 0;
-  if (!hasClaude && !hasFal) return null;
+  const costTone = isCliProvider
+    ? providerBalanceTone(balance)
+    : (worst && worst.level !== 'normal' ? worst.level : undefined);
+  const tone = worseTone(ctxTone, costTone);
+
+  // Краткая сумма стоимости в пилюле
   const sub = billing === 'subscription';
-  const tone = worst && worst.level !== 'normal' ? worst.level : undefined;
-  const toneBg = tone === 'danger' ? RATE_COLORS.danger.bg : tone === 'warn' ? RATE_COLORS.warn.bg : C.bgWhite;
-  const toneBorder = tone === 'danger' ? RATE_COLORS.danger.border : tone === 'warn' ? RATE_COLORS.warn.border : C.border;
+  const totalTokens = cost.input + cost.output;
+  const costSummary = isCliProvider
+    ? (cost.cost > 0 ? fmtUsd(cost.cost) : totalTokens > 0 ? `${fmtTokens(totalTokens)} ток.` : '—')
+    : (cost.cost > 0 ? (sub ? '≈' : '') + fmtUsd(cost.cost) : '—');
+
+  // Пилюля: [контекст %] · [стоимость]
+  const amountNode = (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+      {showCtx && <ContextAmount estimate={estimate} isCompacting={isCompacting} isMobile />}
+      {showCtx && (showCost || hasFal) && <span style={{ color: C.textMuted, flexShrink: 0 }}>·</span>}
+      {(showCost || hasFal) && (
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{costSummary}</span>
+      )}
+    </span>
+  );
+
+  const sectionDivider: React.CSSProperties = {
+    marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.bgInset}`,
+  };
+
   return (
-    <button
-      type="button"
-      onClick={() => window.dispatchEvent(new Event('open-fal-stats'))}
-      title="Использование Claude + fal.ai — открыть статистику"
-      style={{
-        display: 'flex', alignItems: 'center', gap: 5, padding: '3px 9px', minWidth: 0, flexShrink: 1,
-        overflow: 'hidden', whiteSpace: 'nowrap',
-        background: toneBg, border: `1px solid ${toneBorder}`, borderRadius: R.lg,
-        cursor: 'pointer', fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: '#B05C38',
-      }}
+    <BadgeShell
+      label="Ctx · $"
+      amount={amountNode}
+      isMobile
+      tone={tone}
+      title="Контекст и расход сессии — нажмите для деталей"
     >
-      {hasClaude && (
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {cost.cost > 0 ? (sub ? '≈' : '') + fmtUsd(cost.cost) : '—'}
-          {tone && worst && <span style={{ marginLeft: 4, color: RATE_COLORS[worst.level].text }}>{worst.pct}%</span>}
-        </span>
+      {showCtx && <ContextPopoverBody {...props} />}
+      {showCost && (
+        <div style={showCtx ? sectionDivider : undefined}>
+          {isCliProvider
+            ? <ProviderCostPopoverBody providerName={providerName} stats={cost} balance={balance} />
+            : <ClaudeCostPopoverBody stats={cost} billing={billing} onBillingChange={props.onBillingChange} windows={windows} />}
+        </div>
       )}
-      {hasClaude && hasFal && <span style={{ color: C.textMuted, flexShrink: 0 }}>·</span>}
       {hasFal && (
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          <span style={{ fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.3, marginRight: 3 }}>fal</span>
-          {fmtUsd(falCost.total)}
-        </span>
+        <div style={sectionDivider}>
+          <FalPopoverBody stats={falCost} />
+        </div>
       )}
-    </button>
+    </BadgeShell>
   );
 }
 
@@ -559,12 +683,14 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
     ? <ProviderCostBadge providerName={asstName} stats={cost} balance={provBalance} isMobile={isMobile} />
     : <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />;
   const costBadges = isMobile ? (
-    <>
-      {ctxBadge}
-      {isCliProvider
-        ? <ProviderCostBadge providerName={asstName} stats={cost} balance={provBalance} isMobile={isMobile} />
-        : <CombinedCostBadge cost={cost} falCost={falCost} billing={billing} windows={rateWindows} />}
-    </>
+    // Мобилка: один объединённый чип (контекст + стоимость/расход) — не распирает шапку
+    <MobileCombinedBadge
+      estimate={ctxEstimate} isWaiting={isWaiting} isCompacting={isCompacting}
+      canCompact={canCompact} compactNote={compactNote} onCompact={onCompact}
+      online={online} assistantName={asstName}
+      isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost}
+      balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={rateWindows}
+    />
   ) : (
     <>
       {ctxBadge}

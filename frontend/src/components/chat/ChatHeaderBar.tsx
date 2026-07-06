@@ -205,17 +205,22 @@ function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
 // Бейдж статистики CLI-провайдера (DeepSeek/GLM): стоимость сессии + токены + баланс.
 // У таких провайдеров нет лимитов подписки Claude — вместо окон показываем остаток
 // средств (если провайдер отдаёт баланс) с подсветкой при низком уровне.
+// Провайдер без цен и баланса (GLM) — показываем токены как меру расхода.
 // Заменяет CostBadge для сессий сторонних провайдеров.
 function ProviderCostBadge({ providerName, stats, balance, isMobile }: {
   providerName: string; stats: CostStats; balance: ProviderBalance | null; isMobile?: boolean;
 }) {
-  if (stats.cost <= 0 && !balance) return null;
+  // Есть активность (хотя бы один ход) или баланс — иначе в начале сессии прячем
+  if (stats.results === 0 && !balance) return null;
   const balNum = balance ? parseFloat(balance.totalBalance) : NaN;
   // Подсветка: < $1 — предупреждение, < $0.2 — критично
   const tone = !isNaN(balNum) ? (balNum < 0.2 ? 'danger' : balNum < 1 ? 'warn' : undefined) : undefined;
+  const hasCost = stats.cost > 0;
+  const totalTokens = stats.input + stats.output;
+  // Сумма в пилюле: деньги, если считаем стоимость; иначе токены; иначе прочерк
   const amountNode = (
     <>
-      <span>{stats.cost > 0 ? fmtUsd(stats.cost) : '—'}</span>
+      <span>{hasCost ? fmtUsd(stats.cost) : totalTokens > 0 ? `${fmtTokens(totalTokens)} ток.` : '—'}</span>
       {tone && balance && (
         <span style={{ marginLeft: 5, color: RATE_COLORS[tone].text, fontWeight: 700 }}>
           · {balance.totalBalance} {balance.currency}
@@ -229,11 +234,11 @@ function ProviderCostBadge({ providerName, stats, balance, isMobile }: {
       amount={amountNode}
       isMobile={isMobile}
       tone={tone}
-      title={`Стоимость сессии и баланс ${providerName} — нажмите для разбивки`}
+      title={`Статистика сессии ${providerName} — нажмите для разбивки`}
     >
-      <div style={badgeTitleStyle}>Стоимость {providerName}</div>
-      {stats.cost > 0 && <>
-        <BadgeRow k="Всего" v={fmtUsd(stats.cost)} />
+      <div style={badgeTitleStyle}>{hasCost ? 'Стоимость' : 'Расход'} {providerName}</div>
+      {stats.results > 0 && <>
+        {hasCost && <BadgeRow k="Всего" v={fmtUsd(stats.cost)} />}
         <BadgeRow k="Ходов" v={String(stats.turns || stats.results)} />
         <BadgeRow k="Входные токены" v={fmtTokens(stats.input)} />
         <BadgeRow k="Выходные токены" v={fmtTokens(stats.output)} />
@@ -251,7 +256,9 @@ function ProviderCostBadge({ providerName, stats, balance, isMobile }: {
         </>
       )}
       <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 8, lineHeight: 1.4 }}>
-        {providerName} работает по балансовой модели — стоимость списывается с аккаунта по факту.
+        {hasCost
+          ? `${providerName} работает по балансовой модели — стоимость списывается с аккаунта по факту.`
+          : `${providerName} не отдаёт цены через API — показываем расход в токенах. Квоты смотрите в кабинете провайдера.`}
       </div>
     </BadgeShell>
   );

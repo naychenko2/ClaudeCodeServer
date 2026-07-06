@@ -714,12 +714,13 @@ public class DeepSeekSession : ILlmSessionAdapter
     }
 
     // Маппинг режима сессии на авторазрешения по классу инструмента.
-    // Execute (shell, вне MVP) спрашивает всегда — даже в auto/bypass.
+    // Execute (команды, web_fetch): в Auto/Bypass разрешён без вопросов,
+    // в Default/AcceptEdits/DontAsk — с permission-карточкой.
     private bool AutoAllowedByMode(ToolPermissionClass cls) => Info.Mode switch
     {
         ClaudeMode.Default or ClaudeMode.Plan => cls == ToolPermissionClass.ReadOnly,
-        ClaudeMode.AcceptEdits => cls is ToolPermissionClass.ReadOnly or ToolPermissionClass.Edit,
-        _ => cls != ToolPermissionClass.Execute, // Auto/DontAsk/Bypass
+        ClaudeMode.AcceptEdits or ClaudeMode.DontAsk => cls is ToolPermissionClass.ReadOnly or ToolPermissionClass.Edit,
+        _ => true, // Auto/Bypass — без вопросов
     };
 
     // После Interrupt: на каждый tool_call последнего assistant-сообщения без ответа —

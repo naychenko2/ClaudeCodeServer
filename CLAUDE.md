@@ -93,7 +93,7 @@ ClaudeSession + `LlmCapabilities`). `SessionManager` создаёт адапте
   - инструменты read_file/list_dir/grep_search/glob_files/write_file/edit_file/web_fetch/
     run_command (`DeepSeekTools`, поверх `FileService.SafeJoin`); классы опасности:
     ReadOnly (авто), Edit (спрашивает в Default), Execute — run_command/web_fetch
-    спрашивают ВСЕГДА, даже в auto/bypass;
+    спрашивают везде, кроме режимов Auto/Bypass;
   - permissions через те же `PermissionRequestMessage` (общий `PermissionRuleEvaluator`);
   - **MCP** — свой stdio-клиент (`DeepSeekMcp.cs`: McpStdioClient + DeepSeekMcpManager):
     серверы из `McpConfigPath` (Dify с инжекцией dataset id) + встроенный tasks-server;

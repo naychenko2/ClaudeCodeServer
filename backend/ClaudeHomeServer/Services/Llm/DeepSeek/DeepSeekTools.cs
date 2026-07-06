@@ -42,8 +42,8 @@ public sealed class DeepSeekToolRegistry
             new EditFileTool(rootPath, files),
             new WebFetchTool(),
         };
-        // Запуск команд (класс Execute) спрашивает разрешение на КАЖДЫЙ вызов —
-        // даже в auto/bypass (см. DeepSeekSession.AutoAllowedByMode)
+        // Запуск команд (класс Execute) спрашивает разрешение везде,
+        // кроме режимов Авто/Без ограничений (см. DeepSeekSession.AutoAllowedByMode)
         if (enableShell) list.Add(new RunCommandTool(rootPath, shellTimeoutSeconds));
         _tools = list.ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
     }
@@ -508,8 +508,8 @@ internal sealed class WebFetchTool : IDeepSeekTool
     public string Name => "web_fetch";
     public string Description =>
         "Загрузить веб-страницу по URL (http/https) и вернуть её текст (HTML очищается от разметки). " +
-        "Каждый запрос требует разрешения пользователя.";
-    // Запрос во внешний мир — спрашиваем всегда, как run_command
+        "Вне режима «Авто» запрос требует разрешения пользователя.";
+    // Запрос во внешний мир — класс Execute, как run_command
     public ToolPermissionClass PermissionClass => ToolPermissionClass.Execute;
 
     public JsonObject BuildSchema() => new()
@@ -576,7 +576,7 @@ file sealed class RunCommandTool(string rootPath, int timeoutSeconds) : IDeepSee
     public string Description =>
         "Выполнить команду оболочки в корне проекта (Windows — PowerShell, Linux — bash). " +
         $"Возвращает stdout/stderr и код выхода. Таймаут по умолчанию {timeoutSeconds} с. " +
-        "Каждый запуск требует разрешения пользователя.";
+        "Вне режима «Авто» запуск требует разрешения пользователя.";
     public ToolPermissionClass PermissionClass => ToolPermissionClass.Execute;
 
     public JsonObject BuildSchema() => new()

@@ -33,7 +33,19 @@ public class DeepSeekSession : ILlmSessionAdapter
     private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _permissionWaiters = new();
     // Инструменты, для которых пользователь выбрал «всегда разрешать» в этой сессии
     private readonly ConcurrentDictionary<string, byte> _autoAllowTools = new();
+    // Ожидающие ответа карточки вопросов (tool_call id → JSON ответа с answers)
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _questionWaiters = new();
+    // Ожидающие решения по плану (tool_call id → approve+feedback)
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<(bool Approve, string? Feedback)>> _planWaiters = new();
+    // После одобрения плана следующий ход идёт без режима планирования (как у Claude)
+    private volatile bool _forceNonPlanNextTurn;
+    // План одобрен в текущем ходу → остаток хода с полным набором инструментов
+    private volatile bool _planApprovedInTurn;
     private volatile CancellationTokenSource? _currentTurnCts;
+
+    // Виртуальные инструменты сессии (не из реестра): вопросы и согласование плана
+    private const string AskQuestionTool = "ask_user_question";
+    private const string ExitPlanTool = "exit_plan_mode";
 
     // Если API не выдаёт ни одного события дольше этого — считаем зависшим
     private static readonly TimeSpan StreamIdleTimeout = TimeSpan.FromMinutes(5);
@@ -90,16 +102,30 @@ public class DeepSeekSession : ILlmSessionAdapter
             tcs.TrySetResult(behavior);
     }
 
-    // AskUserQuestion/ExitPlanMode — механики Claude, у DeepSeek их нет
-    public void AnswerQuestion(string toolUseId, string updatedInputJson) { }
-    public void RespondPlan(string requestId, bool approve, string? feedback) { }
+    // Ответ пользователя на карточку вопроса: JSON {questions, answers} → tool result
+    public void AnswerQuestion(string toolUseId, string updatedInputJson)
+    {
+        if (_questionWaiters.TryGetValue(toolUseId, out var tcs))
+            tcs.TrySetResult(updatedInputJson);
+    }
+
+    // Решение пользователя по плану (exit_plan_mode)
+    public void RespondPlan(string requestId, bool approve, string? feedback)
+    {
+        if (_planWaiters.TryGetValue(requestId, out var tcs))
+            tcs.TrySetResult((approve, feedback));
+    }
 
     public void Interrupt()
     {
         _currentTurnCts?.Cancel();
-        foreach (var tcs in _permissionWaiters.Values)
-            tcs.TrySetCanceled();
+        foreach (var tcs in _permissionWaiters.Values) tcs.TrySetCanceled();
+        foreach (var tcs in _questionWaiters.Values) tcs.TrySetCanceled();
+        foreach (var tcs in _planWaiters.Values) tcs.TrySetCanceled();
         _permissionWaiters.Clear();
+        _questionWaiters.Clear();
+        _planWaiters.Clear();
+        _forceNonPlanNextTurn = false;
     }
 
     // Ставит ход в очередь в фоне, чтобы не блокировать SignalR-соединение
@@ -156,18 +182,26 @@ public class DeepSeekSession : ILlmSessionAdapter
             Info.Mode.ToWireToken(), _rootPath, _registry.All.Count, null,
             Capabilities.Provider, Capabilities));
 
+        // Режим «План»: только чтение + exit_plan_mode; одобрение снимает ограничение
+        // до конца хода, следующий ход тоже идёт без планирования (консумация флага — как у Claude)
+        var planPhase = Info.Mode == ClaudeMode.Plan && modelCfg.SupportsTools;
+        if (_forceNonPlanNextTurn) { _forceNonPlanNextTurn = false; planPhase = false; }
+        _planApprovedInTurn = false;
+
         _fileWatcher.Start();
         try
         {
-            var tools = modelCfg.SupportsTools ? _registry.BuildToolsJson() : null;
-
             while (iterations < opts.MaxToolIterations)
             {
                 iterations++;
                 ct.ThrowIfCancellationRequested();
                 _store.TrimToFit(modelCfg.ContextWindow, opts.MaxTokens);
 
-                var turn = await StreamOneRequestAsync(modelCfg, tools, opts.MaxTokens, ct);
+                var planningNow = planPhase && !_planApprovedInTurn;
+                var tools = BuildTurnTools(modelCfg, planningNow);
+                var messages = planningNow ? WithPlanInstruction(_store.Messages) : _store.Messages;
+
+                var turn = await StreamOneRequestAsync(modelCfg, messages, tools, opts.MaxTokens, ct);
                 promptMiss += Math.Max(0, turn.PromptTokens - turn.CacheHitTokens);
                 cacheHit += turn.CacheHitTokens;
                 completion += turn.CompletionTokens;
@@ -234,10 +268,103 @@ public class DeepSeekSession : ILlmSessionAdapter
     private sealed record TurnResult(string Content, List<ToolCallAcc> ToolCalls, string? FinishReason,
         int PromptTokens, int CompletionTokens, int CacheHitTokens);
 
-    private async Task<TurnResult> StreamOneRequestAsync(DeepSeekModelConfig modelCfg, JsonArray? tools,
-        int maxTokens, CancellationToken ct)
+    // Полный набор инструментов хода: реестр (в план-фазе — только чтение) + виртуальные
+    private JsonArray? BuildTurnTools(DeepSeekModelConfig modelCfg, bool planningNow)
     {
-        var req = new DsChatRequest(modelCfg.EffectiveApiModel, _store.Messages, tools, maxTokens,
+        if (!modelCfg.SupportsTools) return null;
+        var tools = _registry.BuildToolsJson(readOnlyOnly: planningNow);
+        tools.Add(BuildAskQuestionSchema());
+        if (planningNow) tools.Add(BuildExitPlanSchema());
+        return tools;
+    }
+
+    // Инструкция режима планирования — во временной копии messages, в историю не пишется
+    private static JsonArray WithPlanInstruction(JsonArray messages)
+    {
+        var copy = (JsonArray)messages.DeepClone();
+        copy.Add(new JsonObject
+        {
+            ["role"] = "system",
+            ["content"] =
+                "Сейчас режим планирования: изменения вносить НЕЛЬЗЯ (доступны только инструменты чтения). " +
+                "Изучи задачу, составь подробный план в markdown и вызови exit_plan_mode с этим планом. " +
+                "После одобрения пользователем приступишь к реализации.",
+        });
+        return copy;
+    }
+
+    private static JsonObject BuildAskQuestionSchema() => new()
+    {
+        ["type"] = "function",
+        ["function"] = new JsonObject
+        {
+            ["name"] = AskQuestionTool,
+            ["description"] =
+                "Задать пользователю уточняющий вопрос с вариантами ответа (интерактивная карточка). " +
+                "Используй, когда требования неоднозначны. 1–4 вопроса, у каждого 2–4 варианта.",
+            ["parameters"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["questions"] = new JsonObject
+                    {
+                        ["type"] = "array",
+                        ["items"] = new JsonObject
+                        {
+                            ["type"] = "object",
+                            ["properties"] = new JsonObject
+                            {
+                                ["question"] = new JsonObject { ["type"] = "string", ["description"] = "Полный текст вопроса" },
+                                ["header"] = new JsonObject { ["type"] = "string", ["description"] = "Короткая метка (до 12 символов)" },
+                                ["multiSelect"] = new JsonObject { ["type"] = "boolean", ["description"] = "Разрешить несколько вариантов" },
+                                ["options"] = new JsonObject
+                                {
+                                    ["type"] = "array",
+                                    ["items"] = new JsonObject
+                                    {
+                                        ["type"] = "object",
+                                        ["properties"] = new JsonObject
+                                        {
+                                            ["label"] = new JsonObject { ["type"] = "string", ["description"] = "Вариант (1-5 слов)" },
+                                            ["description"] = new JsonObject { ["type"] = "string", ["description"] = "Пояснение варианта" },
+                                        },
+                                        ["required"] = new JsonArray { "label" },
+                                    },
+                                },
+                            },
+                            ["required"] = new JsonArray { "question", "options" },
+                        },
+                    },
+                },
+                ["required"] = new JsonArray { "questions" },
+            },
+        },
+    };
+
+    private static JsonObject BuildExitPlanSchema() => new()
+    {
+        ["type"] = "function",
+        ["function"] = new JsonObject
+        {
+            ["name"] = ExitPlanTool,
+            ["description"] = "Представить готовый план пользователю на согласование. Вызывай, когда план составлен.",
+            ["parameters"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["plan"] = new JsonObject { ["type"] = "string", ["description"] = "Полный план в markdown" },
+                },
+                ["required"] = new JsonArray { "plan" },
+            },
+        },
+    };
+
+    private async Task<TurnResult> StreamOneRequestAsync(DeepSeekModelConfig modelCfg, JsonArray messages,
+        JsonArray? tools, int maxTokens, CancellationToken ct)
+    {
+        var req = new DsChatRequest(modelCfg.EffectiveApiModel, messages, tools, maxTokens,
             modelCfg.Thinking ? true : null, modelCfg.Thinking ? MapReasoningEffort(Info.Effort) : null);
 
         var contentSb = new System.Text.StringBuilder();
@@ -264,12 +391,15 @@ public class DeepSeekSession : ILlmSessionAdapter
                         break;
                     case DsToolCallStart s:
                         toolCalls[s.Index] = new ToolCallAcc(s.Index, s.Id) { Name = s.Name };
-                        // Ранняя карточка инструмента — аргументы дольются стримом
-                        await _onMessage(new ToolUseMessage(s.Id, s.Name, new { }));
+                        // Ранняя карточка инструмента — аргументы дольются стримом.
+                        // Виртуальные (вопрос/план) идут своими карточками — tool-карточку не дублируем
+                        if (s.Name is not (AskQuestionTool or ExitPlanTool))
+                            await _onMessage(new ToolUseMessage(s.Id, s.Name, new { }));
                         break;
                     case DsToolCallArgsDelta a when toolCalls.TryGetValue(a.Index, out var acc):
                         acc.Args.Append(a.Fragment);
-                        await _onMessage(new ToolInputDeltaMessage(acc.Id, acc.Args.ToString()));
+                        if (acc.Name is not (AskQuestionTool or ExitPlanTool))
+                            await _onMessage(new ToolInputDeltaMessage(acc.Id, acc.Args.ToString()));
                         break;
                     case DsFinish f:
                         finishReason = f.Reason;
@@ -333,6 +463,10 @@ public class DeepSeekSession : ILlmSessionAdapter
             return parseError;
         }
 
+        // Виртуальные интерактивные инструменты — свои карточки, без permission-проверок
+        if (call.Name == AskQuestionTool) return await HandleAskQuestionAsync(call.Id, argsJson, ct);
+        if (call.Name == ExitPlanTool) return await HandleExitPlanAsync(call.Id, args, ct);
+
         // Финальная карточка с распарсенными аргументами (ранняя ушла с пустым input)
         var input = JsonSerializer.Deserialize<object>(argsJson) ?? new object();
         await _onMessage(new ToolUseMessage(call.Id, call.Name, input));
@@ -353,6 +487,88 @@ public class DeepSeekSession : ILlmSessionAdapter
 
         await _onMessage(new ToolResultMessage(call.Id, result.Content, result.IsError));
         return result;
+    }
+
+    // Карточка вопроса: AskQuestionMessage → ждём AnswerQuestion → ответы в tool result
+    private async Task<DsToolResult> HandleAskQuestionAsync(string callId, string argsJson, CancellationToken ct)
+    {
+        var input = JsonSerializer.Deserialize<object>(argsJson) ?? new object();
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _questionWaiters[callId] = tcs;
+        // Статус Waiting выставит SessionManager по AskQuestionMessage
+        await _onMessage(new AskQuestionMessage(callId, input));
+        try
+        {
+            var answerJson = await tcs.Task.WaitAsync(PermissionTimeout, ct);
+            return new DsToolResult(FormatAnswers(answerJson));
+        }
+        catch (TimeoutException)
+        {
+            return new DsToolResult("Пользователь не ответил на вопрос — продолжай по своему усмотрению", IsError: true);
+        }
+        finally
+        {
+            _questionWaiters.TryRemove(callId, out _);
+        }
+    }
+
+    // {"answers":{"<вопрос>":"<label>"|[labels]}} → человекочитаемый текст для модели
+    private static string FormatAnswers(string answerJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(answerJson);
+            if (!doc.RootElement.TryGetProperty("answers", out var answers)
+                || answers.ValueKind != JsonValueKind.Object)
+                return $"Ответ пользователя: {answerJson}";
+            var sb = new System.Text.StringBuilder("Пользователь ответил:");
+            foreach (var q in answers.EnumerateObject())
+            {
+                var value = q.Value.ValueKind == JsonValueKind.Array
+                    ? string.Join(", ", q.Value.EnumerateArray().Select(v => v.GetString()))
+                    : q.Value.ToString();
+                sb.Append("\n— ").Append(q.Name).Append(": ").Append(value);
+            }
+            return sb.ToString();
+        }
+        catch (JsonException)
+        {
+            return $"Ответ пользователя: {answerJson}";
+        }
+    }
+
+    // Согласование плана: PlanReviewMessage → ждём RespondPlan.
+    // Approve снимает план-ограничение до конца хода и на следующий ход
+    private async Task<DsToolResult> HandleExitPlanAsync(string callId, JsonElement args, CancellationToken ct)
+    {
+        var plan = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("plan", out var p)
+            && p.ValueKind == JsonValueKind.String ? p.GetString() ?? "" : "";
+        var tcs = new TaskCompletionSource<(bool, string?)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _planWaiters[callId] = tcs;
+        // Статус Waiting выставит SessionManager по PlanReviewMessage
+        await _onMessage(new PlanReviewMessage(callId, plan));
+        try
+        {
+            var (approve, feedback) = await tcs.Task.WaitAsync(PermissionTimeout, ct);
+            if (approve)
+            {
+                _planApprovedInTurn = true;
+                _forceNonPlanNextTurn = true;
+                return new DsToolResult(
+                    "План одобрен пользователем. Приступай к реализации немедленно, без повторного планирования.");
+            }
+            return new DsToolResult(string.IsNullOrWhiteSpace(feedback)
+                ? "Пользователь отклонил план. Уточни план с учётом контекста и предложи заново."
+                : $"Пользователь отклонил план с комментарием: {feedback}");
+        }
+        catch (TimeoutException)
+        {
+            return new DsToolResult("Пользователь не рассмотрел план — ход завершён", IsError: true);
+        }
+        finally
+        {
+            _planWaiters.TryRemove(callId, out _);
+        }
     }
 
     // Разрешение на инструмент: правила проекта → «всегда разрешать» → режим сессии → спросить.
@@ -475,9 +691,12 @@ public class DeepSeekSession : ILlmSessionAdapter
         _fileWatcher.Dispose();
         _cts.Cancel();
         _currentTurnCts?.Cancel();
-        foreach (var tcs in _permissionWaiters.Values)
-            tcs.TrySetCanceled();
+        foreach (var tcs in _permissionWaiters.Values) tcs.TrySetCanceled();
+        foreach (var tcs in _questionWaiters.Values) tcs.TrySetCanceled();
+        foreach (var tcs in _planWaiters.Values) tcs.TrySetCanceled();
         _permissionWaiters.Clear();
+        _questionWaiters.Clear();
+        _planWaiters.Clear();
         await _store.SaveAsync();
         _cts.Dispose();
         _turnLock.Dispose();

@@ -52,12 +52,14 @@ public sealed class DeepSeekToolRegistry
 
     public IDeepSeekTool? Get(string name) => _tools.GetValueOrDefault(name);
 
-    // Массив tools для запроса chat completions (OpenAI-формат)
-    public JsonArray BuildToolsJson()
+    // Массив tools для запроса chat completions (OpenAI-формат).
+    // readOnlyOnly — для режима планирования (только чтение, без правок и команд)
+    public JsonArray BuildToolsJson(bool readOnlyOnly = false)
     {
         var arr = new JsonArray();
         foreach (var t in _tools.Values)
         {
+            if (readOnlyOnly && t.PermissionClass != ToolPermissionClass.ReadOnly) continue;
             arr.Add(new JsonObject
             {
                 ["type"] = "function",

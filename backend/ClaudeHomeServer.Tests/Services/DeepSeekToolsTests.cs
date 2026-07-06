@@ -32,10 +32,18 @@ public class DeepSeekToolsTests : IDisposable
         _registry.Get(tool)!.ExecuteAsync(Args(args), CancellationToken.None);
 
     [Fact]
-    public void Registry_СодержитВесьMvpНабор()
+    public void Registry_СодержитВесьНабор()
     {
         _registry.All.Select(t => t.Name).Should().BeEquivalentTo(
-            ["read_file", "list_dir", "grep_search", "write_file", "edit_file"]);
+            ["read_file", "list_dir", "grep_search", "write_file", "edit_file", "run_command"]);
+    }
+
+    [Fact]
+    public void Registry_БезShell_НеСодержитRunCommand()
+    {
+        var registry = new DeepSeekToolRegistry(_root, new FileService(), enableShell: false);
+
+        registry.Get("run_command").Should().BeNull();
     }
 
     [Fact]
@@ -43,11 +51,35 @@ public class DeepSeekToolsTests : IDisposable
     {
         var json = _registry.BuildToolsJson();
 
-        json.Should().HaveCount(5);
+        json.Should().HaveCount(6);
         var fn = json[0]!["function"]!;
         json[0]!["type"]!.GetValue<string>().Should().Be("function");
         fn["name"]!.GetValue<string>().Should().NotBeNullOrEmpty();
         fn["parameters"]!["type"]!.GetValue<string>().Should().Be("object");
+    }
+
+    [Fact]
+    public async Task RunCommand_ВыполняетКомандуИВозвращаетВывод()
+    {
+        var result = await RunAsync("run_command", new { command = "echo привет-из-оболочки" });
+
+        result.IsError.Should().BeFalse();
+        result.Content.Should().Contain("привет-из-оболочки").And.Contain("[exit code: 0]");
+    }
+
+    [Fact]
+    public async Task RunCommand_НенулевойКодВыхода_IsError()
+    {
+        var result = await RunAsync("run_command", new { command = "exit 3" });
+
+        result.IsError.Should().BeTrue();
+        result.Content.Should().Contain("[exit code: 3]");
+    }
+
+    [Fact]
+    public void RunCommand_КлассExecute()
+    {
+        _registry.Get("run_command")!.PermissionClass.Should().Be(ToolPermissionClass.Execute);
     }
 
     [Theory]

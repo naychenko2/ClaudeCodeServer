@@ -49,7 +49,8 @@ public class DeepSeekSession : ILlmSessionAdapter
         _rawSystemPrompt = context.RawSystemPrompt;
         _client = client;
         _options = options;
-        _registry = new DeepSeekToolRegistry(_rootPath, files);
+        _registry = new DeepSeekToolRegistry(_rootPath, files,
+            options.Value.EnableShellTool, options.Value.ShellTimeoutSeconds);
         _store = new DeepSeekConversationStore(sessionsBasePath);
         _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage);
     }

@@ -44,7 +44,7 @@ public static class PermissionRuleEvaluator
         if (input.ValueKind != JsonValueKind.Object) return null;
         var keys = toolName.ToLowerInvariant() switch
         {
-            "bash" => new[] { "command" },
+            "bash" or "run_command" => new[] { "command" },
             "edit" or "write" or "read" or "notebookedit" => new[] { "file_path", "path" },
             "glob" or "grep" => new[] { "pattern", "path" },
             "webfetch" => new[] { "url" },

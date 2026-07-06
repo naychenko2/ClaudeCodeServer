@@ -29,7 +29,8 @@ public sealed class DeepSeekToolRegistry
 
     private readonly Dictionary<string, IDeepSeekTool> _tools;
 
-    public DeepSeekToolRegistry(string rootPath, FileService files)
+    public DeepSeekToolRegistry(string rootPath, FileService files,
+        bool enableShell = true, int shellTimeoutSeconds = 120)
     {
         var list = new List<IDeepSeekTool>
         {
@@ -39,6 +40,9 @@ public sealed class DeepSeekToolRegistry
             new WriteFileTool(rootPath, files),
             new EditFileTool(rootPath, files),
         };
+        // Запуск команд (класс Execute) спрашивает разрешение на КАЖДЫЙ вызов —
+        // даже в auto/bypass (см. DeepSeekSession.AutoAllowedByMode)
+        if (enableShell) list.Add(new RunCommandTool(rootPath, shellTimeoutSeconds));
         _tools = list.ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
     }
 
@@ -398,6 +402,96 @@ file sealed class EditFileTool(string rootPath, FileService files) : IDeepSeekTo
         catch (Exception ex)
         {
             return Task.FromResult(new DsToolResult($"Ошибка правки {path}: {ex.Message}", IsError: true));
+        }
+    }
+}
+
+file sealed class RunCommandTool(string rootPath, int timeoutSeconds) : IDeepSeekTool
+{
+    public string Name => "run_command";
+    public string Description =>
+        "Выполнить команду оболочки в корне проекта (Windows — PowerShell, Linux — bash). " +
+        $"Возвращает stdout/stderr и код выхода. Таймаут по умолчанию {timeoutSeconds} с. " +
+        "Каждый запуск требует разрешения пользователя.";
+    public ToolPermissionClass PermissionClass => ToolPermissionClass.Execute;
+
+    public JsonObject BuildSchema() => new()
+    {
+        ["type"] = "object",
+        ["properties"] = new JsonObject
+        {
+            ["command"] = new JsonObject { ["type"] = "string", ["description"] = "Команда оболочки" },
+            ["timeout_seconds"] = new JsonObject { ["type"] = "integer", ["description"] = "Таймаут в секундах (макс 600)" },
+        },
+        ["required"] = new JsonArray { "command" },
+    };
+
+    public async Task<DsToolResult> ExecuteAsync(JsonElement args, CancellationToken ct)
+    {
+        var command = DeepSeekToolRegistry.GetString(args, "command");
+        if (string.IsNullOrWhiteSpace(command))
+            return new DsToolResult("Не указан параметр command", IsError: true);
+        var timeout = Math.Clamp(DeepSeekToolRegistry.GetInt(args, "timeout_seconds") ?? timeoutSeconds, 1, 600);
+
+        var utf8NoBom = new UTF8Encoding(false);
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            WorkingDirectory = rootPath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = utf8NoBom,
+            StandardErrorEncoding = utf8NoBom,
+            CreateNoWindow = true,
+        };
+        if (OperatingSystem.IsWindows())
+        {
+            psi.FileName = "powershell.exe";
+            psi.ArgumentList.Add("-NoProfile");
+            psi.ArgumentList.Add("-NonInteractive");
+            psi.ArgumentList.Add("-Command");
+            // Принудительный UTF-8 вывода — иначе OEM code page даёт кракозябры в русском тексте
+            psi.ArgumentList.Add("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " + command);
+        }
+        else
+        {
+            psi.FileName = "/bin/bash";
+            psi.ArgumentList.Add("-lc");
+            psi.ArgumentList.Add(command);
+        }
+
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(psi)
+                ?? throw new InvalidOperationException("Не удалось запустить процесс оболочки");
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+            var stderrTask = process.StandardError.ReadToEndAsync(ct);
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeout));
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* уже завершился */ }
+                if (ct.IsCancellationRequested) throw; // interrupt хода — пробрасываем
+                return new DsToolResult($"Команда не завершилась за {timeout} с и была прервана", IsError: true);
+            }
+
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
+            var sb = new StringBuilder();
+            if (stdout.Length > 0) sb.AppendLine(stdout.TrimEnd());
+            if (stderr.Length > 0) sb.Append("[stderr]\n").AppendLine(stderr.TrimEnd());
+            sb.Append("[exit code: ").Append(process.ExitCode).Append(']');
+            return new DsToolResult(DeepSeekToolRegistry.Truncate(sb.ToString()), IsError: process.ExitCode != 0);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return new DsToolResult($"Ошибка запуска команды: {ex.Message}", IsError: true);
         }
     }
 }

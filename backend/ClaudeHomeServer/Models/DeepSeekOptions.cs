@@ -12,8 +12,9 @@ public class DeepSeekOptions
     // Лимит итераций tool-цикла на один ход
     public int MaxToolIterations { get; set; } = 15;
     public int MaxTokens { get; set; } = 8192;
-    // Инструмент запуска команд — вне MVP; при включении каждый запуск требует разрешения
-    public bool EnableShellTool { get; set; }
+    // Инструмент запуска команд (run_command): каждый запуск требует разрешения пользователя
+    public bool EnableShellTool { get; set; } = true;
+    public int ShellTimeoutSeconds { get; set; } = 120;
     public List<DeepSeekModelConfig> Models { get; set; } = [];
 
     public bool Enabled => !string.IsNullOrWhiteSpace(ApiKey);

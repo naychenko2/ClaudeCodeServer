@@ -97,9 +97,11 @@ export function RateLimitBar({ w }: { w: RateWindow }) {
 
 // Общая оболочка бейджа стоимости: пилюля с подписью + суммой и выпадающая разбивка по клику.
 // tone окрашивает пилюлю при приближении к лимиту (warn/danger).
-function BadgeShell({ label, amount, title, isMobile, tone, children }: {
-  label: string; amount: React.ReactNode; title: string; isMobile?: boolean;
-  tone?: 'warn' | 'danger'; children: React.ReactNode;
+// stacked — двухстрочная пилюля (label скрыт/опущен): содержимое amount в столбик,
+// компактнее по ширине (для мобильного объединённого чипа).
+function BadgeShell({ label, amount, title, isMobile, tone, stacked, children }: {
+  label?: string; amount: React.ReactNode; title: string; isMobile?: boolean;
+  tone?: 'warn' | 'danger'; stacked?: boolean; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const toneBg = tone === 'danger' ? RATE_COLORS.danger.bg : tone === 'warn' ? RATE_COLORS.warn.bg : C.bgWhite;
@@ -111,12 +113,16 @@ function BadgeShell({ label, amount, title, isMobile, tone, children }: {
         onClick={() => setOpen(o => !o)}
         title={title}
         style={{
-          display: 'flex', alignItems: 'center', gap: 4, padding: '3px 9px',
+          display: 'flex',
+          flexDirection: stacked ? 'column' : 'row',
+          alignItems: stacked ? 'flex-start' : 'center',
+          gap: stacked ? 1 : 4, padding: stacked ? '2px 9px' : '3px 9px',
+          lineHeight: stacked ? 1.2 : undefined,
           background: toneBg, border: `1px solid ${toneBorder}`, borderRadius: R.lg,
           cursor: 'pointer', fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: '#B05C38',
         }}
       >
-        <span style={{ fontFamily: FONT.sans, fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</span>
+        {label && <span style={{ fontFamily: FONT.sans, fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</span>}
         {amount}
       </button>
       {open && (
@@ -553,11 +559,11 @@ function MobileCombinedBadge(props: {
     ? (cost.cost > 0 ? fmtUsd(cost.cost) : totalTokens > 0 ? `${fmtTokens(totalTokens)} ток.` : '—')
     : (cost.cost > 0 ? (sub ? '≈' : '') + fmtUsd(cost.cost) : '—');
 
-  // Пилюля: [контекст %] · [стоимость]
+  // Пилюля в две строки (без текстового лейбла): строка 1 — контекст, строка 2 — стоимость.
+  // Компактнее по ширине, чтобы не распирать узкую мобильную шапку.
   const amountNode = (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0, minWidth: 0 }}>
       {showCtx && <ContextAmount estimate={estimate} isCompacting={isCompacting} isMobile />}
-      {showCtx && (showCost || hasFal) && <span style={{ color: C.textMuted, flexShrink: 0 }}>·</span>}
       {(showCost || hasFal) && (
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{costSummary}</span>
       )}
@@ -570,10 +576,10 @@ function MobileCombinedBadge(props: {
 
   return (
     <BadgeShell
-      label="Ctx · $"
       amount={amountNode}
       isMobile
       tone={tone}
+      stacked
       title="Контекст и расход сессии — нажмите для деталей"
     >
       {showCtx && <ContextPopoverBody {...props} />}
@@ -726,9 +732,15 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
     </ToolbarIconButton>
   ) : null;
 
+  // На мобилке артефакты и настройки — плотная пара справа (gap 2 вместо TB.gap),
+  // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
+  const actionBtns = isMobile
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>{artifactsBtn}{settingsBtn}</div>
+    : <>{artifactsBtn}{settingsBtn}</>;
+
   return (
     <Toolbar isMobile={isMobile}>
-      {openBtn}{titleEl}{workflowBadge}{costBadges}{artifactsBtn}{settingsBtn}
+      {openBtn}{titleEl}{workflowBadge}{costBadges}{actionBtns}
     </Toolbar>
   );
 }

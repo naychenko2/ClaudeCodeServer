@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
-import { joinUser, leaveUser, onMessage } from '../lib/signalr';
+import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { C, FONT } from '../lib/design';
 import { useSidebarWidth } from '../lib/sidebarWidth';
@@ -125,7 +125,9 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     return () => {
       clearInterval(poll);
       off();
-      if (auth.id) leaveUser(auth.id).catch(() => {});
+      // Группу user_{id} НЕ покидаем: она сессионная и общая (её держат
+      // NotificationToasts и стор задач). Ранний LeaveUser выкидывал всё
+      // соединение из группы → task_changed переставал доходить в проектном чате.
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.id]);

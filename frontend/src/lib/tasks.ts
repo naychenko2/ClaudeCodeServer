@@ -47,7 +47,6 @@ function joinUserGroup() {
 function wireRealtime() {
   if (_realtimeWired) return;
   _realtimeWired = true;
-  joinUserGroup();
   onMessage(msg => {
     if (msg.type !== 'task_changed') return;
     if (msg.action === 'deleted') remove(msg.task.id);
@@ -67,6 +66,9 @@ export async function reloadTasks(): Promise<void> {
 // Первая загрузка (идемпотентно). Вызывается из компонентов задач при монтировании.
 export function ensureTasksLoaded(): Promise<void> {
   wireRealtime();
+  // Членство в группе подтверждаем на каждый заход (идемпотентно): если какая-то
+  // страница ранее вышла из user_{id}, страница задач переподпишется.
+  joinUserGroup();
   if (_loaded) return Promise.resolve();
   if (!_loading)
     _loading = reloadTasks().finally(() => { _loading = null; });

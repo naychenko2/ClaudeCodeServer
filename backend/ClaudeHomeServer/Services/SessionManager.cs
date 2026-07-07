@@ -42,7 +42,6 @@ public class SessionManager
     private readonly AppSettingsService _appSettings;
     private readonly UserStore _users;
     private readonly JwtService _jwt;
-    private readonly FeatureFlagService _featureFlags;
     private readonly Microsoft.AspNetCore.Hosting.Server.IServer _server;
     private readonly IConfiguration _config;
     // Сервисные токены MCP tasks-server — по одному на владельца, с перевыпуском до истечения
@@ -56,7 +55,7 @@ public class SessionManager
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
         FalCostService falCost, UsageService usage,
         AppSettingsService appSettings, UserStore users, JwtService jwt,
-        FeatureFlagService featureFlags, Microsoft.AspNetCore.Hosting.Server.IServer server,
+        Microsoft.AspNetCore.Hosting.Server.IServer server,
         LlmProviderRegistry llmProviders)
     {
         _projects = projects;
@@ -69,7 +68,6 @@ public class SessionManager
         _appSettings = appSettings;
         _users = users;
         _jwt = jwt;
-        _featureFlags = featureFlags;
         _server = server;
         _config = config;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
@@ -99,12 +97,10 @@ public class SessionManager
         return addr.Replace("0.0.0.0", "localhost").Replace("[::]", "localhost").TrimEnd('/');
     }
 
-    // Контекст MCP-сервера задач для сессии; null — фича выключена у владельца
+    // Контекст MCP-сервера задач для сессии; null — только для чата без владельца
     private TasksMcpContext? BuildTasksContext(string? ownerId, string? projectId)
     {
         if (ownerId is null) return null;
-        if (!_featureFlags.GetEffective(ownerId).TryGetValue(FeatureFlagKeys.Tasks, out var enabled) || !enabled)
-            return null;
         // Перевыпуск за сутки до истечения — сервер может жить дольше срока токена
         var entry = _tasksTokens.AddOrUpdate(ownerId,
             id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),

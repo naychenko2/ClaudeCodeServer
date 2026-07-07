@@ -69,10 +69,9 @@ public class SessionStatusTests : IDisposable
         var userStore = new UserStore(_config, NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(_config);
         var jwt = new JwtService(_config, NullLogger<JwtService>.Instance);
-        var featureFlags = new FeatureFlagService(userStore);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
-        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, featureFlags, server.Object, llmProviders);
+        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders);
     }
 
     private void WriteSessions(IEnumerable<Session> sessions)

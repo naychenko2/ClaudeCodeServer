@@ -12,7 +12,6 @@ namespace ClaudeHomeServer.Services;
 public class TaskSchedulerService(
     TaskManager tasks,
     UserStore users,
-    FeatureFlagService flags,
     IHubContext<SessionHub> hub,
     PushService push,
     TaskExecutionService executor,
@@ -42,17 +41,12 @@ public class TaskSchedulerService(
     {
         foreach (var user in users.GetAll())
         {
-            var effective = flags.GetEffective(user.Id);
-            var remindersOn = effective.GetValueOrDefault(FeatureFlagKeys.TaskReminders);
-            var execOn = effective.GetValueOrDefault(FeatureFlagKeys.TaskClaudeExec);
-            if (!remindersOn && !execOn) continue;
-
             var tz = TaskDueCalculator.ResolveTimeZone(user.TimeZone);
             foreach (var task in tasks.GetByOwner(user.Id))
             {
                 if (task.Status == TaskItemStatus.Done) continue;
-                if (remindersOn) await ProcessReminderAsync(task, tz, nowUtc);
-                if (execOn) await ProcessClaudeAutoStartAsync(task, tz, nowUtc);
+                await ProcessReminderAsync(task, tz, nowUtc);
+                await ProcessClaudeAutoStartAsync(task, tz, nowUtc);
             }
         }
     }

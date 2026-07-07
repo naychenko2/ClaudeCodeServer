@@ -148,13 +148,12 @@ const windowWidth = useWindowWidth();
   // Задачи (за фич-флагом): вкладка «Задачи» в сайдбаре + карточка задачи в центре.
   // Открытая задача ведёт себя как открытый файл: переключение вкладок сайдбара
   // основную зону не трогает — карточка открывается кликом и закрывается крестиком.
-  const tasksEnabled = useFeature(FLAGS.tasks);
   const allTasks = useTasks();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Свежесозданная задача — её карточка открывается сразу в режиме редактирования
   const [autoEditTaskId, setAutoEditTaskId] = useState<string | null>(null);
-  const tasksMode = tasksEnabled && leftTab === 'tasks';
-  const selectedTask = tasksEnabled && selectedTaskId
+  const tasksMode = leftTab === 'tasks';
+  const selectedTask = selectedTaskId
     ? allTasks.find(t => t.id === selectedTaskId && t.projectId === project.id) ?? null
     : null;
 
@@ -185,7 +184,7 @@ const windowWidth = useWindowWidth();
   const leftTabOptions: { value: LeftTab; label: string }[] = [
     { value: 'sessions', label: 'Чаты' },
     { value: 'files', label: 'Файлы' },
-    ...(tasksEnabled ? [{ value: 'tasks' as const, label: 'Задачи' }] : []),
+    { value: 'tasks', label: 'Задачи' },
   ];
 
   // Диплинк файла: App положил «projectId|путь» в sessionStorage.

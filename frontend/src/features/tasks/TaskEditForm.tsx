@@ -9,7 +9,6 @@ import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import { PRIORITY_LABEL, PRIORITY_ORDER, RECURRENCE_TYPE_LABEL, REMINDER_PRESETS, reminderLabel } from '../../lib/tasks';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { ClaudeBadge, MeBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
 import { MarkdownEditor } from './MarkdownEditor';
@@ -81,8 +80,6 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
   const [customReminderOpen, setCustomReminderOpen] = useState(false);
   const [customReminderValue, setCustomReminderValue] = useState('2');
   const [customReminderUnit, setCustomReminderUnit] = useState<1 | 60 | 1440>(60);
-  const remindersEnabled = useFeature(FLAGS.taskReminders);
-  const recurrenceEnabled = useFeature(FLAGS.taskRecurrence);
   // Повторение: null — не повторяется
   const [recurrence, setRecurrence] = useState<TaskRecurrence | null>(task.recurrence ?? null);
   const [assignee, setAssignee] = useState<TaskAssignee>(task.assignee ?? 'me');
@@ -290,8 +287,8 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
             />
           </div>
 
-          {/* Напоминание — только при заданном сроке (за фич-флагом) */}
-          {remindersEnabled && dueDate && (
+          {/* Напоминание — только при заданном сроке */}
+          {dueDate && (
             <>
               <div style={fieldLabelStyle()}>Напоминание</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
@@ -362,8 +359,8 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
             </>
           )}
 
-          {/* Повторение — только при заданном сроке (за фич-флагом) */}
-          {recurrenceEnabled && dueDate && (
+          {/* Повторение — только при заданном сроке */}
+          {dueDate && (
             <>
               <div style={fieldLabelStyle()}>Повторение</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>

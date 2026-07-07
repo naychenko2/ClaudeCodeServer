@@ -19,7 +19,6 @@ import {
   PriorityFlag, SectionLabel, SubtaskCheck,
 } from './bits';
 import { TaskEditForm } from './TaskEditForm';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 
 interface Props {
   task: Task;
@@ -59,7 +58,6 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const claudeExecEnabled = useFeature(FLAGS.taskClaudeExec);
   const [executing, setExecuting] = useState(false);
   const [execError, setExecError] = useState<string | null>(null);
 
@@ -137,7 +135,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
 
   // Живая сессия по задаче уже идёт — не показываем кнопку повторного запуска
   const claudeRunning = !!task.claudeStartedAt && !task.claudeResult && task.status !== 'done';
-  const executeButton = claudeExecEnabled && task.assignee === 'claude' && task.status !== 'done' && !claudeRunning && (
+  const executeButton = task.assignee === 'claude' && task.status !== 'done' && !claudeRunning && (
     <button
       onClick={handleExecute}
       disabled={executing}

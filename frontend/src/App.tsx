@@ -18,7 +18,7 @@ import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
-import { setAllFlags, useFeature, FLAGS } from './lib/featureFlags'
+import { setAllFlags } from './lib/featureFlags'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
@@ -76,10 +76,7 @@ export default function App() {
     const saved = localStorage.getItem(HUB_TAB_KEY)
     return saved === 'projects' || saved === 'calendar' ? saved : 'chats'
   })
-  // «Календарь» доступен только при включённом флаге tasks; если флаг выключен
-  // (или ещё не загружен), сохранённая вкладка «календарь» откатывается на «Чаты»
-  const tasksEnabled = useFeature(FLAGS.tasks)
-  const effectiveHubTab: HubTab = hubTab === 'calendar' && !tasksEnabled ? 'chats' : hubTab
+  const effectiveHubTab: HubTab = hubTab
 
   // «Что нового» — продуктовая история по всем проектам. Overlay на верхнем уровне,
   // открывается из HubHeader (событие) из любого раздела.

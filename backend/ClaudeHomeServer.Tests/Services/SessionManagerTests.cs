@@ -52,10 +52,9 @@ public class SessionManagerTests : IDisposable
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var jwt = new JwtService(config, NullLogger<JwtService>.Instance);
-        var featureFlags = new FeatureFlagService(userStore);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, featureFlags, server.Object, llmProviders);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders);
     }
 
     public void Dispose()

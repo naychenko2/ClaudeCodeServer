@@ -142,67 +142,51 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
     // ─── Регулярные задачи: done → следующий экземпляр ───────────────────────
 
-    private async Task SetRecurrenceFlagAsync(bool enabled)
-    {
-        var response = await _client.PutAsJsonAsync("/api/feature-flags/task-recurrence", new { enabled });
-        response.EnsureSuccessStatusCode();
-    }
-
     [Fact]
-    public async Task Done_РегулярнаяЗадачаСФлагом_СпавнитСледующийЭкземпляр()
+    public async Task Done_РегулярнаяЗадача_СпавнитСледующийЭкземпляр()
     {
-        await SetRecurrenceFlagAsync(true);
-        try
-        {
-            var marker = "рег_" + Guid.NewGuid().ToString("N")[..8];
-            var task = await CreateTaskAsync(new
-            {
-                title = marker,
-                dueDate = "2026-07-01",
-                dueTime = "10:00",
-                recurrence = new { type = "daily", interval = 1 }
-            });
-            var id = task.GetProperty("id").GetString();
-
-            var response = await _client.PutAsJsonAsync($"/api/tasks/{id}", new { status = "done" });
-            response.StatusCode.Should().Be(HttpStatusCode.OK);
-
-            var listResponse = await _client.GetAsync($"/api/tasks?q={marker}");
-            var list = await listResponse.Content.ReadFromJsonAsync<JsonElement>();
-            var items = list.EnumerateArray().ToList();
-
-            items.Should().HaveCount(2);
-            var done = items.Single(t => t.GetProperty("status").GetString() == "done");
-            var next = items.Single(t => t.GetProperty("status").GetString() == "todo");
-            done.GetProperty("dueDate").GetString().Should().Be("2026-07-01");
-            next.GetProperty("dueDate").GetString().Should().Be("2026-07-02");
-            next.GetProperty("dueTime").GetString().Should().Be("10:00");
-            // Оба экземпляра — одна серия
-            next.GetProperty("seriesId").GetString().Should().Be(done.GetProperty("seriesId").GetString());
-        }
-        finally
-        {
-            await SetRecurrenceFlagAsync(false);
-        }
-    }
-
-    [Fact]
-    public async Task Done_БезФлагаRecurrence_НеСпавнит()
-    {
-        // Флаг у второго юзера выключен (дефолт) — спавна нет
-        var marker = "без_флага_" + Guid.NewGuid().ToString("N")[..8];
-        var createResponse = await _stranger.PostAsJsonAsync("/api/tasks", new
+        var marker = "рег_" + Guid.NewGuid().ToString("N")[..8];
+        var task = await CreateTaskAsync(new
         {
             title = marker,
             dueDate = "2026-07-01",
+            dueTime = "10:00",
             recurrence = new { type = "daily", interval = 1 }
         });
-        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>())
-            .GetProperty("id").GetString();
+        var id = task.GetProperty("id").GetString();
 
-        await _stranger.PutAsJsonAsync($"/api/tasks/{id}", new { status = "done" });
+        var response = await _client.PutAsJsonAsync($"/api/tasks/{id}", new { status = "done" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        var list = await (await _stranger.GetAsync($"/api/tasks?q={marker}"))
+        var listResponse = await _client.GetAsync($"/api/tasks?q={marker}");
+        var list = await listResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var items = list.EnumerateArray().ToList();
+
+        items.Should().HaveCount(2);
+        var done = items.Single(t => t.GetProperty("status").GetString() == "done");
+        var next = items.Single(t => t.GetProperty("status").GetString() == "todo");
+        done.GetProperty("dueDate").GetString().Should().Be("2026-07-01");
+        next.GetProperty("dueDate").GetString().Should().Be("2026-07-02");
+        next.GetProperty("dueTime").GetString().Should().Be("10:00");
+        // Оба экземпляра — одна серия
+        next.GetProperty("seriesId").GetString().Should().Be(done.GetProperty("seriesId").GetString());
+    }
+
+    [Fact]
+    public async Task Done_БезRecurrence_НеСпавнит()
+    {
+        // У задачи нет recurrence — следующий экземпляр не создаётся
+        var marker = "без_рекуррентности_" + Guid.NewGuid().ToString("N")[..8];
+        var task = await CreateTaskAsync(new
+        {
+            title = marker,
+            dueDate = "2026-07-01"
+        });
+        var id = task.GetProperty("id").GetString();
+
+        await _client.PutAsJsonAsync($"/api/tasks/{id}", new { status = "done" });
+
+        var list = await (await _client.GetAsync($"/api/tasks?q={marker}"))
             .Content.ReadFromJsonAsync<JsonElement>();
         list.GetArrayLength().Should().Be(1);
     }
@@ -210,29 +194,21 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task Done_ПовторноеСохранениеDone_НеСпавнитВторойРаз()
     {
-        await SetRecurrenceFlagAsync(true);
-        try
+        var marker = "идемпотент_" + Guid.NewGuid().ToString("N")[..8];
+        var task = await CreateTaskAsync(new
         {
-            var marker = "идемпотент_" + Guid.NewGuid().ToString("N")[..8];
-            var task = await CreateTaskAsync(new
-            {
-                title = marker,
-                dueDate = "2026-07-01",
-                recurrence = new { type = "daily", interval = 1 }
-            });
-            var id = task.GetProperty("id").GetString();
+            title = marker,
+            dueDate = "2026-07-01",
+            recurrence = new { type = "daily", interval = 1 }
+        });
+        var id = task.GetProperty("id").GetString();
 
-            await _client.PutAsJsonAsync($"/api/tasks/{id}", new { status = "done" });
-            // Второй PUT по уже завершённой задаче (wasDone == true) — спавна быть не должно
-            await _client.PutAsJsonAsync($"/api/tasks/{id}", new { status = "done" });
+        await _client.PutAsJsonAsync($"/api/tasks/{id}", new { status = "done" });
+        // Второй PUT по уже завершённой задаче (wasDone == true) — спавна быть не должно
+        await _client.PutAsJsonAsync($"/api/tasks/{id}", new { status = "done" });
 
-            var list = await (await _client.GetAsync($"/api/tasks?q={marker}"))
-                .Content.ReadFromJsonAsync<JsonElement>();
-            list.GetArrayLength().Should().Be(2);
-        }
-        finally
-        {
-            await SetRecurrenceFlagAsync(false);
-        }
+        var list = await (await _client.GetAsync($"/api/tasks?q={marker}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        list.GetArrayLength().Should().Be(2);
     }
 }

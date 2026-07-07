@@ -1,6 +1,9 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { MermaidDiagram } from './MermaidDiagram';
 import { C, FONT } from '../lib/design';
 
 interface Props {
@@ -41,20 +44,39 @@ const components: Components = {
   em: ({ children }) => (
     <em style={{ fontStyle: 'italic' }}>{children}</em>
   ),
+  // pre не оборачиваем — блоки кода целиком собираются в компоненте code ниже
+  pre: ({ children }) => <>{children}</>,
   code: ({ children, className }) => {
-    const isBlock = className?.startsWith('language-');
-    if (isBlock) return null; // обрабатывается в pre
+    const language = /language-(\w+)/.exec(className || '')?.[1];
+    const text = String(children).replace(/\n$/, '');
+    if (language === 'mermaid') {
+      return <MermaidDiagram code={text} />;
+    }
+    if (language) {
+      return (
+        <SyntaxHighlighter
+          language={language}
+          style={oneDark}
+          customStyle={{ borderRadius: 10, fontSize: 12.5, margin: '0 0 16px', padding: '14px 16px', fontFamily: mono, overflowX: 'auto' }}
+        >
+          {text}
+        </SyntaxHighlighter>
+      );
+    }
+    // Многострочный блок без указания языка (например ASCII-схема) — моноширинный на светлом фоне
+    if (text.includes('\n')) {
+      return (
+        <pre style={{ margin: '0 0 16px', background: C.bgInset, borderRadius: 10, padding: '14px 16px', overflowX: 'auto', fontFamily: mono, fontSize: 12.5, lineHeight: 1.6, color: C.textHeading }}>
+          <code style={{ fontFamily: mono }}>{text}</code>
+        </pre>
+      );
+    }
     return (
       <code style={{ fontFamily: mono, fontSize: 12.5, background: C.bgInset, padding: '1px 5px', borderRadius: 4, color: C.textHeading }}>
         {children}
       </code>
     );
   },
-  pre: ({ children }) => (
-    <pre style={{ margin: '0 0 16px', background: C.bgInset, borderRadius: 10, padding: '14px 16px', overflowX: 'auto', fontFamily: mono, fontSize: 12.5, lineHeight: 1.6, color: C.textHeading }}>
-      {children}
-    </pre>
-  ),
   ul: ({ children }) => (
     <ul style={{ margin: '0 0 14px', paddingLeft: 22, lineHeight: 1.7 }}>{children}</ul>
   ),

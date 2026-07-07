@@ -662,7 +662,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
         {/* Empty state */}
         {items.length === 0 && !isHistoryLoading && online && (
-          <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint} />
+          <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}
+            session={session} onSessionUpdated={onSessionUpdated} isMobile={isMobile} />
         )}
 
         <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}>{renderedItems}</ChatProjectContext.Provider></FalCostContext.Provider>

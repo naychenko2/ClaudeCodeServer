@@ -2,8 +2,9 @@ import { useState } from 'react';
 import type { MouseEvent } from 'react';
 import type { Project } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
-import { TILE_COLORS, firstLetter, relativeTime } from './projectUtil';
+import { tileColors, firstLetter, relativeTime } from './projectUtil';
 import { ProjectActionsMenu } from './ProjectActionsMenu';
+import { useThemeMode } from '../../lib/themeMode';
 
 interface Props {
   project: Project;
@@ -18,7 +19,8 @@ interface Props {
 
 // Десктопная строка проекта: плитка + имя/путь, справа — статус, действия, шеврон.
 export function ProjectRow({ project: p, index, online, hasActiveSession, onOpen, onMove, onEdit, onDelete }: Props) {
-  const [tileBg, tileFg] = TILE_COLORS[index % TILE_COLORS.length];
+  useThemeMode();  // перекраска плашки при смене темы
+  const [tileBg, tileFg] = tileColors(index);
   const [hover, setHover] = useState(false);
 
   const rel = relativeTime(p.updatedAt);

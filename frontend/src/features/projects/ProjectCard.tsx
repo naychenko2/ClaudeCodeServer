@@ -1,8 +1,9 @@
 import type { MouseEvent } from 'react';
 import type { Project } from '../../types';
 import { C, R, FONT, SHADOW } from '../../lib/design';
-import { TILE_COLORS, firstLetter, pluralChats } from './projectUtil';
+import { tileColors, firstLetter, pluralChats } from './projectUtil';
 import { ProjectActionsMenu } from './ProjectActionsMenu';
+import { useThemeMode } from '../../lib/themeMode';
 
 interface Props {
   project: Project;
@@ -17,7 +18,8 @@ interface Props {
 
 // Мобильная карточка проекта: плитка + имя (+ меню) + путь + подпись «N чатов · дата».
 export function ProjectCard({ project: p, index, online, hasActiveSession, onOpen, onMove, onEdit, onDelete }: Props) {
-  const [tileBg, tileFg] = TILE_COLORS[index % TILE_COLORS.length];
+  useThemeMode();  // перекраска плашки при смене темы
+  const [tileBg, tileFg] = tileColors(index);
 
   const count = p.sessionCount ?? 0;
   const date = new Date(p.updatedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });

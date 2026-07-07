@@ -46,6 +46,12 @@ function themeCss(dark: boolean): string {
     /* Подложка холста (не сам лист) — тёплый фон в тон приложению */
     .geEditor { background-color: ${canvas} !important; }
     .geMenubar a, .geToolbar a, .geTitle { color: ${barText} !important; }
+    /* Заголовки групп палитры в сайдбаре — тёмная тема drawio красит их в тёмный
+       через более специфичное правило; перебиваем с той же специфичностью + полной непрозрачностью */
+    .geSidebarContainer .geTitle, .geSidebarContainer a.geTitle {
+      color: ${barText} !important;
+      opacity: 0.9 !important;
+    }
     .geBtn.gePrimaryBtn, button.gePrimaryBtn, .geBigStandardButtons .gePrimaryBtn {
       background: ${accent} !important;
       border-color: ${accent} !important;
@@ -97,7 +103,8 @@ export const DrawioViewer = forwardRef<DrawioHandle, Props>(function DrawioViewe
   const params = mode === 'view'
     ? `embed=1&proto=json&configure=1&chrome=0`
     : `embed=1&proto=json&configure=1&spin=1&noExitBtn=1&noSaveBtn=0`;
-  const src = `/drawio/?${params}${dark ? '&dark=1&ui=dark' : ''}`;
+  // lang=ru — интерфейс редактора на русском
+  const src = `/drawio/?${params}&lang=ru${dark ? '&dark=1&ui=dark' : ''}`;
 
   // flush: запрашиваем текущий XML у draw.io и сохраняем. Резолвится после записи
   // (или по таймауту — не блокируем UI, если редактор молчит).

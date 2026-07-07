@@ -74,7 +74,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
     [sessions, task.linkedSessionId],
   );
 
-  const color = project ? projectColor(project.id) : NO_PROJECT_COLOR;
+  const color = projectColor(project ? project.id : null);
   const doneSubs = task.subtasks.filter(s => s.isDone).length;
 
   const setStatus = (status: TaskStatus) => { void updateTask(task.id, { status }); };

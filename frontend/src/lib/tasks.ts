@@ -7,6 +7,7 @@ import type { CreateTaskDto, Task, TaskPriority, TaskRecurrence, TaskRecurrenceT
 import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { C } from './design';
+import { getEffectiveTheme } from './themeMode';
 
 // === Стор ===
 
@@ -143,29 +144,44 @@ export const PRIORITY_FILL: Record<TaskPriority, boolean> = {
 
 export interface ProjectColor { main: string; soft: string }
 
-const PROJECT_PALETTE: ProjectColor[] = [
-  { main: '#5E8B4E', soft: '#E3EEDD' },  // зелёный
-  { main: '#3E7CA6', soft: '#DEEAF3' },  // синий
-  { main: '#C2693B', soft: '#F7E6D9' },  // оранжевый
-  { main: '#8E4A82', soft: '#F0E1ED' },  // фиолетовый
-  { main: '#4B6BB0', soft: '#E2E8F5' },  // индиго
-  { main: '#3E9A94', soft: '#DDEEEC' },  // бирюзовый
-  { main: '#B4452F', soft: '#F6E1DC' },  // терракотовый
-  { main: '#7A7250', soft: '#EBE8DB' },  // хаки
+// main — точки/полосы/аватары (насыщенный, читается на любом фоне).
+// soft — пастельный фон чипов/аватаров для СВЕТЛОЙ темы; softDark — тёмный
+// тонированный аналог того же оттенка для ТЁМНОЙ темы (иначе светлые пастели
+// становятся светлыми «островками» на тёмном фоне).
+interface ProjectPaletteEntry { main: string; soft: string; softDark: string }
+
+const PROJECT_PALETTE: ProjectPaletteEntry[] = [
+  { main: '#5E8B4E', soft: '#E3EEDD', softDark: '#26311F' },  // зелёный
+  { main: '#3E7CA6', soft: '#DEEAF3', softDark: '#1E2B34' },  // синий
+  { main: '#C2693B', soft: '#F7E6D9', softDark: '#342319' },  // оранжевый
+  { main: '#8E4A82', soft: '#F0E1ED', softDark: '#301F2C' },  // фиолетовый
+  { main: '#4B6BB0', soft: '#E2E8F5', softDark: '#20283A' },  // индиго
+  { main: '#3E9A94', soft: '#DDEEEC', softDark: '#1B2E2C' },  // бирюзовый
+  { main: '#B4452F', soft: '#F6E1DC', softDark: '#341F1A' },  // терракотовый
+  { main: '#7A7250', soft: '#EBE8DB', softDark: '#2B2921' },  // хаки
 ];
 
 // Нейтральная пара для личных задач (вне проекта): тёплый taupe + тихая пастель
-export const NO_PROJECT_COLOR: ProjectColor = { main: '#9A8F7E', soft: '#EFEAE0' };
+const NO_PROJECT_ENTRY: ProjectPaletteEntry = { main: '#9A8F7E', soft: '#EFEAE0', softDark: '#2A2621' };
+
+// Публичная пара для личных задач. ВНИМАНИЕ: значение фиксируется при загрузке
+// модуля — безопасно только `.main` (тема-независим). Для soft/полного цвета
+// с учётом темы вызывай projectColor(null) в рендере.
+export const NO_PROJECT_COLOR: ProjectColor = resolveColor(NO_PROJECT_ENTRY);
 
 // Подпись «проекта» личной задачи в карточках/агенде/списке дня
 export const NO_PROJECT_LABEL = 'Личное';
 
+function resolveColor(e: ProjectPaletteEntry): ProjectColor {
+  return { main: e.main, soft: getEffectiveTheme() === 'dark' ? e.softDark : e.soft };
+}
+
 export function projectColor(projectId?: string | null): ProjectColor {
-  if (!projectId) return NO_PROJECT_COLOR;
+  if (!projectId) return resolveColor(NO_PROJECT_ENTRY);
   let hash = 0;
   for (let i = 0; i < projectId.length; i++)
     hash = (hash * 31 + projectId.charCodeAt(i)) | 0;
-  return PROJECT_PALETTE[Math.abs(hash) % PROJECT_PALETTE.length];
+  return resolveColor(PROJECT_PALETTE[Math.abs(hash) % PROJECT_PALETTE.length]);
 }
 
 // Инициал проекта для чипа-аватара («A» у «Acme API»)

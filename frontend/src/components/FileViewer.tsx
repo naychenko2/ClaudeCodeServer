@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
-import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
 import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript';
 import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript';
@@ -35,6 +35,7 @@ import { C, FONT, MODAL_W, SHADOW } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from './Toolbar';
 import { BackButton, Modal, ModalActions, Button, useIsMobileModal } from './ui';
 import { DiffView } from './DiffView';
+import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 
 const CodeEditor = lazy(() =>
   import('./CodeEditor').then(m => ({ default: m.CodeEditor }))
@@ -297,6 +298,9 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
 
 export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isMobile, onOpenSidebar }: Props) {
   const online = useOnline();
+  // Подписка на тему: подсветка кода переключается light/dark вместе с приложением
+  useThemeMode();
+  const codeTheme = getEffectiveTheme() === 'dark' ? oneDark : oneLight;
   const [fileContent, setFileContent] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -890,7 +894,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   ? <MarkdownViewer content={content} />
                   : <SyntaxHighlighter
                       language={getLanguage(filePath)}
-                      style={oneLight}
+                      style={codeTheme}
                       customStyle={{ margin: 0, padding: 0, background: 'transparent', fontSize: 13, lineHeight: '1.6', fontFamily: FONT.mono }}
                       codeTagProps={{ style: { fontFamily: FONT.mono } }}
                       showLineNumbers

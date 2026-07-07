@@ -23,6 +23,7 @@ import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { C, R, FONT, MODAL_W, TB, SHADOW } from '../lib/design';
+import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem } from './ui';
 
 interface Props {
@@ -107,9 +108,20 @@ const EXT_META: Record<string, { bg: string; fg: string; label: string }> = {
   svg:  { bg: '#F2E6F0', fg: '#8E4A82', label: 'svg' },
 };
 
+// Светлый hex → полупрозрачный rgba (для тёмного тонированного фона плитки)
+function hexToRgba(hex: string, a: number): string {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
 function getExtMeta(name: string) {
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
-  return EXT_META[ext] ?? { bg: '#EFEAE0', fg: '#9A8F7E', label: ext.slice(0, 3) || '•' };
+  const m = EXT_META[ext] ?? { bg: '#EFEAE0', fg: '#9A8F7E', label: ext.slice(0, 3) || '•' };
+  // В тёмной теме светлый пастельный фон плитки заменяем на тёмный тонированный
+  // того же оттенка (rgba от fg поверх тёмного фона), буква остаётся цветной
+  if (getEffectiveTheme() === 'dark') return { ...m, bg: hexToRgba(m.fg, 0.18) };
+  return m;
 }
 
 function FolderIcon() {
@@ -362,6 +374,7 @@ interface ContextMenuState {
 
 export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenKnowledge }: Props) {
   const online = useOnline();
+  useThemeMode();  // перерисовка дерева при смене темы (плитки типов файлов)
   const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
   const [dirCache, setDirCache] = useState<Map<string, FileEntry[]>>(() => initial?.dirCache ?? new Map());

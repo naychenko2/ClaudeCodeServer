@@ -50,7 +50,7 @@ function themeCss(dark: boolean): string {
        через более специфичное правило; перебиваем с той же специфичностью + полной непрозрачностью */
     .geSidebarContainer .geTitle, .geSidebarContainer a.geTitle {
       color: ${barText} !important;
-      opacity: 0.9 !important;
+      opacity: 1 !important;
     }
     .geBtn.gePrimaryBtn, button.gePrimaryBtn, .geBigStandardButtons .gePrimaryBtn {
       background: ${accent} !important;

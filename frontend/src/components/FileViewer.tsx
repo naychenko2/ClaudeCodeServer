@@ -30,7 +30,7 @@ import { MarkdownViewer } from './MarkdownViewer';
 import { MermaidDiagram } from './MermaidDiagram';
 import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
-import { DrawioViewer } from './DrawioViewer';
+import { DrawioViewer, type DrawioHandle } from './DrawioViewer';
 import { base64ToBytes } from '../lib/binary';
 import { C, FONT, MODAL_W, SHADOW } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from './Toolbar';
@@ -313,12 +313,15 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const [officeSwitching, setOfficeSwitching] = useState(false);
   const [officeDiscardConfirm, setOfficeDiscardConfirm] = useState(false);
   const [officeCacheKey, setOfficeCacheKey] = useState<string | undefined>();
+  // Режим draw.io: по умолчанию просмотр (read-only), кнопка «Редактировать» → edit
+  const [drawioMode, setDrawioMode] = useState<'view' | 'edit'>('view');
   const [editContent, setEditContent] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [unsavedConfirm, setUnsavedConfirm] = useState(false);
   // Ошибка мутации (сохранение/откат/удаление) офлайн или при сбое — inline-фидбек
   const [actionError, setActionError] = useState<string | null>(null);
   const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
+  const drawioRef = useRef<DrawioHandle>(null);
   const marks = useSyncMarks(project.id);
 
   const content = fileContent?.content ?? '';
@@ -335,6 +338,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
     setOfficeSwitching(false);
     setOfficeDiscardConfirm(false);
     setOfficeCacheKey(undefined);
+    setDrawioMode('view');
     setLoading(true);
     setLoadError(false);
     setFileContent(null);
@@ -357,13 +361,16 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   // Watcher: открытый файл изменился на диске → перечитываем (если не редактируем — не затираем правки)
   useEffect(() => {
     return onFilesChanged(({ projectId, paths }) => {
-      if (projectId !== project.id || editing) return;
+      // Пока draw.io в режиме edit — не перечитываем: autosave сам пишет файл,
+      // а перезагрузка content дала бы лишние refetch на каждый autosave.
+      const isDrawioEditing = /\.(drawio|dio)$/i.test(filePath) && drawioMode === 'edit';
+      if (projectId !== project.id || editing || isDrawioEditing) return;
       const norm = filePath.replace(/\\/g, '/');
       if (!paths.some(p => p.replace(/\\/g, '/') === norm)) return;
       api.files.getContent(project.id, filePath).then(r => { setFileContent(r); setEditContent(r.content ?? ''); setLoadError(false); }).catch(() => {});
       api.files.getDiff(project.id, filePath).then(r => setDiff(r.diff)).catch(() => {});
     });
-  }, [project.id, filePath, editing]);
+  }, [project.id, filePath, editing, drawioMode]);
 
   const handleToggleSync = () => {
     toggleSyncMark(project.id, {
@@ -416,7 +423,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
     }
   };
 
-  const handleClose = () => {
+  const handleClose = async () => {
+    // draw.io в режиме edit — сохраняем текущие правки перед закрытием
+    if (isDrawio && drawioMode === 'edit') await drawioRef.current?.flush();
     if (hasUnsavedChanges) {
       setUnsavedConfirm(true);
     } else {
@@ -535,6 +544,34 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             onChange={v => { setHtmlTab(v); if (v === 'code') setEditing(false); }}
             isMobile={isMobile}
           />
+        )}
+
+        {/* Переключатель просмотр/редактирование для draw.io */}
+        {isDrawioViewing && (
+          drawioMode === 'view' ? (
+            <button
+              title="Редактировать"
+              onClick={() => setDrawioMode('edit')}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textHeading, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.7 }}>
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+              {!isMobile && <span>Редактировать</span>}
+            </button>
+          ) : (
+            <button
+              title="Просмотр (правки сохраняются)"
+              onClick={async () => { await drawioRef.current?.flush(); setDrawioMode('view'); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.accent}`, background: C.accent, color: C.onAccent, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+              {!isMobile && <span>Просмотр</span>}
+            </button>
+          )
         )}
 
         {/* Переключатель режима просмотра/редактирования для Office-файлов */}
@@ -901,7 +938,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   </Suspense>
                 )
                 : isDrawio
-                  ? <DrawioViewer content={content} onSave={handleDrawioSave} />
+                  ? <DrawioViewer ref={drawioRef} key={drawioMode} content={content} mode={drawioMode} onSave={handleDrawioSave} />
                 : isHtml && htmlTab === 'preview'
                   ? <iframe
                       srcDoc={content}

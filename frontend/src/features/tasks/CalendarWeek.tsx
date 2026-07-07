@@ -128,19 +128,19 @@ export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenT
             >
               <span style={{
                 fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 600,
-                color: selected ? 'rgba(255,255,255,0.75)' : C.textMuted,
+                color: selected ? C.bgPanel : C.textMuted,
               }}>
                 {WEEKDAYS[i]}
               </span>
               <span style={{
                 fontFamily: FONT.sans, fontSize: 16, fontWeight: selected || iso === today ? 700 : 500,
-                color: selected ? '#fff' : iso === today ? C.accent : C.textPrimary,
+                color: selected ? C.bgMain : iso === today ? C.accent : C.textPrimary,
               }}>
                 {day}
               </span>
               <span style={{
                 width: 4, height: 4, borderRadius: '50%',
-                background: hasTasks ? (selected ? '#fff' : C.accent) : 'transparent',
+                background: hasTasks ? (selected ? C.bgMain : C.accent) : 'transparent',
               }} />
             </button>
           );

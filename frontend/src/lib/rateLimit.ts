@@ -1,4 +1,5 @@
 import type { RateLimitInfo, UsageSnapshot } from '../types';
+import { C } from './design';
 
 // Окно лимита подписки с вычисленными процентом и уровнем тревоги
 export interface RateWindow extends RateLimitInfo {
@@ -23,9 +24,9 @@ export function windowLabel(type: string): string {
 
 // Цвета по уровню (из палитры design.ts): норма — нейтральный, внимание — янтарь, лимит — красный
 export const RATE_COLORS: Record<RateWindow['level'], { fill: string; text: string; bg: string; border: string }> = {
-  normal: { fill: '#9A8F7E', text: '#756B5E', bg: '#FFFFFF', border: '#E0D7C8' },
-  warn:   { fill: '#C9923E', text: '#8A6A28', bg: '#FBEFE0', border: '#EAD2A0' },
-  danger: { fill: '#B4452F', text: '#C0392B', bg: '#FBF1EC', border: '#F5C6BF' },
+  normal: { fill: C.textMuted, text: C.textSecondary, bg: C.bgWhite, border: C.border },
+  warn:   { fill: C.warning, text: C.warningText, bg: C.warningBg, border: C.warning },
+  danger: { fill: C.danger, text: C.dangerText, bg: C.dangerBg, border: C.dangerBorder },
 };
 
 function rateLevel(w: RateLimitInfo): RateWindow['level'] {

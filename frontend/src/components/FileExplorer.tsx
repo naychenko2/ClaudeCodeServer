@@ -22,7 +22,7 @@ import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
-import { C, R, FONT, MODAL_W, TB } from '../lib/design';
+import { C, R, FONT, MODAL_W, TB, SHADOW } from '../lib/design';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem } from './ui';
 
 interface Props {
@@ -114,7 +114,7 @@ function getExtMeta(name: string) {
 
 function FolderIcon() {
   return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#C2693B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
     </svg>
   );
@@ -129,8 +129,8 @@ function ChevronRight() {
 }
 
 function CloudIcon({ variant }: { variant: 'direct' | 'inherited' | 'idle' }) {
-  const color = variant === 'direct' ? '#D97757' : variant === 'inherited' ? '#D7A78D' : '#B0A697';
-  const fill = variant === 'direct' ? '#D97757' : variant === 'inherited' ? '#EAC6B2' : 'none';
+  const color = variant === 'direct' ? C.accent : variant === 'inherited' ? C.accentSoft : C.textMuted;
+  const fill = variant === 'direct' ? C.accent : variant === 'inherited' ? C.accentMuted : 'none';
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill={fill} stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
@@ -141,7 +141,7 @@ function CloudIcon({ variant }: { variant: 'direct' | 'inherited' | 'idle' }) {
 function SyncSpinner() {
   return (
     <span style={{ display: 'flex', width: 16, height: 16, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-      <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2.5px solid #DACDB9', borderTopColor: '#C2532E', animation: 'spin 0.6s linear infinite' }} />
+      <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2.5px solid ${C.track}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite' }} />
     </span>
   );
 }
@@ -236,7 +236,7 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
               <span style={{ flex: 1, fontFamily: FONT.mono, fontSize: 11, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {webdavUrl}
               </span>
-              <button onClick={handleCopyWebdav} title="Скопировать URL" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: copied ? '#3F7A4F' : C.textMuted, flexShrink: 0 }}>
+              <button onClick={handleCopyWebdav} title="Скопировать URL" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: copied ? C.successText : C.textMuted, flexShrink: 0 }}>
                 {copied
                   ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                   : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -842,11 +842,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     const isRenaming = renamingPath === entry.path;
 
     const rowBg = isDropTgt
-      ? '#F1DDD1'
-      : isActive ? '#F1DDD1'
-      : hoveredPath === entry.path ? '#E8E1D4'
-      : normPath(entry.path) === newlyCreatedPath ? 'rgba(217,119,87,0.13)'
-      : (sstate || folderSyncing) ? '#F4ECE3'
+      ? C.accentMuted
+      : isActive ? C.accentMuted
+      : hoveredPath === entry.path ? C.bgSelected
+      : normPath(entry.path) === newlyCreatedPath ? C.accentLight
+      : (sstate || folderSyncing) ? C.accentLight
       : 'transparent';
     // Десктоп: кластер иконок липнет к правому краю видимой области при горизонтальном скролле
     const stickyIcons = !isMobile;
@@ -893,14 +893,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           background: rowBg,
           boxShadow: isDropTgt
             ? `inset 0 0 0 2px ${C.accent}`
-            : isActive ? 'inset 2px 0 0 #D97757'
+            : isActive ? `inset 2px 0 0 ${C.accent}`
             : 'none',
           transition: 'background 0.1s, box-shadow 0.1s, opacity 0.1s, transform 0.1s',
         }}
       >
         {/* toggle-стрелка дерева — только десктоп/планшет */}
         {!mobileNav && (
-          <span style={{ width: 12, flexShrink: 0, textAlign: 'center', userSelect: 'none', color: '#9A8F7E', fontSize: 9, lineHeight: 1 }}>
+          <span style={{ width: 12, flexShrink: 0, textAlign: 'center', userSelect: 'none', color: C.textMuted, fontSize: 9, lineHeight: 1 }}>
             {entry.isDirectory ? (isLoading ? '·' : (isExpanded ? '▾' : '▸')) : ''}
           </span>
         )}
@@ -936,7 +936,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 fontFamily: "'JetBrains Mono', monospace",
                 fontSize: 13,
                 fontWeight: entry.isDirectory ? 700 : 500,
-                color: '#39332B',
+                color: C.textHeading,
                 background: C.bgWhite,
                 border: `1.5px solid ${C.accent}`,
                 borderRadius: 4,
@@ -952,8 +952,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               fontSize: 13,
               fontWeight: entry.isDirectory ? 700 : 500,
               color: (!entry.isDirectory && indexedFileNames?.has(entry.name))
-                ? '#3F7A4F'
-                : '#39332B',
+                ? C.successText
+                : C.textHeading,
               ...(isMobile
                 ? { whiteSpace: 'normal', wordBreak: 'break-all', lineHeight: 1.35 }
                 : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
@@ -961,7 +961,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           )}
           {parentDir && (
             <span title={normPath(entry.path)} style={{
-              fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: '#9A8F7E',
+              fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: C.textMuted,
               ...(isMobile ? { whiteSpace: 'normal', wordBreak: 'break-all' } : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
             }}>{parentDir}</span>
           )}
@@ -978,10 +978,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           } : {}),
         }}>
         {entry.isModified && (
-          <span style={{ fontSize: 9, fontWeight: 700, color: '#C2693B', background: '#FBEBE0', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
+          <span style={{ fontSize: 9, fontWeight: 700, color: C.accent, background: C.accentLight, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
         )}
         {entry.isNew && (
-          <span style={{ fontSize: 9, fontWeight: 700, color: '#3F7A4F', background: '#E2F0E6', width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>+</span>
+          <span style={{ fontSize: 9, fontWeight: 700, color: C.successText, background: C.successBg, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>+</span>
         )}
         {/* Hover-иконки: переименовать + удалить — только десктоп при hover */}
         {online && !isRenaming && !isMobile && hoveredPath === entry.path && (
@@ -996,7 +996,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             <IconButton
               size="xs"
               tone="danger"
-              color="#C85A3F"
+              color={C.danger}
               onClick={e => { e.stopPropagation(); setDeleteConfirm(entry); }}
               title="Удалить"
             >
@@ -1022,7 +1022,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {/* Иконка знаний: спиннер при индексации; при hover — добавить или удалить */}
         {!entry.isDirectory && (
           indexingFiles?.has(entry.path) ? (
-            <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}>
+            <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.successText }}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                 <style>{`@keyframes kb-spin{to{transform:rotate(360deg)}} .kb-spin{transform-origin:center;animation:kb-spin 0.8s linear infinite}`}</style>
                 <circle className="kb-spin" cx="12" cy="12" r="9" strokeDasharray="40 20" />
@@ -1033,14 +1033,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               <IconButton
                 size="xs"
                 tone="danger"
-                color="#C85A3F"
+                color={C.danger}
                 onClick={e => { e.stopPropagation(); onRemoveFromKnowledge(entry.path); }}
                 title="Удалить из знаний"
               >
                 <BookMinusIcon />
               </IconButton>
             ) : (
-              <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: '#3F7A4F' }}>
+              <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.successText }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
                   <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
@@ -1052,7 +1052,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             onAddToKnowledge && isKnowledgeIndexable(entry.name) && !isMobile && !alwaysShowIcons && hoveredPath === entry.path ? (
               <IconButton
                 size="xs"
-                color="#3F7A4F"
+                color={C.successText}
                 onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
                 title="Добавить в базу знаний"
               >
@@ -1109,7 +1109,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         padding: isMobile || alwaysShowIcons ? '14px 20px' : '8px 12px',
         background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
         fontFamily: FONT.sans, fontSize: isMobile || alwaysShowIcons ? 15 : 13,
-        color: danger ? '#C85A3F' : C.textPrimary,
+        color: danger ? C.danger : C.textPrimary,
         borderRadius: isMobile || alwaysShowIcons ? 0 : 6,
         gap: 10,
       }}
@@ -1248,7 +1248,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 onChange={e => handleUploadFiles(e.target.files)}
               />
               {uploading ? (
-                <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid #DACDB9', borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} />
+                <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} />
               ) : (
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
               )}
@@ -1256,7 +1256,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           </div>
         )}
         {uploadError && (
-          <div style={{ marginTop: 6, fontSize: 12, color: '#B4452F', fontFamily: FONT.sans, paddingLeft: 2 }}>{uploadError}</div>
+          <div style={{ marginTop: 6, fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, paddingLeft: 2 }}>{uploadError}</div>
         )}
         {/* Хинт целевой папки — только десктоп */}
         {online && !isMobile && (
@@ -1370,8 +1370,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               style={{
                 fontFamily: "'JetBrains Mono', monospace",
                 fontSize: 14,
-                color: '#39332B',
-                background: '#FFFFFF',
+                color: C.textHeading,
+                background: C.bgWhite,
                 border: `1.5px solid ${C.accent}`,
                 borderRadius: 6,
                 padding: '10px 12px',
@@ -1455,7 +1455,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           subtitle={
             <>
               <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{deleteConfirm.name}</span>
-              {deleteConfirm.isDirectory && <span style={{ color: '#C85A3F' }}> со всем содержимым</span>}
+              {deleteConfirm.isDirectory && <span style={{ color: C.danger }}> со всем содержимым</span>}
             </>
           }
           footer={
@@ -1530,7 +1530,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             <>
               <div
                 onPointerDown={e => { e.stopPropagation(); setContextMenu(null); }}
-                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1000 }}
+                style={{ position: 'fixed', inset: 0, background: C.overlay, zIndex: 1000 }}
               />
               <div style={{
                 position: 'fixed', bottom: 0, left: 0, right: 0,
@@ -1538,7 +1538,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 borderRadius: '16px 16px 0 0',
                 paddingBottom: 24,
                 zIndex: 1001,
-                boxShadow: '0 -4px 32px rgba(0,0,0,0.12)',
+                boxShadow: SHADOW.sheet,
               }}>
                 {/* Ручка */}
                 <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px' }}>
@@ -1574,7 +1574,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               background: C.bgWhite,
               border: `1px solid ${C.border}`,
               borderRadius: R.lg,
-              boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+              boxShadow: SHADOW.dropdown,
               padding: 4,
               minWidth: 190,
             }}

@@ -38,7 +38,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint }: {
                   Чем помочь?
                 </div>
 
-                <div style={{ fontSize: 13, color: '#8A8070', textAlign: 'center', maxWidth: 320 }}>
+                <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center', maxWidth: 320 }}>
                   Спросите что угодно — тексты и идеи, поиск в интернете, генерация картинок
                 </div>
 
@@ -49,13 +49,13 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint }: {
                       key={hint}
                       onClick={() => onHint(hint)}
                       style={{
-                        background: '#FFF', border: `1px solid ${C.borderLight}`,
+                        background: C.bgWhite, border: `1px solid ${C.borderLight}`,
                         borderRadius: 10, padding: '9px 12px',
                         fontSize: 13, color: C.textPrimary, cursor: 'pointer',
                         fontFamily: 'inherit',
                       }}
                       onMouseEnter={e => (e.currentTarget.style.background = C.accentLight)}
-                      onMouseLeave={e => (e.currentTarget.style.background = '#FFF')}
+                      onMouseLeave={e => (e.currentTarget.style.background = C.bgWhite)}
                     >
                       {hint}
                     </button>
@@ -73,7 +73,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint }: {
                 </div>
 
                 {/* Подзаголовок */}
-                <div style={{ fontSize: 13, color: '#8A8070', textAlign: 'center', maxWidth: 260 }}>
+                <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center', maxWidth: 260 }}>
                   Запустите /init, чтобы Claude изучил проект и создал CLAUDE.md
                 </div>
 
@@ -84,7 +84,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint }: {
                     marginTop: 4,
                     background: C.accent, border: 'none',
                     borderRadius: 10, padding: '10px 20px',
-                    fontSize: 13, color: '#FFF', cursor: 'pointer',
+                    fontSize: 13, color: C.onAccent, cursor: 'pointer',
                     fontFamily: 'inherit', fontWeight: 500,
                   }}
                   onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
@@ -104,7 +104,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint }: {
                 </div>
 
                 {/* Подзаголовок */}
-                <div style={{ fontSize: 13, color: '#8A8070', textAlign: 'center' }}>
+                <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center' }}>
                   Опишите задачу или начните с подсказки
                 </div>
 
@@ -115,13 +115,13 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint }: {
                       key={hint}
                       onClick={() => onHint(hint)}
                       style={{
-                        background: '#FFF', border: `1px solid ${C.borderLight}`,
+                        background: C.bgWhite, border: `1px solid ${C.borderLight}`,
                         borderRadius: 10, padding: '9px 12px',
                         fontSize: 13, color: C.textPrimary, cursor: 'pointer',
                         fontFamily: 'inherit',
                       }}
                       onMouseEnter={e => (e.currentTarget.style.background = C.accentLight)}
-                      onMouseLeave={e => (e.currentTarget.style.background = '#FFF')}
+                      onMouseLeave={e => (e.currentTarget.style.background = C.bgWhite)}
                     >
                       {hint}
                     </button>

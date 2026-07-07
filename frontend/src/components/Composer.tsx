@@ -351,7 +351,7 @@ export function Composer({
     border: `1px solid ${dragOver || hasText ? C.accent : C.border}`,
     borderRadius: R.xxl,
     padding: isMobile ? '8px 10px' : '7px 8px',
-    boxShadow: dragOver ? '0 0 0 3px rgba(217,119,87,0.14)' : hasText ? '0 3px 12px rgba(217,119,87,0.10)' : 'none',
+    boxShadow: dragOver ? SHADOW.focus : hasText ? SHADOW.card : 'none',
     display: 'flex',
     flexDirection: 'column',
     gap: 0,
@@ -405,8 +405,8 @@ export function Composer({
 
   const inputArea = isListening ? (
     <div style={{ ...dotsStyle, gap: 10 }}>
-      <span style={{ width: 9, height: 9, borderRadius: '50%', background: '#D9534F', animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
-      <span style={{ fontSize: 13, color: '#C2532E', fontWeight: 600, fontFamily: FONT.mono, flexShrink: 0, minWidth: 34 }}>{fmtRecTime(recSeconds)}</span>
+      <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.danger, animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
+      <span style={{ fontSize: 13, color: C.dangerText, fontWeight: 600, fontFamily: FONT.mono, flexShrink: 0, minWidth: 34 }}>{fmtRecTime(recSeconds)}</span>
       <Waveform />
     </div>
   ) : (
@@ -606,7 +606,7 @@ export function Composer({
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
         padding: '14px', borderRadius: 14, background: C.bgPanel,
-        border: '1px solid #E0D8CC', color: C.textMuted, fontSize: 13, fontWeight: 600,
+        border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 13, fontWeight: 600,
       }}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M1 1l22 22" />

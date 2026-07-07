@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { AuthState } from '../types';
-import { C, FONT, TB } from '../lib/design';
+import { C, FONT, TB, SHADOW } from '../lib/design';
 import { HubTabs, type HubTab } from './HubTabs';
 import { AvatarMenu } from '../features/projects/AvatarMenu';
 import { UserManagementModal } from './UserManagementModal';
@@ -114,7 +114,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
               background: 'none', color: C.textSecondary, cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
             }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,0,0,0.05)'; setShowHistoryTip(true); }}
+            onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; setShowHistoryTip(true); }}
             onMouseLeave={e => { e.currentTarget.style.background = 'none'; setShowHistoryTip(false); }}
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -125,7 +125,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
             {(historyBadge ?? 0) > 0 ? (
               <span style={{
                 position: 'absolute', top: -3, right: -5, minWidth: 15, height: 15,
-                padding: '0 4px', borderRadius: 8, background: C.accent, color: '#fff',
+                padding: '0 4px', borderRadius: 8, background: C.accent, color: C.onAccent,
                 fontSize: 9.5, fontWeight: 700, lineHeight: '15px', textAlign: 'center',
                 boxSizing: 'border-box', pointerEvents: 'none',
               }}>
@@ -142,8 +142,8 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
             {showHistoryTip && (
               <span style={{
                 position: 'absolute', top: 'calc(100% + 7px)', right: 0, zIndex: 200,
-                background: '#fff', border: `1px solid ${C.border}`, borderRadius: 8,
-                boxShadow: '0 6px 20px rgba(60, 50, 40, 0.16)', padding: '5px 10px',
+                background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: 8,
+                boxShadow: SHADOW.dropdown, padding: '5px 10px',
                 fontSize: 12, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap',
                 fontFamily: FONT.sans, pointerEvents: 'none',
               }}>

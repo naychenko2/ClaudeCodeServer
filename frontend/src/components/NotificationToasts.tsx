@@ -18,9 +18,9 @@ interface ToastItem {
 const AUTO_DISMISS_MS = 8000;
 
 const KIND_COLOR: Record<ToastItem['kind'], string> = {
-  reminder: '#C9923E',  // warning — колокольчик
-  claude:   '#D97757',  // accent — события Claude
-  info:     '#3E7CA6',  // info
+  reminder: C.warning,  // warning — колокольчик
+  claude:   C.accent,  // accent — события Claude
+  info:     C.info,  // info
 };
 
 function KindIcon({ kind }: { kind: ToastItem['kind'] }) {

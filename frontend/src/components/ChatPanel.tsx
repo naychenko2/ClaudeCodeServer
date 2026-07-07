@@ -746,7 +746,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           )}
           {/* Вариант В: строка-предупреждение о лимите подписки у места отправки (warning/rejected) */}
           {worstRate && worstRate.level !== 'normal' && <RateLimitBar w={worstRate} />}
-          <div style={{ borderRadius: 14, boxShadow: '0 6px 22px rgba(60,50,35,0.13)' }}>
+          <div style={{ borderRadius: 14, boxShadow: SHADOW.dropdown }}>
           <input
             ref={chatFileInputRef}
             type="file"

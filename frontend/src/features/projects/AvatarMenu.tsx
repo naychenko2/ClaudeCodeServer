@@ -77,7 +77,7 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
           ...(historyBadge > 0
             ? {
                 minWidth: 15, height: 15, padding: '0 4px', borderRadius: 8,
-                background: C.accent, color: '#fff', fontSize: 9.5, fontWeight: 700,
+                background: C.accent, color: C.onAccent, fontSize: 9.5, fontWeight: 700,
                 lineHeight: '15px', textAlign: 'center', boxSizing: 'border-box',
               }
             : { width: 8, height: 8, borderRadius: '50%', background: C.accent }),
@@ -119,7 +119,7 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
                   ...(historyBadge > 0
                     ? {
                         minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
-                        background: C.accent, color: '#fff', fontSize: 11, fontWeight: 700,
+                        background: C.accent, color: C.onAccent, fontSize: 11, fontWeight: 700,
                         lineHeight: '18px', textAlign: 'center', boxSizing: 'border-box',
                       }
                     : { width: 8, height: 8, borderRadius: '50%', background: C.accent }),

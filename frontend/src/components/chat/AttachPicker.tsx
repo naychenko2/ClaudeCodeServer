@@ -96,7 +96,7 @@ export function AttachPicker({ projectId, selected, onToggle, onClose }: AttachP
           onClick={onClose}
           style={{
             padding: '7px 16px', borderRadius: R.md, border: 'none', cursor: 'pointer',
-            background: C.accent, color: '#fff', fontSize: 13, fontWeight: 600,
+            background: C.accent, color: C.onAccent, fontSize: 13, fontWeight: 600,
             fontFamily: FONT.sans,
           }}
         >

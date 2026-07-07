@@ -3,7 +3,7 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { base64ToBytes } from '../lib/binary';
-import { C, FONT } from '../lib/design';
+import { C, FONT, SHADOW } from '../lib/design';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -130,7 +130,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
             error={<div style={{ color: C.textMuted, fontSize: 13, padding: 40 }}>Не удалось отобразить PDF</div>}
           >
             {Array.from({ length: numPages }, (_, i) => (
-              <div key={i} style={{ margin: '0 0 16px', boxShadow: '0 2px 12px rgba(42,37,31,0.12)', borderRadius: 4, overflow: 'hidden' }}>
+              <div key={i} style={{ margin: '0 0 16px', boxShadow: SHADOW.card, borderRadius: 4, overflow: 'hidden' }}>
                 <Page pageNumber={i + 1} width={pageWidth} loading="" />
               </div>
             ))}
@@ -153,7 +153,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
           WebkitBackdropFilter: 'blur(8px)',
           border: `1px solid ${C.border}`,
           borderRadius: 10,
-          boxShadow: '0 4px 16px rgba(42,37,31,0.18)',
+          boxShadow: SHADOW.dropdown,
           padding: '0 6px',
           gap: 2,
         }}>

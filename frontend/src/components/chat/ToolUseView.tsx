@@ -17,19 +17,19 @@ function toolMeta(name: string): { color: string; icon: React.ReactNode } {
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
   );
   if (n.startsWith('mcp__'))
-    return { color: '#8E4A82', icon: svg(<><path d="M9 2v6M15 2v6" /><path d="M6 8h12v3a6 6 0 0 1-12 0z" /><path d="M12 17v5" /></>) };
+    return { color: C.plan, icon: svg(<><path d="M9 2v6M15 2v6" /><path d="M6 8h12v3a6 6 0 0 1-12 0z" /><path d="M12 17v5" /></>) };
   if (['read', 'glob', 'grep', 'ls'].includes(n))
     return { color: C.info, icon: svg(<><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></>) };
   if (['edit', 'write', 'multiedit', 'notebookedit'].includes(n))
-    return { color: '#C2693B', icon: svg(<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></>) };
+    return { color: C.accent, icon: svg(<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></>) };
   if (n.startsWith('bash') || n.includes('shell'))
     return { color: C.success, icon: svg(<><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></>) };
   if (['websearch', 'webfetch'].includes(n))
-    return { color: '#8E4A82', icon: svg(<><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></>) };
+    return { color: C.plan, icon: svg(<><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></>) };
   if (n === 'task')
-    return { color: '#B05C38', icon: svg(<><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>) };
+    return { color: C.accent, icon: svg(<><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>) };
   if (n === 'skill')
-    return { color: '#8E4A82', icon: svg(<><path d="M12 3l1.9 5.2L19 10l-5.1 1.8L12 17l-1.9-5.2L5 10l5.1-1.8z" /><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" /></>) };
+    return { color: C.plan, icon: svg(<><path d="M12 3l1.9 5.2L19 10l-5.1 1.8L12 17l-1.9-5.2L5 10l5.1-1.8z" /><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" /></>) };
   // Todo-задачи — та же «галочка в рамке», что у карточки плана
   if (['taskcreate', 'taskupdate', 'tasklist', 'taskget'].includes(n))
     return { color: C.accent, icon: svg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>) };
@@ -77,8 +77,8 @@ function DiffBody({ hunks }: { hunks: Array<{ old?: string; new?: string }> }) {
       rows.push(
         <div key={count} style={{
           display: 'flex', gap: 7, padding: '0 9px',
-          background: kind === 'del' ? '#FBEAE7' : '#EAF4E6',
-          color: kind === 'del' ? '#A8392C' : '#37722B',
+          background: kind === 'del' ? C.diffRemBg : C.diffAddBg,
+          color: kind === 'del' ? C.diffRemText : C.diffAddText,
           whiteSpace: 'pre-wrap', wordBreak: 'break-word',
         }}>
           <span style={{ userSelect: 'none', opacity: 0.55, flexShrink: 0 }}>{kind === 'del' ? '−' : '+'}</span>
@@ -201,7 +201,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
             })()
           : <span style={{ flex: 1 }} />}
         {item.result !== undefined && (
-          <span style={{ fontSize: 11, color: item.isError ? '#C0392B' : C.textMuted, flexShrink: 0 }}>
+          <span style={{ fontSize: 11, color: item.isError ? C.dangerText : C.textMuted, flexShrink: 0 }}>
             {item.isError ? 'ошибка' : hasMedia ? mediaLabel(media) : 'готово'}
           </span>
         )}

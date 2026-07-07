@@ -47,11 +47,11 @@ function dateGroupKey(t: Task): string {
 }
 
 const DATE_GROUPS: { key: string; label: string; dot?: string }[] = [
-  { key: 'overdue', label: 'Просрочено', dot: '#B4452F' },
-  { key: 'today',   label: 'Сегодня',    dot: '#D97757' },
-  { key: 'week',    label: 'Эта неделя', dot: '#C9923E' },
-  { key: 'later',   label: 'Позже',      dot: '#9A8F7E' },
-  { key: 'none',    label: 'Без срока',  dot: '#9A8F7E' },
+  { key: 'overdue', label: 'Просрочено', dot: C.danger },
+  { key: 'today',   label: 'Сегодня',    dot: C.accent },
+  { key: 'week',    label: 'Эта неделя', dot: C.warning },
+  { key: 'later',   label: 'Позже',      dot: C.textMuted },
+  { key: 'none',    label: 'Без срока',  dot: C.textMuted },
 ];
 
 // «По дате»: готовые задачи скрыты (как в макете)

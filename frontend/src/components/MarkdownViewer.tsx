@@ -45,13 +45,13 @@ const components: Components = {
     const isBlock = className?.startsWith('language-');
     if (isBlock) return null; // обрабатывается в pre
     return (
-      <code style={{ fontFamily: mono, fontSize: 12.5, background: '#EDE7DA', padding: '1px 5px', borderRadius: 4, color: '#5C3D2E' }}>
+      <code style={{ fontFamily: mono, fontSize: 12.5, background: C.bgInset, padding: '1px 5px', borderRadius: 4, color: C.textHeading }}>
         {children}
       </code>
     );
   },
   pre: ({ children }) => (
-    <pre style={{ margin: '0 0 16px', background: '#EDE7DA', borderRadius: 10, padding: '14px 16px', overflowX: 'auto', fontFamily: mono, fontSize: 12.5, lineHeight: 1.6, color: C.textHeading }}>
+    <pre style={{ margin: '0 0 16px', background: C.bgInset, borderRadius: 10, padding: '14px 16px', overflowX: 'auto', fontFamily: mono, fontSize: 12.5, lineHeight: 1.6, color: C.textHeading }}>
       {children}
     </pre>
   ),
@@ -65,7 +65,7 @@ const components: Components = {
     <li style={{ margin: '3px 0', color: C.textHeading }}>{children}</li>
   ),
   blockquote: ({ children }) => (
-    <blockquote style={{ margin: '0 0 14px', padding: '10px 16px', borderLeft: `3px solid ${C.accent}`, background: C.bgMain, borderRadius: '0 8px 8px 0', color: '#5C5246' }}>
+    <blockquote style={{ margin: '0 0 14px', padding: '10px 16px', borderLeft: `3px solid ${C.accent}`, background: C.bgMain, borderRadius: '0 8px 8px 0', color: C.textSecondary }}>
       {children}
     </blockquote>
   ),
@@ -78,7 +78,7 @@ const components: Components = {
     </div>
   ),
   th: ({ children }) => (
-    <th style={{ padding: '7px 12px', background: '#EDE7DA', fontWeight: 700, textAlign: 'left', borderBottom: `2px solid ${C.border}`, color: C.textHeading }}>{children}</th>
+    <th style={{ padding: '7px 12px', background: C.bgInset, fontWeight: 700, textAlign: 'left', borderBottom: `2px solid ${C.border}`, color: C.textHeading }}>{children}</th>
   ),
   td: ({ children }) => (
     <td style={{ padding: '7px 12px', borderBottom: `1px solid ${C.border}`, color: C.textHeading }}>{children}</td>

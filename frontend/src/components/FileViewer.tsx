@@ -31,7 +31,7 @@ import { MermaidDiagram } from './MermaidDiagram';
 import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
 import { base64ToBytes } from '../lib/binary';
-import { C, FONT, MODAL_W } from '../lib/design';
+import { C, FONT, MODAL_W, SHADOW } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from './Toolbar';
 import { BackButton, Modal, ModalActions, Button, useIsMobileModal } from './ui';
 import { DiffView } from './DiffView';
@@ -208,7 +208,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
     <div style={{
       background: C.bgPanel, borderRadius: 16, border: `1px solid ${C.border}`,
       padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 16,
-      width: '100%', maxWidth: 440, boxShadow: '0 2px 12px rgba(60,50,35,0.06)',
+      width: '100%', maxWidth: 440, boxShadow: SHADOW.card,
     }}>
       <audio
         ref={audioRef}
@@ -269,7 +269,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
             width: 60, height: 60, borderRadius: '50%', border: 'none',
             background: C.accent, color: C.onAccent, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 4px 14px rgba(217,119,87,0.40)', flexShrink: 0,
+            boxShadow: SHADOW.button, flexShrink: 0,
           }}
         >
           {playing
@@ -587,7 +587,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   setOfficeCacheKey(String(Date.now()));
                   setOfficeMode('view');
                 }}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.08)', background: C.accent, color: C.onAccent, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.accent}`, background: C.accent, color: C.onAccent, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
                 <SaveIcon />
                 {!isMobile && <span>Сохранить</span>}
@@ -743,7 +743,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                 <img
                   src={`data:${fileContent.mimeType};base64,${fileContent.base64}`}
                   onLoad={e => setImgDims({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-                  style={{ maxWidth: '100%', borderRadius: 8, boxShadow: '0 2px 12px rgba(60,50,35,0.10)' }}
+                  style={{ maxWidth: '100%', borderRadius: 8, boxShadow: SHADOW.card }}
                   alt={fileName}
                 />
                 {/* Метаданные изображения: тип · размеры · вес */}
@@ -759,7 +759,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 16 }}>
                 <video
                   controls
-                  style={{ maxWidth: '100%', borderRadius: 8, boxShadow: '0 2px 12px rgba(60,50,35,0.10)' }}
+                  style={{ maxWidth: '100%', borderRadius: 8, boxShadow: SHADOW.card }}
                 >
                   <source src={streamUrl(project.id, filePath)} type={fileContent.mimeType} />
                 </video>
@@ -786,7 +786,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                     <div style={{
                       background: C.bgPanel, borderRadius: 14, border: `1px solid ${C.border}`,
                       padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 12,
-                      width: '100%', maxWidth: 440, boxShadow: '0 2px 12px rgba(60,50,35,0.06)',
+                      width: '100%', maxWidth: 440, boxShadow: SHADOW.card,
                     }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <div style={{
@@ -919,7 +919,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             position: 'absolute', right: 18, bottom: 18, width: 52, height: 52, borderRadius: '50%',
             border: 'none', background: C.accent, color: C.onAccent, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 6px 18px rgba(217,119,87,0.42)', zIndex: 20,
+            boxShadow: SHADOW.fab, zIndex: 20,
           }}
         >
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

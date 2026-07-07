@@ -6,7 +6,7 @@ import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, s
 import { cliProviderKeys, providerCapsByKey, providerLabel } from '../lib/models';
 
 const STALE_MS = 30 * 60 * 1000;
-const MONEY = '#B05C38';
+const MONEY = C.accent;
 const LOW_BALANCE = 5;
 
 const money = (c: number) => '$' + (c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(3) : c.toFixed(2));
@@ -17,8 +17,8 @@ const fmtDay = (iso: string) => { const d = new Date(iso); return isNaN(d.getTim
 function MetricCard({ value, label, valueColor = C.textHeading, tone, children }: {
   value: string; label: string; valueColor?: string; tone?: 'warn' | 'danger'; children?: React.ReactNode;
 }) {
-  const bg = tone === 'warn' ? '#FBF3E4' : tone === 'danger' ? '#FBF1EC' : '#fff';
-  const bd = tone === 'warn' ? '#EAD2A0' : tone === 'danger' ? '#F5C6BF' : '#ECE5D6';
+  const bg = tone === 'warn' ? C.warningBg : tone === 'danger' ? C.dangerBg : C.bgWhite;
+  const bd = tone === 'warn' ? C.warning : tone === 'danger' ? C.dangerBorder : C.border;
   return (
     <div style={{ background: bg, border: `1px solid ${bd}`, borderRadius: 12, padding: '13px 15px', minWidth: 0 }}>
       <div style={{ fontFamily: FONT.mono, fontSize: 24, fontWeight: 700, color: valueColor, lineHeight: 1.1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
@@ -58,18 +58,18 @@ function WindowCard({ w }: { w: RateWindow }) {
   return (
     <MetricCard
       value={w.hasUtil ? `${w.pct}%` : '—'}
-      valueColor={w.hasUtil ? (w.level === 'normal' ? C.textHeading : c.text) : '#9A8F7E'}
+      valueColor={w.hasUtil ? (w.level === 'normal' ? C.textHeading : c.text) : C.textMuted}
       label={windowLabel(w.limitType)}
       tone={tone}
     >
       {w.hasUtil && (
-        <div style={{ height: 6, borderRadius: 3, background: '#E5DCCB', overflow: 'hidden', margin: '8px 0 5px' }}>
+        <div style={{ height: 6, borderRadius: 3, background: C.track, overflow: 'hidden', margin: '8px 0 5px' }}>
           <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
         </div>
       )}
       <div style={{ fontSize: 11, color: C.textMuted, marginTop: w.hasUtil ? 0 : 12 }}>{sub}</div>
       {overage && (
-        <div style={{ fontSize: 11, color: '#B4452F', marginTop: 4 }}>
+        <div style={{ fontSize: 11, color: C.dangerText, marginTop: 4 }}>
           {w.isUsingOverage ? '⚠ перерасход' : `перерасход: ${w.overageStatus}`}
           {w.overageResetsAt && ` · сброс ${fmtReset(w.overageResetsAt)}`}
         </div>
@@ -99,7 +99,7 @@ function ClaudeTab({ usage }: { usage: UsageResponse | null }) {
   return (
     <div style={{ opacity: stale ? 0.6 : 1 }}>
       {stale && (
-        <div style={{ fontSize: 11.5, color: '#9A6B1E', background: '#FBF0DC', border: '1px solid #EAD2A0', borderRadius: 8, padding: '6px 10px', marginBottom: 12 }}>
+        <div style={{ fontSize: 11.5, color: C.warningText, background: C.warningBg, border: `1px solid ${C.warning}`, borderRadius: 8, padding: '6px 10px', marginBottom: 12 }}>
           Снимок старше 30 минут — возможно, неактуально. Обновится после следующего ответа Claude.
         </div>
       )}
@@ -178,7 +178,7 @@ function ProviderTab({ providerKey, data }: { providerKey: string; data: Provide
         <MetricCard
           value={isNaN(cur) ? '—' : `${cur.toFixed(2)} ${currency}`}
           label={`баланс ${name}`}
-          valueColor={low ? '#B4452F' : MONEY}
+          valueColor={low ? C.dangerText : MONEY}
           tone={low ? 'danger' : undefined}
         >
           {TOPUP_URL[providerKey] && (
@@ -232,7 +232,7 @@ function FalTab({ days, setDays }: { days: number; setDays: (d: number) => void 
           <span style={{ display: 'inline-flex', border: `1px solid ${C.border}`, borderRadius: 7, overflow: 'hidden' }}>
             {[7, 30].map(d => (
               <button key={d} type="button" onClick={() => setDays(d)}
-                style={{ padding: '3px 11px', border: 'none', cursor: 'pointer', fontFamily: FONT.sans, fontSize: 11, fontWeight: days === d ? 700 : 500, background: days === d ? '#F1DDD1' : '#fff', color: days === d ? MONEY : C.textMuted }}>{d}д</button>
+                style={{ padding: '3px 11px', border: 'none', cursor: 'pointer', fontFamily: FONT.sans, fontSize: 11, fontWeight: days === d ? 700 : 500, background: days === d ? C.accentMuted : C.bgWhite, color: days === d ? MONEY : C.textMuted }}>{d}д</button>
             ))}
           </span>
         )}
@@ -247,7 +247,7 @@ function FalTab({ days, setDays }: { days: number; setDays: (d: number) => void 
       ) : (
         <div style={{ opacity: loading ? 0.5 : 1 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-            <MetricCard value={typeof balance === 'number' ? money(balance) : '—'} label="баланс fal.ai" valueColor={lowBal ? '#B4452F' : MONEY} tone={lowBal ? 'danger' : undefined}>
+            <MetricCard value={typeof balance === 'number' ? money(balance) : '—'} label="баланс fal.ai" valueColor={lowBal ? C.dangerText : MONEY} tone={lowBal ? 'danger' : undefined}>
               <a href="https://fal.ai/dashboard/billing" target="_blank" rel="noopener noreferrer"
                 style={{ display: 'inline-block', marginTop: 8, color: C.accent, fontSize: 11, fontWeight: 600, textDecoration: 'none' }}>пополнить ↗</a>
             </MetricCard>
@@ -257,7 +257,7 @@ function FalTab({ days, setDays }: { days: number; setDays: (d: number) => void 
             const tot = spent + balance; const sp = tot > 0 ? Math.max(2, Math.round((spent / tot) * 100)) : 0;
             return (
               <div style={{ marginTop: 10 }}>
-                <div style={{ height: 8, borderRadius: 4, overflow: 'hidden', background: '#E5DCCB' }}><div style={{ width: `${sp}%`, height: '100%', background: MONEY }} /></div>
+                <div style={{ height: 8, borderRadius: 4, overflow: 'hidden', background: C.track }}><div style={{ width: `${sp}%`, height: '100%', background: MONEY }} /></div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: C.textMuted, marginTop: 4 }}>
                   <span>потрачено {money(spent)}</span><span>остаток {typeof balance === 'number' ? money(balance) : '—'}</span>
                 </div>
@@ -273,7 +273,7 @@ function FalTab({ days, setDays }: { days: number; setDays: (d: number) => void 
               {top.map(m => (
                 <div key={m.endpointId} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
                   <span style={{ fontSize: 12, color: C.textSecondary, width: 140, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shortModel(m.endpointId)}</span>
-                  <span style={{ flex: 1, height: 7, background: '#E5DCCB', borderRadius: 4, overflow: 'hidden' }}>
+                  <span style={{ flex: 1, height: 7, background: C.track, borderRadius: 4, overflow: 'hidden' }}>
                     <span style={{ display: 'block', width: `${Math.max(3, Math.round((m.cost / maxModel) * 100))}%`, height: '100%', background: MONEY }} />
                   </span>
                   <span style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: MONEY, width: 50, textAlign: 'right', flexShrink: 0 }}>{money(m.cost)}</span>
@@ -292,7 +292,7 @@ function FalTab({ days, setDays }: { days: number; setDays: (d: number) => void 
                       const h = Math.max(2, Math.round((d.cost / maxDay) * 64));
                       return (
                         <div key={d.date} title={`${d.date}: ${money(d.cost)}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, minWidth: 0 }}>
-                          <div style={{ width: '100%', maxWidth: 26, height: h, background: d.cost >= maxDay ? C.accent : '#C9A98F', borderRadius: 2 }} />
+                          <div style={{ width: '100%', maxWidth: 26, height: h, background: d.cost >= maxDay ? C.accent : C.accentMuted, borderRadius: 2 }} />
                           <span style={{ fontFamily: FONT.mono, fontSize: 9.5, color: C.textMuted }}>{fmtDay(d.date)}</span>
                         </div>
                       );
@@ -347,10 +347,10 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
 
   return (
     <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(23,19,15,0.42)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      style={{ position: 'fixed', inset: 0, background: C.overlay, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div style={{ width: '100%', maxWidth: 720, maxHeight: '85vh', background: '#FFFFFF', borderRadius: 18, boxShadow: SHADOW.dropdown, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ width: '100%', maxWidth: 720, maxHeight: '85vh', background: C.bgCard, borderRadius: 18, boxShadow: SHADOW.dropdown, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {/* Шапка */}
         <div style={{ padding: '13px 20px 6px', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexShrink: 0 }}>
           <span style={{ fontSize: 15, fontWeight: 700, color: C.textHeading, fontFamily: FONT.sans }}>Использование</span>
@@ -361,9 +361,9 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
           {plan && <span>{plan.label}</span>}
           {worst?.hasUtil && <span> · {windowLabel(worst.limitType)} <span style={{ color: RATE_COLORS[worst.level].text, fontWeight: 700 }}>{worst.pct}%</span></span>}
           {providerKeys.filter(k => !isNaN(provBalanceOf(k))).map(k => (
-            <span key={k}> · {providerLabel(k)} <span style={{ fontFamily: FONT.mono, color: provLow(k) ? '#B4452F' : MONEY, fontWeight: 700 }}>{provBalanceOf(k).toFixed(2)} {provData[k]?.balance?.currency}</span></span>
+            <span key={k}> · {providerLabel(k)} <span style={{ fontFamily: FONT.mono, color: provLow(k) ? C.dangerText : MONEY, fontWeight: 700 }}>{provBalanceOf(k).toFixed(2)} {provData[k]?.balance?.currency}</span></span>
           ))}
-          {typeof falBalance === 'number' && <span> · fal <span style={{ fontFamily: FONT.mono, color: lowBal ? '#B4452F' : MONEY, fontWeight: 700 }}>{money(falBalance)}</span></span>}
+          {typeof falBalance === 'number' && <span> · fal <span style={{ fontFamily: FONT.mono, color: lowBal ? C.dangerText : MONEY, fontWeight: 700 }}>{money(falBalance)}</span></span>}
         </div>
         {/* Вкладки */}
         <div style={{ display: 'flex', gap: 6, padding: '0 18px', borderBottom: `1px solid ${C.bgInset}`, flexShrink: 0 }}>
@@ -373,8 +373,8 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
                 fontWeight: tab === key ? 700 : 500, color: tab === key ? C.textHeading : C.textMuted,
                 borderBottom: `2px solid ${tab === key ? C.accent : 'transparent'}`, marginBottom: -1, display: 'flex', alignItems: 'center', gap: 6 }}>
               {lbl}
-              {key === 'fal' && lowBal && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#B4452F' }} />}
-              {key !== 'fal' && key !== 'claude' && provLow(key) && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#B4452F' }} />}
+              {key === 'fal' && lowBal && <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.danger }} />}
+              {key !== 'fal' && key !== 'claude' && provLow(key) && <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.danger }} />}
             </button>
           ))}
         </div>

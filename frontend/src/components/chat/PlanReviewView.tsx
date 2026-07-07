@@ -85,7 +85,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
         {/* Выход из режима «План» — только у актуального (последнего) одобренного плана.
             Предлагаем выбрать режим исполнения, как в нативном approval Claude Code. */}
         {showSwitch && onSwitchMode && (
-          <div style={{ marginTop: 9, paddingTop: 9, borderTop: '1px solid #CFE3CA', fontSize: 12, color: C.textSecondary }}>
+          <div style={{ marginTop: 9, paddingTop: 9, borderTop: `1px solid ${C.success}`, fontSize: 12, color: C.textSecondary }}>
             <div style={{ marginBottom: 7 }}>Чат остаётся в режиме «План» — следующие задачи тоже будут согласованы. Выйти и выполнять в:</div>
             <div style={{ display: 'flex', gap: 7 }}>
               {(['acceptEdits', 'auto'] as Mode[]).map(m => (
@@ -166,7 +166,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
           // Градиентный fade снизу — подсказка, что план длиннее видимой области
           <div style={{
             position: 'absolute', left: 1, right: 1, bottom: 1, height: 40, borderRadius: `0 0 ${R.lg}px ${R.lg}px`,
-            background: `linear-gradient(to bottom, rgba(255,255,255,0), ${C.bgCard})`,
+            background: `linear-gradient(to bottom, transparent, ${C.bgCard})`,
             pointerEvents: 'none',
           }} />
         )}

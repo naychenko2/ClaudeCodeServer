@@ -58,9 +58,9 @@ function TagIcon() {
 const TERMINAL_STATUSES = ['completed', 'available', 'error'];
 
 function statusColor(indexingStatus: string): string {
-  if (indexingStatus === 'completed' || indexingStatus === 'available') return '#4CAF50';
+  if (indexingStatus === 'completed' || indexingStatus === 'available') return C.success;
   if (indexingStatus === 'error') return C.accent;
-  return '#2196F3';
+  return C.info;
 }
 
 // --- Диалог редактирования тегов ---
@@ -237,7 +237,7 @@ function TagsDialog({ doc, existingTags, onClose, onSave }: TagsDialogProps) {
                       onMouseEnter={e => {
                         (e.currentTarget as HTMLButtonElement).style.background = C.accentLight;
                         (e.currentTarget as HTMLButtonElement).style.color = C.accent;
-                        (e.currentTarget as HTMLButtonElement).style.borderColor = `${C.accent}40`;
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = C.accentMuted;
                       }}
                       onMouseLeave={e => {
                         (e.currentTarget as HTMLButtonElement).style.background = C.bgInset;
@@ -373,7 +373,7 @@ function DocumentRow({ doc, deleting, retrying, isMobile, alwaysShowIcons, onDel
               background: 'none', border: 'none', cursor: retrying ? 'default' : 'pointer',
               padding: isMobile ? 8 : 3,
               minWidth: isMobile ? 36 : undefined, minHeight: isMobile ? 36 : undefined,
-              color: '#4CAF50', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: C.success, display: 'flex', alignItems: 'center', justifyContent: 'center',
               transition: 'opacity 0.15s', borderRadius: R.sm, flexShrink: 0,
             }}
           >
@@ -581,7 +581,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
               </svg>
             </button>
             {/* Знания — активна */}
-            <button title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bgMain, color: '#3F7A4F', boxShadow: TB.pillThumbShadow }}>
+            <button title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bgMain, color: C.successText, boxShadow: TB.pillThumbShadow }}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
                 <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
@@ -608,9 +608,9 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
           padding: '8px 12px',
           borderRadius: R.lg,
           fontSize: 12,
-          background: notification.type === 'error' ? `${C.accent}15` : '#4CAF5015',
-          color: notification.type === 'error' ? C.accent : '#2E7D32',
-          border: `1px solid ${notification.type === 'error' ? `${C.accent}40` : '#4CAF5040'}`,
+          background: notification.type === 'error' ? C.dangerBg : C.successBg,
+          color: notification.type === 'error' ? C.dangerText : C.successText,
+          border: `1px solid ${notification.type === 'error' ? C.dangerBorder : C.success}`,
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
           flexShrink: 0,
         }}>
@@ -634,13 +634,13 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
             borderBottom: `1px solid ${C.border}`,
             marginBottom: 2,
           }}>
-            <div style={{ color: '#3F7A4F', display: 'flex', flexShrink: 0 }}>
+            <div style={{ color: C.successText, display: 'flex', flexShrink: 0 }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
                 <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
               </svg>
             </div>
-            <span style={{ fontSize: 12, fontWeight: 600, color: '#3F7A4F', flex: 1 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: C.successText, flex: 1 }}>
               База знаний
             </span>
             <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono }}>

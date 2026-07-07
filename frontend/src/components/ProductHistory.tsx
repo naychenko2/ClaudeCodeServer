@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ChangelogDay, ChangelogItem, DaySummaryStub, ChangelogStatus } from '../types';
 import { api } from '../lib/api';
-import { C, FONT, R, MODAL_W } from '../lib/design';
+import { C, FONT, R, MODAL_W, SHADOW } from '../lib/design';
 import { EmptyState } from './EmptyState';
 import { Toolbar } from './Toolbar';
 import { IconButton, Modal, ModalActions } from './ui';
@@ -536,14 +536,14 @@ function ScoreSpeech({ anchor, text }: { anchor: DOMRect; text: string }) {
       ...(openUp
         ? { bottom: window.innerHeight - anchor.top + GAP }
         : { top: anchor.bottom + GAP }),
-      background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12,
-      boxShadow: '0 8px 24px rgba(60, 50, 40, 0.14)', padding: '9px 12px',
+      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: 12,
+      boxShadow: SHADOW.dropdown, padding: '9px 12px',
       display: 'flex', gap: 8, alignItems: 'flex-start',
       animation: 'cc-fade-in 0.14s ease', pointerEvents: 'none',
     }}>
       {/* Хвостик-уголок к бейджу: сверху пузыря (открыт вниз) либо снизу (открыт вверх) */}
       <div style={{
-        position: 'absolute', right: 14, width: 11, height: 11, background: '#fff',
+        position: 'absolute', right: 14, width: 11, height: 11, background: C.bgWhite,
         transform: 'rotate(45deg)',
         ...(openUp
           ? { bottom: -6, borderRight: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}` }
@@ -634,7 +634,7 @@ function DayCalendar({ days, selected, onSelect, onNeedOlder, isMobile }: {
                 fontSize: 13, fontWeight: isSel ? 700 : (has ? 600 : 400),
                 cursor: has ? 'pointer' : 'default',
                 background: isSel ? C.accent : 'transparent',
-                color: isSel ? '#fff' : (has ? C.textHeading : C.textMuted),
+                color: isSel ? C.onAccent : (has ? C.textHeading : C.textMuted),
                 opacity: has ? 1 : 0.45,
                 border: isToday && !isSel ? `1px solid ${C.accent}` : '1px solid transparent',
                 transition: 'background 0.12s',

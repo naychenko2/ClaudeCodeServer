@@ -10,6 +10,7 @@ import { NotificationToasts } from './components/NotificationToasts'
 import { ProductHistory } from './components/ProductHistory'
 import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
 import { initConnectivity } from './lib/offline'
+import { C } from './lib/design'
 import { useOnline } from './hooks/useOnline'
 import { runOfflineSnapshot, syncProjectFiles } from './lib/sync'
 import { onFilesChanged } from './lib/signalr'
@@ -332,7 +333,7 @@ export default function App() {
       <UpdatePrompt />
       {auth && !authChecking && <NotificationToasts onNavigate={openNotificationUrl} />}
       {authChecking
-        ? <div style={{ minHeight: '100vh', background: '#F4F0E8' }} />
+        ? <div style={{ minHeight: '100vh', background: C.bgMain }} />
         : !auth
           ? <LoginPage onConnect={setAuth} />
           : effectiveHubTab === 'chats'

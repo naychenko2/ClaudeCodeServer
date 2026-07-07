@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
-import { C, FONT, R } from '../lib/design';
+import { C, FONT, R, SHADOW } from '../lib/design';
 import { PillSwitch } from './Toolbar';
 import { MarkdownViewer } from './MarkdownViewer';
 import { useSessionArtifacts, type AgentArtifact, type AgentToolCall, type ArtifactFile, type ArtifactLink, type PlanStatus, type TodoItem, type WorkflowGroup } from '../hooks/useSessionArtifacts';
@@ -126,17 +126,17 @@ function TodoRow({ todo }: { todo: TodoItem }) {
       <span style={{ flexShrink: 0, marginTop: 2, display: 'flex' }}>
         {isDone ? (
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-            <circle cx="8" cy="8" r="8" fill="#5E8B4E" />
+            <circle cx="8" cy="8" r="8" fill={C.success} />
             <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         ) : isActive ? (
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-            <circle cx="8" cy="8" r="7" fill="#D97757" />
-            <circle cx="8" cy="8" r="2.6" fill="#FBF1EA" />
+            <circle cx="8" cy="8" r="7" fill={C.accent} />
+            <circle cx="8" cy="8" r="2.6" fill={C.accentLight} />
           </svg>
         ) : (
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-            <circle cx="8" cy="8" r="6.5" stroke="#C9BFAD" strokeWidth="1.5" />
+            <circle cx="8" cy="8" r="6.5" stroke={C.dashed} strokeWidth="1.5" />
           </svg>
         )}
       </span>
@@ -161,20 +161,20 @@ function callName(name: string): string {
 function AgentStatusIcon({ status }: { status: AgentArtifact['status'] }) {
   if (status === 'done') return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-      <circle cx="8" cy="8" r="8" fill="#5E8B4E" />
+      <circle cx="8" cy="8" r="8" fill={C.success} />
       <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
   if (status === 'error') return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-      <circle cx="8" cy="8" r="8" fill="#B3564D" />
+      <circle cx="8" cy="8" r="8" fill={C.danger} />
       <path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   );
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-      <circle cx="8" cy="8" r="6.5" stroke="#EAD9CE" strokeWidth="2" />
-      <path d="M8 1.5a6.5 6.5 0 0 1 6.5 6.5" stroke="#D97757" strokeWidth="2" strokeLinecap="round">
+      <circle cx="8" cy="8" r="6.5" stroke={C.accentMuted} strokeWidth="2" />
+      <path d="M8 1.5a6.5 6.5 0 0 1 6.5 6.5" stroke={C.accent} strokeWidth="2" strokeLinecap="round">
         <animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="0.9s" repeatCount="indefinite" />
       </path>
     </svg>
@@ -408,13 +408,13 @@ function WorkflowGroupView({ group }: { group: WorkflowGroup }) {
           </span>
           {group.settled ? (
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-              <circle cx="8" cy="8" r="8" fill="#5E8B4E" />
+              <circle cx="8" cy="8" r="8" fill={C.success} />
               <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           ) : (
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-              <circle cx="8" cy="8" r="6.5" stroke="#EAD9CE" strokeWidth="2.4" />
-              <path d="M8 1.5a6.5 6.5 0 0 1 6.5 6.5" stroke="#D97757" strokeWidth="2.4" strokeLinecap="round">
+              <circle cx="8" cy="8" r="6.5" stroke={C.accentMuted} strokeWidth="2.4" />
+              <path d="M8 1.5a6.5 6.5 0 0 1 6.5 6.5" stroke={C.accent} strokeWidth="2.4" strokeLinecap="round">
                 <animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="0.9s" repeatCount="indefinite" />
               </path>
             </svg>
@@ -448,8 +448,8 @@ function AgentsSummary({ running, done, errors }: { running: number; done: numbe
     }}>
       {running > 0 && item(
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-          <circle cx="8" cy="8" r="6.5" stroke="#EAD9CE" strokeWidth="2.4" />
-          <path d="M8 1.5a6.5 6.5 0 0 1 6.5 6.5" stroke="#D97757" strokeWidth="2.4" strokeLinecap="round">
+          <circle cx="8" cy="8" r="6.5" stroke={C.accentMuted} strokeWidth="2.4" />
+          <path d="M8 1.5a6.5 6.5 0 0 1 6.5 6.5" stroke={C.accent} strokeWidth="2.4" strokeLinecap="round">
             <animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="0.9s" repeatCount="indefinite" />
           </path>
         </svg>,
@@ -457,14 +457,14 @@ function AgentsSummary({ running, done, errors }: { running: number; done: numbe
       )}
       {done > 0 && item(
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-          <circle cx="8" cy="8" r="8" fill="#5E8B4E" />
+          <circle cx="8" cy="8" r="8" fill={C.success} />
           <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>,
         `${done} завершено`, C.textSecondary,
       )}
       {errors > 0 && item(
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-          <circle cx="8" cy="8" r="8" fill="#B3564D" />
+          <circle cx="8" cy="8" r="8" fill={C.danger} />
           <path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" />
         </svg>,
         `${errors} с ошибкой`, C.dangerText,
@@ -676,7 +676,7 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
                         position: 'absolute', top: '100%', right: 8, marginTop: 4, zIndex: 41,
                         width: 'min(280px, calc(100% - 16px))', maxHeight: 320, overflowY: 'auto',
                         background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
-                        boxShadow: '0 8px 28px rgba(60,50,35,0.16)', padding: '6px 0',
+                        boxShadow: SHADOW.dropdown, padding: '6px 0',
                       }}>
                         {headings.map((h, i) => (
                           <button

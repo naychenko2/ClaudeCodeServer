@@ -157,7 +157,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
 
   // Секции для десктопа в зависимости от выбранного пункта сайдбара
   type Section = { key: string; name: string; color?: string; items: Project[] };
-  const UNGROUPED_COLOR = '#C4BBA9';
+  const UNGROUPED_COLOR = C.textMuted;
   let sections: Section[] = [];
   let title = 'Все проекты';
   if (view === 'all') {
@@ -304,7 +304,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                 title="Сортировка"
                 style={{
                   flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 7,
-                  fontSize: 12.5, color: '#5C5246', fontWeight: 600, fontFamily: FONT.sans,
+                  fontSize: 12.5, color: C.textSecondary, fontWeight: 600, fontFamily: FONT.sans,
                   background: C.bgPanel, border: `1px solid ${C.border}`, padding: '7px 12px', borderRadius: R.pill, cursor: 'pointer',
                 }}
               >
@@ -338,8 +338,8 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 9 }}>
                     <span style={{ width: 5, height: 18, borderRadius: 2, background: sec.color || UNGROUPED_COLOR, flexShrink: 0 }} />
                     <span style={{ fontSize: 14, fontWeight: 700, color: C.textPrimary }}>{sec.name}</span>
-                    <span style={{ fontSize: 11.5, color: '#9A8F7E' }}>{sec.items.length}</span>
-                    <div style={{ flex: 1, height: 1, background: '#E4DDCE' }} />
+                    <span style={{ fontSize: 11.5, color: C.textMuted }}>{sec.items.length}</span>
+                    <div style={{ flex: 1, height: 1, background: C.divider }} />
                   </div>
                   <div style={twoCol
                     // minmax(0,1fr): длинный nowrap-путь в карточке не распирает колонки за экран

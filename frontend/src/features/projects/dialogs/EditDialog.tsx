@@ -86,7 +86,7 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
           <div style={{
             fontFamily: 'JetBrains Mono, monospace',
             fontSize: 12,
-            color: 'rgba(60, 45, 30, 0.55)',
+            color: C.textMuted,
             lineHeight: 1.6,
             whiteSpace: 'pre-wrap',
             maxHeight: 120,
@@ -142,7 +142,7 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
                 <div style={{
                   fontFamily: 'JetBrains Mono, monospace',
                   fontSize: 12,
-                  color: 'rgba(60, 45, 30, 0.55)',
+                  color: C.textMuted,
                   lineHeight: 1.6,
                   whiteSpace: 'pre-wrap',
                   maxHeight: 160,
@@ -299,7 +299,7 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
             position: 'absolute', top: 3,
             left: showHiddenFiles ? 21 : 3,
             width: 16, height: 16,
-            background: '#fff', borderRadius: '50%',
+            background: C.bgWhite, borderRadius: '50%',
             transition: 'left 0.15s',
           }} />
         </button>

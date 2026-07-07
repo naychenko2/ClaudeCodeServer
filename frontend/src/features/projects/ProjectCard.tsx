@@ -37,7 +37,7 @@ export function ProjectCard({ project: p, index, online, hasActiveSession, onOpe
         {hasActiveSession && (
           <>
             <style>{`@keyframes pc-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.5;transform:scale(1.15)}} .pc-pulse{animation:pc-pulse 1.5s ease-in-out infinite}`}</style>
-            <span className="pc-pulse" style={{ position: 'absolute', top: 1, right: 1, width: 9, height: 9, borderRadius: '50%', background: C.accent, border: '2px solid #F4F0E8', zIndex: 1 }} />
+            <span className="pc-pulse" style={{ position: 'absolute', top: 1, right: 1, width: 9, height: 9, borderRadius: '50%', background: C.accent, border: `2px solid ${C.bgMain}`, zIndex: 1 }} />
           </>
         )}
         <div style={{
@@ -58,7 +58,7 @@ export function ProjectCard({ project: p, index, online, hasActiveSession, onOpe
           {online && <ProjectActionsMenu project={p} onMove={onMove} onEdit={onEdit} onDelete={onDelete} />}
         </div>
         {/* Путь */}
-        <div style={{ fontFamily: FONT.mono, fontSize: 11.5, color: '#9A8F7E', margin: '3px 0 6px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.rootPath}>
+        <div style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.textMuted, margin: '3px 0 6px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.rootPath}>
           {path}
         </div>
         {/* Подпись: чаты · дата */}

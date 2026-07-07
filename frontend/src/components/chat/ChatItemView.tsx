@@ -2,7 +2,7 @@ import { memo, useState, useContext } from 'react';
 import type { ChatItem } from '../../types';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
-import { C, FONT } from '../../lib/design';
+import { C, FONT, SHADOW } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { ChatProjectContext, useAssistantName } from './contexts';
 import { MarkdownContent } from './MarkdownContent';
@@ -25,10 +25,10 @@ function TodoPlanView({ todos }: { todos: TodoItem[] }) {
   return (
     <div style={{
       border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite,
-      overflow: 'hidden', boxShadow: '0 2px 8px rgba(60,50,35,0.04)',
+      overflow: 'hidden', boxShadow: SHADOW.card,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderBottom: '1px solid #EFE9DD' }}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#D97757" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderBottom: `1px solid ${C.divider}` }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
         </svg>
         <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>План</span>
@@ -46,17 +46,17 @@ function TodoPlanView({ todos }: { todos: TodoItem[] }) {
               <span style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}>
                 {isDone ? (
                   <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="8" fill="#5E8B4E" />
+                    <circle cx="8" cy="8" r="8" fill={C.success} />
                     <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 ) : isActive ? (
                   <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="7" fill="#D97757" />
-                    <circle cx="8" cy="8" r="2.6" fill="#FBF1EA" />
+                    <circle cx="8" cy="8" r="7" fill={C.accent} />
+                    <circle cx="8" cy="8" r="2.6" fill={C.accentLight} />
                   </svg>
                 ) : (
                   <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="6.5" stroke="#C9BFAD" strokeWidth="1.5" />
+                    <circle cx="8" cy="8" r="6.5" stroke={C.dashed} strokeWidth="1.5" />
                   </svg>
                 )}
               </span>
@@ -88,7 +88,7 @@ export const FileChangedRow = memo(function FileChangedRow({ item, online, onOpe
   const relativePath = relPath(item.path, project?.rootPath);
   return (
     <div style={{ padding: '9px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: '#C2693B' }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: C.accent }}>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
           <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
@@ -98,11 +98,11 @@ export const FileChangedRow = memo(function FileChangedRow({ item, online, onOpe
         style={{ fontFamily: FONT.mono, fontSize: 12.5, flex: 1, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: onOpenFile ? 'pointer' : 'default', direction: 'rtl', textAlign: 'left' }}>
         {relativePath}
       </span>
-      <span style={{ fontSize: 11.5, color: '#27AE60', fontFamily: FONT.mono, flexShrink: 0 }}>+{item.added}</span>
-      <span style={{ fontSize: 11.5, color: '#C0392B', fontFamily: FONT.mono, flexShrink: 0 }}>-{item.removed}</span>
+      <span style={{ fontSize: 11.5, color: C.diffAddText, fontFamily: FONT.mono, flexShrink: 0 }}>+{item.added}</span>
+      <span style={{ fontSize: 11.5, color: C.diffRemText, fontFamily: FONT.mono, flexShrink: 0 }}>-{item.removed}</span>
       {online && onRevert && (
         <button onClick={() => onRevert(item.path)}
-          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: '1px solid #E0D8CC', background: '#FFF', cursor: 'pointer', color: '#C0392B', flexShrink: 0 }}>
+          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bgWhite, cursor: 'pointer', color: C.dangerText, flexShrink: 0 }}>
           Откатить
         </button>
       )}
@@ -119,7 +119,7 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
   };
   const iconBtn: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: 26, height: 26, borderRadius: 7, border: 'none', background: '#EDE7DA',
+    width: 26, height: 26, borderRadius: 7, border: 'none', background: C.bgSelected,
     color: C.textMuted, cursor: 'pointer', fontFamily: 'inherit', padding: 0,
   };
   return (
@@ -133,16 +133,16 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
       {!streaming && (
         <div className="cc-actions" style={{ position: 'absolute', top: 0, right: 0, display: 'flex', gap: 4 }}>
           <button onClick={copy} style={iconBtn} title={copied ? 'Скопировано' : 'Скопировать ответ'} aria-label="Скопировать ответ"
-            onMouseEnter={e => { if (!copied) e.currentTarget.style.background = '#E2DACB'; }}
-            onMouseLeave={e => { if (!copied) e.currentTarget.style.background = '#EDE7DA'; }}>
+            onMouseEnter={e => { if (!copied) e.currentTarget.style.background = C.bgInset; }}
+            onMouseLeave={e => { if (!copied) e.currentTarget.style.background = C.bgSelected; }}>
             {copied
-              ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5E8B4E" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+              ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
               : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>}
           </button>
           {online && (
             <button onClick={onRetry} style={iconBtn} title="Повторить последний запрос" aria-label="Повторить последний запрос"
-              onMouseEnter={e => (e.currentTarget.style.background = '#E2DACB')}
-              onMouseLeave={e => (e.currentTarget.style.background = '#EDE7DA')}>
+              onMouseEnter={e => (e.currentTarget.style.background = C.bgInset)}
+              onMouseLeave={e => (e.currentTarget.style.background = C.bgSelected)}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 4v6h6" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
             </button>
           )}
@@ -186,7 +186,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
     case 'user_message':
       return (
         <div style={{
-          alignSelf: 'flex-end', background: '#F1DDD1', color: '#5A3322',
+          alignSelf: 'flex-end', background: C.accentMuted, color: C.textHeading,
           borderRadius: '18px 18px 4px 18px', padding: '12px 17px',
           maxWidth: '80%', fontSize: 14,
         }}>
@@ -195,7 +195,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
               {item.attachedPaths.map(p => (
                 <span key={p} style={{
-                  background: 'rgba(90,51,34,0.1)', borderRadius: 5,
+                  background: C.accentLight, borderRadius: 5,
                   padding: '1px 6px', fontSize: 11,
                 }}>
                   {/* В проекте — путь относительно корня; в чате без проекта — только имя файла */}
@@ -326,13 +326,13 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       const isConsoleReq = pn.startsWith('bash') || pn.includes('shell');
       return (
         <div style={{
-          border: '1px solid #E6C9B8', borderLeft: `3px solid ${C.accent}`,
-          borderRadius: 12, padding: '13px 14px', background: '#FBF1EA',
+          border: `1px solid ${C.accentMuted}`, borderLeft: `3px solid ${C.accent}`,
+          borderRadius: 12, padding: '13px 14px', background: C.accentLight,
         }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: C.textHeading }}>
             Запрос разрешения
           </div>
-          <div style={{ fontSize: 12, color: '#5A5040', marginBottom: 10 }}>
+          <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 10 }}>
             {asstName} хочет выполнить <span style={{ fontWeight: 600 }}>{item.toolName}</span>:
           </div>
           <div style={{
@@ -346,7 +346,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             {detail || item.toolName}
           </div>
           {item.resolved ? (
-            <div style={{ fontSize: 12, color: '#8A8070' }}>Решение принято</div>
+            <div style={{ fontSize: 12, color: C.textMuted }}>Решение принято</div>
           ) : online ? (
             <>
               <div style={{ display: 'flex', gap: 8 }}>
@@ -375,7 +375,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
                 onClick={() => onAllowAlways(item.requestId)}
                 style={{
                   marginTop: 8, width: '100%', background: 'none', border: 'none',
-                  cursor: 'pointer', fontSize: 12, color: '#B05C38', padding: '4px 0',
+                  cursor: 'pointer', fontSize: 12, color: C.accent, padding: '4px 0',
                 }}
               >
                 Всегда разрешать «{item.toolName}» в этом чате
@@ -393,18 +393,18 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       return (
         <div style={{
           border: `1px solid ${C.borderLight}`, borderRadius: 14, overflow: 'hidden',
-          background: C.bgWhite, boxShadow: '0 2px 10px rgba(60,50,35,0.05)',
+          background: C.bgWhite, boxShadow: SHADOW.card,
         }}>
           <div style={{
             display: 'flex', alignItems: 'center', gap: 11,
             padding: '12px 13px', cursor: onOpenFile ? 'pointer' : 'default',
-            borderBottom: '1px solid #EFE9DD',
+            borderBottom: `1px solid ${C.divider}`,
           }}
             onClick={() => onOpenFile?.(item.path)}
           >
             <div style={{
               width: 28, height: 28, borderRadius: 8,
-              background: '#FBEBE0', color: '#C2693B',
+              background: C.accentLight, color: C.accent,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               flexShrink: 0,
             }}>
@@ -416,10 +416,10 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {fileName}
             </span>
-            <span style={{ fontSize: 11.5, color: '#27AE60', fontFamily: FONT.mono }}>
+            <span style={{ fontSize: 11.5, color: C.diffAddText, fontFamily: FONT.mono }}>
               +{item.added}
             </span>
-            <span style={{ fontSize: 11.5, color: '#C0392B', fontFamily: FONT.mono }}>
+            <span style={{ fontSize: 11.5, color: C.diffRemText, fontFamily: FONT.mono }}>
               -{item.removed}
             </span>
           </div>
@@ -429,7 +429,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
                 onClick={() => onOpenFile(item.path)}
                 style={{
                   fontSize: 12, padding: '4px 10px', borderRadius: 6,
-                  border: `1px solid ${C.borderLight}`, background: '#FFF', cursor: 'pointer', color: C.textPrimary,
+                  border: `1px solid ${C.borderLight}`, background: C.bgWhite, cursor: 'pointer', color: C.textPrimary,
                 }}
               >
                 Открыть
@@ -440,8 +440,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
                 onClick={() => onRevert(item.path)}
                 style={{
                   fontSize: 12, padding: '4px 10px', borderRadius: 6,
-                  border: '1px solid #E0D8CC', background: '#FFF',
-                  cursor: 'pointer', color: '#C0392B',
+                  border: `1px solid ${C.border}`, background: C.bgWhite,
+                  cursor: 'pointer', color: C.dangerText,
                 }}
               >
                 Откатить
@@ -493,8 +493,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         return (
           <div style={{
             alignSelf: 'center', maxWidth: '100%',
-            background: '#FDECEA', border: '1px solid #F5C6CB', borderRadius: 8,
-            padding: '8px 12px', fontSize: 12.5, color: '#C0392B',
+            background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, borderRadius: 8,
+            padding: '8px 12px', fontSize: 12.5, color: C.dangerText,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, flexWrap: 'wrap',
           }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -509,8 +509,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
                 onClick={onRetry}
                 style={{
                   fontSize: 12, padding: '4px 10px', borderRadius: 6,
-                  border: '1px solid #C0392B', background: '#FFF', cursor: 'pointer',
-                  color: '#C0392B', whiteSpace: 'nowrap', flexShrink: 0,
+                  border: `1px solid ${C.dangerBorder}`, background: C.bgWhite, cursor: 'pointer',
+                  color: C.dangerText, whiteSpace: 'nowrap', flexShrink: 0,
                 }}
               >
                 Повторить
@@ -525,12 +525,12 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
 
       return (
         <div style={{
-          fontSize: 11, color: '#8A8070', alignSelf: 'center',
-          background: '#E8E2D6', borderRadius: 8, padding: '4px 11px',
+          fontSize: 11, color: C.textMuted, alignSelf: 'center',
+          background: C.bgSelected, borderRadius: 8, padding: '4px 11px',
           fontFamily: FONT.mono,
           display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', justifyContent: 'center',
         }}>
-          <span style={{ color: ok ? C.success : '#C0392B', fontWeight: 700 }}>{ok ? '✓' : '✗'}</span>
+          <span style={{ color: ok ? C.success : C.dangerText, fontWeight: 700 }}>{ok ? '✓' : '✗'}</span>
           <span>{item.numTurns} {stepWord(item.numTurns)}</span>
           {sep}
           <span>{(item.durationMs / 1000).toFixed(1)}с</span>
@@ -543,13 +543,13 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           {typeof item.totalCostUsd === 'number' && item.totalCostUsd > 0 && (
             <>
               {sep}
-              <span style={{ color: '#B05C38', fontWeight: 700 }}>{fmtCost(item.totalCostUsd)}</span>
+              <span style={{ color: C.accent, fontWeight: 700 }}>{fmtCost(item.totalCostUsd)}</span>
             </>
           )}
           {item.permissionDenials && item.permissionDenials.length > 0 && (
             <>
               {sep}
-              <span title={`Запрещено: ${item.permissionDenials.join(', ')}`} style={{ color: '#C0392B', fontWeight: 700 }}>
+              <span title={`Запрещено: ${item.permissionDenials.join(', ')}`} style={{ color: C.dangerText, fontWeight: 700 }}>
                 ⊘ {item.permissionDenials.length} {item.permissionDenials.length === 1 ? 'запрет' : 'запрета(ов)'}
               </span>
             </>
@@ -583,8 +583,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       return (
         <div style={{
           alignSelf: 'center', maxWidth: '100%',
-          background: '#FBF0DC', border: '1px solid #EAD2A0', borderRadius: 8,
-          padding: '7px 12px', fontSize: 12.5, color: '#9A6B1E',
+          background: C.warningBg, border: `1px solid ${C.warning}`, borderRadius: 8,
+          padding: '7px 12px', fontSize: 12.5, color: C.warningText,
           display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center',
         }}>
           <span>⏳</span>
@@ -599,7 +599,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center', gap: 10, color: C.textMuted, fontSize: 11, margin: '2px 0' }}>
           <div style={{ flex: 1, height: 1, background: C.border }} />
           <span style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
-            <span style={{ color: '#B89B6E' }}>✦</span>
+            <span style={{ color: C.textMuted }}>✦</span>
             контекст сжат{item.trigger === 'manual' ? ' вручную' : ''}
             {typeof item.preTokens === 'number' && item.preTokens > 0 && (
               <span style={{ opacity: 0.7 }}>
@@ -622,14 +622,14 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       return (
         <div style={{
           alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
-          background: '#F3ECE2', border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 12px', fontSize: 12, color: C.textSecondary,
+          background: C.bgSelected, border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 12px', fontSize: 12, color: C.textSecondary,
         }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="#9A8F7E"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill={C.textMuted}><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
             Ход остановлен пользователем
           </span>
           {online && (
-            <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: '1px solid #C9BEAD', background: '#FFF', cursor: 'pointer', color: '#5A5043', whiteSpace: 'nowrap' }}>Повторить</button>
+            <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bgWhite, cursor: 'pointer', color: C.textSecondary, whiteSpace: 'nowrap' }}>Повторить</button>
           )}
         </div>
       );
@@ -638,8 +638,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       return (
         <div style={{
           alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 8,
-          background: '#FBF0DC', border: '1px solid #EAD2A0', borderRadius: 8, padding: '6px 12px',
-          fontSize: 12.5, color: '#9A6B1E',
+          background: C.warningBg, border: `1px solid ${C.warning}`, borderRadius: 8, padding: '6px 12px',
+          fontSize: 12.5, color: C.warningText,
         }}>
           <span>✂</span>
           <span>Ответ обрезан — достигнут лимит токенов в ответе</span>
@@ -650,8 +650,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       return (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-          background: '#EFEAE0', border: `1px solid ${C.border}`, borderRadius: 10,
-          fontSize: 12.5, fontStyle: 'italic', color: '#8A8070',
+          background: C.bgSelected, border: `1px solid ${C.border}`, borderRadius: 10,
+          fontSize: 12.5, fontStyle: 'italic', color: C.textMuted,
         }}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
           Размышление скрыто (зашифровано провайдером)
@@ -662,11 +662,11 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       return (
         <div style={{
           alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
-          background: '#FDECEA', border: '1px solid #F5C6CB', borderRadius: 8, padding: '7px 12px', fontSize: 12.5, color: '#C0392B',
+          background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, borderRadius: 8, padding: '7px 12px', fontSize: 12.5, color: C.dangerText,
         }}>
           <span>⚠ Сессия прервана — {asstName} завершился неожиданно</span>
           {online && (
-            <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: '1px solid #C0392B', background: '#FFF', cursor: 'pointer', color: '#C0392B', whiteSpace: 'nowrap' }}>Повторить</button>
+            <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.dangerBorder}`, background: C.bgWhite, cursor: 'pointer', color: C.dangerText, whiteSpace: 'nowrap' }}>Повторить</button>
           )}
         </div>
       );
@@ -674,8 +674,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
     case 'error':
       return (
         <div style={{
-          background: '#FDECEA', borderRadius: 8, padding: '8px 12px',
-          fontSize: 13, color: '#C0392B', border: '1px solid #F5C6CB',
+          background: C.dangerBg, borderRadius: 8, padding: '8px 12px',
+          fontSize: 13, color: C.dangerText, border: `1px solid ${C.dangerBorder}`,
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
         }}>
           <span>⚠ {item.text}</span>
@@ -684,8 +684,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
               onClick={onRetry}
               style={{
                 fontSize: 12, padding: '4px 10px', borderRadius: 6,
-                border: '1px solid #C0392B', background: '#FFF',
-                cursor: 'pointer', color: '#C0392B', whiteSpace: 'nowrap', flexShrink: 0,
+                border: `1px solid ${C.dangerBorder}`, background: C.bgWhite,
+                cursor: 'pointer', color: C.dangerText, whiteSpace: 'nowrap', flexShrink: 0,
               }}
             >
               Повторить

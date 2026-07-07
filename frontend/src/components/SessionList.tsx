@@ -188,7 +188,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               background: isActive ? C.accentLight : C.bgWhite,
               border: '1px solid ' + (isActive ? C.accent : C.borderLight),
               boxShadow: isActive
-                ? '0 2px 10px rgba(217,119,87,0.18)'
+                ? SHADOW.button
                 : SHADOW.card,
               display: 'flex',
               justifyContent: 'space-between',
@@ -217,11 +217,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                   <div title="Выполняется Workflow" style={{
                     display: 'flex', alignItems: 'center', gap: 3,
                     padding: '1px 5px',
-                    background: '#F4ECE1', border: '1px solid #EAD3C5', borderRadius: 4,
+                    background: C.accentLight, border: `1px solid ${C.accentMuted}`, borderRadius: 4,
                     flexShrink: 0,
                   }}>
                     <div className="tool-spinner" style={{ width: 8, height: 8 }} />
-                    <span style={{ fontFamily: 'Hanken Grotesk, sans-serif', fontSize: 10, fontWeight: 600, color: '#D97757', lineHeight: 1 }}>WF</span>
+                    <span style={{ fontFamily: 'Hanken Grotesk, sans-serif', fontSize: 10, fontWeight: 600, color: C.accent, lineHeight: 1 }}>WF</span>
                   </div>
                 )}
               </div>

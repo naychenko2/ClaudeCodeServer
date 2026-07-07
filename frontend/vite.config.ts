@@ -46,6 +46,8 @@ export default defineConfig({
     proxy: {
       '/api': { target: backendUrl, changeOrigin: true },
       '/hubs': { target: backendUrl, changeOrigin: true, ws: true },
+      // Self-hosted draw.io: бэкенд (YARP) проксирует /drawio/* в контейнер jgraph/drawio
+      '/drawio': { target: backendUrl, changeOrigin: true },
     },
   },
   preview: {
@@ -54,6 +56,7 @@ export default defineConfig({
     proxy: {
       '/api': { target: backendUrl, changeOrigin: true },
       '/hubs': { target: backendUrl, changeOrigin: true, ws: true },
+      '/drawio': { target: backendUrl, changeOrigin: true },
     },
   },
 });

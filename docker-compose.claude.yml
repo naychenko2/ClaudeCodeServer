@@ -49,6 +49,8 @@ services:
       # FileSystemWatcher молчит. Включаем polling-обход дерева для авто-обновления файлов.
       FileWatcher__UsePolling: "true"
       ReverseProxy__Clusters__onlyoffice__Destinations__default__Address: http://host.docker.internal:8090
+      # draw.io self-hosted (контейнер drawio из docker-compose.yml) — YARP проксирует /drawio/*
+      ReverseProxy__Clusters__drawio__Destinations__default__Address: http://host.docker.internal:8091
       # Egress в интернет через прокси (вызовы API Claude). Пусто = прямой интернет.
       # NO_PROXY исключает локальные адреса (host.docker.internal — Dify/OnlyOffice).
       HTTP_PROXY: ${CLAUDE_EGRESS_PROXY:-}

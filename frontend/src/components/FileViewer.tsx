@@ -30,6 +30,7 @@ import { MarkdownViewer } from './MarkdownViewer';
 import { MermaidDiagram } from './MermaidDiagram';
 import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
+import { DrawioViewer } from './DrawioViewer';
 import { base64ToBytes } from '../lib/binary';
 import { C, FONT, MODAL_W, SHADOW } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from './Toolbar';
@@ -450,6 +451,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const isMarkdown = /\.(md|mdx)$/i.test(fileName);
   const isMermaid = /\.mmd$/i.test(fileName);
   const isHtml = /\.html?$/i.test(fileName);
+  const isDrawio = /\.(drawio|dio)$/i.test(fileName);
   const diffStats = diff ? {
     added: diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
     removed: diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length,
@@ -465,6 +467,23 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const isCodeEditing = editing && tab === 'file' && !fileContent?.isBinary && !fileContent?.isImage;
   const isPdfViewing = !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind === 'pdf';
   const isHtmlPreviewing = !loading && !loadError && tab === 'file' && isHtml && htmlTab === 'preview' && !editing && !fileContent?.isBinary;
+  const isDrawioViewing = !loading && !loadError && tab === 'file' && isDrawio && !fileContent?.isBinary;
+
+  // Сохранение диаграммы из встроенного редактора draw.io: пишем XML и обновляем diff.
+  // fileContent.content обновляем, но iframe не перезагружаем (DrawioViewer грузит XML
+  // только по событию init), поэтому редактор не сбрасывается.
+  const handleDrawioSave = async (xml: string) => {
+    try {
+      await api.files.saveContent(project.id, filePath, xml);
+      setFileContent(prev => prev ? { ...prev, content: xml } : prev);
+      setEditContent(xml);
+      setActionError(null);
+      const r = await api.files.getDiff(project.id, filePath);
+      setDiff(r.diff);
+    } catch (e) {
+      setActionError(mutationErrorText(e, 'Не удалось сохранить диаграмму'));
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative' }}>
@@ -609,7 +628,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   ? <ToolbarIconButton isMobile={isMobile} onClick={handleRevert} title="Откатить"><RevertIcon /></ToolbarIconButton>
                   : <button onClick={handleRevert} style={tbBtnGhost}>Откатить</button>
               )}
-              {!isMobile && (
+              {!isMobile && !isDrawio && (
                 isHtml && htmlTab === 'preview'
                   ? <button onClick={() => setHtmlTab('code')} style={tbBtnPrimary}>Править</button>
                   : <button onClick={() => { setEditing(true); setTab('file'); }} style={tbBtnPrimary}>Править</button>
@@ -722,7 +741,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       )}
 
       {/* Содержимое */}
-      <div style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing) ? 0 : 16, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing) ? 0 : 16, display: 'flex', flexDirection: 'column' }}>
         {loading && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 14 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', border: `3px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.8s linear infinite' }} />
@@ -881,6 +900,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                     />
                   </Suspense>
                 )
+                : isDrawio
+                  ? <DrawioViewer content={content} onSave={handleDrawioSave} />
                 : isHtml && htmlTab === 'preview'
                   ? <iframe
                       srcDoc={content}
@@ -915,7 +936,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       </div>
 
       {/* Плавающая кнопка редактирования на мобиле (MA4) */}
-      {isMobile && online && !editing && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !(isHtml && htmlTab === 'preview') && (
+      {isMobile && online && !editing && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !(isHtml && htmlTab === 'preview') && (
         <button
           onClick={() => { setEditing(true); setTab('file'); }}
           title="Редактировать"

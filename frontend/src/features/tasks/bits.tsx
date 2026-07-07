@@ -17,15 +17,17 @@ export function PriorityFlag({ priority, size = 13 }: { priority: TaskPriority; 
   );
 }
 
-// Оранжевый квадратик Claude (звёздочка-логотип упрощена до точки-лучей)
+// Иконка-аватар исполнителя Claude — брендовая иконка приложения
 export function ClaudeBadge({ size = 20 }: { size?: number }) {
   return (
-    <div title="Claude" style={{
-      width: size, height: size, borderRadius: size * 0.3, background: C.accent, flexShrink: 0,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }}>
-      <div style={{ width: size * 0.4, height: size * 0.4, borderRadius: '50%', background: C.onAccent }} />
-    </div>
+    <img
+      src="/favicon.svg"
+      alt=""
+      title="Claude"
+      width={size}
+      height={size}
+      style={{ display: 'block', flexShrink: 0 }}
+    />
   );
 }
 

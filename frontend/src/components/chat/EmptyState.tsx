@@ -19,14 +19,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint }: {
             gap: 12, paddingTop: 40,
           }}>
             {/* Логотип */}
-            <div style={{
-              width: 46, height: 46, borderRadius: 13, background: C.accent,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <div style={{
-                width: 22, height: 22, borderRadius: '50%', background: '#FFF',
-              }} />
-            </div>
+            <img src="/favicon.svg" alt="" width={46} height={46} style={{ display: 'block' }} />
 
             {!hasProject ? (
               <>

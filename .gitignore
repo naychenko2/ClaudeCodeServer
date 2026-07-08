@@ -45,6 +45,8 @@ mcp/tasks-server/dist/
 
 # Локальный override-конфиг (машинно-специфичные пути/секреты), у каждого свой
 backend/ClaudeHomeServer/appsettings.Local.json
+# Локальные docker-compose оверрайды (машинно-специфичные, не для git)
+docker-compose.*.local.yml
 # Боевой сетевой конфиг деплоя (домен/серт grisha, порт 80) — не светим в git
 backend/ClaudeHomeServer/appsettings.Production80.json
 

@@ -22,6 +22,7 @@ public record FeatureFlagDefinition(
 public static class FeatureFlagKeys
 {
     public const string SessionArtifacts = "session-artifacts";
+    public const string Notes = "notes";
 }
 
 /// <summary>
@@ -38,6 +39,15 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.SessionArtifacts,
             Title: "Артефакты сессии",
             Description: "Панель справа от чата с измененными файлами, планом, задачами, агентами и ссылками за текущую сессию.",
+            Default: false,
+            Stage: "beta"),
+
+        // Раздел «Заметки» — Obsidian-совместимая база знаний: markdown-заметки с
+        // [[wikilinks]], backlinks и графом; Claude ведёт их через MCP notes-server.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.Notes,
+            Title: "Заметки",
+            Description: "База знаний: markdown-заметки со связями [[…]], обратными ссылками и графом. Claude ведёт заметки, единый граф поверх личного vault и проектов.",
             Default: false,
             Stage: "beta"),
     ];

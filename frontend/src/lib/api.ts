@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, CreateNoteDto, UpdateNoteDto } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -149,6 +149,27 @@ export const api = {
       request<{ subtasks: string[] }>('/tasks/ai/subtasks', {
         method: 'POST', body: JSON.stringify({ title, description, projectId: projectId ?? null }),
       }),
+  },
+
+  // Заметки (Obsidian-совместимая база знаний): .md файлы в личном vault + notes/ проектов
+  notes: {
+    list: (source?: string, q?: string) => {
+      const qs = new URLSearchParams();
+      if (source) qs.set('source', source);
+      if (q) qs.set('q', q);
+      const s = qs.toString();
+      return request<NoteSummary[]>(`/notes${s ? `?${s}` : ''}`);
+    },
+    sources: () => request<NoteSource[]>('/notes/sources'),
+    graph: () => request<NoteGraph>('/notes/graph'),
+    get: (id: string) => request<NoteDetail>(`/notes/${encodeURIComponent(id)}`),
+    backlinks: (id: string) => request<NoteBacklink[]>(`/notes/${encodeURIComponent(id)}/backlinks`),
+    create: (dto: CreateNoteDto) =>
+      request<NoteDetail>('/notes', { method: 'POST', body: JSON.stringify(dto) }),
+    update: (id: string, dto: UpdateNoteDto) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dto) }),
+    delete: (id: string) =>
+      request<void>(`/notes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   },
 
   sessions: {

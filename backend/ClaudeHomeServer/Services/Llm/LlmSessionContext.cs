@@ -8,6 +8,10 @@ namespace ClaudeHomeServer.Services.Llm;
 // Не Claude-специфичен: DeepSeek-адаптер может реализовать те же tasks_* инструменты нативно.
 public record TasksMcpContext(string ApiUrl, string Token, string? ProjectId);
 
+// Контекст MCP-сервера заметок: адрес API, сервисный токен владельца и проект
+// (задаёт источник по умолчанию для создания заметок; null — личный vault).
+public record NotesMcpContext(string ApiUrl, string Token, string? ProjectId);
+
 // Per-session контекст, общий для всех адаптеров — то, что SessionManager передаёт
 // при создании сессии независимо от провайдера. Claude-специфичные зависимости
 // (MCP-конфиг, скиллы, disallowed tools) живут в фабрике адаптеров.
@@ -16,4 +20,5 @@ public sealed record LlmSessionContext(
     Func<ServerMessage, Task> OnMessage,
     string? RawSystemPrompt,
     Func<IReadOnlyList<PermissionRule>>? PermissionRules,
-    TasksMcpContext? TasksMcp);
+    TasksMcpContext? TasksMcp,
+    NotesMcpContext? NotesMcp = null);

@@ -107,6 +107,11 @@ public record WorkflowProgressMessage(string ToolUseId, IReadOnlyList<WorkflowAg
 public record TaskChangedMessage(string Action, Models.TaskItem Task)
     : ServerMessage("task_changed");
 
+// Изменение заметок (Claude создал/обновил/удалил заметку через MCP или пользователь
+// с другого устройства) — шлётся в группу user_{userId}, чтобы обновить список и граф.
+public record NotesChangedMessage(string Action, string? NoteId = null)
+    : ServerMessage("notes_changed");
+
 // Пользовательское уведомление (напоминание о задаче, событие Claude-исполнителя и т.п.) —
 // в группу user_{userId}: открытое приложение показывает тост, клик ведёт по Url (hash-диплинк).
 // Kind — семантика для иконки/цвета: reminder | claude | info

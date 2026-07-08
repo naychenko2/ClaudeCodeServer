@@ -1,4 +1,4 @@
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -8,10 +8,28 @@ import { C, FONT } from '../lib/design';
 
 interface Props {
   content: string;
+  // Клик по вики-ссылке [[Заголовок]] — target = «сырой» текст цели (до | и #)
+  onWikilink?: (target: string) => void;
+  // Нормализованные (lower/trim) заголовки существующих заметок — чтобы отличить
+  // «живую» ссылку (accent) от «призрачной» (серый пунктир, цели ещё нет)
+  existingTitles?: Set<string>;
 }
 
 const mono = FONT.mono;
 const serif = FONT.serif;
+
+// [[Заметка]] / [[Заметка|подпись]] → markdown-ссылка со схемой wikilink:
+// (urlTransform ниже пропускает эту схему, иначе санитайзер react-markdown её вырежет).
+function preprocessWikilinks(md: string): string {
+  return md.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g,
+    (_m, target: string, label?: string) =>
+      `[${(label ?? target).trim()}](wikilink:${encodeURIComponent(target.trim())})`);
+}
+
+// Имя цели для проверки существования: последний сегмент пути, без якоря, lower/trim
+function normTarget(target: string): string {
+  return target.split('/').pop()!.split('#')[0].trim().toLowerCase();
+}
 
 const components: Components = {
   h1: ({ children }) => (
@@ -110,10 +128,45 @@ const components: Components = {
   ),
 };
 
-export function MarkdownViewer({ content }: Props) {
+export function MarkdownViewer({ content, onWikilink, existingTitles }: Props) {
+  const hasWikilinks = /\[\[[^\]]+\]\]/.test(content);
+  const source = hasWikilinks ? preprocessWikilinks(content) : content;
+
+  // Переопределяем рендер ссылок только когда нужны вики-ссылки —
+  // иначе используем базовый набор компонентов без изменений.
+  const merged: Components = hasWikilinks
+    ? {
+        ...components,
+        a: ({ href, children }) => {
+          if (href?.startsWith('wikilink:')) {
+            const target = decodeURIComponent(href.slice('wikilink:'.length));
+            const live = existingTitles ? existingTitles.has(normTarget(target)) : true;
+            return (
+              <a
+                onClick={e => { e.preventDefault(); onWikilink?.(target); }}
+                title={live ? target : `Создать заметку «${target}»`}
+                style={{
+                  color: live ? C.accent : C.textMuted,
+                  textDecoration: 'none',
+                  cursor: 'pointer',
+                  fontWeight: 500,
+                  borderBottom: live ? 'none' : `1px dashed ${C.textMuted}`,
+                }}
+              >{children}</a>
+            );
+          }
+          return <a href={href} style={{ color: C.accent, textDecoration: 'underline' }}>{children}</a>;
+        },
+      }
+    : components;
+
   return (
     <div style={{ fontFamily: FONT.sans, fontSize: 14, lineHeight: 1.7, color: C.textHeading, width: '100%' }}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{content}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        urlTransform={url => (url.startsWith('wikilink:') ? url : defaultUrlTransform(url))}
+        components={merged}
+      >{source}</ReactMarkdown>
     </div>
   );
 }

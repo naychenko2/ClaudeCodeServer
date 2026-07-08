@@ -122,6 +122,12 @@ export function Composer({
 }: ComposerProps) {
   const asstName = useAssistantName();
   const [text, setText] = useState('');
+  // Преднастройка из раздела «Заметки»: кнопка «Спросить Claude про это» кладёт
+  // контекст заметки в sessionStorage — забираем один раз при появлении композера.
+  useEffect(() => {
+    const pending = sessionStorage.getItem('cc_pending_chat_prompt');
+    if (pending) { sessionStorage.removeItem('cc_pending_chat_prompt'); setText(pending); }
+  }, []);
   const [isListening, setIsListening] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);

@@ -1,0 +1,170 @@
+import { useEffect, useRef, useState } from 'react';
+import type { NoteDetail } from '../../types';
+import { api } from '../../lib/api';
+import { bumpNotes, useNotesVersion } from '../../lib/notes';
+import { C, FONT, R } from '../../lib/design';
+import { MarkdownViewer } from '../../components/MarkdownViewer';
+import { MarkdownEditor } from '../tasks/MarkdownEditor';
+import { IconButton } from '../../components/ui';
+import {
+  CollapseGroup, SourceBadge, SourceDot,
+  IconEye, IconPencil, IconChat, IconBacklink, IconOutlink, IconTrash,
+} from './shared';
+
+// Просмотр и правка одной заметки + панель обратных ссылок.
+export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted }: {
+  noteId: string;
+  existingTitles: Set<string>;
+  onWikilink: (target: string) => void;
+  onAskClaude?: (note: NoteDetail) => void;
+  onSelectNote: (id: string) => void;
+  onDeleted: () => void;
+}) {
+  const version = useNotesVersion();
+  const [note, setNote] = useState<NoteDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [draftTitle, setDraftTitle] = useState('');
+  const [draftBody, setDraftBody] = useState('');
+  const [saving, setSaving] = useState(false);
+  const editingRef = useRef(false);
+  editingRef.current = editing;
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    api.notes.get(noteId)
+      .then(n => { if (alive) { setNote(n); if (!editingRef.current) { setDraftTitle(n.title); setDraftBody(n.content); } } })
+      .catch(() => { if (alive) setNote(null); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+    // Перечитываем при смене заметки и при realtime-изменении (version)
+  }, [noteId, version]);
+
+  const startEdit = () => { if (note) { setDraftTitle(note.title); setDraftBody(note.content); setEditing(true); } };
+
+  const save = async () => {
+    if (!note) return;
+    setSaving(true);
+    try {
+      const updated = await api.notes.update(note.id, {
+        title: draftTitle !== note.title ? draftTitle : undefined,
+        content: draftBody,
+      });
+      setEditing(false);
+      bumpNotes();
+      // id мог смениться при переименовании — переключаемся на новый
+      if (updated.id !== note.id) onSelectNote(updated.id);
+      else setNote(updated);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const del = async () => {
+    if (!note) return;
+    if (!window.confirm(`Удалить заметку «${note.title}»?`)) return;
+    await api.notes.delete(note.id);
+    bumpNotes();
+    onDeleted();
+  };
+
+  if (loading && !note)
+    return <div style={{ padding: 40, textAlign: 'center', color: C.textMuted, fontFamily: FONT.sans }}>Загрузка…</div>;
+  if (!note)
+    return <div style={{ padding: 40, textAlign: 'center', color: C.textMuted, fontFamily: FONT.sans }}>Заметка не найдена</div>;
+
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Шапка */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px 10px', flexWrap: 'wrap' }}>
+        {editing
+          ? <input
+              value={draftTitle}
+              onChange={e => setDraftTitle(e.target.value)}
+              style={{
+                flex: 1, minWidth: 160, fontFamily: FONT.serif, fontSize: 20, fontWeight: 700,
+                color: C.textHeading, background: C.bgWhite, border: `1px solid ${C.border}`,
+                borderRadius: R.md, padding: '6px 10px',
+              }}
+            />
+          : <h1 style={{ flex: 1, minWidth: 0, margin: 0, fontFamily: FONT.serif, fontSize: 22, fontWeight: 700, color: C.textHeading }}>{note.title}</h1>}
+        <SourceBadge source={note.source} label={note.sourceLabel} />
+        <div style={{ display: 'flex', gap: 2 }}>
+          <IconButton title={editing ? 'Просмотр' : 'Читать'} active={!editing} onClick={() => setEditing(false)}><IconEye /></IconButton>
+          <IconButton title="Править" active={editing} onClick={startEdit}><IconPencil /></IconButton>
+          {onAskClaude && <IconButton title="Спросить Claude про это" onClick={() => onAskClaude(note)}><IconChat /></IconButton>}
+          <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>
+        </div>
+      </div>
+
+      {/* Тело */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 18px 24px' }}>
+        {editing ? (
+          <>
+            <MarkdownEditor value={draftBody} onChange={setDraftBody} minHeight={280} placeholder="Текст заметки… связывай через [[Заголовок]]" />
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button onClick={save} disabled={saving} style={primaryBtn}>{saving ? 'Сохранение…' : 'Сохранить'}</button>
+              <button onClick={() => { setEditing(false); setDraftBody(note.content); setDraftTitle(note.title); }} style={ghostBtn}>Отмена</button>
+            </div>
+          </>
+        ) : (
+          <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink} />
+        )}
+
+        {/* Backlinks / исходящие — только в режиме чтения */}
+        {!editing && (
+          <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+            <CollapseGroup
+              defaultOpen={note.backlinks.length > 0}
+              title={<span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.03em' }}><IconBacklink />Обратные ссылки · {note.backlinks.length}</span>}
+            >
+              {note.backlinks.length === 0
+                ? <div style={{ padding: '4px 4px 8px', color: C.textMuted, fontSize: 12 }}>Пока никто не ссылается</div>
+                : note.backlinks.map((b, i) => (
+                    <button key={i} onClick={() => onSelectNote(b.sourceId)} style={backlinkRow}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <SourceDot source={b.source} size={7} />
+                        <span style={{ fontSize: 12.5, fontWeight: 500, color: C.textPrimary }}>{b.sourceTitle}</span>
+                      </span>
+                      <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, marginLeft: 13, marginTop: 2, display: 'block' }}>{b.snippet}</span>
+                    </button>
+                  ))}
+            </CollapseGroup>
+
+            {note.links.length > 0 && (
+              <CollapseGroup
+                defaultOpen={false}
+                title={<span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.03em' }}><IconOutlink />Исходящие · {note.links.length}</span>}
+              >
+                {note.links.map((l, i) => (
+                  <button
+                    key={i}
+                    onClick={() => l.resolved ? onSelectNote(l.targetId) : onWikilink(l.targetTitle)}
+                    style={{ ...backlinkRow, display: 'flex', alignItems: 'center', gap: 6 }}
+                  >
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: l.resolved ? C.accent : 'transparent', border: l.resolved ? 'none' : `1px dashed ${C.textMuted}`, flex: 'none' }} />
+                    <span style={{ fontSize: 12.5, color: l.resolved ? C.textPrimary : C.textMuted, fontStyle: l.resolved ? 'normal' : 'italic' }}>{l.targetTitle}</span>
+                  </button>
+                ))}
+              </CollapseGroup>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const primaryBtn: React.CSSProperties = {
+  background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.lg,
+  padding: '8px 16px', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: FONT.sans,
+};
+const ghostBtn: React.CSSProperties = {
+  background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}`, borderRadius: R.lg,
+  padding: '8px 16px', fontSize: 13, cursor: 'pointer', fontFamily: FONT.sans,
+};
+const backlinkRow: React.CSSProperties = {
+  width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer',
+  padding: '6px 4px', borderRadius: R.sm, fontFamily: FONT.sans, display: 'block',
+};

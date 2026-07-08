@@ -46,6 +46,8 @@ public class SessionManager
     private readonly IConfiguration _config;
     // Сервисные токены MCP tasks-server — по одному на владельца, с перевыпуском до истечения
     private readonly ConcurrentDictionary<string, (string Token, DateTime IssuedAt)> _tasksTokens = new();
+    // Аналогично для MCP notes-server (тот же сервисный токен владельца по смыслу, свой кэш)
+    private readonly ConcurrentDictionary<string, (string Token, DateTime IssuedAt)> _notesTokens = new();
 
     // Наблюдатель сообщений сессий (Claude-исполнитель задач слушает result/permission).
     // Вызывается после обновления статуса и broadcast; его ошибки не роняют пайплайн
@@ -108,6 +110,18 @@ public class SessionManager
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
         return new TasksMcpContext(ResolveTasksApiUrl(), entry.Token, projectId);
+    }
+
+    // Контекст MCP-сервера заметок; null — только для чата без владельца
+    private NotesMcpContext? BuildNotesContext(string? ownerId, string? projectId)
+    {
+        if (ownerId is null) return null;
+        var entry = _notesTokens.AddOrUpdate(ownerId,
+            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
+            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
+                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
+                : old);
+        return new NotesMcpContext(ResolveTasksApiUrl(), entry.Token, projectId);
     }
 
     // --- Персистентность сессий ---
@@ -266,7 +280,8 @@ public class SessionManager
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
             rawSystemPrompt, permissionRules,
-            BuildTasksContext(ownerId, session.ProjectId)));
+            BuildTasksContext(ownerId, session.ProjectId),
+            BuildNotesContext(ownerId, session.ProjectId)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -348,7 +363,8 @@ public class SessionManager
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 RawSystemPrompt: null, PermissionRules: null,
-                BuildTasksContext(entry.Info.OwnerId, null));
+                BuildTasksContext(entry.Info.OwnerId, null),
+                BuildNotesContext(entry.Info.OwnerId, null));
         }
         else
         {
@@ -358,7 +374,8 @@ public class SessionManager
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                BuildTasksContext(project.OwnerId, project.Id));
+                BuildTasksContext(project.OwnerId, project.Id),
+                BuildNotesContext(project.OwnerId, project.Id));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

@@ -22,6 +22,7 @@ import { setAllFlags } from './lib/featureFlags'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
+import { NotesPage } from './features/notes/NotesPage'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 const HUB_TAB_KEY = 'cc_hub_tab'
@@ -72,9 +73,10 @@ export default function App() {
     // Hash-диплинк приоритетнее сохранённой вкладки
     if (initialHash?.screen === 'calendar') return 'calendar'
     if (initialHash?.screen === 'chats') return 'chats'
+    if (initialHash?.screen === 'notes') return 'notes'
     if (initialHash?.screen === 'projects' || initialHash?.screen === 'project') return 'projects'
     const saved = localStorage.getItem(HUB_TAB_KEY)
-    return saved === 'projects' || saved === 'calendar' ? saved : 'chats'
+    return saved === 'projects' || saved === 'calendar' || saved === 'notes' ? saved : 'chats'
   })
   const effectiveHubTab: HubTab = hubTab
 
@@ -152,7 +154,7 @@ export default function App() {
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
-    navReplace({ screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : 'projects' })
+    navReplace({ screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : 'projects' })
     // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
     // проектом — при hubTab==='chats' проект «спит» и в истории не отражается.
     // Если hash-диплинк указывает на ДРУГОЙ проект — восстановленный не пушим,
@@ -185,6 +187,9 @@ export default function App() {
       } else if (s?.screen === 'calendar') {
         // Раздел «Календарь» — проект тоже «спит»
         if (hubTab !== 'calendar') { localStorage.setItem(HUB_TAB_KEY, 'calendar'); setHubTab('calendar') }
+      } else if (s?.screen === 'notes') {
+        // Раздел «Заметки» — проект «спит»
+        if (hubTab !== 'notes') { localStorage.setItem(HUB_TAB_KEY, 'notes'); setHubTab('notes') }
       } else if (s?.screen === 'projects') {
         // Список проектов — явный выход из проекта
         if (project) { localStorage.removeItem(OPEN_PROJECT_KEY); setProject(null) }
@@ -259,7 +264,7 @@ export default function App() {
   const switchHubTab = (t: HubTab) => {
     localStorage.setItem(HUB_TAB_KEY, t)
     setHubTab(t)
-    navReplace({ screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : 'projects' })
+    navReplace({ screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : 'projects' })
   }
   // Из календаря: открыть задачу во вкладке «Задачи» её проекта.
   // Задача передаётся через sessionStorage — WorkspacePage подхватывает при монтировании.
@@ -337,6 +342,8 @@ export default function App() {
             ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'calendar'
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
+            : effectiveHubTab === 'notes'
+              ? <NotesPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : project
                 ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
                 : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />

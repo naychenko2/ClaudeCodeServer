@@ -213,6 +213,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
+  | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' }
 );
 
@@ -367,4 +368,85 @@ export interface ChangelogStatus {
   configured: boolean;
   mode: string;         // 'repo' | 'projects'
   detail: string | null;
+}
+
+// ===== Заметки (Obsidian-совместимая база знаний) =====
+
+// Источник заметки: "personal" (личный vault) или id проекта
+export interface NoteSummary {
+  id: string;
+  title: string;
+  source: string;
+  sourceLabel: string;
+  path: string;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Разрешённая исходящая ссылка [[...]]; resolved=false — «призрачная» (цели ещё нет)
+export interface NoteLink {
+  targetId: string;
+  targetTitle: string;
+  resolved: boolean;
+}
+
+// Обратная ссылка: заметка, ссылающаяся на текущую, + контекст-сниппет
+export interface NoteBacklink {
+  sourceId: string;
+  sourceTitle: string;
+  source: string;
+  sourceLabel: string;
+  snippet: string;
+}
+
+export interface NoteDetail {
+  id: string;
+  title: string;
+  source: string;
+  sourceLabel: string;
+  path: string;
+  content: string;      // сырой markdown (для правки)
+  tags: string[];
+  links: NoteLink[];
+  backlinks: NoteBacklink[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Узел графа; ghost=true — «призрачная» заметка (на неё ссылаются, но её нет)
+export interface NoteGraphNode {
+  id: string;
+  title: string;
+  source: string;
+  sourceLabel: string;
+  degree: number;
+  ghost: boolean;
+}
+
+export interface NoteGraphEdge {
+  source: string;
+  target: string;
+}
+
+export interface NoteGraph {
+  nodes: NoteGraphNode[];
+  edges: NoteGraphEdge[];
+}
+
+// Источник для выбора «куда создать» (личный vault + проекты владельца)
+export interface NoteSource {
+  key: string;
+  label: string;
+}
+
+export interface CreateNoteDto {
+  title: string;
+  content?: string;
+  source?: string;
+}
+
+export interface UpdateNoteDto {
+  title?: string;
+  content?: string;
 }

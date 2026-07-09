@@ -40,7 +40,7 @@ const DOC_TYPES: Record<string, string> = {
   pptx: 'slide', ppt: 'slide',
 };
 
-// Цвета темы Claude Home — пишем в localStorage перед инициализацией OO,
+// Цвета темы AI Home — пишем в localStorage перед инициализацией OO,
 // чтобы themeinit.js внутри iframe применил правильный CSS ещё на старте.
 // OO iframe и наш сайт на одном origin → localStorage общий.
 const CLAUDE_HOME_THEME = {

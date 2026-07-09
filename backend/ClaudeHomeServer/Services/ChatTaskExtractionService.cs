@@ -43,6 +43,11 @@ public sealed class ChatTaskExtractionService(
         log.LogInformation(
             "extract-tasks: сессия {SessionId}, история {HistCount} сообщ., транскрипт {Len} симв., распознано {Count} задач",
             sessionId, history.Count, transcript.Length, result.Count);
+        // Диагностика «всегда пусто»: показываем сырой ответ модели, когда ничего не распозналось,
+        // чтобы отличить реальный [] от сбойного парсинга/преамбулы haiku.
+        if (result.Count == 0)
+            log.LogInformation("extract-tasks: 0 задач; сырой ответ модели (усечён): {Raw}",
+                raw.Length > 800 ? raw[..800] + "…" : raw);
 
         return new ExtractTasksResult(session.ProjectId, result);
     }
@@ -77,12 +82,11 @@ public sealed class ChatTaskExtractionService(
     // JSON-массив из ответа модели; невалидные записи отбрасываются
     private static IReadOnlyList<ExtractedTask> ParseTasks(string raw)
     {
-        var start = raw.IndexOf('[');
-        var end = raw.LastIndexOf(']');
-        if (start < 0 || end <= start) return [];
+        var json = ExtractJsonArray(raw);
+        if (json is null) return [];
 
         List<ExtractedTaskRaw>? parsed;
-        try { parsed = JsonSerializer.Deserialize<List<ExtractedTaskRaw>>(raw[start..(end + 1)], JsonOpts); }
+        try { parsed = JsonSerializer.Deserialize<List<ExtractedTaskRaw>>(json, JsonOpts); }
         catch (JsonException) { return []; }
         if (parsed is null) return [];
 
@@ -97,6 +101,35 @@ public sealed class ChatTaskExtractionService(
             result.Add(new ExtractedTask(title, due, priority));
         }
         return result.Take(20).ToList();
+    }
+
+    // Вырезает первый сбалансированный JSON-массив из ответа модели: устойчиво к
+    // markdown-fence (```json), русской преамбуле/послесловию haiku и скобкам внутри строк
+    // (в отличие от прежней жадной пары IndexOf('[')…LastIndexOf(']')).
+    private static string? ExtractJsonArray(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var start = raw.IndexOf('[');
+        if (start < 0) return null;
+
+        var depth = 0;
+        var inStr = false;
+        var esc = false;
+        for (var i = start; i < raw.Length; i++)
+        {
+            var c = raw[i];
+            if (inStr)
+            {
+                if (esc) esc = false;
+                else if (c == '\\') esc = true;
+                else if (c == '"') inStr = false;
+                continue;
+            }
+            if (c == '"') inStr = true;
+            else if (c == '[') depth++;
+            else if (c == ']' && --depth == 0) return raw[start..(i + 1)];
+        }
+        return null;
     }
 
     private static bool IsValidDate(string? s) =>

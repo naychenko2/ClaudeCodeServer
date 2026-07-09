@@ -41,7 +41,7 @@ function buildTree(notes: NoteSummary[]): FolderNode {
 
 // Список заметок: источники → дерево папок → заметки. Перенос — drag&drop
 // заметки на папку/заголовок источника (в пределах источника).
-export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFolder, onDeleted }: {
+export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFolder, onDeleted, onIdsRemapped }: {
   notes: NoteSummary[];
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -51,10 +51,38 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
   onCreateInFolder?: (source: string, folder: string) => void;
   // Папка удалена вместе с заметками — вызывающий сбрасывает выбор при необходимости
   onDeleted?: (ids: string[]) => void;
+  // Папка переименована/перенесена — маппинг id заметок для обновления выбора
+  onIdsRemapped?: (map: { oldId: string; newId: string }[]) => void;
 }) {
   // Свёрнутые папки (ключ source|path); по умолчанию всё раскрыто
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [dropTarget, setDropTarget] = useState<string | null>(null);   // source|path
+  // Переименование папки: ключ source|path + редактируемый полный путь
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  const commitFolderRename = async (source: string, oldPath: string) => {
+    const newPath = renameValue.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    setRenaming(null);
+    if (!newPath || newPath === oldPath) return;
+    try {
+      const r = await api.notes.moveFolder(source, oldPath, newPath);
+      bumpNotes();
+      onIdsRemapped?.(r.notes);
+    } catch { /* конфликт имени/вложение в себя — состояние покажет реалтайм */ }
+  };
+
+  const moveFolderTo = async (source: string, folderPath: string, targetFolder: string) => {
+    const name = folderPath.split('/').pop()!;
+    const newPath = targetFolder ? `${targetFolder}/${name}` : name;
+    if (newPath === folderPath) return;
+    if (targetFolder === folderPath || targetFolder.startsWith(folderPath + '/')) return;  // внутрь себя
+    try {
+      const r = await api.notes.moveFolder(source, folderPath, newPath);
+      bumpNotes();
+      onIdsRemapped?.(r.notes);
+    } catch { /* конфликт имени */ }
+  };
 
   const groups = useMemo<Group[]>(() => {
     const map = new Map<string, { source: string; label: string; notes: NoteSummary[] }>();
@@ -82,7 +110,8 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
 
   const dropProps = (source: string, folder: string) => ({
     onDragOver: (e: React.DragEvent) => {
-      if (e.dataTransfer.types.includes('application/x-note-id')) {
+      if (e.dataTransfer.types.includes('application/x-note-id') ||
+          e.dataTransfer.types.includes('application/x-folder-path')) {
         e.preventDefault();
         setDropTarget(`${source}|${folder}`);
       }
@@ -91,9 +120,12 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
     onDrop: (e: React.DragEvent) => {
       e.preventDefault();
       setDropTarget(null);
+      const dragSource = e.dataTransfer.getData('application/x-note-source');
+      if (dragSource !== source) return;   // перенос только внутри источника
       const noteId = e.dataTransfer.getData('application/x-note-id');
-      const noteSource = e.dataTransfer.getData('application/x-note-source');
-      if (noteId && noteSource === source) void doMove(noteId, source, folder);
+      if (noteId) { void doMove(noteId, source, folder); return; }
+      const folderPath = e.dataTransfer.getData('application/x-folder-path');
+      if (folderPath) void moveFolderTo(source, folderPath, folder);
     },
   });
 
@@ -153,10 +185,38 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
     const key = `${source}|${node.path}`;
     const isCollapsed = collapsed.has(key);
     const isDrop = dropTarget === key;
+    const isRenaming = renaming === key;
     return (
       <div key={key}>
+        {isRenaming ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: `3px 8px 3px ${10 + depth * 14}px` }}>
+            <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={e => setRenameValue(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') void commitFolderRename(source, node.path);
+                if (e.key === 'Escape') setRenaming(null);
+              }}
+              onBlur={() => void commitFolderRename(source, node.path)}
+              title="Полный путь папки: новое имя или «Другая/Папка» для переноса"
+              style={{
+                flex: 1, minWidth: 0, fontSize: 12, fontFamily: FONT.sans, color: C.textHeading,
+                background: C.bgWhite, border: `1px solid ${C.accent}`, borderRadius: R.sm,
+                padding: '2px 6px', outline: 'none',
+              }}
+            />
+          </div>
+        ) : (
         <button
           onClick={() => setCollapsed(prev => { const next = new Set(prev); isCollapsed ? next.delete(key) : next.add(key); return next; })}
+          draggable
+          onDragStart={e => {
+            e.dataTransfer.setData('application/x-folder-path', node.path);
+            e.dataTransfer.setData('application/x-note-source', source);
+            e.dataTransfer.effectAllowed = 'move';
+          }}
           {...dropProps(source, node.path)}
           style={{
             width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
@@ -172,10 +232,13 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
           {onCreateInFolder && iconBtn('Новая заметка в папке', () => onCreateInFolder(source, node.path),
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>)}
+          {iconBtn('Переименовать/перенести папку', () => { setRenaming(key); setRenameValue(node.path); },
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>)}
           {iconBtn('Удалить папку', () => void deleteFolder(node),
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></svg>)}
           <span style={{ fontSize: 10, color: C.textMuted }}>{countNotes(node)}</span>
         </button>
+        )}
         {!isCollapsed && (
           <>
             {node.children.map(c => renderFolder(source, c, depth + 1))}

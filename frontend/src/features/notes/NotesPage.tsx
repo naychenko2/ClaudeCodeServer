@@ -196,7 +196,11 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote}
         onMoved={(oldId, newId) => { if (selectedId === oldId) setSelectedId(newId); }}
         onCreateInFolder={(source, folder) => setNewDialog({ source, folder })}
-        onDeleted={ids => { if (selectedId && ids.includes(selectedId)) setSelectedId(null); }} />;
+        onDeleted={ids => { if (selectedId && ids.includes(selectedId)) setSelectedId(null); }}
+        onIdsRemapped={map => {
+          const hit = selectedId && map.find(m => m.oldId === selectedId);
+          if (hit) setSelectedId(hit.newId);
+        }} />;
 
   const notesContent = isMobile ? (
     mobileView === 'list' || !selectedId

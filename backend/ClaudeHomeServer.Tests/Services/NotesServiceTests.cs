@@ -278,6 +278,29 @@ public class NotesServiceTests : IDisposable
     }
 
     [Fact]
+    public void MoveFolder_ПереименованиеИПеренос_СМаппингомId()
+    {
+        var a = _sut.Create(User, new CreateNoteRequest("А", "тело", "personal", Folder: "Старая"));
+        _sut.Create(User, new CreateNoteRequest("Б", "тело с [[А]]", "personal", Folder: "Старая/Вложенная"));
+
+        var map = _sut.MoveFolder(User, "personal", "Старая", "Архив/Новая");
+        map.Should().HaveCount(2);
+        map.Should().Contain(m => m.OldId == a.Id);
+
+        var paths = _sut.GetSummaries(User, null, null).Select(s => s.Path).ToList();
+        paths.Should().Contain("Архив/Новая/А.md");
+        paths.Should().Contain("Архив/Новая/Вложенная/Б.md");
+
+        // Ссылка [[А]] пережила переезд (резолв по заголовку)
+        var b = _sut.GetSummaries(User, null, null).Single(s => s.Title == "Б");
+        _sut.GetDetail(User, b.Id)!.Links.Should().ContainSingle(l => l.Resolved && l.TargetTitle == "А");
+
+        // Внутрь самой себя — нельзя
+        var act = () => _sut.MoveFolder(User, "personal", "Архив", "Архив/Новая/Глубже");
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
     public void SanitizeFolder_ЧиститTraversalИМусор()
     {
         NotesService.SanitizeFolder("Идеи/Черновики").Should().Be("Идеи/Черновики");

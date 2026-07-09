@@ -160,6 +160,22 @@ public class NotesController : ControllerBase
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
 
+    // Переименование/перенос папки целиком: newPath — полный новый путь папки.
+    [HttpPost("folder/move")]
+    public async Task<ActionResult> MoveFolder([FromBody] MoveFolderRequest req)
+    {
+        try
+        {
+            var moved = _notes.MoveFolder(UserId, req.Source, req.Path, req.NewPath);
+            await Broadcast("updated");
+            return Ok(new { notes = moved });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
     // Перенос заметки в другую папку того же источника (id меняется — путь в id).
     [HttpPost("{id}/move")]
     public async Task<ActionResult<NoteDetail>> Move(string id, [FromBody] MoveNoteRequest req)

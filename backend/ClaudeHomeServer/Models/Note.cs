@@ -82,6 +82,11 @@ public record CreateNoteRequest(
 // Перенос заметки в другую папку того же источника (id меняется — путь в id)
 public record MoveNoteRequest(string? Folder = null);
 
+// Переименование/перенос папки: newPath — полный новый путь ("Идеи" → "Архив/Идеи").
+// Возвращается маппинг id заметок (старый → новый), чтобы фронт обновил выбор.
+public record MoveFolderRequest(string Source, string Path, string NewPath);
+public record MovedNoteId(string OldId, string NewId);
+
 // Дата дня для daily note — клиент шлёт свою локальную (таймзона устройства)
 public record DailyNoteRequest(string? Date = null);
 

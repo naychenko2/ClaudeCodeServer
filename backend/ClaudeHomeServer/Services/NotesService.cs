@@ -619,6 +619,44 @@ public sealed class NotesService
         return GetDetail(userId, EncodeId(sourceKey, newRel));
     }
 
+    // Переименование/перенос папки целиком (Directory.Move — атомарно, вложения
+    // переезжают вместе). Ссылки [[…]] не трогаем (резолв по заголовку).
+    // Возвращает маппинг id заметок старый → новый (id содержит путь).
+    public IReadOnlyList<MovedNoteId> MoveFolder(string userId, string sourceKey, string path, string newPath)
+    {
+        var rootDir = ResolveRoot(userId, sourceKey);
+        var oldFolder = SanitizeFolder(path);
+        var newFolder = SanitizeFolder(newPath);
+        if (oldFolder.Length == 0) throw new ArgumentException("Не задана папка");
+        if (newFolder.Length == 0) throw new ArgumentException("Не задан новый путь");
+        if (newFolder.Equals(oldFolder, StringComparison.OrdinalIgnoreCase))
+            return [];
+        if (newFolder.StartsWith(oldFolder + "/", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Нельзя перенести папку внутрь самой себя");
+
+        var oldFull = FileService.SafeJoinPublic(rootDir, oldFolder);
+        var newFull = FileService.SafeJoinPublic(rootDir, newFolder);
+        if (!Directory.Exists(oldFull)) throw new KeyNotFoundException("Папка не найдена");
+        if (Directory.Exists(newFull) || File.Exists(newFull))
+            throw new InvalidOperationException($"«{newFolder}» уже существует");
+
+        // Заметки папки до переезда — для маппинга id
+        var before = GetModel(userId).Notes
+            .Where(n => n.SourceKey == sourceKey &&
+                        (n.RelPath.StartsWith(oldFolder + "/", StringComparison.OrdinalIgnoreCase)))
+            .Select(n => n.RelPath).ToList();
+
+        Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
+        Directory.Move(oldFull, newFull);
+        Invalidate(userId);
+
+        return before.Select(rel =>
+        {
+            var newRel = newFolder + rel[oldFolder.Length..];
+            return new MovedNoteId(EncodeId(sourceKey, rel), EncodeId(sourceKey, newRel));
+        }).ToList();
+    }
+
     public NoteDetail? Update(string userId, string id, UpdateNoteRequest req)
     {
         var (sourceKey, relPath) = DecodeId(id);

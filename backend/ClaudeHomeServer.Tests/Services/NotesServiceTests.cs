@@ -30,7 +30,7 @@ public class NotesServiceTests : IDisposable
         var users = new UserStore(config, NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(config);
         _projects = new ProjectManager(config, users, appSettings);
-        _sut = new NotesService(_projects, new FeatureFlagService(users), config, NullLogger<NotesService>.Instance);
+        _sut = new NotesService(_projects, config, NullLogger<NotesService>.Instance);
     }
 
     public void Dispose()
@@ -374,48 +374,5 @@ public class NotesServiceTests : IDisposable
 
         var updated = _sut.LinkMention(User, note.Id, "Гамма")!;
         updated.Content.Should().Contain("[[Гамма|гамма]]");
-    }
-
-    // ─── Память Claude как источник (этап 4) ─────────────────────────────────
-
-    [Theory]
-    [InlineData(@"C:\Sources\ClaudeCodeServer", "C--Sources-ClaudeCodeServer")]
-    [InlineData("/home/user/proj", "-home-user-proj")]
-    [InlineData(@"C:\a.b\c", "C--a-b-c")]
-    public void ProjectMemorySlug_ЗаменяетРазделители(string path, string expected)
-    {
-        NotesService.ProjectMemorySlug(path).Should().Be(expected);
-    }
-
-    [Fact]
-    public void Create_ВИсточникПамяти_Запрещено()
-    {
-        // Запись в memory:* отклоняется ещё на резолве источника, без обращения к проекту
-        var act = () => _sut.Create(User, new CreateNoteRequest("x", "y", "memory:some-project"));
-        act.Should().Throw<UnauthorizedAccessException>();
-    }
-
-    // Заголовок read-only заметки памяти: читаемый description вместо английского имени файла
-    [Fact]
-    public void ReadonlyTitle_ИзDescription()
-    {
-        NotesService.ReadonlyTitle("Песочница: backend и claude в одном контейнере", "containerization-sandbox", "containerization-sandbox")
-            .Should().Be("Песочница: backend и claude в одном контейнере");
-    }
-
-    [Fact]
-    public void ReadonlyTitle_БезDescription_БерётNameИлиФайл()
-    {
-        NotesService.ReadonlyTitle(null, "my-name", "my-file").Should().Be("my-name");
-        NotesService.ReadonlyTitle("   ", null, "my-file").Should().Be("my-file");
-    }
-
-    [Fact]
-    public void ReadonlyTitle_ДлинноеОбрезаетсяПоСлову()
-    {
-        var longDesc = "Очень длинное описание памяти которое точно превышает семьдесят символов и должно обрезаться по границе слова";
-        var title = NotesService.ReadonlyTitle(longDesc, "n", "f");
-        title.Length.Should().BeLessThanOrEqualTo(72);
-        title.Should().EndWith("…");
     }
 }

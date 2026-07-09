@@ -64,9 +64,8 @@ public record NoteGraph(
     IReadOnlyList<NoteGraphEdge> Edges);
 
 // Возможный источник для создания заметки (личный vault + проекты владельца) —
-// отдаётся фронту, чтобы показать выбор «куда создать». ReadOnly=true — источник
-// только для чтения (память Claude): создание/правка/перенос в него запрещены.
-public record NoteSourceDto(string Key, string Label, bool ReadOnly = false);
+// отдаётся фронту, чтобы показать выбор «куда создать».
+public record NoteSourceDto(string Key, string Label);
 
 // Шаблон заметки (файл в templates/ личного vault)
 public record NoteTemplateDto(string Id, string Title);

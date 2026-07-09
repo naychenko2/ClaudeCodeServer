@@ -75,7 +75,7 @@ public class SessionStatusTests : IDisposable
         var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
             Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
         var flags = new FeatureFlagService(userStore);
-        var notesSvc = new NotesService(_projectManager, flags, _config, NullLogger<NotesService>.Instance);
+        var notesSvc = new NotesService(_projectManager, _config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, _config,
             NullLogger<NotesKnowledgeService>.Instance);
         return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, NullLogger<SessionManager>.Instance);

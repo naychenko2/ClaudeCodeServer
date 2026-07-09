@@ -39,15 +39,7 @@ export function usePanelWidth(storageKey: string, def: number, min: number, max:
 
 // Цвет источника заметки: личный vault — accent, проект — детерминированный цвет проекта.
 export function sourceColor(source: string): string {
-  if (source === 'personal') return C.accent;
-  // Память Claude привязана к проекту — красим цветом того же проекта
-  return projectColor(isReadOnlySource(source) ? source.slice(MEMORY_PREFIX.length) : source).main;
-}
-
-// Ключ источника «Память Claude»: memory:{projectId} (read-only)
-export const MEMORY_PREFIX = 'memory:';
-export function isReadOnlySource(source: string): boolean {
-  return source.startsWith(MEMORY_PREFIX);
+  return source === 'personal' ? C.accent : projectColor(source).main;
 }
 
 // --- Иконки (inline SVG, стиль Feather: stroke=currentColor) ---

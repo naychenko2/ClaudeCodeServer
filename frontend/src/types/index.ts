@@ -456,8 +456,6 @@ export interface NoteGraph {
 export interface NoteSource {
   key: string;
   label: string;
-  // Источник только для чтения (память Claude): создание/правка/перенос запрещены
-  readOnly?: boolean;
 }
 
 export interface CreateNoteDto {

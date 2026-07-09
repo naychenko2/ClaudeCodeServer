@@ -58,7 +58,7 @@ public class SessionManagerTests : IDisposable
         var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
             Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
         var flags = new FeatureFlagService(userStore);
-        var notesSvc = new NotesService(_projectManager, flags, config, NullLogger<NotesService>.Instance);
+        var notesSvc = new NotesService(_projectManager, config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, NullLogger<SessionManager>.Instance);

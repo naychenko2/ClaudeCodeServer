@@ -122,6 +122,14 @@ public static class FeatureFlagCatalog
             Description: "Кнопка в шапке чата: Claude выделяет из диалога конкретные задачи-действия, вы отмечаете нужные — и они попадают в трекер.",
             Default: false,
             Stage: "dev"),
+
+        // Единый поиск: заметки (по смыслу) + задачи в одной выдаче.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.UnifiedSearch,
+            Title: "Единый поиск",
+            Description: "Поиск по всему рабочему пространству сразу — заметки (по смыслу) и задачи в одной выдаче. Кнопка-лупа в шапке.",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

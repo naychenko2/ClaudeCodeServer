@@ -93,6 +93,17 @@ export interface Task {
   virtual?: boolean;
 }
 
+// Элемент единой выдачи поиска (флаг unified-search)
+export interface SearchHit {
+  type: 'note' | 'task';
+  id: string;
+  title: string;
+  context: string;   // источник заметки / контекст задачи
+  snippet: string;
+  score?: number | null;
+  url: string;       // hash-диплинк
+}
+
 // Кандидат в задачу, извлечённый из чата (флаг chat-extract-tasks). Ещё не создан.
 export interface ExtractedTaskCandidate {
   title: string;

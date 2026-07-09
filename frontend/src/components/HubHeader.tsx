@@ -9,6 +9,7 @@ import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { api } from '../lib/api';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { openNoteById } from '../features/notes/saveToNote';
+import { GlobalSearch } from './GlobalSearch';
 
 // Локальная дата устройства в формате YYYY-MM-DD (для дневника брифа)
 function localDateStr(): string {
@@ -89,6 +90,9 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
   // «Утренний бриф» (флаг daily-briefing): собрать план дня в дневник и открыть его
   const briefingEnabled = useFeature(FLAGS.dailyBriefing);
   const [briefingBusy, setBriefingBusy] = useState(false);
+  // Единый поиск (флаг unified-search)
+  const searchEnabled = useFeature(FLAGS.unifiedSearch);
+  const [showSearch, setShowSearch] = useState(false);
   const runBriefing = async () => {
     if (briefingBusy) return;
     setBriefingBusy(true);
@@ -138,6 +142,26 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
 
       {/* Правая секция — меню аватара (управление пользователями — внутри меню, admin) */}
       <div style={{ flex: isMobile ? 'none' : 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+        {/* Единый поиск (флаг unified-search) — заметки + задачи. Только десктоп. */}
+        {!isMobile && searchEnabled && (
+          <button
+            onClick={() => setShowSearch(true)}
+            aria-label="Поиск по пространству"
+            title="Поиск по заметкам и задачам"
+            style={{
+              width: 32, height: 32, borderRadius: 8, border: 'none', background: 'none',
+              color: C.textSecondary, cursor: 'pointer', display: 'flex', alignItems: 'center',
+              justifyContent: 'center', flexShrink: 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+          </button>
+        )}
         {/* «Утренний бриф» — план дня в дневник (флаг daily-briefing). Как и «Что нового»,
             только на десктопе (на мобилке в шапке нет места). */}
         {!isMobile && briefingEnabled && (
@@ -228,6 +252,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
         />
       </div>
 
+      {showSearch && <GlobalSearch onClose={() => setShowSearch(false)} />}
       {showUserMgmt && <UserManagementModal currentUserId={auth.id} onClose={() => setShowUserMgmt(false)} />}
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}

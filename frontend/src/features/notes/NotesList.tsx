@@ -41,12 +41,16 @@ function buildTree(notes: NoteSummary[]): FolderNode {
 
 // Список заметок: источники → дерево папок → заметки. Перенос — drag&drop
 // заметки на папку/заголовок источника (в пределах источника).
-export function NotesList({ notes, selectedId, onSelect, onMoved }: {
+export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFolder, onDeleted }: {
   notes: NoteSummary[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   // Заметка перенесена (id сменился) — вызывающий обновляет выбор
   onMoved?: (oldId: string, newId: string) => void;
+  // «+» на папке: создать заметку сразу в этой папке источника
+  onCreateInFolder?: (source: string, folder: string) => void;
+  // Папка удалена вместе с заметками — вызывающий сбрасывает выбор при необходимости
+  onDeleted?: (ids: string[]) => void;
 }) {
   // Свёрнутые папки (ключ source|path); по умолчанию всё раскрыто
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -119,6 +123,32 @@ export function NotesList({ notes, selectedId, onSelect, onMoved }: {
     );
   };
 
+  // Собрать все заметки папки (включая подпапки)
+  const notesUnder = (node: FolderNode): NoteSummary[] =>
+    [...node.notes, ...node.children.flatMap(notesUnder)];
+
+  const deleteFolder = async (node: FolderNode) => {
+    const all = notesUnder(node);
+    const msg = all.length > 0
+      ? `Удалить папку «${node.name}» и ${all.length} замет${all.length === 1 ? 'ку' : all.length < 5 ? 'ки' : 'ок'} в ней?`
+      : `Удалить папку «${node.name}»?`;
+    if (!window.confirm(msg)) return;
+    for (const n of all) {
+      try { await api.notes.delete(n.id); } catch { /* уже удалена — не страшно */ }
+    }
+    bumpNotes();
+    onDeleted?.(all.map(n => n.id));
+  };
+
+  const iconBtn = (title: string, onClick: () => void, children: React.ReactNode) => (
+    <span role="button" tabIndex={0} title={title}
+      onClick={e => { e.stopPropagation(); onClick(); }}
+      onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); onClick(); } }}
+      style={{ display: 'flex', alignItems: 'center', color: C.textMuted, cursor: 'pointer', padding: '0 2px' }}>
+      {children}
+    </span>
+  );
+
   const renderFolder = (source: string, node: FolderNode, depth: number): React.ReactNode => {
     const key = `${source}|${node.path}`;
     const isCollapsed = collapsed.has(key);
@@ -140,6 +170,10 @@ export function NotesList({ notes, selectedId, onSelect, onMoved }: {
           <span style={{ fontSize: 8, color: C.textMuted, width: 8 }}>{isCollapsed ? '▸' : '▾'}</span>
           <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
           <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
+          {onCreateInFolder && iconBtn('Новая заметка в папке', () => onCreateInFolder(source, node.path),
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>)}
+          {iconBtn('Удалить папку', () => void deleteFolder(node),
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></svg>)}
           <span style={{ fontSize: 10, color: C.textMuted }}>{countNotes(node)}</span>
         </button>
         {!isCollapsed && (

@@ -38,7 +38,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const [mode, setMode] = useState<Mode>('notes');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [showNew, setShowNew] = useState(false);
+  // Диалог создания: null — закрыт; поля — préfill (создание из «+» на папке)
+  const [newDialog, setNewDialog] = useState<{ source?: string; folder?: string } | null>(null);
   const [mobileView, setMobileView] = useState<'list' | 'note'>('list');
   // Фильтр источников для графа (null = все), с сохранением между заходами
   const [hiddenSources, setHiddenSources] = useState<Set<string>>(() => {
@@ -183,7 +184,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
       <button onClick={openDaily} title="Дневниковая заметка на сегодня" style={{ ...newBtn, background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}` }}>
         <IconCalendarDay />{!isMobile && 'Сегодня'}
       </button>
-      <button onClick={() => setShowNew(true)} style={newBtn}>
+      <button onClick={() => setNewDialog({})} style={newBtn}>
         <IconPlus />{!isMobile && 'Новая'}
       </button>
     </div>
@@ -193,7 +194,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const listPane = showSemantic
     ? <SemanticResults hits={semanticHits} selectedId={selectedId} onSelect={selectNote} />
     : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote}
-        onMoved={(oldId, newId) => { if (selectedId === oldId) setSelectedId(newId); }} />;
+        onMoved={(oldId, newId) => { if (selectedId === oldId) setSelectedId(newId); }}
+        onCreateInFolder={(source, folder) => setNewDialog({ source, folder })}
+        onDeleted={ids => { if (selectedId && ids.includes(selectedId)) setSelectedId(null); }} />;
 
   const notesContent = isMobile ? (
     mobileView === 'list' || !selectedId
@@ -216,7 +219,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <EmptyState icon={<IconGraph />} title="Заметки"
                 subtitle={notes.length ? 'Выбери заметку слева или создай новую' : 'Создай первую заметку или попроси Claude законспектировать разговор'}
-                action={<button onClick={() => setShowNew(true)} style={newBtn}><IconPlus />Новая заметка</button>} />
+                action={<button onClick={() => setNewDialog({})} style={newBtn}><IconPlus />Новая заметка</button>} />
             </div>}
       </div>
     </div>
@@ -278,7 +281,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
       <div style={{ flex: 1, minHeight: 0 }}>
         {mode === 'notes' ? notesContent : graphContent}
       </div>
-      {showNew && <NewNoteDialog onClose={() => setShowNew(false)} onCreated={id => { setShowNew(false); bumpNotes(); selectNote(id); }} />}
+      {newDialog && <NewNoteDialog defaults={newDialog} onClose={() => setNewDialog(null)} onCreated={id => { setNewDialog(null); bumpNotes(); selectNote(id); }} />}
     </div>
   );
 }
@@ -296,11 +299,15 @@ const backBar: React.CSSProperties = {
 
 // --- Диалог создания заметки ---
 
-function NewNoteDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+function NewNoteDialog({ defaults, onClose, onCreated }: {
+  defaults?: { source?: string; folder?: string };
+  onClose: () => void;
+  onCreated: (id: string) => void;
+}) {
   const notes = useNotes();
   const [title, setTitle] = useState('');
-  const [source, setSource] = useState('personal');
-  const [folder, setFolder] = useState('');
+  const [source, setSource] = useState(defaults?.source ?? 'personal');
+  const [folder, setFolder] = useState(defaults?.folder ?? '');
   const [sources, setSources] = useState<NoteSource[]>([{ key: 'personal', label: 'Личный' }]);
   const [templates, setTemplates] = useState<NoteTemplate[]>([]);
   const [templateId, setTemplateId] = useState('');

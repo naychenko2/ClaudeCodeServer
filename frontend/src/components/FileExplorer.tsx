@@ -19,6 +19,7 @@ function isKnowledgeIndexable(filename: string): boolean {
   return KB_TEXT_EXT.has(ext) || KB_FILE_EXT.has(ext);
 }
 import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
+import { bumpNotes } from '../lib/notes';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
@@ -74,6 +75,15 @@ const loadSortMode = (): FileSortMode => {
 
 // Папка заметок (vault проекта) в корне дерева — закреплена первой
 const isNotesRoot = (e: FileEntry) => e.isDirectory && normPath(e.path) === 'notes';
+
+// Путь внутри vault заметок — файловые операции с ним должны обновить раздел «Заметки»
+const inNotesVault = (p?: string | null) => {
+  const n = normPath(p);
+  return n === 'notes' || n.startsWith('notes/');
+};
+const touchNotesStore = (...paths: (string | undefined | null)[]) => {
+  if (paths.some(inNotesVault)) bumpNotes();
+};
 
 // Единая сортировка записей: «Заметки» первой, папки сверху, затем по имени
 // (без учёта регистра) или по дате изменения (в выбранном направлении)
@@ -572,6 +582,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const handleCreateFile = async () => {
     const path = createInDir ? `${createInDir}/${newFileName}` : newFileName;
     await api.files.createFile(project.id, path);
+    touchNotesStore(path);
     setShowCreateFile(false);
     setNewFileName('');
     await invalidateDir(createInDir);
@@ -597,6 +608,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     setUploadError(null);
     try {
       await Promise.all(Array.from(fileList).map(f => api.files.upload(project.id, f, dir)));
+      touchNotesStore(dir);
       await invalidateDir(dir);
       if (dir && !isMobile) setExpanded(prev => new Set(prev).add(dir));
     } catch (e) {
@@ -668,6 +680,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     const newPath = parentDir ? `${parentDir}/${newName}` : newName;
     try {
       await api.files.rename(project.id, renamingPath, newPath);
+      touchNotesStore(renamingPath, newPath);
       setRenamingPath(null);
       setRenameValue('');
       await invalidateDir(parentDir);
@@ -709,6 +722,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     const [parentDir] = splitPath(entry.path);
     try {
       await api.files.delete(project.id, entry.path);
+      touchNotesStore(entry.path);
       setDeleteConfirm(null);
       await invalidateDir(parentDir);
     } catch {
@@ -760,6 +774,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
     try {
       await api.files.rename(project.id, dp, targetPath);
+      touchNotesStore(dp, targetPath);
       await Promise.all([
         invalidateDir(sourceParent),
         invalidateDir(targetEntry.path),
@@ -780,6 +795,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     const [sourceParent] = splitPath(entry.path);
     try {
       await api.files.rename(project.id, entry.path, targetPath);
+      touchNotesStore(entry.path, targetPath);
       setShowMoveModal(false);
       setMovingEntry(null);
       await Promise.all([invalidateDir(sourceParent), invalidateDir(targetDir)]);

@@ -27,12 +27,18 @@ function joinUserGroup() {
   if (uid) joinUser(uid).catch(() => {});
 }
 
+let _fileChangeTimer: number | null = null;
+
 function wireRealtime() {
   if (_realtimeWired) return;
   _realtimeWired = true;
   onMessage(msg => {
-    if (msg.type !== 'notes_changed') return;
-    void reloadNotes();
+    if (msg.type === 'notes_changed') { void reloadNotes(); return; }
+    // Правки файлов vault мимо notes-API (Claude в ходе сессии и т.п.) — дебаунс-перечитка
+    if (msg.type === 'file_changed' && /(^|[\\/])notes[\\/]/i.test(msg.path)) {
+      if (_fileChangeTimer) window.clearTimeout(_fileChangeTimer);
+      _fileChangeTimer = window.setTimeout(() => { _fileChangeTimer = null; void reloadNotes(); }, 800);
+    }
   });
   onReconnected(() => { joinUserGroup(); void reloadNotes(); });
 }

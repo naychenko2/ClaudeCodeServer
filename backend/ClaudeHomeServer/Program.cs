@@ -52,6 +52,8 @@ builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();
 builder.Services.AddSingleton<NotesService>();
 builder.Services.AddSingleton<NotesKnowledgeService>();
+builder.Services.AddSingleton<NotesAiService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
 builder.Services.AddSingleton<ChangelogService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();

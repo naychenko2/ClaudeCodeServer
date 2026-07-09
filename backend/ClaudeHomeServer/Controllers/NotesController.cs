@@ -18,12 +18,15 @@ public class NotesController : ControllerBase
 {
     private readonly NotesService _notes;
     private readonly NotesKnowledgeService _kb;
+    private readonly NotesAiService _ai;
     private readonly IHubContext<SessionHub> _hub;
 
-    public NotesController(NotesService notes, NotesKnowledgeService kb, IHubContext<SessionHub> hub)
+    public NotesController(NotesService notes, NotesKnowledgeService kb, NotesAiService ai,
+        IHubContext<SessionHub> hub)
     {
         _notes = notes;
         _kb = kb;
+        _ai = ai;
         _hub = hub;
     }
 
@@ -124,6 +127,37 @@ public class NotesController : ControllerBase
         var note = _notes.GetOrCreateDaily(UserId, req.Date);
         await Broadcast("updated", note.Id);
         return Ok(note);
+    }
+
+    // ✨ Предложить связи с другими заметками (one-shot AI)
+    [HttpPost("{id}/suggest-links")]
+    public async Task<ActionResult> SuggestLinks(string id, CancellationToken ct)
+    {
+        try { return Ok(await _ai.SuggestLinksAsync(UserId, id, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
+
+    // ✨ Предложить теги (one-shot AI)
+    [HttpPost("{id}/suggest-tags")]
+    public async Task<ActionResult> SuggestTags(string id, CancellationToken ct)
+    {
+        try { return Ok(await _ai.SuggestTagsAsync(UserId, id, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
+
+    // ✨ Конспект дня — секция «Итоги дня» в daily note (one-shot AI)
+    [HttpPost("daily/summary")]
+    public async Task<ActionResult<NoteDetail>> DailySummary([FromBody] DailyNoteRequest req, CancellationToken ct)
+    {
+        try
+        {
+            var note = await _ai.DailySummaryAsync(UserId, req.Date, ct);
+            await Broadcast("updated", note.Id);
+            return Ok(note);
+        }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
 
     // «Связать» несвязанное упоминание: первое вхождение заголовка → [[…]].

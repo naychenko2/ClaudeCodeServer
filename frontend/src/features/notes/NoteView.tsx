@@ -11,7 +11,7 @@ import { IconButton } from '../../components/ui';
 import { NotesGraph } from './NotesGraph';
 import {
   CollapseGroup, SourceBadge, SourceDot,
-  IconEye, IconPencil, IconChat, IconBacklink, IconOutlink, IconTrash, IconGraph, IconLink,
+  IconEye, IconPencil, IconChat, IconBacklink, IconOutlink, IconTrash, IconGraph, IconLink, IconSparkle,
 } from './shared';
 
 // Просмотр и правка одной заметки + связи (backlinks, упоминания, локальный граф).
@@ -53,6 +53,56 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       const r = await api.notes.resolve(name, anchor);
       return { title: r.note.title, content: r.fragment ?? r.note.content };
     } catch { return null; }
+  };
+
+  // ✨ AI-помощь: предложение связей, тегов, конспект дня
+  const [aiLinks, setAiLinks] = useState<{ title: string; why: string }[] | 'loading' | null>(null);
+  const [aiTags, setAiTags] = useState<string[] | 'loading' | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const isDaily = note?.source === 'personal' && note.path.startsWith('Journal/');
+
+  const suggestLinks = () => {
+    if (!note) return;
+    setAiLinks('loading');
+    api.notes.suggestLinks(note.id)
+      .then(l => setAiLinks(l))
+      .catch(() => setAiLinks([]));
+  };
+  const suggestTags = () => {
+    if (!note) return;
+    setAiTags('loading');
+    api.notes.suggestTags(note.id)
+      .then(t => setAiTags(t))
+      .catch(() => setAiTags([]));
+  };
+  // Принять связь: секция «## Связанное» с [[…]] в конце заметки
+  const acceptLink = async (title: string) => {
+    if (!note) return;
+    const hasSection = /(^|\n)## Связанное\s*\n/.test(note.content);
+    const content = hasSection
+      ? note.content.trimEnd() + `\n- [[${title}]]\n`
+      : note.content.trimEnd() + `\n\n## Связанное\n\n- [[${title}]]\n`;
+    const updated = await api.notes.update(note.id, { content });
+    setNote(updated);
+    setAiLinks(prev => Array.isArray(prev) ? prev.filter(l => l.title !== title) : prev);
+    bumpNotes();
+  };
+  // Принять тег: inline #тег в конец заметки
+  const acceptTag = async (tag: string) => {
+    if (!note) return;
+    const updated = await api.notes.update(note.id, { content: note.content.trimEnd() + ` #${tag}\n` });
+    setNote(updated);
+    setAiTags(prev => Array.isArray(prev) ? prev.filter(t => t !== tag) : prev);
+    bumpNotes();
+  };
+  // Конспект дня (только в daily-заметке)
+  const makeDailySummary = () => {
+    if (!note) return;
+    setAiBusy(true);
+    const day = note.path.replace(/^Journal\//, '').replace(/\.md$/, '');
+    api.notes.dailySummary(day)
+      .then(n => { setNote(n); bumpNotes(); })
+      .finally(() => setAiBusy(false));
   };
 
   const save = async () => {
@@ -107,19 +157,54 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           <IconButton title={editing ? 'Просмотр' : 'Читать'} active={!editing} onClick={() => setEditing(false)}><IconEye /></IconButton>
           <IconButton title="Править" active={editing} onClick={startEdit}><IconPencil /></IconButton>
           {onAskClaude && <IconButton title="Спросить Claude про это" onClick={() => onAskClaude(note)}><IconChat /></IconButton>}
+          {!editing && <IconButton title="Предложить связи (AI)" tone="accent" onClick={suggestLinks}><IconSparkle /></IconButton>}
+          {isDaily && !editing && (
+            <IconButton title="Конспект дня (AI)" tone="accent" onClick={makeDailySummary} disabled={aiBusy}><IconGraph /></IconButton>
+          )}
           <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>
         </div>
       </div>
 
       {/* Тело */}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 18px 24px' }}>
-        {!editing && note.tags.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+        {!editing && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12, alignItems: 'center' }}>
             {note.tags.map(t => (
               <button key={t} onClick={() => onTag?.(t)} title={`Заметки с тегом ${t}`}
                 style={{ fontSize: 11.5, fontWeight: 500, color: C.accent, background: C.accentLight, border: 'none', borderRadius: R.sm, padding: '2px 8px', cursor: onTag ? 'pointer' : 'default', fontFamily: FONT.sans }}>
                 #{t}
               </button>
+            ))}
+            <button onClick={suggestTags} title="Предложить теги (AI)"
+              style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: C.textMuted, background: 'none', border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 7px', cursor: 'pointer', fontFamily: FONT.sans }}>
+              <IconSparkle />{aiTags === 'loading' ? '…' : 'теги'}
+            </button>
+            {Array.isArray(aiTags) && aiTags.map(t => (
+              <button key={t} onClick={() => void acceptTag(t)} title="Добавить тег"
+                style={{ fontSize: 11.5, fontWeight: 500, color: C.textSecondary, background: C.bgSelected, border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
+                +#{t}
+              </button>
+            ))}
+          </div>
+        )}
+        {!editing && aiLinks != null && (
+          <div style={{ marginBottom: 12, padding: '9px 12px', background: C.accentLight, borderRadius: R.lg, border: `1px solid ${C.accentMuted}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, color: C.textSecondary, marginBottom: aiLinks === 'loading' || aiLinks.length === 0 ? 0 : 8 }}>
+              <IconSparkle />
+              {aiLinks === 'loading' ? 'Ищу связи…' : aiLinks.length === 0 ? 'Подходящих связей не нашлось' : 'Предложенные связи'}
+              <button onClick={() => setAiLinks(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 13 }}>✕</button>
+            </div>
+            {Array.isArray(aiLinks) && aiLinks.map(l => (
+              <div key={l.title} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
+                <span style={{ flex: 1, minWidth: 0, fontSize: 12.5 }}>
+                  <span style={{ fontWeight: 500, color: C.textPrimary }}>{l.title}</span>
+                  <span style={{ color: C.textMuted }}> — {l.why}</span>
+                </span>
+                <button onClick={() => void acceptLink(l.title)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 'none', fontSize: 11, fontWeight: 500, color: C.accent, background: C.bgWhite, border: `1px solid ${C.accentMuted}`, borderRadius: R.sm, padding: '3px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
+                  <IconLink />Связать
+                </button>
+              </div>
             ))}
           </div>
         )}

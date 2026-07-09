@@ -181,6 +181,13 @@ export const api = {
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/link-mention`, {
         method: 'POST', body: JSON.stringify({ targetTitle }),
       }),
+    // ✨ one-shot AI: связи, теги, конспект дня
+    suggestLinks: (id: string) =>
+      request<{ title: string; why: string }[]>(`/notes/${encodeURIComponent(id)}/suggest-links`, { method: 'POST' }),
+    suggestTags: (id: string) =>
+      request<string[]>(`/notes/${encodeURIComponent(id)}/suggest-tags`, { method: 'POST' }),
+    dailySummary: (date: string) =>
+      request<NoteDetail>('/notes/daily/summary', { method: 'POST', body: JSON.stringify({ date }) }),
     get: (id: string) => request<NoteDetail>(`/notes/${encodeURIComponent(id)}`),
     backlinks: (id: string) => request<NoteBacklink[]>(`/notes/${encodeURIComponent(id)}/backlinks`),
     create: (dto: CreateNoteDto) =>

@@ -208,6 +208,12 @@ export const api = {
       request<void>(`/notes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   },
 
+  // Утренний бриф (флаг daily-briefing): собрать план дня в дневник
+  briefing: {
+    today: (date?: string) =>
+      request<NoteDetail>('/briefing/today', { method: 'POST', body: JSON.stringify({ date: date ?? null }) }),
+  },
+
   sessions: {
     list: (projectId: string) => request<Session[]>(`/projects/${projectId}/sessions`),
     create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string) =>

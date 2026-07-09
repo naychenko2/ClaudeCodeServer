@@ -15,6 +15,7 @@ public class TaskSchedulerService(
     IHubContext<SessionHub> hub,
     PushService push,
     TaskExecutionService executor,
+    DailyBriefingService briefing,
     ILogger<TaskSchedulerService> log) : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
@@ -48,6 +49,8 @@ public class TaskSchedulerService(
                 await ProcessReminderAsync(task, tz, nowUtc);
                 await ProcessClaudeAutoStartAsync(task, tz, nowUtc);
             }
+            // Утренний бриф раз в день в таймзоне юзера (быстрый выход, если не время/выключено)
+            await briefing.MaybeRunScheduledAsync(user, tz, nowUtc);
         }
     }
 

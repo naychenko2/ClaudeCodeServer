@@ -26,6 +26,11 @@ public static class FeatureFlagKeys
     public const string NotesSessionSummary = "notes-session-summary";
     public const string NotesAutoRecall = "notes-auto-recall";
     public const string NotesMemorySource = "notes-memory-source";
+    public const string DailyBriefing = "daily-briefing";
+    public const string NotesTaskSync = "notes-task-sync";
+    public const string TaskExecContext = "task-exec-context";
+    public const string ChatExtractTasks = "chat-extract-tasks";
+    public const string UnifiedSearch = "unified-search";
 }
 
 /// <summary>
@@ -78,6 +83,16 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.NotesMemorySource,
             Title: "Память Claude в заметках",
             Description: "Файлы памяти Claude Code по проектам показываются как источник заметок (только чтение): видно, что Claude помнит.",
+            Default: false,
+            Stage: "dev"),
+
+        // Утренний бриф — агент собирает просроченные/сегодняшние задачи, изменённые
+        // заметки и git-активность за сутки, прогоняет через LLM и пишет план дня
+        // в дневниковую заметку (## Утренний бриф) + push. On-demand и по расписанию утром.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.DailyBriefing,
+            Title: "Утренний бриф",
+            Description: "Агент утром собирает задачи на день, свежие заметки и активность по проектам в короткий план дня — пишет его в дневник и присылает уведомление.",
             Default: false,
             Stage: "dev"),
     ];

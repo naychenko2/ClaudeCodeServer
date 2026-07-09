@@ -104,6 +104,15 @@ public static class FeatureFlagCatalog
             Description: "Чекбоксы `- [ ]` в заметках можно превратить в задачи с датой и повтором. Отметка выполнения в заметке и в календаре синхронизируется.",
             Default: false,
             Stage: "dev"),
+
+        // Claude-исполнитель задач получает в контекст семантически близкие заметки
+        // (нужен Dify): выполняет задачу, опираясь на базу знаний, а не вслепую.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.TaskExecContext,
+            Title: "Заметки в контексте исполнителя",
+            Description: "Когда Claude берёт задачу в работу, в постановку подмешиваются выдержки из семантически близких заметок — исполнение с опорой на базу знаний.",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

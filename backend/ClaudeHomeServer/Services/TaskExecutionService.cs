@@ -16,6 +16,8 @@ public class TaskExecutionService
     private readonly SessionManager _sessions;
     private readonly IHubContext<SessionHub> _hub;
     private readonly PushService _push;
+    private readonly NotesKnowledgeService _kb;
+    private readonly FeatureFlagService _flags;
     private readonly ILogger<TaskExecutionService> _log;
     // Модель сессии-исполнителя (Tasks:ExecutorModel): null → дефолт Claude;
     // deepseek-модель тоже валидна — задачи доступны ей через MCP tasks-server
@@ -23,13 +25,16 @@ public class TaskExecutionService
 
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions,
-        IHubContext<SessionHub> hub, PushService push, ILogger<TaskExecutionService> log,
-        IConfiguration config)
+        IHubContext<SessionHub> hub, PushService push,
+        NotesKnowledgeService kb, FeatureFlagService flags,
+        ILogger<TaskExecutionService> log, IConfiguration config)
     {
         _tasks = tasks;
         _sessions = sessions;
         _hub = hub;
         _push = push;
+        _kb = kb;
+        _flags = flags;
         _log = log;
         _executorModel = config["Tasks:ExecutorModel"];
         _sessions.OnSessionMessage += OnSessionMessageAsync;
@@ -62,7 +67,11 @@ public class TaskExecutionService
             ?? throw new InvalidOperationException("Задача удалена");
         await _hub.BroadcastTaskChangedAsync(task.OwnerId, "updated", updated);
 
-        await _sessions.SendMessageAsync(session.Id, BuildPrompt(updated), []);
+        var prompt = BuildPrompt(updated);
+        // Обогащение контекста семантически близкими заметками (флаг task-exec-context)
+        if (_flags.IsEnabled(updated.OwnerId!, FeatureFlagKeys.TaskExecContext))
+            prompt += await BuildNotesContextAsync(updated);
+        await _sessions.SendMessageAsync(session.Id, prompt, []);
 
         if (auto)
             await NotifyAsync(updated, new NotificationMessage(
@@ -109,6 +118,37 @@ public class TaskExecutionService
         sb.AppendLine("- Когда всё сделано и проверено — заверши задачу через tasks_complete.");
         sb.AppendLine("- Если выполнить невозможно — не завершай задачу, а кратко опиши причину.");
         sb.AppendLine("- В конце подведи короткий итог сделанного.");
+        return sb.ToString();
+    }
+
+    // Блок «релевантные заметки» — семантический поиск по базе знаний владельца
+    // (флаг task-exec-context). Тихо пусто, если Dify не настроен или ничего не нашлось.
+    private async Task<string> BuildNotesContextAsync(TaskItem task)
+    {
+        if (!_kb.Available || task.OwnerId is null) return "";
+        var query = string.IsNullOrWhiteSpace(task.Description)
+            ? task.Title
+            : $"{task.Title}\n{task.Description}";
+
+        IReadOnlyList<NoteSemanticHit> hits;
+        try { hits = await _kb.SearchAsync(task.OwnerId, query, topK: 5); }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Не удалось получить контекст заметок для задачи {TaskId}", task.Id);
+            return "";
+        }
+        if (hits.Count == 0) return "";
+
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("## Возможно релевантные заметки из базы знаний");
+        sb.AppendLine("(семантически близкие к задаче выдержки — используй как контекст, если полезно; не полагайся слепо)");
+        foreach (var h in hits)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"### {h.Title} ({h.SourceLabel})");
+            sb.AppendLine(h.Snippet.Trim());
+        }
         return sb.ToString();
     }
 

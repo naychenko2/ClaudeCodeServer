@@ -7,7 +7,7 @@ import { NewNoteDialog } from './NewNoteDialog';
 import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes } from '../../lib/notes';
-import { parseHash } from '../../lib/nav';
+import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
 import { NotesList } from './NotesList';
 import { NoteView } from './NoteView';
 import { NotesGraph, type GraphStats } from './NotesGraph';
@@ -58,17 +58,30 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     if (t?.screen === 'notes' && t.noteId) { setSelectedId(t.noteId); setMobileView('note'); }
   }, []);
 
+  // Back/forward браузера внутри вкладки «Заметки» — синхронизируем открытую заметку из истории
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      const s = e.state as NavSnapshot | null;
+      if (s?.screen === 'notes') {
+        setSelectedId(s.note ?? null);
+        setMobileView(s.note ? 'note' : 'list');
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
   // Открытие заметки по заголовку (из [[wikilink]] в файлах/чате). Заголовок в
   // sessionStorage; ждём загрузки списка (deps: notes) и открываем по совпадению.
   useEffect(() => {
     const consume = () => {
       // По id (из графа сайдбара FileViewer) — приоритетнее
       const id = sessionStorage.getItem('cc_pending_note_id');
-      if (id) { sessionStorage.removeItem('cc_pending_note_id'); setSelectedId(id); setMobileView('note'); return; }
+      if (id) { sessionStorage.removeItem('cc_pending_note_id'); setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id }); return; }
       const title = sessionStorage.getItem('cc_pending_note_title');
       if (!title) return;
       const n = notes.find(x => x.title.trim().toLowerCase() === title.trim().toLowerCase());
-      if (n) { sessionStorage.removeItem('cc_pending_note_title'); setSelectedId(n.id); setMobileView('note'); }
+      if (n) { sessionStorage.removeItem('cc_pending_note_title'); setSelectedId(n.id); setMobileView('note'); navPush({ screen: 'notes', note: n.id }); }
     };
     consume();
     window.addEventListener('cc-open-note', consume);
@@ -110,7 +123,11 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     return [...s].sort((a, b) => a.localeCompare(b, 'ru'));
   }, [notes]);
 
-  const selectNote = (id: string) => { setSelectedId(id); setMobileView('note'); };
+  const selectNote = (id: string) => { setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id }); };
+
+  // Возврат к списку (удаление/кнопка «назад» на мобилке): снимаем выбор и
+  // откатываем запись истории с note к списку (детерминированно, как в «Чатах»).
+  const clearNote = () => { setSelectedId(null); setMobileView('list'); if (getNav()?.note) navReplace({ screen: 'notes' }); };
 
   // Клик по [[wikilink]]: найти заметку по заголовку, иначе предложить создать
   const onWikilink = (target: string) => {
@@ -210,12 +227,12 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const listPane = showSemantic
     ? <SemanticResults hits={semanticHits} selectedId={selectedId} onSelect={selectNote} />
     : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote} isMobile={isMobile}
-        onMoved={(oldId, newId) => { if (selectedId === oldId) setSelectedId(newId); }}
+        onMoved={(oldId, newId) => { if (selectedId === oldId) { setSelectedId(newId); navReplace({ screen: 'notes', note: newId }); } }}
         onCreateInFolder={(source, folder) => setNewDialog({ source, folder })}
-        onDeleted={ids => { if (selectedId && ids.includes(selectedId)) setSelectedId(null); }}
+        onDeleted={ids => { if (selectedId && ids.includes(selectedId)) clearNote(); }}
         onIdsRemapped={map => {
           const hit = selectedId && map.find(m => m.oldId === selectedId);
-          if (hit) setSelectedId(hit.newId);
+          if (hit) { setSelectedId(hit.newId); navReplace({ screen: 'notes', note: hit.newId }); }
         }} />;
 
   // Сайдбар целиком: управление сверху, ниже — список (режим «Заметки») или фильтры («Граф»)
@@ -237,8 +254,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     : selectedId
       ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink}
           onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} isMobile={isMobile}
-          onBack={isMobile ? () => setMobileView('list') : undefined}
-          onDeleted={() => { setSelectedId(null); setMobileView('list'); }} />
+          onBack={isMobile ? clearNote : undefined}
+          onDeleted={clearNote} />
       : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <EmptyState icon={<IconNotes />} title="Заметки"
             subtitle={notes.length ? 'Выбери заметку слева или создай новую' : 'Создай первую заметку или попроси Claude законспектировать разговор'}

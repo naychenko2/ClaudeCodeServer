@@ -163,7 +163,13 @@ export default function App() {
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
-    navReplace({ screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : 'projects' })
+    navReplace(
+      hubTab === 'chats' ? { screen: 'chats' }
+      : hubTab === 'calendar' ? { screen: 'calendar' }
+      // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
+      : hubTab === 'notes' ? { screen: 'notes', note: initialHash?.screen === 'notes' ? initialHash.noteId ?? null : null }
+      : { screen: 'projects' }
+    )
     // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
     // проектом — при hubTab==='chats' проект «спит» и в истории не отражается.
     // Если hash-диплинк указывает на ДРУГОЙ проект — восстановленный не пушим,

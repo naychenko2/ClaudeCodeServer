@@ -252,7 +252,8 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
         }}
         style={{
           display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
-          padding: `2px 6px 2px ${24 + depth * 14}px`, borderRadius: R.sm, marginBottom: 1,
+          minHeight: 26, boxSizing: 'border-box',
+          padding: `0 6px 0 ${24 + depth * 14}px`, borderRadius: R.sm, marginBottom: 1,
           background: active ? C.accentMuted : (hovered && !isMobile ? C.bgSelected : 'transparent'),
           WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none',
         }}
@@ -260,7 +261,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
         <span style={{
           flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: 12.5,
           color: active ? C.textHeading : C.textSecondary, fontWeight: active ? 500 : 400,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '3px 0',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{n.title}</span>
         {/* Действия — только при ховере на десктопе (на мобиле — long-press меню) */}
         {!isMobile && hovered && (
@@ -353,7 +354,8 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           {...dropProps(source, node.path)}
           style={{
             cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
-            padding: `1px 6px 1px ${10 + depth * 14}px`, borderRadius: R.sm, fontFamily: FONT.sans,
+            minHeight: 26, boxSizing: 'border-box',
+            padding: `0 6px 0 ${10 + depth * 14}px`, borderRadius: R.sm, fontFamily: FONT.sans,
             fontSize: 12, fontWeight: 500, color: C.textSecondary,
             background: isDrop ? C.accentMuted : (hovered && !isMobile ? C.bgSelected : 'transparent'),
             boxShadow: isDrop ? `inset 0 0 0 1.5px ${C.accent}` : 'none',
@@ -362,7 +364,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
         >
           <span style={{ fontSize: 8, color: C.textMuted, width: 8 }}>{isCollapsed ? '▸' : '▾'}</span>
           <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
-          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '3px 0' }}>{node.name}</span>
+          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
           {/* Действия — только при ховере на десктопе; иначе счётчик (на мобиле — long-press) */}
           {!isMobile && hovered ? (
             <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>

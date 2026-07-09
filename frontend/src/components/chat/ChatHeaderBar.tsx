@@ -369,7 +369,7 @@ function ContextAmount({ estimate, isCompacting, isMobile }: {
 
 // Тело поповера контекста (детали заполнения + «Сжать контекст» + «Настроить пороги»).
 // Вынесено, чтобы переиспользовать в отдельном ContextBadge и в объединённом чипе.
-function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, assistantName = 'Claude' }: {
+function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, assistantName = 'Ассистент' }: {
   estimate: ContextEstimate; isWaiting: boolean; isCompacting: boolean;
   canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean;
   assistantName?: string;

@@ -146,7 +146,7 @@ export function FeatureFlagsModal({ onClose }: Props) {
               Push-уведомления на этом устройстве
             </div>
             <div style={{ fontSize: 12.5, lineHeight: 1.45, color: C.textSecondary }}>
-              Напоминания о задачах и события Claude приходят, даже когда вкладка закрыта.
+              Напоминания о задачах и события ассистента приходят, даже когда вкладка закрыта.
               Настройка действует только для этого браузера.
             </div>
             {pushError && (

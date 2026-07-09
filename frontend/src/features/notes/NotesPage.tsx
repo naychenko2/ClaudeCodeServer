@@ -258,7 +258,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           onDeleted={clearNote} />
       : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <EmptyState icon={<IconNotes />} title="Заметки"
-            subtitle={notes.length ? 'Выбери заметку слева или создай новую' : 'Создай первую заметку или попроси Claude законспектировать разговор'}
+            subtitle={notes.length ? 'Выбери заметку слева или создай новую' : 'Создай первую заметку или попроси ассистента законспектировать разговор'}
             action={<button onClick={() => setNewDialog({})} style={newBtn}><IconPlus />Новая заметка</button>} />
         </div>;
 

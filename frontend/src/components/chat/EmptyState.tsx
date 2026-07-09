@@ -1,6 +1,7 @@
 import type { Session } from '../../types';
 import { C } from '../../lib/design';
 import { NewChatSetup } from './NewChatSetup';
+import { useAssistantName } from './contexts';
 
 // Чипы-подсказки для empty state проектного чата
 const HINTS = ['Объясни структуру проекта', 'Найди и почини падающие тесты'];
@@ -18,6 +19,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
   onSessionUpdated?: (s: Session) => void;
   isMobile?: boolean;
 }) {
+  const asstName = useAssistantName();
   return (
           <div style={{
             flex: 1, display: 'flex', flexDirection: 'column',
@@ -73,7 +75,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
 
                 {/* Подзаголовок */}
                 <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center', maxWidth: 260 }}>
-                  Запустите /init, чтобы Claude изучил проект и создал CLAUDE.md
+                  Запустите /init, чтобы {asstName} изучил проект и создал CLAUDE.md
                 </div>
 
                 {/* Кнопка CTA */}

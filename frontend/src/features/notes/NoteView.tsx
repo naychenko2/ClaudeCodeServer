@@ -235,7 +235,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             </>
           ) : (
             <>
-              {onAskClaude && <IconButton title="Спросить Claude про это" onClick={() => onAskClaude(note)}><IconChat /></IconButton>}
+              {onAskClaude && <IconButton title="Спросить ассистента про это" onClick={() => onAskClaude(note)}><IconChat /></IconButton>}
               <IconButton title="Переместить…" onClick={openMove}><IconFolderMove /></IconButton>
               <IconButton title="Предложить связи (AI)" tone="accent" onClick={suggestLinks}><IconSparkle /></IconButton>
               {isDaily && (

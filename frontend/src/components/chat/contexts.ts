@@ -5,7 +5,7 @@ export const ChatProjectContext = createContext<{ id: string; rootPath: string }
 
 // Имя ассистента сессии (Claude | DeepSeek | GLM | …) — для строк в UI, чтобы не тащить проп
 // через все вложенные компоненты ленты. Провайдится в ChatPanel по session.model.
-export const AssistantNameContext = createContext<string>('Claude');
+export const AssistantNameContext = createContext<string>('Ассистент');
 export function useAssistantName(): string {
   return useContext(AssistantNameContext);
 }

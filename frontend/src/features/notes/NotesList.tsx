@@ -396,7 +396,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
   if (notes.length === 0 && folders.length === 0)
     return (
       <div style={{ padding: '20px 12px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans, lineHeight: 1.6 }}>
-        Пока нет заметок. Создай первую или попроси Claude законспектировать что-нибудь.
+        Пока нет заметок. Создай первую или попроси ассистента законспектировать что-нибудь.
       </div>
     );
 

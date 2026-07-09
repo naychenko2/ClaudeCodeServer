@@ -7,10 +7,10 @@ import { lazy, Suspense } from 'react';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
 const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
-import { IconButton } from '../../components/ui';
+import { IconButton, Splitter } from '../../components/ui';
 import { NoteConnections } from './NoteConnections';
 import {
-  SourceBadge,
+  SourceBadge, usePanelWidth,
   IconEye, IconPencil, IconChat, IconTrash, IconGraph, IconLink, IconSparkle,
 } from './shared';
 
@@ -27,6 +27,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   isMobile?: boolean;
 }) {
   const version = useNotesVersion();
+  // Перетаскиваемая ширина сайдбара связей (справа: тянем влево — растёт)
+  const [connWidth, connDragging, startConnDrag] = usePanelWidth('cc_notes_conn_width', 280, 230, 460, true);
   const [note, setNote] = useState<NoteDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -242,16 +244,18 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         )}
       </div>
 
-      {/* Десктоп: сайдбар связей справа */}
+      {/* Десктоп: сайдбар связей справа (ширина перетаскивается) */}
       {!editing && !isMobile && (
-        <aside style={{
-          width: 280, flex: 'none', overflowY: 'auto',
-          borderLeft: `1px solid ${C.border}`, background: C.bgPanel,
-          padding: '12px 12px 24px',
-        }}>
-          <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
-            onWikilink={onWikilink} onLinkMention={linkMention} />
-        </aside>
+        <>
+          <Splitter active={connDragging} onMouseDown={startConnDrag} />
+          <aside style={{
+            width: connWidth, flex: 'none', overflowY: 'auto',
+            background: C.bgPanel, padding: '12px 12px 24px', boxSizing: 'border-box',
+          }}>
+            <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
+              onWikilink={onWikilink} onLinkMention={linkMention} />
+          </aside>
+        </>
       )}
       </div>
     </div>

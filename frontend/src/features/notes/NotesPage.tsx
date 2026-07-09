@@ -12,7 +12,8 @@ import { NotesList } from './NotesList';
 import { NoteView } from './NoteView';
 import { NotesGraph } from './NotesGraph';
 import { EmptyState } from '../../components/EmptyState';
-import { IconSearch, IconPlus, IconBack, IconGraph, IconCalendarDay, SourceDot } from './shared';
+import { Splitter } from '../../components/ui';
+import { IconSearch, IconPlus, IconBack, IconGraph, IconCalendarDay, SourceDot, usePanelWidth } from './shared';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -49,6 +50,10 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   }, [hiddenSources]);
   // Фильтр графа по тегам (пусто = все); теги собираются из заметок
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+
+  // Перетаскиваемые ширины сайдбаров (персист, как в Workspace)
+  const [listWidth, listDragging, startListDrag] = usePanelWidth('cc_notes_list_width', 250, 200, 420);
+  const [railWidth, railDragging, startRailDrag] = usePanelWidth('cc_notes_rail_width', 180, 150, 320);
 
   useEffect(() => { void ensureNotesLoaded(); }, []);
 
@@ -200,9 +205,10 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         </div>
   ) : (
     <div style={{ height: '100%', display: 'flex' }}>
-      <div style={{ width: 250, borderRight: `1px solid ${C.border}`, overflowY: 'auto', flex: 'none', background: C.bgPanel }}>
+      <div style={{ width: listWidth, overflowY: 'auto', flex: 'none', background: C.bgPanel }}>
         {listPane}
       </div>
+      <Splitter active={listDragging} onMouseDown={startListDrag} />
       <div style={{ flex: 1, minWidth: 0 }}>
         {selectedId
           ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink} onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} onDeleted={() => setSelectedId(null)} />
@@ -219,7 +225,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const graphContent = (
     <div style={{ height: '100%', display: 'flex' }}>
       {!isMobile && (
-        <div style={{ width: 180, borderRight: `1px solid ${C.border}`, padding: '14px 12px', flex: 'none', background: C.bgPanel }}>
+        <div style={{ width: railWidth, padding: '14px 12px', flex: 'none', background: C.bgPanel, overflowY: 'auto', boxSizing: 'border-box' }}>
           <div style={{ fontSize: 10.5, letterSpacing: '.05em', textTransform: 'uppercase', color: C.textMuted, fontWeight: 600, marginBottom: 10 }}>Источники</div>
           {sources.map(s => {
             const on = !hiddenSources.has(s.key);
@@ -256,6 +262,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           </div>
         </div>
       )}
+      {!isMobile && <Splitter active={railDragging} onMouseDown={startRailDrag} />}
       <div style={{ flex: 1, minWidth: 0 }}>
         <NotesGraph sourceFilter={sourceFilter} selectedId={selectedId} onSelectNode={selectNote}
           maxNodes={isMobile ? 40 : undefined} tagFilter={selectedTags.size ? selectedTags : null} />

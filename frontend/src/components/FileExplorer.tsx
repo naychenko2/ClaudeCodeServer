@@ -804,12 +804,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     }
   }, [project.id, invalidateDir]);
 
-  // Все загруженные папки (для диалога перемещения)
+  // Все загруженные папки (для диалога перемещения); notes показываем как «Заметки»
   const allDirs = useMemo(() => {
+    const label = (p: string) => {
+      const n = normPath(p);
+      if (n === 'notes') return 'Заметки';
+      return n.startsWith('notes/') ? 'Заметки/' + p.slice('notes/'.length) : p;
+    };
     const dirs: Array<{ path: string; label: string }> = [{ path: '', label: '/ (корень проекта)' }];
     for (const [, entries] of dirCache) {
       for (const e of entries) {
-        if (e.isDirectory) dirs.push({ path: e.path, label: e.path });
+        if (e.isDirectory) dirs.push({ path: e.path, label: label(e.path) });
       }
     }
     return dirs.sort((a, b) => a.path.localeCompare(b.path));

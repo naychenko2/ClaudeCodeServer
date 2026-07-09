@@ -13,7 +13,7 @@ import { NoteView } from './NoteView';
 import { NotesGraph } from './NotesGraph';
 import { EmptyState } from '../../components/EmptyState';
 import { Splitter } from '../../components/ui';
-import { IconSearch, IconPlus, IconBack, IconGraph, IconCalendarDay, SourceDot, usePanelWidth } from './shared';
+import { IconSearch, IconPlus, IconGraph, IconCalendarDay, SourceDot, usePanelWidth } from './shared';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -260,6 +260,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     : selectedId
       ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink}
           onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} isMobile={isMobile}
+          onBack={isMobile ? () => setMobileView('list') : undefined}
           onDeleted={() => { setSelectedId(null); setMobileView('list'); }} />
       : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <EmptyState icon={<IconGraph />} title="Заметки"
@@ -276,10 +277,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         </div>
       : (mobileView === 'list' || !selectedId)
         ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
-        : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <button onClick={() => setMobileView('list')} style={backBar}><IconBack /> К списку</button>
-            <div style={{ flex: 1, minHeight: 0 }}>{centerPane}</div>
-          </div>
+        // Возврат к списку — стрелкой/заголовком в тулбаре заметки (onBack), как у файлов
+        : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
   ) : (
     // Десктоп: сайдбар (управление + список/фильтры) | центр — как в Workspace
     <div style={{ height: '100%', display: 'flex' }}>
@@ -306,11 +305,6 @@ const newBtn: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 5, background: C.accent, color: C.onAccent,
   border: 'none', borderRadius: R.md, padding: '7px 12px', fontSize: 13, fontWeight: 500,
   cursor: 'pointer', fontFamily: FONT.sans, flex: 'none',
-};
-const backBar: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: C.bgPanel,
-  border: 'none', borderBottom: `1px solid ${C.border}`, cursor: 'pointer', fontFamily: FONT.sans,
-  fontSize: 13, color: C.textSecondary,
 };
 
 // --- Диалог создания заметки ---

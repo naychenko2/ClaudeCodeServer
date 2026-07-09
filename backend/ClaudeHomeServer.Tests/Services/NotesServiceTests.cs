@@ -14,6 +14,7 @@ public class NotesServiceTests : IDisposable
     private const string User = "u1";
     private readonly string _dir;
     private readonly string _vault;
+    private readonly ProjectManager _projects;
     private readonly NotesService _sut;
 
     public NotesServiceTests()
@@ -28,8 +29,8 @@ public class NotesServiceTests : IDisposable
             .Build();
         var users = new UserStore(config, NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(config);
-        var projects = new ProjectManager(config, users, appSettings);
-        _sut = new NotesService(projects, config, NullLogger<NotesService>.Instance);
+        _projects = new ProjectManager(config, users, appSettings);
+        _sut = new NotesService(_projects, config, NullLogger<NotesService>.Instance);
     }
 
     public void Dispose()
@@ -245,6 +246,30 @@ public class NotesServiceTests : IDisposable
         // В корень
         var root = _sut.Move(User, moved.Id, null)!;
         root.Path.Should().Be("Черновик.md");
+    }
+
+    [Fact]
+    public void Move_МеждуИсточниками_ПереноситФайлИМеняетИсточник()
+    {
+        var project = _projects.Create("Проект", Path.Combine(_dir, "proj"), User, "u1", createDirectory: true);
+        var n = _sut.Create(User, new CreateNoteRequest("Мигрант", "тело", "personal", Folder: "Идеи"));
+
+        var moved = _sut.Move(User, n.Id, "Входящие", project.Id)!;
+        moved.Source.Should().Be(project.Id);
+        moved.Path.Should().Be("Входящие/Мигрант.md");
+        moved.Id.Should().NotBe(n.Id);
+        File.Exists(Path.Combine(_dir, "proj", "notes", "Входящие", "Мигрант.md")).Should().BeTrue();
+        File.Exists(Path.Combine(_vault, "Идеи", "Мигрант.md")).Should().BeFalse();
+
+        // Обратно в личный vault (корень)
+        var back = _sut.Move(User, moved.Id, null, "personal")!;
+        back.Source.Should().Be("personal");
+        File.Exists(Path.Combine(_vault, "Мигрант.md")).Should().BeTrue();
+
+        // Чужой проект — нельзя
+        var alien = _projects.Create("Чужой", Path.Combine(_dir, "alien"), "u2", "u2", createDirectory: true);
+        var act = () => _sut.Move(User, back.Id, null, alien.Id);
+        act.Should().Throw<UnauthorizedAccessException>();
     }
 
     [Fact]

@@ -594,29 +594,40 @@ public sealed class NotesService
         return GetDetail(userId, id);
     }
 
-    // Перенос заметки в другую папку того же источника. Ссылки [[…]] не трогаем —
-    // они резолвятся по заголовку и переезд переживают; меняется только id (путь).
-    public NoteDetail? Move(string userId, string id, string? folder)
+    // Перенос заметки: в папку и/или другой источник (личный vault ↔ notes/ проекта).
+    // Ссылки [[…]] не трогаем — они резолвятся по заголовку и переезд переживают;
+    // меняется только id (источник + путь).
+    public NoteDetail? Move(string userId, string id, string? folder, string? targetSource = null)
     {
         var (sourceKey, relPath) = DecodeId(id);
         var rootDir = ResolveRoot(userId, sourceKey);
         var full = FileService.SafeJoinPublic(rootDir, relPath);
         if (!File.Exists(full)) return null;
 
+        // Целевой источник: пусто = текущий; владение проверяет ResolveRoot
+        var newSource = string.IsNullOrWhiteSpace(targetSource) ? sourceKey : targetSource!;
+        var newRootDir = ResolveRoot(userId, newSource);
+
         var fileName = Path.GetFileName(relPath);
         var target = SanitizeFolder(folder);
         var newRel = NormalizeRel(target.Length > 0 ? $"{target}/{fileName}" : fileName);
-        if (string.Equals(newRel, NormalizeRel(relPath), StringComparison.OrdinalIgnoreCase))
+        if (newSource == sourceKey && string.Equals(newRel, NormalizeRel(relPath), StringComparison.OrdinalIgnoreCase))
             return GetDetail(userId, id);   // уже там
 
-        var newFull = FileService.SafeJoinPublic(rootDir, newRel);
+        var newFull = FileService.SafeJoinPublic(newRootDir, newRel);
         if (File.Exists(newFull))
             throw new InvalidOperationException($"В папке «{(target.Length > 0 ? target : "корень")}» уже есть «{fileName}»");
         Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
-        File.Move(full, newFull);
+        try { File.Move(full, newFull); }
+        catch (IOException)
+        {
+            // Разные тома (личный vault и проект на разных дисках) — копия + удаление
+            File.Copy(full, newFull);
+            File.Delete(full);
+        }
 
         Invalidate(userId);
-        return GetDetail(userId, EncodeId(sourceKey, newRel));
+        return GetDetail(userId, EncodeId(newSource, newRel));
     }
 
     // Переименование/перенос папки целиком (Directory.Move — атомарно, вложения

@@ -79,8 +79,8 @@ public record CreateNoteRequest(
     string? TemplateId = null, // имя шаблона из templates/ (без .md)
     string? Folder = null);    // папка внутри источника ("Идеи/Черновики"); пусто = корень
 
-// Перенос заметки в другую папку того же источника (id меняется — путь в id)
-public record MoveNoteRequest(string? Folder = null);
+// Перенос заметки: в папку и/или другой источник (id меняется — источник+путь в id)
+public record MoveNoteRequest(string? Folder = null, string? TargetSource = null);
 
 // Переименование/перенос папки: newPath — полный новый путь ("Идеи" → "Архив/Идеи").
 // Возвращается маппинг id заметок (старый → новый), чтобы фронт обновил выбор.

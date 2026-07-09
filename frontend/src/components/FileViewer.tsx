@@ -29,6 +29,7 @@ import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
 import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion } from '../lib/notes';
 import { NoteConnections } from '../features/notes/NoteConnections';
+import { NoteView } from '../features/notes/NoteView';
 import type { NoteDetail } from '../types';
 import { MermaidDiagram } from './MermaidDiagram';
 import { DocumentViewer } from './DocumentViewer';
@@ -340,6 +341,16 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
     sessionStorage.setItem('cc_pending_note_id', id);
     window.dispatchEvent(new Event('cc-open-note'));
   };
+  // Навигация по ссылкам/backlinks внутри вьювера: открываем другую заметку на месте,
+  // не уводя в раздел «Заметки» (сброс при смене файла в дереве)
+  const [noteIdOverride, setNoteIdOverride] = useState<string | null>(null);
+  useEffect(() => { setNoteIdOverride(null); }, [filePath]);
+  const openWikilinkInPlace = (target: string) => {
+    const name = target.split('/').pop()!.split('#')[0].trim().toLowerCase();
+    const found = allNotes.find(n => n.title.trim().toLowerCase() === name);
+    if (found) setNoteIdOverride(found.id);
+    else openNoteByTitle(target);
+  };
   // Подписка на тему: подсветка кода переключается light/dark вместе с приложением
   useThemeMode();
   const codeTheme = getEffectiveTheme() === 'dark' ? oneDark : oneLight;
@@ -534,6 +545,40 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       setActionError(mutationErrorText(e, 'Не удалось сохранить диаграмму'));
     }
   };
+
+  // Заметка vault — полноценный NoteView (теги, ✨-связи, перенос, правка через
+  // notes-API с переименованием): тот же функционал, что в разделе «Заметки».
+  // Fallback на обычный рендер ниже — пока заметка не зарезолвилась (или файл не .md).
+  if (isNotesFile && isMarkdown && (noteIdOverride || noteDetail)) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard }}>
+        <NoteView
+          key={noteIdOverride ?? noteDetail!.id}
+          noteId={noteIdOverride ?? noteDetail!.id}
+          existingTitles={noteTitles}
+          onWikilink={openWikilinkInPlace}
+          onSelectNote={id => setNoteIdOverride(id)}
+          onDeleted={onClose}
+          isMobile={isMobile}
+          onBack={isMobile ? onClose : undefined}
+          extraToolbar={
+            <>
+              {!isMobile && onToggleFullscreen && (
+                <ToolbarIconButton isMobile={isMobile} onClick={onToggleFullscreen} title="На весь экран">
+                  <ExpandIcon />
+                </ToolbarIconButton>
+              )}
+              {!isMobile && (
+                <ToolbarIconButton isMobile={isMobile} onClick={onClose} title="Закрыть">
+                  <CloseIcon />
+                </ToolbarIconButton>
+              )}
+            </>
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative' }}>

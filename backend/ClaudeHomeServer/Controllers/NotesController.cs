@@ -182,7 +182,7 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var note = _notes.Move(UserId, id, req.Folder);
+            var note = _notes.Move(UserId, id, req.Folder, req.TargetSource);
             if (note is null) return NotFound();
             await Broadcast("updated", note.Id);
             return Ok(note);

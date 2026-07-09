@@ -7,17 +7,19 @@ import { lazy, Suspense } from 'react';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
 const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
-import { IconButton, Splitter, Modal } from '../../components/ui';
+import { BackButton, IconButton, Splitter, Modal } from '../../components/ui';
+import { tbBtnPrimary, tbBtnGhost } from '../../components/Toolbar';
 import { useNotes } from '../../lib/notes';
+import type { NoteSource } from '../../types';
 import { NoteConnections } from './NoteConnections';
 import {
   SourceBadge, usePanelWidth,
-  IconEye, IconPencil, IconChat, IconTrash, IconGraph, IconLink, IconSparkle, IconFolder, IconFolderMove,
+  IconChat, IconTrash, IconGraph, IconLink, IconSparkle, IconFolder, IconFolderMove,
 } from './shared';
 
 // Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
 // в правом сайдбаре на десктопе, снизу на мобильном.
-export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted, onTag, isMobile }: {
+export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted, onTag, isMobile, onBack, extraToolbar }: {
   noteId: string;
   existingTitles: Set<string>;
   onWikilink: (target: string) => void;
@@ -26,6 +28,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   onDeleted: () => void;
   onTag?: (tag: string) => void;
   isMobile?: boolean;
+  // Мобайл: стрелка «назад» в тулбаре (и клик по заголовку) — как у файлов/чатов
+  onBack?: () => void;
+  // Дополнительные кнопки справа в тулбаре (закрыть/fullscreen при встраивании в файлы)
+  extraToolbar?: React.ReactNode;
 }) {
   const version = useNotesVersion();
   // Перетаскиваемая ширина сайдбара связей (справа: тянем влево — растёт)
@@ -148,22 +154,37 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     void api.notes.linkMention(note.id, targetTitle).then(n => { if (n) setNote(n); bumpNotes(); });
   };
 
-  // Перенос в папку (модалка; на мобиле — bottom-sheet)
+  // Перенос в папку и/или другой источник (модалка)
   const allNotes = useNotes();
   const [showMove, setShowMove] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const [moveSources, setMoveSources] = useState<NoteSource[]>([]);
   const currentDir = note && note.path.includes('/') ? note.path.slice(0, note.path.lastIndexOf('/')) : '';
-  const moveTo = async (folder: string) => {
+  const openMove = () => {
+    setMoveError(null);
+    setShowMove(true);
+    api.notes.sources().then(setMoveSources).catch(() => setMoveSources([]));
+  };
+  // Папки источника — из путей всех его заметок (включая промежуточные уровни)
+  const foldersFor = (src: string) => [...new Set(
+    allNotes.filter(n => n.source === src && n.path.includes('/'))
+      .flatMap(n => {
+        const parts = n.path.slice(0, n.path.lastIndexOf('/')).split('/');
+        return parts.map((_, i) => parts.slice(0, i + 1).join('/'));
+      }),
+  )].sort((a, b) => a.localeCompare(b, 'ru'));
+  const moveTo = async (folder: string, targetSource?: string) => {
     if (!note) return;
     setMoveError(null);
     try {
-      const updated = await api.notes.move(note.id, folder || null);
+      const updated = await api.notes.move(note.id, folder || null,
+        targetSource && targetSource !== note.source ? targetSource : undefined);
       setShowMove(false);
       bumpNotes();
       if (updated.id !== note.id) onSelectNote(updated.id);
       else setNote(updated);
     } catch {
-      setMoveError('Не удалось перенести: в целевой папке уже есть заметка с таким именем');
+      setMoveError('Не удалось перенести: в целевом месте уже есть заметка с таким именем');
     }
   };
 
@@ -181,6 +202,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         padding: `4px ${isMobile ? TB.padXMobile : TB.padX}px`,
         boxSizing: 'border-box', background: TB.bg, borderBottom: TB.borderBottom,
       }}>
+        {/* Мобайл: стрелка «назад» у заголовка — как у файлов/чатов */}
+        {onBack && !editing && <BackButton onClick={onBack} title="К списку" style={{ height: 32 }} />}
         {editing
           ? <input
               value={draftTitle}
@@ -191,19 +214,35 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 borderRadius: R.md, padding: '5px 10px',
               }}
             />
-          : <h1 title={note.title} style={{ flex: 1, minWidth: 0, margin: 0, fontFamily: FONT.serif, fontSize: 16, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{note.title}</h1>}
+          : <h1 title={note.title} onClick={onBack}
+              style={{ flex: 1, minWidth: 0, margin: 0, fontFamily: FONT.serif, fontSize: 16, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: onBack ? 'pointer' : 'default' }}>
+              {note.title}
+            </h1>}
         {!isMobile && <SourceBadge source={note.source} label={note.sourceLabel} />}
         {!editing && !isMobile && <span style={{ fontSize: 11, color: C.textMuted, flex: 'none' }}>изменено {relTime(note.updatedAt)}</span>}
-        <div style={{ display: 'flex', gap: 2, flex: 'none' }}>
-          <IconButton title={editing ? 'Просмотр' : 'Читать'} active={!editing} onClick={() => setEditing(false)}><IconEye /></IconButton>
-          <IconButton title="Править" active={editing} onClick={startEdit}><IconPencil /></IconButton>
-          {onAskClaude && <IconButton title="Спросить Claude про это" onClick={() => onAskClaude(note)}><IconChat /></IconButton>}
-          {!editing && <IconButton title="Переместить в папку…" onClick={() => { setMoveError(null); setShowMove(true); }}><IconFolderMove /></IconButton>}
-          {!editing && <IconButton title="Предложить связи (AI)" tone="accent" onClick={suggestLinks}><IconSparkle /></IconButton>}
-          {isDaily && !editing && (
-            <IconButton title="Конспект дня (AI)" tone="accent" onClick={makeDailySummary} disabled={aiBusy}><IconGraph /></IconButton>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 'none' }}>
+          {editing ? (
+            /* В правке — «Отмена» + «Сохранить» в тулбаре, как у файлов */
+            <>
+              <button onClick={() => { setEditing(false); setDraftBody(note.content); setDraftTitle(note.title); }} style={tbBtnGhost}>Отмена</button>
+              <button onClick={save} disabled={saving}
+                style={{ ...tbBtnPrimary, marginLeft: 6, ...(saving ? { opacity: 0.6, cursor: 'default' } : {}) }}>
+                {saving ? 'Сохранение…' : 'Сохранить'}
+              </button>
+            </>
+          ) : (
+            <>
+              {onAskClaude && <IconButton title="Спросить Claude про это" onClick={() => onAskClaude(note)}><IconChat /></IconButton>}
+              <IconButton title="Переместить…" onClick={openMove}><IconFolderMove /></IconButton>
+              <IconButton title="Предложить связи (AI)" tone="accent" onClick={suggestLinks}><IconSparkle /></IconButton>
+              {isDaily && (
+                <IconButton title="Конспект дня (AI)" tone="accent" onClick={makeDailySummary} disabled={aiBusy}><IconGraph /></IconButton>
+              )}
+              <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>
+              <button onClick={startEdit} style={{ ...tbBtnPrimary, marginLeft: 6 }}>Править</button>
+            </>
           )}
-          <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>
+          {extraToolbar}
         </div>
       </div>
 
@@ -280,16 +319,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           </div>
         )}
         {editing ? (
-          <>
-            <Suspense fallback={<div style={{ padding: 24, color: C.textMuted, fontSize: 13 }}>Загрузка редактора…</div>}>
-              <NoteEditor value={draftBody} onChange={setDraftBody} minHeight={280}
-                placeholder="Текст заметки… связывай через [[Заголовок]]" onWikilink={onWikilink} />
-            </Suspense>
-            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-              <button onClick={save} disabled={saving} style={primaryBtn}>{saving ? 'Сохранение…' : 'Сохранить'}</button>
-              <button onClick={() => { setEditing(false); setDraftBody(note.content); setDraftTitle(note.title); }} style={ghostBtn}>Отмена</button>
-            </div>
-          </>
+          <Suspense fallback={<div style={{ padding: 24, color: C.textMuted, fontSize: 13 }}>Загрузка редактора…</div>}>
+            <NoteEditor value={draftBody} onChange={setDraftBody} minHeight={280}
+              placeholder="Текст заметки… связывай через [[Заголовок]]" onWikilink={onWikilink} />
+          </Suspense>
         ) : (
           <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
             resolveNote={resolveNote} embedSource={note.source} />
@@ -323,13 +356,9 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       {showMove && (
         <MoveDialog
           currentDir={currentDir}
-          folders={[...new Set(
-            allNotes.filter(n => n.source === note.source && n.path.includes('/'))
-              .flatMap(n => {
-                const parts = n.path.slice(0, n.path.lastIndexOf('/')).split('/');
-                return parts.map((_, i) => parts.slice(0, i + 1).join('/'));
-              }),
-          )].sort((a, b) => a.localeCompare(b, 'ru'))}
+          currentSource={note.source}
+          sources={moveSources}
+          foldersFor={foldersFor}
           error={moveError}
           onMove={moveTo}
           onClose={() => setShowMove(false)}
@@ -339,40 +368,54 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   );
 }
 
-// Диалог переноса в папку: существующие папки источника + ввод новой; «Корень» — наверх
-function MoveDialog({ currentDir, folders, error, onMove, onClose }: {
+// Диалог переноса: выбор источника (личный vault / проекты) + папки выбранного
+// источника + ввод новой папки; «Корень» — наверх выбранного источника.
+function MoveDialog({ currentDir, currentSource, sources, foldersFor, error, onMove, onClose }: {
   currentDir: string;
-  folders: string[];
+  currentSource: string;
+  sources: NoteSource[];
+  foldersFor: (source: string) => string[];
   error: string | null;
-  onMove: (folder: string) => void;
+  onMove: (folder: string, targetSource: string) => void;
   onClose: () => void;
 }) {
+  const [src, setSrc] = useState(currentSource);
   const [custom, setCustom] = useState('');
-  const row = (label: React.ReactNode, folder: string, disabled: boolean) => (
-    <button key={folder || '(root)'} disabled={disabled} onClick={() => onMove(folder)}
+  const folders = foldersFor(src);
+  const isCurrent = (folder: string) => src === currentSource && folder === currentDir;
+  const row = (label: React.ReactNode, folder: string) => (
+    <button key={folder || '(root)'} disabled={isCurrent(folder)} onClick={() => onMove(folder, src)}
       style={{
         width: '100%', display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left',
         padding: '8px 10px', borderRadius: R.md, border: 'none', fontFamily: FONT.sans, fontSize: 13,
-        background: 'transparent', color: disabled ? C.textMuted : C.textPrimary,
-        cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.6 : 1,
+        background: 'transparent', color: isCurrent(folder) ? C.textMuted : C.textPrimary,
+        cursor: isCurrent(folder) ? 'default' : 'pointer', opacity: isCurrent(folder) ? 0.6 : 1,
       }}>
       <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
       <span style={{ flex: 1 }}>{label}</span>
-      {disabled && <span style={{ fontSize: 10.5, color: C.textMuted }}>текущая</span>}
+      {isCurrent(folder) && <span style={{ fontSize: 10.5, color: C.textMuted }}>текущая</span>}
     </button>
   );
   return (
-    <Modal width={420} title="Переместить в папку" onClose={onClose}>
+    <Modal width={420} title="Переместить заметку" onClose={onClose}>
+      {sources.length > 1 && (
+        <select value={src} onChange={e => setSrc(e.target.value)}
+          style={{ width: '100%', boxSizing: 'border-box', marginBottom: 10, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, padding: '7px 10px', fontSize: 13, fontFamily: FONT.sans, color: C.textHeading, outline: 'none' }}>
+          {sources.map(s => (
+            <option key={s.key} value={s.key}>{s.label}{s.key === currentSource ? ' (текущий)' : ''}</option>
+          ))}
+        </select>
+      )}
       <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-        {row(<i>Корень</i>, '', currentDir === '')}
-        {folders.map(f => row(f, f, f === currentDir))}
+        {row(<i>Корень</i>, '')}
+        {folders.map(f => row(f, f))}
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         <input value={custom} onChange={e => setCustom(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && custom.trim()) onMove(custom.trim()); }}
+          onKeyDown={e => { if (e.key === 'Enter' && custom.trim()) onMove(custom.trim(), src); }}
           placeholder="Новая папка (Идеи/Черновики)"
           style={{ flex: 1, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, padding: '7px 10px', fontSize: 13, fontFamily: FONT.sans, color: C.textHeading, outline: 'none' }} />
-        <button onClick={() => custom.trim() && onMove(custom.trim())} disabled={!custom.trim()}
+        <button onClick={() => custom.trim() && onMove(custom.trim(), src)} disabled={!custom.trim()}
           style={{ background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.md, padding: '7px 14px', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: FONT.sans, opacity: custom.trim() ? 1 : 0.6 }}>
           Создать и перенести
         </button>
@@ -397,11 +440,3 @@ function relTime(iso: string): string {
   return new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 }
 
-const primaryBtn: React.CSSProperties = {
-  background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.lg,
-  padding: '8px 16px', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: FONT.sans,
-};
-const ghostBtn: React.CSSProperties = {
-  background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}`, borderRadius: R.lg,
-  padding: '8px 16px', fontSize: 13, cursor: 'pointer', fontFamily: FONT.sans,
-};

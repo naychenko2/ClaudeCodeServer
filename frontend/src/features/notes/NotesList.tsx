@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { NoteSummary } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes } from '../../lib/notes';
-import { C, FONT, R } from '../../lib/design';
-import { CollapseGroup, SourceDot, IconFolder } from './shared';
+import { C, FONT, R, SHADOW } from '../../lib/design';
+import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconTrash } from './shared';
 
 interface Group { source: string; label: string; root: FolderNode }
 
@@ -60,6 +60,18 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
   // Переименование папки: ключ source|path + редактируемый полный путь
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  // Контекстное меню (right-click, десктоп): заметка или папка; move — режим выбора цели
+  const [ctxMenu, setCtxMenu] = useState<
+    | { x: number; y: number; kind: 'note'; source: string; note: NoteSummary; move?: boolean }
+    | { x: number; y: number; kind: 'folder'; source: string; node: FolderNode; move?: boolean }
+    | null
+  >(null);
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    const t = setTimeout(() => window.addEventListener('mousedown', close), 0);
+    return () => { clearTimeout(t); window.removeEventListener('mousedown', close); };
+  }, [ctxMenu]);
 
   const commitFolderRename = async (source: string, oldPath: string) => {
     const newPath = renameValue.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
@@ -135,6 +147,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
       <button
         key={n.id}
         onClick={() => onSelect(n.id)}
+        onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'note', source: n.source, note: n }); }}
         title={n.title}
         draggable
         onDragStart={e => {
@@ -158,6 +171,24 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
   // Собрать все заметки папки (включая подпапки)
   const notesUnder = (node: FolderNode): NoteSummary[] =>
     [...node.notes, ...node.children.flatMap(notesUnder)];
+
+  const deleteNote = async (n: NoteSummary) => {
+    if (!window.confirm(`Удалить заметку «${n.title}»?`)) return;
+    try {
+      await api.notes.delete(n.id);
+      bumpNotes();
+      onDeleted?.([n.id]);
+    } catch { /* уже удалена — реалтайм обновит список */ }
+  };
+
+  // Папки источника (включая промежуточные уровни) — для подменю «Переместить в…»
+  const foldersOf = (source: string) => [...new Set(
+    notes.filter(n => n.source === source && n.path.includes('/'))
+      .flatMap(n => {
+        const parts = n.path.slice(0, n.path.lastIndexOf('/')).split('/');
+        return parts.map((_, i) => parts.slice(0, i + 1).join('/'));
+      }),
+  )].sort((a, b) => a.localeCompare(b, 'ru'));
 
   const deleteFolder = async (node: FolderNode) => {
     const all = notesUnder(node);
@@ -211,6 +242,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
         ) : (
         <button
           onClick={() => setCollapsed(prev => { const next = new Set(prev); isCollapsed ? next.delete(key) : next.add(key); return next; })}
+          onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'folder', source, node }); }}
           draggable
           onDragStart={e => {
             e.dataTransfer.setData('application/x-folder-path', node.path);
@@ -256,6 +288,26 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
       </div>
     );
 
+  // Пункт контекстного меню — стиль как у FileExplorer (десктоп-popup)
+  const menuItem = (icon: React.ReactNode, label: string, action: () => void, danger = false) => (
+    <button
+      key={label}
+      onPointerDown={e => { e.stopPropagation(); setCtxMenu(null); action(); }}
+      style={{
+        display: 'flex', alignItems: 'center', width: '100%', padding: '8px 12px',
+        background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
+        fontFamily: FONT.sans, fontSize: 13, color: danger ? C.danger : C.textPrimary,
+        borderRadius: 6, gap: 10,
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = C.bgInset; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
+    >
+      <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0, opacity: 0.8 }}>{icon}</span>
+      {label}
+    </button>
+  );
+  const menuDivider = <div style={{ height: 1, background: C.border, margin: '4px 0' }} />;
+
   return (
     <div style={{ padding: '8px 8px 20px' }}>
       {groups.map(g => (
@@ -276,6 +328,49 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           </CollapseGroup>
         </div>
       ))}
+
+      {/* Контекстное меню (right-click): заметка / папка; move — выбор целевой папки */}
+      {ctxMenu && (
+        <div
+          onMouseDown={e => e.stopPropagation()}
+          onContextMenu={e => e.preventDefault()}
+          style={{
+            position: 'fixed', top: Math.min(ctxMenu.y, window.innerHeight - 240), left: Math.min(ctxMenu.x, window.innerWidth - 210),
+            zIndex: 1000, background: C.bgWhite, border: `1px solid ${C.border}`,
+            borderRadius: R.lg, boxShadow: SHADOW.dropdown, padding: 4, minWidth: 190,
+            maxHeight: 320, overflowY: 'auto',
+          }}
+        >
+          {ctxMenu.move ? (
+            <>
+              <div style={{ padding: '6px 12px 4px', fontSize: 10.5, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: C.textMuted, fontFamily: FONT.sans }}>
+                Переместить в
+              </div>
+              {[{ path: '', label: 'Корень' }, ...foldersOf(ctxMenu.source).map(f => ({ path: f, label: f }))]
+                .filter(d => ctxMenu.kind !== 'folder' || (d.path !== ctxMenu.node.path && !d.path.startsWith(ctxMenu.node.path + '/')))
+                .map(d => menuItem(<IconFolder />, d.label, () => {
+                  if (ctxMenu.kind === 'note') void doMove(ctxMenu.note.id, ctxMenu.source, d.path);
+                  else void moveFolderTo(ctxMenu.source, ctxMenu.node.path, d.path);
+                }))}
+            </>
+          ) : ctxMenu.kind === 'note' ? (
+            <>
+              {menuItem(<IconPencil />, 'Открыть', () => onSelect(ctxMenu.note.id))}
+              {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
+              {menuDivider}
+              {menuItem(<IconTrash />, 'Удалить', () => void deleteNote(ctxMenu.note), true)}
+            </>
+          ) : (
+            <>
+              {onCreateInFolder && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ctxMenu.node.path))}
+              {menuItem(<IconPencil />, 'Переименовать', () => { setRenaming(`${ctxMenu.source}|${ctxMenu.node.path}`); setRenameValue(ctxMenu.node.path); })}
+              {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
+              {menuDivider}
+              {menuItem(<IconTrash />, 'Удалить папку', () => void deleteFolder(ctxMenu.node), true)}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

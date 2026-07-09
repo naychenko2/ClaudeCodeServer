@@ -182,10 +182,10 @@ export const api = {
       request<{ notes: { oldId: string; newId: string }[] }>('/notes/folder/move', {
         method: 'POST', body: JSON.stringify({ source, path, newPath }),
       }),
-    // Перенос в папку источника (folder: "Идеи/Черновики"; null/пусто = корень)
-    move: (id: string, folder: string | null) =>
+    // Перенос: в папку и/или другой источник (личный vault ↔ notes/ проекта)
+    move: (id: string, folder: string | null, targetSource?: string) =>
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/move`, {
-        method: 'POST', body: JSON.stringify({ folder }),
+        method: 'POST', body: JSON.stringify({ folder, targetSource }),
       }),
     linkMention: (id: string, targetTitle: string) =>
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/link-mention`, {

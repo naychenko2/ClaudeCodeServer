@@ -101,13 +101,11 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
         </div>
       )}
 
-      {/* Центр — переключатель вкладок. На мобиле занимает всю доступную ширину;
-          при нехватке места — горизонтальный скролл без обрезания краёв (margin auto) */}
+      {/* Центр — переключатель вкладок. На мобиле — компакт-режим (иконки, подпись
+          у активного): 4 раздела помещаются даже на 320px без скролла и обрезания */}
       {isMobile ? (
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', overflowX: 'auto', scrollbarWidth: 'none' }}>
-          <div style={{ margin: '0 auto', flexShrink: 0 }}>
-            <HubTabs value={value} onChange={onTab} />
-          </div>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center', overflow: 'hidden' }}>
+          <HubTabs mobile value={value} onChange={onTab} />
         </div>
       ) : (
         <HubTabs value={value} onChange={onTab} />

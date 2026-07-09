@@ -42,6 +42,10 @@ import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 const CodeEditor = lazy(() =>
   import('./CodeEditor').then(m => ({ default: m.CodeEditor }))
 );
+// Live preview-редактор заметок — для правки notes/*.md (vault проекта)
+const NoteEditor = lazy(() =>
+  import('../features/notes/NoteEditor').then(m => ({ default: m.NoteEditor }))
+);
 
 SyntaxHighlighter.registerLanguage('tsx', tsx);
 SyntaxHighlighter.registerLanguage('typescript', typescript);
@@ -947,12 +951,22 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                       Загрузка редактора…
                     </div>
                   }>
-                    <CodeEditor
-                      key={filePath}
-                      value={editContent}
-                      onChange={setEditContent}
-                      filePath={filePath}
-                    />
+                    {isNotesFile && isMarkdown ? (
+                      <NoteEditor
+                        key={filePath}
+                        value={editContent}
+                        onChange={setEditContent}
+                        onWikilink={openNoteByTitle}
+                        fill
+                      />
+                    ) : (
+                      <CodeEditor
+                        key={filePath}
+                        value={editContent}
+                        onChange={setEditContent}
+                        filePath={filePath}
+                      />
+                    )}
                   </Suspense>
                 )
                 : isDrawio

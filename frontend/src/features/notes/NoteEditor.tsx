@@ -25,6 +25,8 @@ interface Props {
   minHeight?: number;
   placeholder?: string;
   onWikilink?: (target: string) => void;
+  // Заполнить всю высоту контейнера (редактирование в FileViewer) вместо авто-высоты
+  fill?: boolean;
 }
 
 // --- Подсветка markdown-синтаксиса (сам текст, не маркеры) ---
@@ -273,7 +275,7 @@ function applyToolbar(view: EditorView, action: TbAction) {
 
 // --- Компонент ---
 
-export function NoteEditor({ value, onChange, minHeight = 280, placeholder, onWikilink }: Props) {
+export function NoteEditor({ value, onChange, minHeight = 280, placeholder, onWikilink, fill }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => getEffectiveTheme());
@@ -342,10 +344,11 @@ export function NoteEditor({ value, onChange, minHeight = 280, placeholder, onWi
 
   return (
     <div style={{
-      border: `1px solid ${focused ? C.accent : C.border}`,
-      borderRadius: 10, background: C.bgWhite, overflow: 'hidden',
-      boxShadow: focused ? `0 0 0 3px ${C.accentLight}` : 'none',
+      border: fill ? 'none' : `1px solid ${focused ? C.accent : C.border}`,
+      borderRadius: fill ? 0 : 10, background: C.bgWhite, overflow: 'hidden',
+      boxShadow: !fill && focused ? `0 0 0 3px ${C.accentLight}` : 'none',
       transition: 'border-color .12s, box-shadow .12s',
+      ...(fill ? { height: '100%', display: 'flex', flexDirection: 'column' } : {}),
     }}>
       <div style={{
         display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
@@ -363,7 +366,9 @@ export function NoteEditor({ value, onChange, minHeight = 280, placeholder, onWi
           live preview · Ctrl+клик по [[ссылке]] — переход
         </span>
       </div>
-      <div ref={containerRef} style={{ minHeight, maxHeight: '60vh', overflowY: 'auto', padding: '0 10px' }} />
+      <div ref={containerRef} style={fill
+        ? { flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 10px' }
+        : { minHeight, maxHeight: '60vh', overflowY: 'auto', padding: '0 10px' }} />
     </div>
   );
 }

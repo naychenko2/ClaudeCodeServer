@@ -182,6 +182,7 @@ public class NotesController : ControllerBase
         if (!NotesTaskSyncEnabled) return Forbid();
         try { return Ok(await _noteTasks.PromoteAsync(UserId, id, req.Line)); }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
@@ -192,6 +193,7 @@ public class NotesController : ControllerBase
         if (!NotesTaskSyncEnabled) return Forbid();
         try { return Ok(await _noteTasks.ToggleAsync(UserId, id, req.Line, req.Done)); }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 

@@ -38,6 +38,10 @@ public sealed class NoteTaskSyncService(
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
+        // Источник только для чтения (память Claude): промоут запрещён — обратную запись
+        // галочки в такую заметку сделать нельзя, задача осталась бы рассинхронизированной.
+        if (notes.GetSources(userId).FirstOrDefault(s => s.Key == note.Source)?.ReadOnly == true)
+            throw new InvalidOperationException("Нельзя создать задачу из заметки в источнике только для чтения");
         var parsed = NoteTaskParser.Parse(note.Content).FirstOrDefault(l => l.Line == line)
             ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");
 
@@ -94,9 +98,19 @@ public sealed class NoteTaskSyncService(
         var updatedContent = NoteTaskParser.SetChecked(note.Content, task.SourceNoteLine.Value, done);
         if (updatedContent is null || updatedContent == note.Content) return; // строка сдвинулась/совпадает
 
-        if (notes.Update(userId, task.SourceNoteId, new UpdateNoteRequest(Content: updatedContent)) is null) return;
-        kb.QueueSync(userId);
-        await BroadcastNoteChangedAsync(userId, task.SourceNoteId);
+        // Обратная запись — побочный эффект обновления задачи: не должна ронять запрос
+        // (например, источник заметки стал read-only → NotesService бросит UnauthorizedAccess).
+        try
+        {
+            if (notes.Update(userId, task.SourceNoteId, new UpdateNoteRequest(Content: updatedContent)) is null) return;
+            kb.QueueSync(userId);
+            await BroadcastNoteChangedAsync(userId, task.SourceNoteId);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Не удалось синхронизировать галочку в заметке {NoteId} для задачи {TaskId}",
+                task.SourceNoteId, task.Id);
+        }
     }
 
     // Перевод связанной задачи в done/todo напрямую через TaskManager (не через контроллер —

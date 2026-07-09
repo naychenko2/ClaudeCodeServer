@@ -71,30 +71,36 @@ public sealed class DailyBriefingService
     }
 
     // Хук планировщика: если у юзера включён флаг, наступило утро в его таймзоне и
-    // сегодня бриф ещё не делали — сгенерировать и уведомить. Возвращает быстро, если
-    // не время. Идемпотентность помечается ДО тяжёлой работы (одна попытка в день).
-    public async Task MaybeRunScheduledAsync(User user, TimeZoneInfo tz, DateTime nowUtc, CancellationToken ct = default)
+    // сегодня бриф ещё не делали — запустить генерацию. Гейт синхронный и мгновенный;
+    // тяжёлая работа (git-сбор + LLM, десятки секунд) уходит в фон, чтобы НЕ блокировать
+    // тик планировщика (напоминания/автозапуски остальных пользователей). Идемпотентность
+    // обеспечивается меткой ДО запуска (одна попытка в день, переживает рестарт).
+    public Task MaybeRunScheduledAsync(User user, TimeZoneInfo tz, DateTime nowUtc, CancellationToken ct = default)
     {
-        if (!_flags.IsEnabled(user.Id, FeatureFlagKeys.DailyBriefing)) return;
+        if (!_flags.IsEnabled(user.Id, FeatureFlagKeys.DailyBriefing)) return Task.CompletedTask;
 
         var local = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
         var hour = _config.GetValue("Briefing:Hour", 8);
-        if (local.Hour < hour) return; // ещё не утро в таймзоне пользователя
+        if (local.Hour < hour) return Task.CompletedTask; // ещё не утро в таймзоне пользователя
 
         var day = local.ToString("yyyy-MM-dd");
-        if (AlreadyBriefed(user.Id, day)) return;
-        MarkBriefed(user.Id, day); // помечаем сразу — не спамим LLM при сбое генерации
+        if (AlreadyBriefed(user.Id, day)) return Task.CompletedTask;
+        MarkBriefed(user.Id, day); // помечаем сразу — не спамим LLM и не даём дублей между тиками
 
-        try
+        _ = Task.Run(async () =>
         {
-            var note = await BuildAndWriteAsync(user.Id, tz, day, ct);
-            await NotifyAsync(user.Id, note.Id);
-            _log.LogInformation("Утренний бриф отправлен пользователю {UserId} на {Day}", user.Id, day);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Не удалось сгенерировать утренний бриф пользователю {UserId}", user.Id);
-        }
+            try
+            {
+                var note = await BuildAndWriteAsync(user.Id, tz, day, ct);
+                await NotifyAsync(user.Id, note.Id);
+                _log.LogInformation("Утренний бриф отправлен пользователю {UserId} на {Day}", user.Id, day);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Не удалось сгенерировать утренний бриф пользователю {UserId}", user.Id);
+            }
+        }, ct);
+        return Task.CompletedTask;
     }
 
     private async Task<NoteDetail> BuildAndWriteAsync(string userId, TimeZoneInfo tz, string day, CancellationToken ct)

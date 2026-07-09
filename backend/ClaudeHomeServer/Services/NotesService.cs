@@ -143,7 +143,15 @@ public sealed class NotesService
                 var rel = NormalizeRel(Path.GetRelativePath(src.RootDir, full));
                 // templates/ — шаблоны, не заметки: в список/граф не попадают
                 if (rel.StartsWith("templates/", StringComparison.OrdinalIgnoreCase)) continue;
-                var (title, tags) = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
+                // MEMORY.md — индекс памяти Claude, как заметка бессмыслен
+                if (src.ReadOnly && rel.Equals("MEMORY.md", StringComparison.OrdinalIgnoreCase)) continue;
+
+                var fileName = Path.GetFileNameWithoutExtension(full);
+                var fm = ParseFrontmatter(text);
+                var tags = fm.Tags;
+                // Явный title: приоритетен; для памяти без него — читаемый description, иначе имя файла
+                var title = fm.Title
+                    ?? (src.ReadOnly ? ReadonlyTitle(fm.Description, fm.Name, fileName) : fileName);
                 // Inline-теги #тег из тела + теги из frontmatter (без дублей)
                 foreach (var it in InlineTag.Matches(text).Select(m => m.Groups[1].Value))
                     if (!tags.Contains(it, StringComparer.OrdinalIgnoreCase)) tags.Add(it);
@@ -167,16 +175,17 @@ public sealed class NotesService
         return notes;
     }
 
-    // Минимальный разбор YAML-frontmatter: только title и tags (без внешней либы).
-    private static (string Title, List<string> Tags) ParseFrontmatter(string text, string fallbackTitle)
+    // Минимальный разбор YAML-frontmatter: title/description/name (null если поля нет)
+    // и tags (без внешней либы). description/name нужны для читаемых заголовков заметок
+    // памяти Claude — там нет title:, но есть русский description.
+    private static (string? Title, string? Description, string? Name, List<string> Tags) ParseFrontmatter(string text)
     {
-        var title = fallbackTitle;
         var tags = new List<string>();
-        if (!text.StartsWith("---")) return (title, tags);
+        if (!text.StartsWith("---")) return (null, null, null, tags);
 
         using var reader = new StringReader(text);
         var first = reader.ReadLine();
-        if (first is null || first.Trim() != "---") return (title, tags);
+        if (first is null || first.Trim() != "---") return (null, null, null, tags);
 
         var lines = new List<string>();
         string? line;
@@ -186,13 +195,20 @@ public sealed class NotesService
             if (line.Trim() == "---") { closed = true; break; }
             lines.Add(line);
         }
-        if (!closed) return (title, tags);
+        if (!closed) return (null, null, null, tags);
 
+        string? title = null, description = null, name = null;
         for (var i = 0; i < lines.Count; i++)
         {
             var l = lines[i];
             var m = Regex.Match(l, @"^title:\s*(.+)$", RegexOptions.IgnoreCase);
             if (m.Success) { title = m.Groups[1].Value.Trim().Trim('"', '\''); continue; }
+
+            var d = Regex.Match(l, @"^description:\s*(.+)$", RegexOptions.IgnoreCase);
+            if (d.Success) { description = d.Groups[1].Value.Trim().Trim('"', '\''); continue; }
+
+            var n = Regex.Match(l, @"^name:\s*(.+)$", RegexOptions.IgnoreCase);
+            if (n.Success) { name = n.Groups[1].Value.Trim().Trim('"', '\''); continue; }
 
             var t = Regex.Match(l, @"^tags:\s*(.*)$", RegexOptions.IgnoreCase);
             if (t.Success)
@@ -211,7 +227,25 @@ public sealed class NotesService
                     }
             }
         }
-        return (title, tags.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+        return (title, description, name, tags.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+    }
+
+    // Заголовок read-only заметки (память Claude): у файлов памяти нет title:, а имя
+    // файла — английский слаг. Берём читаемый description (обрезая), иначе name/имя файла.
+    internal static string ReadonlyTitle(string? description, string? name, string fileName)
+    {
+        var d = description?.Trim();
+        if (!string.IsNullOrEmpty(d))
+        {
+            if (d.Length > 70)
+            {
+                var cut = d[..70];
+                var sp = cut.LastIndexOf(' ');
+                d = (sp > 35 ? cut[..sp] : cut).TrimEnd() + "…";
+            }
+            return d;
+        }
+        return string.IsNullOrWhiteSpace(name) ? fileName : name!.Trim();
     }
 
     private static List<(string, string)> ParseLinks(string text)

@@ -394,4 +394,28 @@ public class NotesServiceTests : IDisposable
         var act = () => _sut.Create(User, new CreateNoteRequest("x", "y", "memory:some-project"));
         act.Should().Throw<UnauthorizedAccessException>();
     }
+
+    // Заголовок read-only заметки памяти: читаемый description вместо английского имени файла
+    [Fact]
+    public void ReadonlyTitle_ИзDescription()
+    {
+        NotesService.ReadonlyTitle("Песочница: backend и claude в одном контейнере", "containerization-sandbox", "containerization-sandbox")
+            .Should().Be("Песочница: backend и claude в одном контейнере");
+    }
+
+    [Fact]
+    public void ReadonlyTitle_БезDescription_БерётNameИлиФайл()
+    {
+        NotesService.ReadonlyTitle(null, "my-name", "my-file").Should().Be("my-name");
+        NotesService.ReadonlyTitle("   ", null, "my-file").Should().Be("my-file");
+    }
+
+    [Fact]
+    public void ReadonlyTitle_ДлинноеОбрезаетсяПоСлову()
+    {
+        var longDesc = "Очень длинное описание памяти которое точно превышает семьдесят символов и должно обрезаться по границе слова";
+        var title = NotesService.ReadonlyTitle(longDesc, "n", "f");
+        title.Length.Should().BeLessThanOrEqualTo(72);
+        title.Should().EndWith("…");
+    }
 }

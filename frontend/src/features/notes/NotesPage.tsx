@@ -52,9 +52,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Фильтр графа по тегам (пусто = все); теги собираются из заметок
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
 
-  // Перетаскиваемые ширины сайдбаров (персист, как в Workspace)
-  const [listWidth, listDragging, startListDrag] = usePanelWidth('cc_notes_list_width', 250, 200, 420);
-  const [railWidth, railDragging, startRailDrag] = usePanelWidth('cc_notes_rail_width', 180, 150, 320);
+  // Перетаскиваемая ширина сайдбара (персист, как в Workspace)
+  const [listWidth, listDragging, startListDrag] = usePanelWidth('cc_notes_list_width', 260, 210, 420);
 
   useEffect(() => { void ensureNotesLoaded(); }, []);
 
@@ -150,43 +149,85 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     onHubTab('chats');
   };
 
-  const toolbar = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: isMobile ? '8px 12px' : '10px 16px', borderBottom: `1px solid ${C.border}` }}>
+  // Панель управления в сайдбаре (как у Workspace: всё управление разделом — слева)
+  const sidebarControls = (
+    <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 8, flex: 'none' }}>
       <PillSwitch<Mode>
+        fill
         value={mode} onChange={setMode}
         options={[{ value: 'notes', label: 'Заметки' }, { value: 'graph', label: 'Граф' }]}
       />
       {mode === 'notes' && (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 7, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, height: 32, padding: '0 10px', color: C.textMuted }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, height: 30, padding: '0 8px', color: C.textMuted }}>
           <IconSearch />
           <input
             value={query} onChange={e => setQuery(e.target.value)}
-            placeholder={isMobile ? 'Поиск по заметкам' : 'Поиск… (tag:идея source:Личный)'}
-            style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontFamily: FONT.sans, fontSize: 13, color: C.textHeading }}
+            placeholder="Поиск…"
+            title="Операторы: tag:идея source:Личный"
+            style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: FONT.sans, fontSize: 12.5, color: C.textHeading }}
           />
           {semanticAvailable && (
-            <div style={{ display: 'flex', gap: 2, background: C.bgSelected, borderRadius: 7, padding: 2, flex: 'none' }}>
-              {(['exact', 'semantic'] as const).map(m => (
-                <button key={m} onClick={() => setSearchMode(m)}
-                  title={m === 'exact' ? 'Точный поиск по тексту' : 'Поиск по смыслу (семантический)'}
-                  style={{
-                    fontSize: 10.5, fontWeight: 500, border: 'none', borderRadius: 5, padding: '3px 8px',
-                    cursor: 'pointer', fontFamily: FONT.sans,
-                    background: searchMode === m ? C.bgWhite : 'transparent',
-                    color: searchMode === m ? C.textHeading : C.textMuted,
-                  }}>{m === 'exact' ? 'Точный' : 'По смыслу'}</button>
-              ))}
-            </div>
+            <button
+              onClick={() => setSearchMode(m => m === 'exact' ? 'semantic' : 'exact')}
+              title={searchMode === 'semantic' ? 'Поиск по смыслу (семантический) — включён' : 'Точный поиск по тексту — включён; клик = по смыслу'}
+              style={{
+                fontSize: 10, fontWeight: 600, border: 'none', borderRadius: 5, padding: '3px 6px',
+                cursor: 'pointer', fontFamily: FONT.sans, flex: 'none',
+                background: searchMode === 'semantic' ? C.accent : C.bgSelected,
+                color: searchMode === 'semantic' ? C.onAccent : C.textMuted,
+              }}>смысл</button>
           )}
         </div>
       )}
-      {mode === 'graph' && <div style={{ flex: 1 }} />}
-      <button onClick={openDaily} title="Дневниковая заметка на сегодня" style={{ ...newBtn, background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}` }}>
-        <IconCalendarDay />{!isMobile && 'Сегодня'}
-      </button>
-      <button onClick={() => setNewDialog({})} style={newBtn}>
-        <IconPlus />{!isMobile && 'Новая'}
-      </button>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button onClick={() => setNewDialog({})} style={{ ...newBtn, flex: 1, justifyContent: 'center' }}>
+          <IconPlus />Новая
+        </button>
+        <button onClick={openDaily} title="Дневниковая заметка на сегодня"
+          style={{ ...newBtn, background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}` }}>
+          <IconCalendarDay />
+        </button>
+      </div>
+    </div>
+  );
+
+  // Фильтры графа (содержимое сайдбара в режиме «Граф»)
+  const graphFilters = (
+    <div style={{ padding: '12px 12px' }}>
+      <div style={{ fontSize: 10.5, letterSpacing: '.05em', textTransform: 'uppercase', color: C.textMuted, fontWeight: 600, marginBottom: 10 }}>Источники</div>
+      {sources.map(s => {
+        const on = !hiddenSources.has(s.key);
+        return (
+          <button key={s.key} onClick={() => setHiddenSources(prev => { const next = new Set(prev); on ? next.add(s.key) : next.delete(s.key); return next; })}
+            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '5px 4px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: FONT.sans, fontSize: 12.5, color: on ? C.textPrimary : C.textMuted, opacity: on ? 1 : 0.55 }}>
+            <SourceDot source={s.key} />
+            <span style={{ flex: 1, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.label}</span>
+          </button>
+        );
+      })}
+      {allTags.length > 0 && (
+        <>
+          <div style={{ fontSize: 10.5, letterSpacing: '.05em', textTransform: 'uppercase', color: C.textMuted, fontWeight: 600, margin: '16px 0 8px' }}>Теги</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+            {allTags.map(t => {
+              const on = selectedTags.has(t);
+              return (
+                <button key={t}
+                  onClick={() => setSelectedTags(prev => { const next = new Set(prev); on ? next.delete(t) : next.add(t); return next; })}
+                  style={{
+                    fontSize: 11, fontWeight: 500, borderRadius: R.sm, padding: '2px 7px', cursor: 'pointer',
+                    fontFamily: FONT.sans, border: 'none',
+                    background: on ? C.accent : C.bgSelected,
+                    color: on ? C.onAccent : C.textSecondary,
+                  }}>#{t}</button>
+              );
+            })}
+          </div>
+        </>
+      )}
+      <div style={{ fontSize: 10.5, color: C.textMuted, lineHeight: 1.5, marginTop: 16 }}>
+        Узел — заметка. Размер = число связей. Кольцо = выбранная. Наведи — подсветятся соседи.
+      </div>
     </div>
   );
 
@@ -202,88 +243,59 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           if (hit) setSelectedId(hit.newId);
         }} />;
 
-  const notesContent = isMobile ? (
-    mobileView === 'list' || !selectedId
-      ? <div style={{ height: '100%', overflowY: 'auto' }}>{listPane}</div>
-      : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-          <button onClick={() => setMobileView('list')} style={backBar}><IconBack /> К списку</button>
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink} onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} isMobile onDeleted={() => { setSelectedId(null); setMobileView('list'); }} />
-          </div>
-        </div>
-  ) : (
-    <div style={{ height: '100%', display: 'flex' }}>
-      <div style={{ width: listWidth, overflowY: 'auto', flex: 'none', background: C.bgPanel }}>
-        {listPane}
+  // Сайдбар целиком: управление сверху, ниже — список (режим «Заметки») или фильтры («Граф»)
+  const sidebar = (
+    <>
+      {sidebarControls}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        {mode === 'notes' ? listPane : graphFilters}
       </div>
-      <Splitter active={listDragging} onMouseDown={startListDrag} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {selectedId
-          ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink} onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} onDeleted={() => setSelectedId(null)} />
-          : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <EmptyState icon={<IconGraph />} title="Заметки"
-                subtitle={notes.length ? 'Выбери заметку слева или создай новую' : 'Создай первую заметку или попроси Claude законспектировать разговор'}
-                action={<button onClick={() => setNewDialog({})} style={newBtn}><IconPlus />Новая заметка</button>} />
-            </div>}
-      </div>
-    </div>
+    </>
   );
 
-  // --- Содержимое режима «Граф» ---
-  const graphContent = (
-    <div style={{ height: '100%', display: 'flex' }}>
-      {!isMobile && (
-        <div style={{ width: railWidth, padding: '14px 12px', flex: 'none', background: C.bgPanel, overflowY: 'auto', boxSizing: 'border-box' }}>
-          <div style={{ fontSize: 10.5, letterSpacing: '.05em', textTransform: 'uppercase', color: C.textMuted, fontWeight: 600, marginBottom: 10 }}>Источники</div>
-          {sources.map(s => {
-            const on = !hiddenSources.has(s.key);
-            return (
-              <button key={s.key} onClick={() => setHiddenSources(prev => { const next = new Set(prev); on ? next.add(s.key) : next.delete(s.key); return next; })}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '5px 4px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: FONT.sans, fontSize: 12.5, color: on ? C.textPrimary : C.textMuted, opacity: on ? 1 : 0.55 }}>
-                <SourceDot source={s.key} />
-                <span style={{ flex: 1, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.label}</span>
-              </button>
-            );
-          })}
-          {allTags.length > 0 && (
-            <>
-              <div style={{ fontSize: 10.5, letterSpacing: '.05em', textTransform: 'uppercase', color: C.textMuted, fontWeight: 600, margin: '16px 0 8px' }}>Теги</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                {allTags.map(t => {
-                  const on = selectedTags.has(t);
-                  return (
-                    <button key={t}
-                      onClick={() => setSelectedTags(prev => { const next = new Set(prev); on ? next.delete(t) : next.add(t); return next; })}
-                      style={{
-                        fontSize: 11, fontWeight: 500, borderRadius: R.sm, padding: '2px 7px', cursor: 'pointer',
-                        fontFamily: FONT.sans, border: 'none',
-                        background: on ? C.accent : C.bgSelected,
-                        color: on ? C.onAccent : C.textSecondary,
-                      }}>#{t}</button>
-                  );
-                })}
-              </div>
-            </>
-          )}
-          <div style={{ fontSize: 10.5, color: C.textMuted, lineHeight: 1.5, marginTop: 16 }}>
-            Узел — заметка. Размер = число связей. Кольцо = выбранная. Наведи — подсветятся соседи.
-          </div>
+  // Центральная зона: заметка/пустое состояние или граф
+  const centerPane = mode === 'graph'
+    ? <NotesGraph sourceFilter={sourceFilter} selectedId={selectedId} onSelectNode={selectNote}
+        maxNodes={isMobile ? 40 : undefined} tagFilter={selectedTags.size ? selectedTags : null} />
+    : selectedId
+      ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink}
+          onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} isMobile={isMobile}
+          onDeleted={() => { setSelectedId(null); setMobileView('list'); }} />
+      : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <EmptyState icon={<IconGraph />} title="Заметки"
+            subtitle={notes.length ? 'Выбери заметку слева или создай новую' : 'Создай первую заметку или попроси Claude законспектировать разговор'}
+            action={<button onClick={() => setNewDialog({})} style={newBtn}><IconPlus />Новая заметка</button>} />
+        </div>;
+
+  const body = isMobile ? (
+    // Мобайл: один экран за раз — сайдбар (список/фильтры+граф) ↔ заметка
+    mode === 'graph'
+      ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>
+          {sidebarControls}
+          <div style={{ flex: 1, minHeight: 0, background: C.bgMain }}>{centerPane}</div>
         </div>
-      )}
-      {!isMobile && <Splitter active={railDragging} onMouseDown={startRailDrag} />}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <NotesGraph sourceFilter={sourceFilter} selectedId={selectedId} onSelectNode={selectNote}
-          maxNodes={isMobile ? 40 : undefined} tagFilter={selectedTags.size ? selectedTags : null} />
+      : (mobileView === 'list' || !selectedId)
+        ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
+        : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <button onClick={() => setMobileView('list')} style={backBar}><IconBack /> К списку</button>
+            <div style={{ flex: 1, minHeight: 0 }}>{centerPane}</div>
+          </div>
+  ) : (
+    // Десктоп: сайдбар (управление + список/фильтры) | центр — как в Workspace
+    <div style={{ height: '100%', display: 'flex' }}>
+      <div style={{ width: listWidth, flex: 'none', background: C.bgPanel, display: 'flex', flexDirection: 'column' }}>
+        {sidebar}
       </div>
+      <Splitter active={listDragging} onMouseDown={startListDrag} />
+      <div style={{ flex: 1, minWidth: 0 }}>{centerPane}</div>
     </div>
   );
 
   return (
     <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <HubHeader value="notes" onTab={onHubTab} auth={auth} onLogout={onLogout} />
-      {toolbar}
       <div style={{ flex: 1, minHeight: 0 }}>
-        {mode === 'notes' ? notesContent : graphContent}
+        {body}
       </div>
       {newDialog && <NewNoteDialog defaults={newDialog} onClose={() => setNewDialog(null)} onCreated={id => { setNewDialog(null); bumpNotes(); selectNote(id); }} />}
     </div>

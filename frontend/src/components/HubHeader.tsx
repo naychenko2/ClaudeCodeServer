@@ -93,16 +93,28 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
       padding: `0 ${isMobile ? TB.padXMobile : TB.padX}px`,
       boxSizing: 'border-box', borderBottom: `1px solid ${C.border}`,
     }}>
-      {/* Левая секция — логотип (скрыт на мобилке) */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
-        {!isMobile && logo}
-      </div>
+      {/* Левая секция — логотип (скрыт на мобилке; там распорка не нужна — иначе
+          4 вкладки не помещаются: правая секция не сжимается меньше аватара) */}
+      {!isMobile && (
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+          {logo}
+        </div>
+      )}
 
-      {/* Центр — переключатель вкладок */}
-      <HubTabs value={value} onChange={onTab} />
+      {/* Центр — переключатель вкладок. На мобиле занимает всю доступную ширину;
+          при нехватке места — горизонтальный скролл без обрезания краёв (margin auto) */}
+      {isMobile ? (
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', overflowX: 'auto', scrollbarWidth: 'none' }}>
+          <div style={{ margin: '0 auto', flexShrink: 0 }}>
+            <HubTabs value={value} onChange={onTab} />
+          </div>
+        </div>
+      ) : (
+        <HubTabs value={value} onChange={onTab} />
+      )}
 
       {/* Правая секция — меню аватара (управление пользователями — внутри меню, admin) */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+      <div style={{ flex: isMobile ? 'none' : 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
         {/* «Что нового» — продуктовая история по всем проектам (во всех разделах).
             На мобилке кнопка наезжала бы на контент — там она уезжает в меню аватара. */}
         {!isMobile && (

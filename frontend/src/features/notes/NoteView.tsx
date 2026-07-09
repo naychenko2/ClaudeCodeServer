@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { NoteDetail } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNotesVersion } from '../../lib/notes';
-import { C, FONT, R } from '../../lib/design';
+import { C, FONT, R, TB } from '../../lib/design';
 import { lazy, Suspense } from 'react';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
@@ -174,22 +174,27 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Шапка */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px 10px', flexWrap: 'wrap' }}>
+      {/* Тулбар заметки — единый стиль тулбаров приложения (как FileViewer) */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, flex: 'none',
+        minHeight: isMobile ? TB.heightMobile : TB.heightDesktop,
+        padding: `4px ${isMobile ? TB.padXMobile : TB.padX}px`,
+        boxSizing: 'border-box', background: TB.bg, borderBottom: TB.borderBottom,
+      }}>
         {editing
           ? <input
               value={draftTitle}
               onChange={e => setDraftTitle(e.target.value)}
               style={{
-                flex: 1, minWidth: 160, fontFamily: FONT.serif, fontSize: 20, fontWeight: 700,
+                flex: 1, minWidth: 120, fontFamily: FONT.serif, fontSize: 16, fontWeight: 700,
                 color: C.textHeading, background: C.bgWhite, border: `1px solid ${C.border}`,
-                borderRadius: R.md, padding: '6px 10px',
+                borderRadius: R.md, padding: '5px 10px',
               }}
             />
-          : <h1 style={{ flex: 1, minWidth: 0, margin: 0, fontFamily: FONT.serif, fontSize: 22, fontWeight: 700, color: C.textHeading }}>{note.title}</h1>}
-        <SourceBadge source={note.source} label={note.sourceLabel} />
-        {!editing && <span style={{ fontSize: 11, color: C.textMuted }}>изменено {relTime(note.updatedAt)}</span>}
-        <div style={{ display: 'flex', gap: 2 }}>
+          : <h1 title={note.title} style={{ flex: 1, minWidth: 0, margin: 0, fontFamily: FONT.serif, fontSize: 16, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{note.title}</h1>}
+        {!isMobile && <SourceBadge source={note.source} label={note.sourceLabel} />}
+        {!editing && !isMobile && <span style={{ fontSize: 11, color: C.textMuted, flex: 'none' }}>изменено {relTime(note.updatedAt)}</span>}
+        <div style={{ display: 'flex', gap: 2, flex: 'none' }}>
           <IconButton title={editing ? 'Просмотр' : 'Читать'} active={!editing} onClick={() => setEditing(false)}><IconEye /></IconButton>
           <IconButton title="Править" active={editing} onClick={startEdit}><IconPencil /></IconButton>
           {onAskClaude && <IconButton title="Спросить Claude про это" onClick={() => onAskClaude(note)}><IconChat /></IconButton>}
@@ -299,13 +304,14 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         )}
       </div>
 
-      {/* Десктоп: сайдбар связей справа (ширина перетаскивается) */}
+      {/* Десктоп: сайдбар связей справа — стиль как при просмотре заметки в файлах
+          (прозрачный фон, тонкая линия-сплиттер), ширина перетаскивается */}
       {!editing && !isMobile && (
         <>
           <Splitter active={connDragging} onMouseDown={startConnDrag} />
           <aside style={{
             width: connWidth, flex: 'none', overflowY: 'auto',
-            background: C.bgPanel, padding: '12px 12px 24px', boxSizing: 'border-box',
+            padding: '12px 14px 24px', boxSizing: 'border-box',
           }}>
             <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
               onWikilink={onWikilink} onLinkMention={linkMention} />

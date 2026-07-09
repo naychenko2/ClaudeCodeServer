@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -182,6 +182,14 @@ export const api = {
       request<{ notes: { oldId: string; newId: string }[] }>('/notes/folder/move', {
         method: 'POST', body: JSON.stringify({ source, path, newPath }),
       }),
+    // Физические папки (в т.ч. пустые) — для дерева и «куда создать»
+    folders: () => request<NoteFolder[]>('/notes/folders'),
+    createFolder: (source: string, path: string) =>
+      request<NoteFolder>('/notes/folder', { method: 'POST', body: JSON.stringify({ source, path }) }),
+    deleteFolder: (source: string, path: string) =>
+      request<{ removed: number }>(
+        `/notes/folder?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`,
+        { method: 'DELETE' }),
     // Перенос: в папку и/или другой источник (личный vault ↔ notes/ проекта)
     move: (id: string, folder: string | null, targetSource?: string) =>
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/move`, {

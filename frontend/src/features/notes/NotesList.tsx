@@ -1,9 +1,17 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { NoteSummary } from '../../types';
 import { api } from '../../lib/api';
-import { bumpNotes } from '../../lib/notes';
+import { bumpNotes, useNoteFolders } from '../../lib/notes';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconTrash } from './shared';
+
+// Иконка «Новая папка» для меню (папка с плюсом)
+const IconFolderPlus = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    <path d="M12 11v4M10 13h4" />
+  </svg>
+);
 
 interface Group { source: string; label: string; root: FolderNode }
 
@@ -15,7 +23,7 @@ interface FolderNode {
   notes: NoteSummary[];
 }
 
-function buildTree(notes: NoteSummary[]): FolderNode {
+function buildTree(notes: NoteSummary[], folderPaths: string[] = []): FolderNode {
   const root: FolderNode = { name: '', path: '', children: [], notes: [] };
   const byPath = new Map<string, FolderNode>([['', root]]);
   const dirOf = (p: string) => { const i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); };
@@ -31,6 +39,8 @@ function buildTree(notes: NoteSummary[]): FolderNode {
   };
 
   for (const n of notes) ensureFolder(dirOf(n.path)).notes.push(n);
+  // Пустые физические папки — иначе они «исчезли» бы из дерева
+  for (const p of folderPaths) if (p) ensureFolder(p);
   const sortRec = (node: FolderNode) => {
     node.children.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     node.children.forEach(sortRec);
@@ -54,14 +64,25 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
   // Папка переименована/перенесена — маппинг id заметок для обновления выбора
   onIdsRemapped?: (map: { oldId: string; newId: string }[]) => void;
 }) {
+  // Физические папки (в т.ч. пустые) и лейблы источников (для источников без заметок)
+  const folders = useNoteFolders();
+  const [srcLabels, setSrcLabels] = useState<Record<string, string>>({});
+  useEffect(() => {
+    api.notes.sources().then(ss => setSrcLabels(Object.fromEntries(ss.map(s => [s.key, s.label])))).catch(() => {});
+  }, []);
+
   // Свёрнутые папки (ключ source|path); по умолчанию всё раскрыто
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [dropTarget, setDropTarget] = useState<string | null>(null);   // source|path
   // Переименование папки: ключ source|path + редактируемый полный путь
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
-  // Контекстное меню (right-click, десктоп): заметка или папка; move — режим выбора цели
+  // Создание новой папки: ключ source|parentPath ('' = корень источника) + имя
+  const [creatingFolder, setCreatingFolder] = useState<string | null>(null);
+  const [newFolderValue, setNewFolderValue] = useState('');
+  // Контекстное меню (right-click / long-press): источник, заметка или папка
   const [ctxMenu, setCtxMenu] = useState<
+    | { x: number; y: number; kind: 'source'; source: string; move?: undefined }
     | { x: number; y: number; kind: 'note'; source: string; note: NoteSummary; move?: boolean }
     | { x: number; y: number; kind: 'folder'; source: string; node: FolderNode; move?: boolean }
     | null
@@ -69,9 +90,29 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
   useEffect(() => {
     if (!ctxMenu) return;
     const close = () => setCtxMenu(null);
-    const t = setTimeout(() => window.addEventListener('mousedown', close), 0);
-    return () => { clearTimeout(t); window.removeEventListener('mousedown', close); };
+    const t = setTimeout(() => {
+      window.addEventListener('mousedown', close);
+      window.addEventListener('touchstart', close);
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('touchstart', close);
+    };
   }, [ctxMenu]);
+
+  // Long-press на тач-устройствах → то же контекстное меню (iOS не шлёт contextmenu)
+  const pressTimer = useRef<number | null>(null);
+  const clearPress = () => { if (pressTimer.current) { clearTimeout(pressTimer.current); pressTimer.current = null; } };
+  const longPress = (open: (x: number, y: number) => void) => ({
+    onTouchStart: (e: React.TouchEvent) => {
+      const t = e.touches[0];
+      pressTimer.current = window.setTimeout(() => { navigator.vibrate?.(10); open(t.clientX, t.clientY); }, 500);
+    },
+    onTouchMove: clearPress,
+    onTouchEnd: clearPress,
+    onTouchCancel: clearPress,
+  });
 
   const commitFolderRename = async (source: string, oldPath: string) => {
     const newPath = renameValue.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
@@ -96,17 +137,39 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
     } catch { /* конфликт имени */ }
   };
 
+  const commitCreateFolder = async (source: string, parent: string) => {
+    const name = newFolderValue.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    setCreatingFolder(null);
+    setNewFolderValue('');
+    if (!name) return;
+    const path = parent ? `${parent}/${name}` : name;
+    try { await api.notes.createFolder(source, path); bumpNotes(); }
+    catch { /* дубликат/конфликт — реалтайм покажет актуальное */ }
+  };
+
   const groups = useMemo<Group[]>(() => {
-    const map = new Map<string, { source: string; label: string; notes: NoteSummary[] }>();
+    const notesBySrc = new Map<string, { label: string; notes: NoteSummary[] }>();
     for (const n of notes) {
-      let g = map.get(n.source);
-      if (!g) { g = { source: n.source, label: n.sourceLabel, notes: [] }; map.set(n.source, g); }
+      let g = notesBySrc.get(n.source);
+      if (!g) { g = { label: n.sourceLabel, notes: [] }; notesBySrc.set(n.source, g); }
       g.notes.push(n);
     }
-    return [...map.values()]
-      .sort((a, b) => a.source === 'personal' ? -1 : b.source === 'personal' ? 1 : a.label.localeCompare(b.label, 'ru'))
-      .map(g => ({ source: g.source, label: g.label, root: buildTree(g.notes) }));
-  }, [notes]);
+    const foldersBySrc = new Map<string, string[]>();
+    for (const f of folders) {
+      const arr = foldersBySrc.get(f.source) ?? [];
+      arr.push(f.path);
+      foldersBySrc.set(f.source, arr);
+    }
+    // Источник может иметь только пустые папки (без заметок) — показываем и его
+    const keys = new Set<string>([...notesBySrc.keys(), ...foldersBySrc.keys()]);
+    return [...keys]
+      .map(source => {
+        const gn = notesBySrc.get(source);
+        const label = gn?.label ?? srcLabels[source] ?? (source === 'personal' ? 'Личный' : source);
+        return { source, label, root: buildTree(gn?.notes ?? [], foldersBySrc.get(source) ?? []) };
+      })
+      .sort((a, b) => a.source === 'personal' ? -1 : b.source === 'personal' ? 1 : a.label.localeCompare(b.label, 'ru'));
+  }, [notes, folders, srcLabels]);
 
   const doMove = async (noteId: string, source: string, folder: string) => {
     const note = notes.find(n => n.id === noteId);
@@ -141,6 +204,29 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
     },
   });
 
+  // Инлайн-ввод имени новой папки (в корне источника или внутри папки)
+  const renderCreateFolderInput = (source: string, parent: string, depth: number) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: `3px 8px 3px ${10 + depth * 14}px` }}>
+      <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
+      <input
+        autoFocus
+        value={newFolderValue}
+        onChange={e => setNewFolderValue(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') void commitCreateFolder(source, parent);
+          if (e.key === 'Escape') { setCreatingFolder(null); setNewFolderValue(''); }
+        }}
+        onBlur={() => void commitCreateFolder(source, parent)}
+        placeholder="Имя папки"
+        style={{
+          flex: 1, minWidth: 0, fontSize: 12, fontFamily: FONT.sans, color: C.textHeading,
+          background: C.bgWhite, border: `1px solid ${C.accent}`, borderRadius: R.sm,
+          padding: '2px 6px', outline: 'none',
+        }}
+      />
+    </div>
+  );
+
   const renderNote = (n: NoteSummary, depth: number) => {
     const active = n.id === selectedId;
     return (
@@ -148,6 +234,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
         key={n.id}
         onClick={() => onSelect(n.id)}
         onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'note', source: n.source, note: n }); }}
+        {...longPress((x, y) => setCtxMenu({ x, y, kind: 'note', source: n.source, note: n }))}
         title={n.title}
         draggable
         onDragStart={e => {
@@ -163,6 +250,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           color: active ? C.textHeading : C.textSecondary,
           fontWeight: active ? 500 : 400,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none',
         }}
       >{n.title}</button>
     );
@@ -181,24 +269,25 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
     } catch { /* уже удалена — реалтайм обновит список */ }
   };
 
-  // Папки источника (включая промежуточные уровни) — для подменю «Переместить в…»
-  const foldersOf = (source: string) => [...new Set(
-    notes.filter(n => n.source === source && n.path.includes('/'))
+  // Папки источника (включая промежуточные уровни + физические пустые) —
+  // для подменю «Переместить в…»
+  const foldersOf = (source: string) => [...new Set([
+    ...notes.filter(n => n.source === source && n.path.includes('/'))
       .flatMap(n => {
         const parts = n.path.slice(0, n.path.lastIndexOf('/')).split('/');
         return parts.map((_, i) => parts.slice(0, i + 1).join('/'));
       }),
-  )].sort((a, b) => a.localeCompare(b, 'ru'));
+    ...folders.filter(f => f.source === source).map(f => f.path),
+  ])].sort((a, b) => a.localeCompare(b, 'ru'));
 
-  const deleteFolder = async (node: FolderNode) => {
+  const deleteFolder = async (source: string, node: FolderNode) => {
     const all = notesUnder(node);
     const msg = all.length > 0
       ? `Удалить папку «${node.name}» и ${all.length} замет${all.length === 1 ? 'ку' : all.length < 5 ? 'ки' : 'ок'} в ней?`
       : `Удалить папку «${node.name}»?`;
     if (!window.confirm(msg)) return;
-    for (const n of all) {
-      try { await api.notes.delete(n.id); } catch { /* уже удалена — не страшно */ }
-    }
+    try { await api.notes.deleteFolder(source, node.path); }   // рекурсивно (пустая или с заметками)
+    catch { /* уже удалена — реалтайм обновит */ }
     bumpNotes();
     onDeleted?.(all.map(n => n.id));
   };
@@ -243,6 +332,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
         <button
           onClick={() => setCollapsed(prev => { const next = new Set(prev); isCollapsed ? next.delete(key) : next.add(key); return next; })}
           onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'folder', source, node }); }}
+          {...longPress((x, y) => setCtxMenu({ x, y, kind: 'folder', source, node }))}
           draggable
           onDragStart={e => {
             e.dataTransfer.setData('application/x-folder-path', node.path);
@@ -266,13 +356,14 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>)}
           {iconBtn('Переименовать/перенести папку', () => { setRenaming(key); setRenameValue(node.path); },
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>)}
-          {iconBtn('Удалить папку', () => void deleteFolder(node),
+          {iconBtn('Удалить папку', () => void deleteFolder(source, node),
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></svg>)}
           <span style={{ fontSize: 10, color: C.textMuted }}>{countNotes(node)}</span>
         </button>
         )}
         {!isCollapsed && (
           <>
+            {creatingFolder === key && renderCreateFolderInput(source, node.path, depth + 1)}
             {node.children.map(c => renderFolder(source, c, depth + 1))}
             {node.notes.map(n => renderNote(n, depth + 1))}
           </>
@@ -281,7 +372,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
     );
   };
 
-  if (notes.length === 0)
+  if (notes.length === 0 && folders.length === 0)
     return (
       <div style={{ padding: '20px 12px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans, lineHeight: 1.6 }}>
         Пока нет заметок. Создай первую или попроси Claude законспектировать что-нибудь.
@@ -316,13 +407,18 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           <CollapseGroup
             defaultOpen
             title={
-              <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <span
+                onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'source', source: g.source }); }}
+                {...longPress((x, y) => setCtxMenu({ x, y, kind: 'source', source: g.source }))}
+                style={{ display: 'flex', alignItems: 'center', gap: 7, WebkitTouchCallout: 'none', userSelect: 'none' }}
+              >
                 <SourceDot source={g.source} />
                 <span style={{ fontSize: 12.5, fontWeight: 500, color: C.textPrimary }}>{g.label}</span>
               </span>
             }
             tail={<span style={{ fontSize: 11, color: C.textMuted }}>{countNotes(g.root)}</span>}
           >
+            {creatingFolder === `${g.source}|` && renderCreateFolderInput(g.source, '', 0)}
             {g.root.children.map(c => renderFolder(g.source, c, 0))}
             {g.root.notes.map(n => renderNote(n, 0))}
           </CollapseGroup>
@@ -350,8 +446,13 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
                 .filter(d => ctxMenu.kind !== 'folder' || (d.path !== ctxMenu.node.path && !d.path.startsWith(ctxMenu.node.path + '/')))
                 .map(d => menuItem(<IconFolder />, d.label, () => {
                   if (ctxMenu.kind === 'note') void doMove(ctxMenu.note.id, ctxMenu.source, d.path);
-                  else void moveFolderTo(ctxMenu.source, ctxMenu.node.path, d.path);
+                  else if (ctxMenu.kind === 'folder') void moveFolderTo(ctxMenu.source, ctxMenu.node.path, d.path);
                 }))}
+            </>
+          ) : ctxMenu.kind === 'source' ? (
+            <>
+              {onCreateInFolder && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ''))}
+              {menuItem(<IconFolderPlus />, 'Новая папка', () => { setCreatingFolder(`${ctxMenu.source}|`); setNewFolderValue(''); })}
             </>
           ) : ctxMenu.kind === 'note' ? (
             <>
@@ -363,10 +464,15 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           ) : (
             <>
               {onCreateInFolder && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ctxMenu.node.path))}
+              {menuItem(<IconFolderPlus />, 'Новая папка', () => {
+                const k = `${ctxMenu.source}|${ctxMenu.node.path}`;
+                setCollapsed(prev => { const n = new Set(prev); n.delete(k); return n; });   // раскрыть, чтобы ввод был виден
+                setCreatingFolder(k); setNewFolderValue('');
+              })}
               {menuItem(<IconPencil />, 'Переименовать', () => { setRenaming(`${ctxMenu.source}|${ctxMenu.node.path}`); setRenameValue(ctxMenu.node.path); })}
               {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
               {menuDivider}
-              {menuItem(<IconTrash />, 'Удалить папку', () => void deleteFolder(ctxMenu.node), true)}
+              {menuItem(<IconTrash />, 'Удалить папку', () => void deleteFolder(ctxMenu.source, ctxMenu.node), true)}
             </>
           )}
         </div>

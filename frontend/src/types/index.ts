@@ -458,6 +458,12 @@ export interface NoteSource {
   label: string;
 }
 
+// Физическая папка источника (в т.ч. пустая) — для дерева и выбора «куда создать»
+export interface NoteFolder {
+  source: string;
+  path: string;
+}
+
 export interface CreateNoteDto {
   title: string;
   content?: string;

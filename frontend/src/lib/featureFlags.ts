@@ -12,6 +12,11 @@ export const FLAGS = {
   notes: 'notes',
   notesSessionSummary: 'notes-session-summary',
   notesAutoRecall: 'notes-auto-recall',
+  dailyBriefing: 'daily-briefing',
+  notesTaskSync: 'notes-task-sync',
+  taskExecContext: 'task-exec-context',
+  chatExtractTasks: 'chat-extract-tasks',
+  unifiedSearch: 'unified-search',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

@@ -8,11 +8,13 @@ import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { C, FONT, R, SHADOW, TB } from '../../lib/design';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
-import { BackButton } from '../ui';
+import { BackButton, Modal, ModalActions } from '../ui';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { bumpNotes } from '../../lib/notes';
+import { createTask } from '../../lib/tasks';
 import { openNoteById } from '../../features/notes/saveToNote';
 import { IconNotes } from '../../features/notes/shared';
+import type { ExtractedTaskCandidate } from '../../types';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -683,6 +685,86 @@ function SessionSummaryButton({ session, online, isMobile }: { session: Session;
   );
 }
 
+// Иконка «задачи из чата» — документ с плюсом
+const IconTaskPlus = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="4" width="13" height="16" rx="2" />
+    <path d="M7 9h6M7 13h3" />
+    <path d="M18 14v6M15 17h6" />
+  </svg>
+);
+
+// Кнопка «Задачи из чата» (флаг chat-extract-tasks): Claude извлекает action items
+// из транскрипта, пользователь подтверждает выбор — задачи создаются в трекере.
+function ExtractTasksButton({ session, online, isMobile }: { session: Session; online: boolean; isMobile?: boolean }) {
+  const on = useFeature(FLAGS.chatExtractTasks);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [dialog, setDialog] = useState<{ projectId: string | null; items: (ExtractedTaskCandidate & { sel: boolean })[] } | null>(null);
+  useEffect(() => { setDialog(null); setNote(null); setBusy(false); }, [session.id]);
+  if (!on || !online || session.messageCount === 0) return null;
+
+  const run = () => {
+    if (busy) return;
+    setBusy(true); setNote(null);
+    api.sessions.extractTasks(session.id)
+      .then(r => {
+        if (r.tasks.length === 0) { setNote('Задач в чате не найдено'); setTimeout(() => setNote(null), 3000); return; }
+        setDialog({ projectId: r.projectId ?? null, items: r.tasks.map(t => ({ ...t, sel: true })) });
+      })
+      .catch(() => { setNote('Не удалось извлечь задачи'); setTimeout(() => setNote(null), 3000); })
+      .finally(() => setBusy(false));
+  };
+  const toggle = (i: number) =>
+    setDialog(d => d && ({ ...d, items: d.items.map((t, idx) => idx === i ? { ...t, sel: !t.sel } : t) }));
+  const create = async () => {
+    if (!dialog) return;
+    const chosen = dialog.items.filter(t => t.sel);
+    if (chosen.length === 0) { setDialog(null); return; }
+    setCreating(true);
+    try {
+      for (const t of chosen)
+        await createTask(dialog.projectId, { title: t.title, dueDate: t.due ?? undefined, priority: t.priority ?? undefined });
+      setDialog(null);
+    } catch { /* оставляем диалог — можно повторить */ }
+    finally { setCreating(false); }
+  };
+  const selectedCount = dialog?.items.filter(t => t.sel).length ?? 0;
+
+  return (
+    <>
+      <ToolbarIconButton onClick={run} isMobile={isMobile}
+        title={busy ? 'Ищу задачи…' : note ?? 'Задачи из чата'}>
+        {busy ? <div className="tool-spinner" style={{ width: 13, height: 13 }} /> : <IconTaskPlus />}
+      </ToolbarIconButton>
+      {dialog && (
+        <Modal width={460} title="Задачи из чата" subtitle="Отметьте, что добавить в трекер"
+          onClose={() => setDialog(null)}
+          footer={<ModalActions confirmLabel={`Создать (${selectedCount})`} confirmDisabled={selectedCount === 0}
+            loading={creating} onConfirm={create} onCancel={() => setDialog(null)} />}>
+          <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 360, overflowY: 'auto' }}>
+            {dialog.items.map((t, i) => (
+              <label key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 4px', cursor: 'pointer', borderBottom: `1px solid ${C.border}` }}>
+                <input type="checkbox" checked={t.sel} onChange={() => toggle(i)} style={{ marginTop: 3, accentColor: C.accent }} />
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 13.5, fontFamily: FONT.sans, color: C.textPrimary }}>{t.title}</span>
+                  {(t.due || t.priority) && (
+                    <span style={{ display: 'flex', gap: 8, marginTop: 3 }}>
+                      {t.due && <span style={{ fontSize: 11, color: C.textSecondary }}>📅 {t.due}</span>}
+                      {t.priority && <span style={{ fontSize: 11, color: C.textMuted }}>{t.priority}</span>}
+                    </span>
+                  )}
+                </span>
+              </label>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
 export function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact }: ChatHeaderBarProps) {
   const sessionModelLabel = useModelLabel(session.model);
   const asstName = assistantName(session.model);
@@ -794,9 +876,10 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
   // На мобилке артефакты и настройки — плотная пара справа (gap 2 вместо TB.gap),
   // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
   const summaryBtn = <SessionSummaryButton session={session} online={online} isMobile={isMobile} />;
+  const extractBtn = <ExtractTasksButton session={session} online={online} isMobile={isMobile} />;
   const actionBtns = isMobile
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{summaryBtn}{artifactsBtn}{settingsBtn}</div>
-    : <>{summaryBtn}{artifactsBtn}{settingsBtn}</>;
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>
+    : <>{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</>;
 
   return (
     <Toolbar isMobile={isMobile}>

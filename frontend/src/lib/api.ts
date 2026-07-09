@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -214,7 +214,27 @@ export const api = {
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dto) }),
     delete: (id: string) =>
       request<void>(`/notes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    // Задачи из заметок (флаг notes-task-sync): чекбоксы .md ↔ задачи
+    tasks: (id: string) => request<NoteTask[]>(`/notes/${encodeURIComponent(id)}/tasks`),
+    promoteTask: (id: string, line: number) =>
+      request<Task>(`/notes/${encodeURIComponent(id)}/tasks/promote`, {
+        method: 'POST', body: JSON.stringify({ line }),
+      }),
+    toggleTask: (id: string, line: number, done: boolean) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/tasks/toggle`, {
+        method: 'POST', body: JSON.stringify({ line, done }),
+      }),
   },
+
+  // Утренний бриф (флаг daily-briefing): собрать план дня в дневник
+  briefing: {
+    today: (date?: string) =>
+      request<NoteDetail>('/briefing/today', { method: 'POST', body: JSON.stringify({ date: date ?? null }) }),
+  },
+
+  // Единый поиск (флаг unified-search): заметки + задачи в одной выдаче
+  search: (q: string, topK = 8) =>
+    request<SearchHit[]>(`/search?q=${encodeURIComponent(q)}&topK=${topK}`),
 
   sessions: {
     list: (projectId: string) => request<Session[]>(`/projects/${projectId}/sessions`),
@@ -236,6 +256,9 @@ export const api = {
     // Маршрут по id сессии — работает и для проектных сессий, и для чатов
     summary: (sessionId: string) =>
       request<NoteDetail>(`/sessions/${sessionId}/summary`, { method: 'POST' }),
+    // «Задачи из чата» (флаг chat-extract-tasks): извлечь кандидатов (не создаёт)
+    extractTasks: (sessionId: string) =>
+      request<ExtractTasksResponse>(`/sessions/${sessionId}/extract-tasks`, { method: 'POST' }),
   },
 
   // Чаты вне проекта (project-less)

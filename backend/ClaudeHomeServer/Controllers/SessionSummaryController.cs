@@ -12,7 +12,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/sessions")]
-public class SessionSummaryController(SessionSummaryService summary) : ControllerBase
+public class SessionSummaryController(
+    SessionSummaryService summary, ChatTaskExtractionService taskExtraction) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -27,6 +28,20 @@ public class SessionSummaryController(SessionSummaryService summary) : Controlle
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (SummaryInProgressException ex) { return Conflict(new { error = ex.Message }); }
         catch (SummaryGenerationException ex) { return StatusCode(502, new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    // «Задачи из чата» (флаг chat-extract-tasks): извлечь кандидатов в задачи из
+    // транскрипта. Ничего не создаёт — фронт показывает диалог подтверждения.
+    [HttpPost("{sessionId}/extract-tasks")]
+    public async Task<ActionResult<ExtractTasksResult>> ExtractTasks(string sessionId, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await taskExtraction.ExtractAsync(UserId, sessionId, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 }

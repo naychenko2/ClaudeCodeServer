@@ -81,6 +81,9 @@ export interface Task {
   linkedFiles: string[];
   subtasks: TaskSubtask[];
   labels: string[];
+  // Связь с чекбоксом заметки (флаг notes-task-sync)
+  sourceNoteId?: string;
+  sourceNoteLine?: number;
   createdAt: string;
   updatedAt: string;
   // UI-проекция повторяющейся задачи в календаре (не приходит с бэка):
@@ -88,6 +91,38 @@ export interface Task {
   // virtual — признак вычисленного будущего повтора (реально существует только один экземпляр)
   occurrenceOf?: string;
   virtual?: boolean;
+}
+
+// Элемент единой выдачи поиска (флаг unified-search)
+export interface SearchHit {
+  type: 'note' | 'task';
+  id: string;
+  title: string;
+  context: string;   // источник заметки / контекст задачи
+  snippet: string;
+  score?: number | null;
+  url: string;       // hash-диплинк
+}
+
+// Кандидат в задачу, извлечённый из чата (флаг chat-extract-tasks). Ещё не создан.
+export interface ExtractedTaskCandidate {
+  title: string;
+  due?: string | null;
+  priority?: TaskPriority | null;
+}
+export interface ExtractTasksResponse {
+  projectId?: string | null;
+  tasks: ExtractedTaskCandidate[];
+}
+
+// Строка-чекбокс заметки + связанная задача (флаг notes-task-sync)
+export interface NoteTask {
+  line: number;
+  text: string;
+  done: boolean;
+  due?: string | null;
+  taskId?: string | null;
+  taskStatus?: string | null;
 }
 
 export interface CreateTaskDto {

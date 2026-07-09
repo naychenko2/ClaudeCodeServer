@@ -12,6 +12,8 @@ import { tbBtnPrimary, tbBtnGhost } from '../../components/Toolbar';
 import { useNotes } from '../../lib/notes';
 import type { NoteSource } from '../../types';
 import { NoteConnections } from './NoteConnections';
+import { NoteTasksSection } from './NoteTasksSection';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import {
   SourceBadge, usePanelWidth,
   IconChat, IconTrash, IconCalendarDay, IconLink, IconSparkle, IconFolder, IconFolderMove,
@@ -34,6 +36,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   extraToolbar?: React.ReactNode;
 }) {
   const version = useNotesVersion();
+  const taskSyncEnabled = useFeature(FLAGS.notesTaskSync);
   // Перетаскиваемая ширина сайдбара связей (справа: тянем влево — растёт)
   const [connWidth, connDragging, startConnDrag] = usePanelWidth('cc_notes_conn_width', 280, 230, 460, true);
   const [note, setNote] = useState<NoteDetail | null>(null);
@@ -329,6 +332,11 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         )}
         <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
           resolveNote={resolveNote} embedSource={note.source} />
+
+        {/* Задачи из заметки (флаг notes-task-sync): чекбоксы .md ↔ задачи. */}
+        {taskSyncEnabled && (
+          <NoteTasksSection noteId={note.id} version={version} />
+        )}
 
         {/* Мобильный: блок связей снизу под контентом (сайдбару нет места) */}
         {isMobile && (

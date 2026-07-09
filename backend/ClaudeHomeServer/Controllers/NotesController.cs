@@ -19,14 +19,18 @@ public class NotesController : ControllerBase
     private readonly NotesService _notes;
     private readonly NotesKnowledgeService _kb;
     private readonly NotesAiService _ai;
+    private readonly NoteTaskSyncService _noteTasks;
+    private readonly FeatureFlagService _flags;
     private readonly IHubContext<SessionHub> _hub;
 
     public NotesController(NotesService notes, NotesKnowledgeService kb, NotesAiService ai,
-        IHubContext<SessionHub> hub)
+        NoteTaskSyncService noteTasks, FeatureFlagService flags, IHubContext<SessionHub> hub)
     {
         _notes = notes;
         _kb = kb;
         _ai = ai;
+        _noteTasks = noteTasks;
+        _flags = flags;
         _hub = hub;
     }
 
@@ -159,6 +163,41 @@ public class NotesController : ControllerBase
         }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
+
+    // --- Задачи из заметок (флаг notes-task-sync) ---
+
+    // Чекбоксы заметки + связанные задачи (панель «Задачи из заметки»).
+    [HttpGet("{id}/tasks")]
+    public ActionResult<IReadOnlyList<NoteTaskDto>> NoteTasks(string id)
+    {
+        if (!NotesTaskSyncEnabled) return Forbid();
+        try { return Ok(_noteTasks.ListForNote(UserId, id)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    // Промоут чекбокса в настоящую задачу (появляется в календаре, работают напоминания).
+    [HttpPost("{id}/tasks/promote")]
+    public async Task<ActionResult> PromoteTask(string id, [FromBody] PromoteTaskRequest req)
+    {
+        if (!NotesTaskSyncEnabled) return Forbid();
+        try { return Ok(await _noteTasks.PromoteAsync(UserId, id, req.Line)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    // Тоггл чекбокса из заметки: правит .md + синхронизирует связанную задачу.
+    [HttpPost("{id}/tasks/toggle")]
+    public async Task<ActionResult<NoteDetail>> ToggleTask(string id, [FromBody] ToggleTaskRequest req)
+    {
+        if (!NotesTaskSyncEnabled) return Forbid();
+        try { return Ok(await _noteTasks.ToggleAsync(UserId, id, req.Line, req.Done)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    private bool NotesTaskSyncEnabled => _flags.IsEnabled(UserId, FeatureFlagKeys.NotesTaskSync);
 
     // Переименование/перенос папки целиком: newPath — полный новый путь папки.
     [HttpPost("folder/move")]

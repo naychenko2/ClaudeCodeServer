@@ -33,6 +33,10 @@ public class TaskManager
         _tasks.Values.Where(t => t.ProjectId == projectId)
             .OrderBy(t => t.DueDate ?? "9999").ThenBy(t => t.CreatedAt).ToList();
 
+    // Задачи, промоутнутые из чекбоксов конкретной заметки (флаг notes-task-sync)
+    public IReadOnlyCollection<TaskItem> GetBySourceNote(string noteId) =>
+        _tasks.Values.Where(t => t.SourceNoteId == noteId).ToList();
+
     public TaskItem Create(string? projectId, string ownerId, CreateTaskRequest req)
     {
         var task = new TaskItem
@@ -52,6 +56,8 @@ public class TaskManager
             LinkedFiles = req.LinkedFiles ?? [],
             Subtasks = req.Subtasks?.Select(s => new TaskSubtask { Title = s.Title }).ToList() ?? [],
             Labels = req.Labels ?? [],
+            SourceNoteId = req.SourceNoteId,
+            SourceNoteLine = req.SourceNoteLine,
         };
         // Серия регулярной задачи начинается с её первого экземпляра
         if (task.Recurrence is not null) task.SeriesId = task.Id;
@@ -217,7 +223,9 @@ public record CreateTaskRequest(
     string? LinkedSessionId = null,
     List<string>? LinkedFiles = null,
     List<CreateSubtaskRequest>? Subtasks = null,
-    List<string>? Labels = null);
+    List<string>? Labels = null,
+    string? SourceNoteId = null,
+    int? SourceNoteLine = null);
 
 public record CreateSubtaskRequest(string Title);
 

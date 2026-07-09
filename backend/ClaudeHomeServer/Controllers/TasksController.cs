@@ -51,7 +51,7 @@ public class ProjectTasksController(
 [Route("api/tasks")]
 public class TasksController(
     TaskManager tasks, IHubContext<SessionHub> hub, TaskAiService ai, ProjectManager projects,
-    TaskExecutionService executor) : ControllerBase
+    TaskExecutionService executor, NoteTaskSyncService noteSync) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -158,6 +158,11 @@ public class TasksController(
             if (next is not null)
                 await hub.BroadcastTaskChangedAsync(UserId, "created", next);
         }
+
+        // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
+        // (флаг notes-task-sync; no-op если задача не из заметки)
+        if (wasDone != (updated.Status == TaskItemStatus.Done))
+            await noteSync.SyncTaskToNoteAsync(UserId, updated);
 
         return Ok(updated);
     }

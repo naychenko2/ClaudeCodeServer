@@ -25,6 +25,11 @@ public static class FeatureFlagKeys
     public const string Notes = "notes";
     public const string NotesSessionSummary = "notes-session-summary";
     public const string NotesAutoRecall = "notes-auto-recall";
+    public const string DailyBriefing = "daily-briefing";
+    public const string NotesTaskSync = "notes-task-sync";
+    public const string TaskExecContext = "task-exec-context";
+    public const string ChatExtractTasks = "chat-extract-tasks";
+    public const string UnifiedSearch = "unified-search";
 }
 
 /// <summary>
@@ -68,6 +73,51 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.NotesAutoRecall,
             Title: "Заметки в контексте Claude",
             Description: "Перед каждым ходом Claude автоматически получает выдержки из семантически близких заметок — база знаний работает как память.",
+            Default: false,
+            Stage: "dev"),
+
+        // Утренний бриф — агент собирает просроченные/сегодняшние задачи, изменённые
+        // заметки и git-активность за сутки, прогоняет через LLM и пишет план дня
+        // в дневниковую заметку (## Утренний бриф) + push. On-demand и по расписанию утром.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.DailyBriefing,
+            Title: "Утренний бриф",
+            Description: "Агент утром собирает задачи на день, свежие заметки и активность по проектам в короткий план дня — пишет его в дневник и присылает уведомление.",
+            Default: false,
+            Stage: "dev"),
+
+        // Связь чекбоксов заметок и задач: `- [ ] … 📅 дата` можно превратить в настоящую
+        // задачу (календарь, напоминания); завершение с любой стороны синхронизирует галочку.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.NotesTaskSync,
+            Title: "Задачи из заметок",
+            Description: "Чекбоксы `- [ ]` в заметках можно превратить в задачи с датой и повтором. Отметка выполнения в заметке и в календаре синхронизируется.",
+            Default: false,
+            Stage: "dev"),
+
+        // Claude-исполнитель задач получает в контекст семантически близкие заметки
+        // (нужен Dify): выполняет задачу, опираясь на базу знаний, а не вслепую.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.TaskExecContext,
+            Title: "Заметки в контексте исполнителя",
+            Description: "Когда Claude берёт задачу в работу, в постановку подмешиваются выдержки из семантически близких заметок — исполнение с опорой на базу знаний.",
+            Default: false,
+            Stage: "dev"),
+
+        // «Задачи из чата» — кнопка в шапке: Claude извлекает action items из транскрипта
+        // сессии, пользователь подтверждает — и они создаются задачами.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.ChatExtractTasks,
+            Title: "Задачи из чата",
+            Description: "Кнопка в шапке чата: Claude выделяет из диалога конкретные задачи-действия, вы отмечаете нужные — и они попадают в трекер.",
+            Default: false,
+            Stage: "dev"),
+
+        // Единый поиск: заметки (по смыслу) + задачи в одной выдаче.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.UnifiedSearch,
+            Title: "Единый поиск",
+            Description: "Поиск по всему рабочему пространству сразу — заметки (по смыслу) и задачи в одной выдаче. Кнопка-лупа в шапке.",
             Default: false,
             Stage: "dev"),
     ];

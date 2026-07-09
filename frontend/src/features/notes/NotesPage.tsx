@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { AuthState, NoteDetail, NoteSource, NoteSummary, NoteTemplate } from '../../types';
+import type { AuthState, NoteDetail, NoteSemanticHit, NoteSource, NoteSummary, NoteTemplate } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
@@ -74,15 +74,26 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
 
   const existingTitles = useMemo(() => existingTitleSet(notes), [notes]);
 
-  // Поиск — серверный (по заголовку, тексту и тегам), с дебаунсом. Пусто → весь список.
+  // Поиск: точный (по заголовку/тексту/тегам, серверный) или «по смыслу» (Dify RAG).
+  const [semanticAvailable, setSemanticAvailable] = useState(false);
+  const [searchMode, setSearchMode] = useState<'exact' | 'semantic'>('exact');
+  useEffect(() => { api.notes.caps().then(c => setSemanticAvailable(c.semantic)).catch(() => {}); }, []);
+
   const [results, setResults] = useState<NoteSummary[] | null>(null);
+  const [semanticHits, setSemanticHits] = useState<NoteSemanticHit[] | null>(null);
   useEffect(() => {
     const q = query.trim();
-    if (!q) { setResults(null); return; }
-    const t = setTimeout(() => { api.notes.list(undefined, q).then(setResults).catch(() => {}); }, 250);
+    if (!q) { setResults(null); setSemanticHits(null); return; }
+    const t = setTimeout(() => {
+      if (searchMode === 'semantic' && semanticAvailable)
+        api.notes.semantic(q).then(r => setSemanticHits(r.results)).catch(() => setSemanticHits([]));
+      else
+        api.notes.list(undefined, q).then(setResults).catch(() => {});
+    }, searchMode === 'semantic' ? 450 : 250);
     return () => clearTimeout(t);
-  }, [query]);
+  }, [query, searchMode, semanticAvailable]);
   const listed = results ?? notes;
+  const showSemantic = searchMode === 'semantic' && query.trim().length > 0;
 
   const sources = useMemo(() => {
     const m = new Map<string, string>();
@@ -144,6 +155,20 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
             placeholder={isMobile ? 'Поиск по заметкам' : 'Поиск… (tag:идея source:Личный)'}
             style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontFamily: FONT.sans, fontSize: 13, color: C.textHeading }}
           />
+          {semanticAvailable && (
+            <div style={{ display: 'flex', gap: 2, background: C.bgSelected, borderRadius: 7, padding: 2, flex: 'none' }}>
+              {(['exact', 'semantic'] as const).map(m => (
+                <button key={m} onClick={() => setSearchMode(m)}
+                  title={m === 'exact' ? 'Точный поиск по тексту' : 'Поиск по смыслу (семантический)'}
+                  style={{
+                    fontSize: 10.5, fontWeight: 500, border: 'none', borderRadius: 5, padding: '3px 8px',
+                    cursor: 'pointer', fontFamily: FONT.sans,
+                    background: searchMode === m ? C.bgWhite : 'transparent',
+                    color: searchMode === m ? C.textHeading : C.textMuted,
+                  }}>{m === 'exact' ? 'Точный' : 'По смыслу'}</button>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {mode === 'graph' && <div style={{ flex: 1 }} />}
@@ -157,9 +182,13 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   );
 
   // --- Содержимое режима «Заметки» ---
+  const listPane = showSemantic
+    ? <SemanticResults hits={semanticHits} selectedId={selectedId} onSelect={selectNote} />
+    : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote} />;
+
   const notesContent = isMobile ? (
     mobileView === 'list' || !selectedId
-      ? <div style={{ height: '100%', overflowY: 'auto' }}><NotesList notes={listed} selectedId={selectedId} onSelect={selectNote} /></div>
+      ? <div style={{ height: '100%', overflowY: 'auto' }}>{listPane}</div>
       : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
           <button onClick={() => setMobileView('list')} style={backBar}><IconBack /> К списку</button>
           <div style={{ flex: 1, minHeight: 0 }}>
@@ -169,7 +198,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   ) : (
     <div style={{ height: '100%', display: 'flex' }}>
       <div style={{ width: 250, borderRight: `1px solid ${C.border}`, overflowY: 'auto', flex: 'none', background: C.bgPanel }}>
-        <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote} />
+        {listPane}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         {selectedId
@@ -312,6 +341,38 @@ function NewNoteDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
         )}
       </div>
     </Modal>
+  );
+}
+
+// Результаты семантического поиска: заметка + score + сниппет чанка
+function SemanticResults({ hits, selectedId, onSelect }: {
+  hits: NoteSemanticHit[] | null;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  if (hits === null)
+    return <div style={{ padding: '20px 12px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans }}>Ищу по смыслу…</div>;
+  if (hits.length === 0)
+    return <div style={{ padding: '20px 12px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans }}>Ничего близкого не нашлось</div>;
+  return (
+    <div style={{ padding: '8px 8px 20px' }}>
+      {hits.map(h => (
+        <button key={h.id} onClick={() => onSelect(h.id)}
+          style={{
+            width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
+            padding: '7px 8px', borderRadius: R.md, fontFamily: FONT.sans, marginBottom: 2,
+            background: h.id === selectedId ? C.accentMuted : 'transparent',
+          }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <SourceDot source={h.source} size={7} />
+            <span style={{ flex: 1, fontSize: 12.5, fontWeight: 500, color: C.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{h.title}</span>
+            <span style={{ fontSize: 10, fontFamily: FONT.mono, color: C.accent }}>{Math.round(h.score * 100)}%</span>
+          </span>
+          <span style={{ display: 'block', fontSize: 11, color: C.textMuted, marginTop: 2, lineHeight: 1.4,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.snippet}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 

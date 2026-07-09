@@ -128,6 +128,18 @@ const TOOLS = [
       properties: { id: { type: 'string', description: 'ID заметки' } },
     },
   },
+  {
+    name: 'notes_semantic_search',
+    description: 'Семантический поиск по заметкам (по смыслу, не по подстроке): находит близкие по содержанию заметки со score и сниппетом. Используй, когда точный текст неизвестен.',
+    inputSchema: {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query: { type: 'string', description: 'Смысловой запрос' },
+        topK: { type: 'integer', minimum: 1, maximum: 20, description: 'Сколько результатов (по умолчанию 8)' },
+      },
+    },
+  },
 ];
 
 function json(data) {
@@ -178,6 +190,15 @@ async function callTool(name, args) {
     case 'notes_delete':
       await api(`/api/notes/${encodeURIComponent(args.id)}`, { method: 'DELETE' });
       return { content: [{ type: 'text', text: `Заметка ${args.id} удалена.` }] };
+
+    case 'notes_semantic_search': {
+      const params = new URLSearchParams({ q: String(args.query ?? '') });
+      if (args.topK) params.set('topK', String(args.topK));
+      const data = await api(`/api/notes/semantic?${params}`);
+      if (!data.available)
+        return { content: [{ type: 'text', text: 'Семантический поиск не настроен (нет Dify) — используй notes_search.' }] };
+      return json(data.results);
+    }
 
     default:
       throw new Error(`Неизвестный инструмент: ${name}`);

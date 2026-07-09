@@ -432,6 +432,16 @@ export interface NoteTemplate {
   title: string;
 }
 
+// Результат семантического поиска (Dify RAG)
+export interface NoteSemanticHit {
+  id: string;
+  title: string;
+  source: string;
+  sourceLabel: string;
+  score: number;
+  snippet: string;
+}
+
 export interface NoteGraphEdge {
   source: string;
   target: string;

@@ -51,6 +51,7 @@ builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();
 builder.Services.AddSingleton<NotesService>();
+builder.Services.AddSingleton<NotesKnowledgeService>();
 builder.Services.AddSingleton<ChangelogService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();

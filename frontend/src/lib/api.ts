@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteTemplate, CreateNoteDto, UpdateNoteDto } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -172,6 +172,11 @@ export const api = {
     // Дневниковая заметка: date — локальная дата клиента YYYY-MM-DD
     daily: (date: string) =>
       request<NoteDetail>('/notes/daily', { method: 'POST', body: JSON.stringify({ date }) }),
+    caps: () => request<{ semantic: boolean }>('/notes/caps'),
+    semantic: (q: string, topK = 8) =>
+      request<{ available: boolean; results: NoteSemanticHit[] }>(
+        `/notes/semantic?q=${encodeURIComponent(q)}&topK=${topK}`),
+    reindex: () => request<{ changed: number }>('/notes/reindex', { method: 'POST' }),
     linkMention: (id: string, targetTitle: string) =>
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/link-mention`, {
         method: 'POST', body: JSON.stringify({ targetTitle }),

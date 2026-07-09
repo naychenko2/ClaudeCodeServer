@@ -72,10 +72,14 @@ const loadSortMode = (): FileSortMode => {
   return 'name';
 };
 
-// Единая сортировка записей: папки сверху, затем по имени (без учёта регистра)
-// или по дате изменения (в выбранном направлении, при равенстве — по имени)
+// Папка заметок (vault проекта) в корне дерева — закреплена первой
+const isNotesRoot = (e: FileEntry) => e.isDirectory && normPath(e.path) === 'notes';
+
+// Единая сортировка записей: «Заметки» первой, папки сверху, затем по имени
+// (без учёта регистра) или по дате изменения (в выбранном направлении)
 const sortEntries = (entries: FileEntry[], mode: FileSortMode): FileEntry[] =>
   [...entries].sort((a, b) => {
+    if (isNotesRoot(a) !== isNotesRoot(b)) return isNotesRoot(a) ? -1 : 1;
     if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
     if (mode !== 'name') {
       const d = Date.parse(a.modified) - Date.parse(b.modified);
@@ -128,6 +132,18 @@ function FolderIcon() {
   return (
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+    </svg>
+  );
+}
+
+// Иконка папки «Заметки» (vault проекта): связанные ноды графа знаний
+function NotesFolderIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="7" r="2.5" />
+      <circle cx="18" cy="8" r="2.5" />
+      <circle cx="12" cy="18" r="2.5" />
+      <path d="M7.7 9 10.7 16M16.6 10 13.4 16M8.5 7.4 15.5 7.8" />
     </svg>
   );
 }
@@ -846,6 +862,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     const isExpanded = expanded.has(entry.path);
     const isLoading = loadingDirs.has(entry.path);
     const em = entry.isDirectory ? null : getExtMeta(entry.name);
+    // «Заметки» (vault проекта) — выделенная строка с русским именем и своей иконкой
+    const notesRoot = isNotesRoot(entry);
     const isActive = !entry.isDirectory && activeNorm !== '' && normPath(entry.path) === activeNorm;
     const sstate = computeSyncState(marks, entry.path);
     const pending = !entry.isDirectory && !!sstate && !isDownloaded(project.id, entry.path);
@@ -860,6 +878,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       : hoveredPath === entry.path ? C.bgSelected
       : normPath(entry.path) === newlyCreatedPath ? C.accentLight
       : (sstate || folderSyncing) ? C.accentLight
+      : notesRoot ? C.accentLight
       : 'transparent';
     // Десктоп: кластер иконок липнет к правому краю видимой области при горизонтальном скролле
     const stickyIcons = !isMobile;
@@ -874,7 +893,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     return (
       <div
         key={entry.path}
-        draggable={!isMobile && !alwaysShowIcons && !isRenaming}
+        draggable={!isMobile && !alwaysShowIcons && !isRenaming && !notesRoot}
         onClick={handleRowClick}
         onDoubleClick={!isMobile && !entry.isDirectory ? e => { e.stopPropagation(); startRename(entry); } : undefined}
         onContextMenu={e => handleContextMenu(e, entry)}
@@ -918,7 +937,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           </span>
         )}
         {entry.isDirectory ? (
-          <span style={{ flexShrink: 0, display: 'flex' }}><FolderIcon /></span>
+          <span style={{ flexShrink: 0, display: 'flex', color: C.accent }}>
+            {notesRoot ? <NotesFolderIcon /> : <FolderIcon />}
+          </span>
         ) : (
           <span style={{
             width: 23, height: 23, borderRadius: 6,
@@ -960,17 +981,18 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               }}
             />
           ) : (
-            <span title={entry.name} style={{
-              fontFamily: "'JetBrains Mono', monospace",
+            <span title={notesRoot ? 'Заметки (папка notes)' : entry.name} style={{
+              fontFamily: notesRoot ? undefined : "'JetBrains Mono', monospace",
               fontSize: 13,
               fontWeight: entry.isDirectory ? 700 : 500,
-              color: (!entry.isDirectory && indexedFileNames?.has(entry.name))
+              color: notesRoot ? C.accent
+                : (!entry.isDirectory && indexedFileNames?.has(entry.name))
                 ? C.successText
                 : C.textHeading,
               ...(isMobile
                 ? { whiteSpace: 'normal', wordBreak: 'break-all', lineHeight: 1.35 }
                 : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
-            }}>{entry.name}</span>
+            }}>{notesRoot ? 'Заметки' : entry.name}</span>
           )}
           {parentDir && (
             <span title={normPath(entry.path)} style={{
@@ -1566,11 +1588,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 {entry.isDirectory && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
                 {entry.isDirectory && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
                 {canToggleOffline && menuItem(<MI_Cloud />, offlineLabel, doToggleOffline)}
-                <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />
-                {online && menuItem(<MI_Rename />, 'Переименовать', () => startRename(entry))}
-                {online && menuItem(<MI_Move />, 'Переместить в...', () => { setContextMenu(null); setMovingEntry(entry); setShowMoveModal(true); })}
-                {online && <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />}
-                {online && menuItem(<MI_Trash />, 'Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
+                {/* «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний */}
+                {!isNotesRoot(entry) && <>
+                  <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />
+                  {online && menuItem(<MI_Rename />, 'Переименовать', () => startRename(entry))}
+                  {online && menuItem(<MI_Move />, 'Переместить в...', () => { setContextMenu(null); setMovingEntry(entry); setShowMoveModal(true); })}
+                  {online && <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />}
+                  {online && menuItem(<MI_Trash />, 'Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
+                </>}
               </div>
             </>
           );
@@ -1598,11 +1623,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             {entry.isDirectory && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
             {entry.isDirectory && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
             {canToggleOffline && menuItem(<MI_Cloud />, sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн', doToggleOffline)}
-            <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
-            {online && menuItem(<MI_Rename />, 'Переименовать', () => startRename(entry))}
-            {online && menuItem(<MI_Move />, 'Переместить в...', () => { setContextMenu(null); setMovingEntry(entry); setShowMoveModal(true); })}
-            <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
-            {online && menuItem(<MI_Trash />, 'Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
+            {/* «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний */}
+            {!isNotesRoot(entry) && <>
+              <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
+              {online && menuItem(<MI_Rename />, 'Переименовать', () => startRename(entry))}
+              {online && menuItem(<MI_Move />, 'Переместить в...', () => { setContextMenu(null); setMovingEntry(entry); setShowMoveModal(true); })}
+              <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
+              {online && menuItem(<MI_Trash />, 'Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
+            </>}
           </div>
         );
       })()}

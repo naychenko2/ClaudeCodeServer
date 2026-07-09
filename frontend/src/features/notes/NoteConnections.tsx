@@ -87,8 +87,8 @@ export function NoteConnections({ note, onOpenNote, onWikilink, onLinkMention }:
         defaultOpen={note.backlinks.length + note.links.length > 0}
         title={<span style={capStyle}><IconGraph />Граф связей</span>}
       >
-        <div style={{ height: 230, border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden', background: C.bgMain }}>
-          <NotesGraph sourceFilter={null} selectedId={note.id} focusId={note.id}
+        <div style={{ height: 260, border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden', background: C.bgMain, position: 'relative' }}>
+          <NotesGraph selectedId={note.id} focusId={note.id} settingsKey="cc_graph_local"
             onSelectNode={id => onOpenNote(id, '')} />
         </div>
       </CollapseGroup>

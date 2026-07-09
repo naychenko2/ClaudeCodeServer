@@ -10,7 +10,9 @@ import { useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes } from '../../
 import { parseHash } from '../../lib/nav';
 import { NotesList } from './NotesList';
 import { NoteView } from './NoteView';
-import { NotesGraph } from './NotesGraph';
+import { NotesGraph, type GraphStats } from './NotesGraph';
+import { GraphSettingsBody } from './graph/GraphSettingsBody';
+import { useGraphSettings } from './graph/graphSettings';
 import { EmptyState } from '../../components/EmptyState';
 import { Splitter } from '../../components/ui';
 import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot, usePanelWidth } from './shared';
@@ -41,16 +43,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Диалог создания: null — закрыт; поля — préfill (создание из «+» на папке)
   const [newDialog, setNewDialog] = useState<{ source?: string; folder?: string } | null>(null);
   const [mobileView, setMobileView] = useState<'list' | 'note'>('list');
-  // Фильтр источников для графа (null = все), с сохранением между заходами
-  const [hiddenSources, setHiddenSources] = useState<Set<string>>(() => {
-    try { const raw = localStorage.getItem('cc_notes_hidden_sources'); return raw ? new Set<string>(JSON.parse(raw)) : new Set(); }
-    catch { return new Set(); }
-  });
-  useEffect(() => {
-    localStorage.setItem('cc_notes_hidden_sources', JSON.stringify([...hiddenSources]));
-  }, [hiddenSources]);
-  // Фильтр графа по тегам (пусто = все); теги собираются из заметок
-  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  // Настройки графа подняты сюда: сайдбар в режиме «Граф» показывает и правит их
+  const [graphSettings, setGraphSettings] = useGraphSettings('cc_graph_global');
+  const [graphStats, setGraphStats] = useState<GraphStats | null>(null);
 
   // Перетаскиваемая ширина сайдбара (персист, как в Workspace)
   const [listWidth, listDragging, startListDrag] = usePanelWidth('cc_notes_list_width', 260, 210, 420);
@@ -103,23 +98,17 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const listed = results ?? notes;
   const showSemantic = searchMode === 'semantic' && query.trim().length > 0;
 
-  const sources = useMemo(() => {
+  // Источники и теги для фильтров графа — из списка заметок
+  const graphSources = useMemo(() => {
     const m = new Map<string, string>();
     notes.forEach(n => m.set(n.source, n.sourceLabel));
     return [...m.entries()].map(([key, label]) => ({ key, label }));
   }, [notes]);
-
-  // Все теги заметок — для фильтра графа
-  const allTags = useMemo(() => {
+  const graphTags = useMemo(() => {
     const s = new Set<string>();
     notes.forEach(n => n.tags.forEach(t => s.add(t)));
     return [...s].sort((a, b) => a.localeCompare(b, 'ru'));
   }, [notes]);
-
-  const sourceFilter = useMemo(
-    () => hiddenSources.size === 0 ? null : new Set(sources.map(s => s.key).filter(k => !hiddenSources.has(k))),
-    [hiddenSources, sources],
-  );
 
   const selectNote = (id: string) => { setSelectedId(id); setMobileView('note'); };
 
@@ -191,42 +180,28 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     </div>
   );
 
-  // Фильтры графа (содержимое сайдбара в режиме «Граф»)
-  const graphFilters = (
-    <div style={{ padding: '12px 12px' }}>
-      <div style={{ fontSize: 10.5, letterSpacing: '.05em', textTransform: 'uppercase', color: C.textMuted, fontWeight: 600, marginBottom: 10 }}>Источники</div>
-      {sources.map(s => {
-        const on = !hiddenSources.has(s.key);
-        return (
-          <button key={s.key} onClick={() => setHiddenSources(prev => { const next = new Set(prev); on ? next.add(s.key) : next.delete(s.key); return next; })}
-            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '5px 4px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: FONT.sans, fontSize: 12.5, color: on ? C.textPrimary : C.textMuted, opacity: on ? 1 : 0.55 }}>
-            <SourceDot source={s.key} />
-            <span style={{ flex: 1, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.label}</span>
-          </button>
-        );
-      })}
-      {allTags.length > 0 && (
-        <>
-          <div style={{ fontSize: 10.5, letterSpacing: '.05em', textTransform: 'uppercase', color: C.textMuted, fontWeight: 600, margin: '16px 0 8px' }}>Теги</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-            {allTags.map(t => {
-              const on = selectedTags.has(t);
-              return (
-                <button key={t}
-                  onClick={() => setSelectedTags(prev => { const next = new Set(prev); on ? next.delete(t) : next.add(t); return next; })}
-                  style={{
-                    fontSize: 11, fontWeight: 500, borderRadius: R.sm, padding: '2px 7px', cursor: 'pointer',
-                    fontFamily: FONT.sans, border: 'none',
-                    background: on ? C.accent : C.bgSelected,
-                    color: on ? C.onAccent : C.textSecondary,
-                  }}>#{t}</button>
-              );
-            })}
-          </div>
-        </>
-      )}
-      <div style={{ fontSize: 10.5, color: C.textMuted, lineHeight: 1.5, marginTop: 16 }}>
-        Узел — заметка. Размер = число связей. Кольцо = выбранная. Наведи — подсветятся соседи.
+  // Сайдбар в режиме «Граф»: статистика + полный набор настроек (фильтры, группы,
+  // отображение, силы). Настройки — из поднятого сюда состояния graphSettings.
+  const graphSidebar = (
+    <div style={{ padding: '10px 12px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 10, fontSize: 12, color: C.textSecondary }}>
+        {graphStats ? (
+          <>
+            <span style={{ fontWeight: 600, color: C.textPrimary }}>{graphStats.shown}</span>
+            <span>{graphStats.shown === graphStats.total ? 'заметок' : `из ${graphStats.total}`}</span>
+            <span style={{ color: C.textMuted }}>· {graphStats.edges} связей</span>
+          </>
+        ) : <span style={{ color: C.textMuted }}>Граф связей</span>}
+      </div>
+      <GraphSettingsBody
+        settings={graphSettings}
+        onChange={setGraphSettings}
+        sources={graphSources}
+        tags={graphTags}
+        localMode={false}
+      />
+      <div style={{ fontSize: 10.5, color: C.textMuted, lineHeight: 1.6, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+        Колесо/щипок — зум, тяни узел — сдвинуть, двойной клик по фону — показать весь граф. Наведи на узел — подсветятся соседи.
       </div>
     </div>
   );
@@ -248,15 +223,17 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     <>
       {sidebarControls}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        {mode === 'notes' ? listPane : graphFilters}
+        {mode === 'notes' ? listPane : graphSidebar}
       </div>
     </>
   );
 
   // Центральная зона: заметка/пустое состояние или граф
   const centerPane = mode === 'graph'
-    ? <NotesGraph sourceFilter={sourceFilter} selectedId={selectedId} onSelectNode={selectNote}
-        maxNodes={isMobile ? 40 : undefined} tagFilter={selectedTags.size ? selectedTags : null} />
+    ? <NotesGraph selectedId={selectedId} onSelectNode={selectNote}
+        maxNodes={isMobile ? 40 : undefined}
+        settings={graphSettings} onSettingsChange={setGraphSettings}
+        hidePanel={!isMobile} onStats={setGraphStats} />
     : selectedId
       ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink}
           onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} isMobile={isMobile}

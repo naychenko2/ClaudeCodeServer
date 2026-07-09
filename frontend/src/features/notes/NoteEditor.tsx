@@ -215,13 +215,16 @@ function tagCompletion(tags: () => string[]) {
   };
 }
 
-// Автопара [[ → ]] (closeBrackets парные скобки одиночные, двойные — сами)
+// Автопара [[ → ]]. Учитываем ]-скобку, которую closeBrackets уже вставил за первой [:
+//   '[|]' + '[' → '[[|]]' (дописываем одну ]), '[|' + '[' → '[[|]]', '[[|]]' — не дублируем.
 const wikiAutoClose = EditorView.inputHandler.of((view, from, _to, text) => {
   if (text !== '[') return false;
   if (view.state.sliceDoc(from - 1, from) !== '[') return false;
-  if (view.state.sliceDoc(from, from + 2) === ']]') return false;
+  const next2 = view.state.sliceDoc(from, from + 2);
+  if (next2 === ']]') return false;                       // пара уже полная
+  const insert = next2.startsWith(']') ? '[]' : '[]]';    // ] от closeBrackets достраиваем до ]]
   view.dispatch({
-    changes: { from, insert: '[]]' },
+    changes: { from, insert },
     selection: { anchor: from + 1 },
   });
   return true;

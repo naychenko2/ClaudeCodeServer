@@ -136,9 +136,10 @@ public class FileServiceTests : IDisposable
     // ─── List ────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void List_EmptyDir_ReturnsEmpty()
+    public void List_EmptyDir_ReturnsOnlyVirtualNotes()
     {
-        _svc.List(_root).Should().BeEmpty();
+        // Корень всегда содержит виртуальную папку заметок (vault проекта)
+        _svc.List(_root).Should().ContainSingle(e => e.IsDirectory && e.Name == "notes");
     }
 
     [Fact]
@@ -147,7 +148,7 @@ public class FileServiceTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "a.txt"), "");
         File.WriteAllText(Path.Combine(_root, "b.txt"), "");
 
-        var entries = _svc.List(_root).ToList();
+        var entries = _svc.List(_root).Where(e => e.Name != "notes").ToList();
         entries.Should().HaveCount(2);
         entries.Should().AllSatisfy(e => e.IsDirectory.Should().BeFalse());
     }
@@ -158,10 +159,21 @@ public class FileServiceTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_root, "subdir"));
         File.WriteAllText(Path.Combine(_root, "file.txt"), "x");
 
-        var entries = _svc.List(_root).ToList();
+        var entries = _svc.List(_root).Where(e => e.Name != "notes").ToList();
         entries.Should().HaveCount(2);
         entries.Should().ContainSingle(e => e.IsDirectory && e.Name == "subdir");
         entries.Should().ContainSingle(e => !e.IsDirectory && e.Name == "file.txt");
+    }
+
+    [Fact]
+    public void List_NotesVirtual_ExpandsToEmptyAndNotDuplicated()
+    {
+        // Раскрытие несозданной notes/ — пустой список, не исключение
+        _svc.List(_root, "notes").Should().BeEmpty();
+
+        // Физическая notes/ не дублируется виртуальной записью
+        Directory.CreateDirectory(Path.Combine(_root, "notes"));
+        _svc.List(_root).Count(e => e.Name == "notes").Should().Be(1);
     }
 
     [Fact]
@@ -185,7 +197,7 @@ public class FileServiceTests : IDisposable
     public void List_FileEntry_HasCorrectRelativePath()
     {
         File.WriteAllText(Path.Combine(_root, "f.txt"), "");
-        var entry = _svc.List(_root).Single();
+        var entry = _svc.List(_root).Single(e => !e.IsDirectory);
         entry.Path.Should().Be("f.txt");
     }
 

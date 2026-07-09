@@ -63,6 +63,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
     private readonly TasksMcpContext? _tasksMcp;
     private readonly NotesMcpContext? _notesMcp;
+    // Auto-recall заметок: по тексту хода возвращает markdown-блок для системного промпта
+    private readonly Func<string, Task<string?>>? _recallProvider;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -83,6 +85,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _permissionRules = context.PermissionRules;
         _tasksMcp = context.TasksMcp;
         _notesMcp = context.NotesMcp;
+        _recallProvider = context.RecallProvider;
         _disallowedTools = disallowedTools ?? [];
         _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage);
     }
@@ -540,6 +543,20 @@ public class ClaudeSession : ILlmSessionAdapter
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? notesHint
                     : basePrompt + "\n\n" + notesHint;
+            }
+
+            // Auto-recall: релевантные заметки по тексту хода. Имеет смысл только когда
+            // notes-server подключён (в блоке фигурирует notes_read по id). Провайдер сам
+            // гейтит по флагу и failsafe-таймауту; исключения не должны ронять ход.
+            if (_recallProvider is not null && _notesMcp is not null)
+            {
+                string? recall = null;
+                try { recall = await _recallProvider(text); }
+                catch { /* recall не должен ронять ход */ }
+                if (!string.IsNullOrWhiteSpace(recall))
+                    basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                        ? recall
+                        : basePrompt + "\n\n" + recall;
             }
 
             string? agentPrompt = null;

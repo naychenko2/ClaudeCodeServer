@@ -14,11 +14,16 @@ namespace ClaudeHomeServer.Services;
 public sealed class NotesService
 {
     private readonly ProjectManager _projects;
+    private readonly FeatureFlagService _flags;
     private readonly ILogger<NotesService> _logger;
     private readonly string _dataDir;
+    // Корень профиля Claude Code (~/.claude): в projects/{slug}/memory лежит память проекта
+    private readonly string _claudeProfileDir;
 
     private const string PersonalKey = "personal";
     private const string PersonalLabel = "Личный";
+    // Префикс ключа источника «Память Claude»: memory:{projectId}
+    private const string MemoryPrefix = "memory:";
 
     // [[Target]] | [[Target|подпись]] | [[Target#заголовок]] | [[Папка/Target]]
     private static readonly Regex WikiLink = new(@"\[\[([^\[\]]+?)\]\]", RegexOptions.Compiled);
@@ -31,12 +36,16 @@ public sealed class NotesService
     private readonly ConcurrentDictionary<string, (Model Model, DateTime At)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(2);
 
-    public NotesService(ProjectManager projects, IConfiguration config, ILogger<NotesService> logger)
+    public NotesService(ProjectManager projects, FeatureFlagService flags,
+        IConfiguration config, ILogger<NotesService> logger)
     {
         _projects = projects;
+        _flags = flags;
         _logger = logger;
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
+        _claudeProfileDir = config["ClaudeUserProfileDir"]
+            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
     }
 
     private Model GetModel(string userId)
@@ -52,7 +61,7 @@ public sealed class NotesService
 
     // --- Источники владельца ---
 
-    private sealed record Source(string Key, string Label, string RootDir);
+    private sealed record Source(string Key, string Label, string RootDir, bool ReadOnly = false);
 
     private IReadOnlyList<Source> SourcesFor(string userId)
     {
@@ -63,12 +72,39 @@ public sealed class NotesService
         foreach (var p in _projects.GetByOwner(userId))
             if (!string.IsNullOrWhiteSpace(p.RootPath))
                 list.Add(new(p.Id, p.Name, Path.Combine(p.RootPath, "notes")));
+
+        // Память Claude Code по проектам (read-only) — за фич-флагом и только если
+        // директория памяти реально существует и непуста (иначе источник не показываем)
+        if (_flags.IsEnabled(userId, FeatureFlagKeys.NotesMemorySource))
+            foreach (var p in _projects.GetByOwner(userId))
+            {
+                if (string.IsNullOrWhiteSpace(p.RootPath)) continue;
+                var memDir = ProjectMemoryDir(p.RootPath);
+                if (HasMarkdown(memDir))
+                    list.Add(new(MemoryPrefix + p.Id, $"Память: {p.Name}", memDir, ReadOnly: true));
+            }
         return list;
+    }
+
+    // Директория памяти Claude Code для проекта: {~/.claude}/projects/{slug}/memory
+    private string ProjectMemoryDir(string rootPath) =>
+        Path.Combine(_claudeProfileDir, "projects", ProjectMemorySlug(rootPath), "memory");
+
+    // Слуг директории проекта у Claude Code: все не-буквенно-цифровые символы пути → '-'
+    // (C:\Sources\ClaudeCodeServer → C--Sources-ClaudeCodeServer)
+    internal static string ProjectMemorySlug(string rootPath) =>
+        Regex.Replace(rootPath.TrimEnd('\\', '/'), "[^A-Za-z0-9]", "-");
+
+    private static bool HasMarkdown(string dir)
+    {
+        if (!Directory.Exists(dir)) return false;
+        try { return Directory.EnumerateFiles(dir, "*.md", SearchOption.AllDirectories).Any(); }
+        catch { return false; }
     }
 
     // Источники для выбора «куда создать заметку»
     public IReadOnlyList<NoteSourceDto> GetSources(string userId) =>
-        SourcesFor(userId).Select(s => new NoteSourceDto(s.Key, s.Label)).ToList();
+        SourcesFor(userId).Select(s => new NoteSourceDto(s.Key, s.Label, s.ReadOnly)).ToList();
 
     // --- Сканирование и парсинг ---
 
@@ -400,7 +436,7 @@ public sealed class NotesService
     // Абсолютный путь вложения (картинки и т.п.) внутри vault источника — для отдачи
     // в <img>; владение источником проверяет ResolveRoot, traversal — SafeJoin.
     public string ResolveAttachmentPath(string userId, string sourceKey, string relativePath) =>
-        FileService.SafeJoinPublic(ResolveRoot(userId, sourceKey), relativePath);
+        FileService.SafeJoinPublic(ResolveRoot(userId, sourceKey, forWrite: false), relativePath);
 
     // --- Публичное API ---
 
@@ -767,10 +803,25 @@ public sealed class NotesService
 
     // --- Разрешение источника и валидация владения ---
 
-    private string ResolveRoot(string userId, string sourceKey)
+    private string ResolveRoot(string userId, string sourceKey, bool forWrite = true)
     {
         if (sourceKey == PersonalKey)
             return Path.Combine(_dataDir, "notes", userId);
+
+        // Память Claude Code — только чтение (вложения-картинки); запись запрещена
+        if (sourceKey.StartsWith(MemoryPrefix, StringComparison.Ordinal))
+        {
+            if (forWrite)
+                throw new UnauthorizedAccessException("Источник «Память Claude» доступен только для чтения");
+            var projectId = sourceKey[MemoryPrefix.Length..];
+            var proj = _projects.GetById(projectId)
+                ?? throw new KeyNotFoundException($"Источник {sourceKey} не найден");
+            if (proj.OwnerId != userId)
+                throw new UnauthorizedAccessException("Проект не принадлежит пользователю");
+            if (string.IsNullOrWhiteSpace(proj.RootPath))
+                throw new InvalidOperationException("У проекта нет корневой папки");
+            return ProjectMemoryDir(proj.RootPath);
+        }
 
         var project = _projects.GetById(sourceKey)
             ?? throw new KeyNotFoundException($"Источник {sourceKey} не найден");

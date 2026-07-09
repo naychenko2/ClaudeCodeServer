@@ -3,7 +3,7 @@ import type { NoteSummary } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes } from '../../lib/notes';
 import { C, FONT, R, SHADOW } from '../../lib/design';
-import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconTrash } from './shared';
+import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconTrash, isReadOnlySource } from './shared';
 
 interface Group { source: string; label: string; root: FolderNode }
 
@@ -143,14 +143,15 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
 
   const renderNote = (n: NoteSummary, depth: number) => {
     const active = n.id === selectedId;
+    const ro = isReadOnlySource(n.source);   // память Claude — только чтение
     return (
       <button
         key={n.id}
         onClick={() => onSelect(n.id)}
         onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'note', source: n.source, note: n }); }}
         title={n.title}
-        draggable
-        onDragStart={e => {
+        draggable={!ro}
+        onDragStart={ro ? undefined : e => {
           e.dataTransfer.setData('application/x-note-id', n.id);
           e.dataTransfer.setData('application/x-note-source', n.source);
           e.dataTransfer.effectAllowed = 'move';
@@ -217,6 +218,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
     const isCollapsed = collapsed.has(key);
     const isDrop = dropTarget === key;
     const isRenaming = renaming === key;
+    const ro = isReadOnlySource(source);   // память Claude — папки без действий/переноса
     return (
       <div key={key}>
         {isRenaming ? (
@@ -242,14 +244,14 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
         ) : (
         <button
           onClick={() => setCollapsed(prev => { const next = new Set(prev); isCollapsed ? next.delete(key) : next.add(key); return next; })}
-          onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'folder', source, node }); }}
-          draggable
-          onDragStart={e => {
+          onContextMenu={ro ? e => e.preventDefault() : e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'folder', source, node }); }}
+          draggable={!ro}
+          onDragStart={ro ? undefined : e => {
             e.dataTransfer.setData('application/x-folder-path', node.path);
             e.dataTransfer.setData('application/x-note-source', source);
             e.dataTransfer.effectAllowed = 'move';
           }}
-          {...dropProps(source, node.path)}
+          {...(ro ? {} : dropProps(source, node.path))}
           style={{
             width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
             display: 'flex', alignItems: 'center', gap: 6,
@@ -262,11 +264,11 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           <span style={{ fontSize: 8, color: C.textMuted, width: 8 }}>{isCollapsed ? '▸' : '▾'}</span>
           <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
           <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
-          {onCreateInFolder && iconBtn('Новая заметка в папке', () => onCreateInFolder(source, node.path),
+          {!ro && onCreateInFolder && iconBtn('Новая заметка в папке', () => onCreateInFolder(source, node.path),
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>)}
-          {iconBtn('Переименовать/перенести папку', () => { setRenaming(key); setRenameValue(node.path); },
+          {!ro && iconBtn('Переименовать/перенести папку', () => { setRenaming(key); setRenameValue(node.path); },
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>)}
-          {iconBtn('Удалить папку', () => void deleteFolder(node),
+          {!ro && iconBtn('Удалить папку', () => void deleteFolder(node),
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></svg>)}
           <span style={{ fontSize: 10, color: C.textMuted }}>{countNotes(node)}</span>
         </button>
@@ -356,9 +358,9 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           ) : ctxMenu.kind === 'note' ? (
             <>
               {menuItem(<IconPencil />, 'Открыть', () => onSelect(ctxMenu.note.id))}
-              {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
-              {menuDivider}
-              {menuItem(<IconTrash />, 'Удалить', () => void deleteNote(ctxMenu.note), true)}
+              {!isReadOnlySource(ctxMenu.source) && menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
+              {!isReadOnlySource(ctxMenu.source) && menuDivider}
+              {!isReadOnlySource(ctxMenu.source) && menuItem(<IconTrash />, 'Удалить', () => void deleteNote(ctxMenu.note), true)}
             </>
           ) : (
             <>

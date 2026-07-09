@@ -15,7 +15,7 @@ import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
 import { EmptyState } from '../../components/EmptyState';
 import { Splitter } from '../../components/ui';
-import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot, usePanelWidth } from './shared';
+import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot, usePanelWidth, isReadOnlySource } from './shared';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -118,7 +118,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     const found = notes.find(n => n.title.trim().toLowerCase() === name);
     if (found) { selectNote(found.id); return; }
     if (window.confirm(`Заметки «${target}» ещё нет. Создать?`)) {
-      const source = selectedId ? notes.find(n => n.id === selectedId)?.source ?? 'personal' : 'personal';
+      // Призрачную заметку из read-only источника (память Claude) создаём в личном vault
+      const curSource = selectedId ? notes.find(n => n.id === selectedId)?.source : undefined;
+      const source = curSource && !isReadOnlySource(curSource) ? curSource : 'personal';
       void api.notes.create({ title: target.split('/').pop()!.split('#')[0].trim(), source })
         .then(n => { bumpNotes(); selectNote(n.id); });
     }
@@ -305,6 +307,9 @@ function NewNoteDialog({ defaults, onClose, onCreated }: {
     api.notes.templates().then(setTemplates).catch(() => {});
   }, []);
 
+  // В выбор «Куда» показываем только записываемые источники (память Claude — read-only)
+  const writableSources = sources.filter(s => !s.readOnly);
+
   // Существующие папки выбранного источника — для автодополнения (можно ввести новую)
   const folders = useMemo(() => {
     const dirs = new Set<string>();
@@ -352,7 +357,7 @@ function NewNoteDialog({ defaults, onClose, onCreated }: {
         <div>
           <label style={fieldLabel}>Куда</label>
           <select value={source} onChange={e => setSource(e.target.value)} style={{ ...fieldInput, cursor: 'pointer' }}>
-            {sources.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+            {writableSources.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
           </select>
         </div>
         <div>

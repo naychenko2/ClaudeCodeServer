@@ -3,6 +3,9 @@ import { C, FONT, R, SHADOW } from '../lib/design';
 import { PillSwitch } from './Toolbar';
 import { MarkdownViewer } from './MarkdownViewer';
 import { useSessionArtifacts, type AgentArtifact, type AgentToolCall, type ArtifactFile, type ArtifactLink, type PlanStatus, type TodoItem, type WorkflowGroup } from '../hooks/useSessionArtifacts';
+import { IconNotes } from '../features/notes/shared';
+import { saveChatNote, openNoteById } from '../features/notes/saveToNote';
+import { FLAGS, useFeature } from '../lib/featureFlags';
 
 interface Props {
   sessionId: string | null;
@@ -40,6 +43,32 @@ const navChip: CSSProperties = {
 // Единый источник (DOM), чтобы список TOC и цель скролла были тем же узлом —
 // иначе строковый парсер разъезжается с рендером remark (Setext, blockquote и пр.).
 interface Heading { level: number; text: string; el: HTMLElement }
+
+// Чип «в заметку» в навигаторе плана — сохраняет текущий план в базу заметок
+function SavePlanChip({ plan, projectId }: { plan: string; projectId?: string }) {
+  const notesOn = useFeature(FLAGS.notes);
+  const [savedId, setSavedId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (!notesOn) return null;
+  const save = () => {
+    if (busy) return;
+    if (savedId) { openNoteById(savedId); return; }
+    setBusy(true);
+    saveChatNote({ text: plan, projectId, titlePrefix: 'План: ' })
+      .then(n => { setSavedId(n.id); setTimeout(() => setSavedId(null), 6000); })
+      .catch(() => {})
+      .finally(() => setBusy(false));
+  };
+  return (
+    <button onClick={save} title={savedId ? 'Сохранено — открыть заметку' : 'Сохранить план в заметку'}
+      style={savedId
+        ? { ...navChip, background: C.successBg, border: `1px solid ${C.successBg}`, color: C.successText }
+        : { ...navChip, opacity: busy ? 0.6 : 1 }}>
+      <IconNotes size={13} />
+      {savedId ? 'открыть' : 'в заметку'}
+    </button>
+  );
+}
 
 const STATUS_META: Record<PlanStatus, { label: string; fg: string; bg: string }> = {
   approved: { label: 'одобрен', fg: C.successText, bg: C.successBg },
@@ -640,6 +669,7 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
                     {STATUS_META[curPlan.status].label}
                   </span>
                   <div style={{ flex: 1 }} />
+                  <SavePlanChip plan={curPlan.plan} projectId={projectId} />
                   {plans.length > 1 && effIdx !== plans.length - 1 && (
                     <button
                       onClick={() => setPlanIdx(null)}

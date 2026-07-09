@@ -53,12 +53,18 @@ public class SessionManager
     // Вызывается после обновления статуса и broadcast; его ошибки не роняют пайплайн
     public event Func<Session, ServerMessage, Task>? OnSessionMessage;
 
+    // Auto-recall заметок (фича notes-auto-recall): семантический индекс + гейт по флагу
+    private readonly NotesKnowledgeService _notesKb;
+    private readonly FeatureFlagService _flags;
+    private readonly ILogger<SessionManager> _log;
+
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
         FalCostService falCost, UsageService usage,
         AppSettingsService appSettings, UserStore users, JwtService jwt,
         Microsoft.AspNetCore.Hosting.Server.IServer server,
-        LlmProviderRegistry llmProviders)
+        LlmProviderRegistry llmProviders,
+        NotesKnowledgeService notesKb, FeatureFlagService flags, ILogger<SessionManager> log)
     {
         _projects = projects;
         _hub = hub;
@@ -72,6 +78,9 @@ public class SessionManager
         _jwt = jwt;
         _server = server;
         _config = config;
+        _notesKb = notesKb;
+        _flags = flags;
+        _log = log;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
         _falCost.OnCostResolved = PublishFalCostAsync;
 
@@ -122,6 +131,43 @@ public class SessionManager
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
         return new NotesMcpContext(ResolveTasksApiUrl(), entry.Token, projectId);
+    }
+
+    // Провайдер auto-recall для сессии: по тексту хода ищет релевантные заметки и
+    // формирует markdown-блок для системного промпта. Флаги проверяются ВНУТРИ (на
+    // каждый ход — переключение действует без пересоздания процесса). null — если
+    // подмешивать нечего/некому. Ошибки и таймаут Dify → null (ход идёт без recall).
+    private Func<string, Task<string?>>? BuildRecallProvider(string? ownerId)
+    {
+        if (ownerId is null) return null;
+        var topK = int.TryParse(_config["Notes:AutoRecallTopK"], out var k) ? k : 4;
+        var minScore = double.TryParse(_config["Notes:AutoRecallMinScore"],
+            System.Globalization.CultureInfo.InvariantCulture, out var s) ? s : 0.35;
+        var timeoutMs = int.TryParse(_config["Notes:AutoRecallTimeoutMs"], out var t) ? t : 2500;
+
+        return async text =>
+        {
+            if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.Notes) ||
+                !_flags.IsEnabled(ownerId, FeatureFlagKeys.NotesAutoRecall)) return null;
+            if (!_notesKb.Available || !_notesKb.HasIndex(ownerId)) return null;
+
+            var query = text.Trim();
+            if (query.Length == 0) return null;
+            if (query.Length > 500) query = query[..500];
+
+            try
+            {
+                var searchTask = _notesKb.SearchAsync(ownerId, query, Math.Max(topK, 8));
+                var completed = await Task.WhenAny(searchTask, Task.Delay(timeoutMs));
+                if (completed != searchTask) return null;   // таймаут — ход без recall
+                return NotesKnowledgeService.BuildRecallBlock(await searchTask, minScore, topK);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Auto-recall заметок для {Owner}", ownerId);
+                return null;
+            }
+        };
     }
 
     // --- Персистентность сессий ---
@@ -216,6 +262,14 @@ public class SessionManager
     public Session? GetById(string id) =>
         _sessions.TryGetValue(id, out var entry) ? entry.Info : null;
 
+    // Запомнить заметку-итог сессии (SessionSummaryService) — для обновления при повторной генерации
+    public void SetSummaryNoteId(string sessionId, string noteId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        entry.Info.SummaryNoteId = noteId;
+        SaveSessions();
+    }
+
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
         string? effort = null)
@@ -281,7 +335,8 @@ public class SessionManager
             msg => OnMessageAsync(session.Id, accumulator, msg),
             rawSystemPrompt, permissionRules,
             BuildTasksContext(ownerId, session.ProjectId),
-            BuildNotesContext(ownerId, session.ProjectId)));
+            BuildNotesContext(ownerId, session.ProjectId),
+            BuildRecallProvider(ownerId)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -364,7 +419,8 @@ public class SessionManager
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 RawSystemPrompt: null, PermissionRules: null,
                 BuildTasksContext(entry.Info.OwnerId, null),
-                BuildNotesContext(entry.Info.OwnerId, null));
+                BuildNotesContext(entry.Info.OwnerId, null),
+                BuildRecallProvider(entry.Info.OwnerId));
         }
         else
         {
@@ -375,7 +431,8 @@ public class SessionManager
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
                 BuildTasksContext(project.OwnerId, project.Id),
-                BuildNotesContext(project.OwnerId, project.Id));
+                BuildNotesContext(project.OwnerId, project.Id),
+                BuildRecallProvider(project.OwnerId));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

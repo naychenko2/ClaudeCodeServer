@@ -53,11 +53,12 @@ function layout(nodes: NoteGraphNode[], edges: { source: string; target: string 
   return new Map(pos.map(p => [p.id, { x: p.x, y: p.y }]));
 }
 
-export function NotesGraph({ sourceFilter, selectedId, onSelectNode, focusId }: {
+export function NotesGraph({ sourceFilter, selectedId, onSelectNode, focusId, maxNodes }: {
   sourceFilter: Set<string> | null;
   selectedId: string | null;
   onSelectNode: (id: string) => void;
-  focusId?: string;   // локальный режим: только эта заметка и её соседи
+  focusId?: string;    // локальный режим: только эта заметка и её соседи
+  maxNodes?: number;   // ограничение числа узлов (мобильный): топ-N по числу связей
 }) {
   const version = useNotesVersion();
   const [graph, setGraph] = useState<NoteGraph | null>(null);
@@ -87,9 +88,15 @@ export function NotesGraph({ sourceFilter, selectedId, onSelectNode, focusId }: 
       const vis = new Set(nodes.filter(n => n.ghost || !sourceFilter || sourceFilter.has(n.source)).map(n => n.id));
       nodes = nodes.filter(n => vis.has(n.id));
       edges = edges.filter(e => vis.has(e.source) && vis.has(e.target));
+      // Мобильный: ограничиваем топ-N узлами по числу связей — иначе на узком экране каша
+      if (maxNodes && nodes.length > maxNodes) {
+        const keep = new Set([...nodes].sort((a, b) => (b.degree ?? 0) - (a.degree ?? 0)).slice(0, maxNodes).map(n => n.id));
+        nodes = nodes.filter(n => keep.has(n.id));
+        edges = edges.filter(e => keep.has(e.source) && keep.has(e.target));
+      }
     }
     return { nodes, edges };
-  }, [graph, sourceFilter, focusId]);
+  }, [graph, sourceFilter, focusId, maxNodes]);
 
   // Пересчёт раскладки при изменении набора узлов; закреплённые узлы сохраняют место
   useEffect(() => {

@@ -129,12 +129,12 @@ const components: Components = {
 };
 
 export function MarkdownViewer({ content, onWikilink, existingTitles }: Props) {
-  const hasWikilinks = /\[\[[^\]]+\]\]/.test(content);
-  const source = hasWikilinks ? preprocessWikilinks(content) : content;
+  // Режим заметок: включаем рендер [[wikilinks]] и внешние ссылки синим (info),
+  // чтобы три класса ссылок различались (живая accent / призрак пунктир / внешняя синяя).
+  const notesMode = onWikilink != null;
+  const source = notesMode ? preprocessWikilinks(content) : content;
 
-  // Переопределяем рендер ссылок только когда нужны вики-ссылки —
-  // иначе используем базовый набор компонентов без изменений.
-  const merged: Components = hasWikilinks
+  const merged: Components = notesMode
     ? {
         ...components,
         a: ({ href, children }) => {
@@ -158,7 +158,8 @@ export function MarkdownViewer({ content, onWikilink, existingTitles }: Props) {
               >{children}</a>
             );
           }
-          return <a href={href} style={{ color: C.accent, textDecoration: 'underline' }}>{children}</a>;
+          // Внешняя ссылка в заметке — синим (info), чтобы отличать от вики-ссылок
+          return <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: C.info, textDecoration: 'underline' }}>{children}</a>;
         },
       }
     : components;

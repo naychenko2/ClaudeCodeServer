@@ -92,6 +92,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             />
           : <h1 style={{ flex: 1, minWidth: 0, margin: 0, fontFamily: FONT.serif, fontSize: 22, fontWeight: 700, color: C.textHeading }}>{note.title}</h1>}
         <SourceBadge source={note.source} label={note.sourceLabel} />
+        {!editing && <span style={{ fontSize: 11, color: C.textMuted }}>изменено {relTime(note.updatedAt)}</span>}
         <div style={{ display: 'flex', gap: 2 }}>
           <IconButton title={editing ? 'Просмотр' : 'Читать'} active={!editing} onClick={() => setEditing(false)}><IconEye /></IconButton>
           <IconButton title="Править" active={editing} onClick={startEdit}><IconPencil /></IconButton>
@@ -192,6 +193,21 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       </div>
     </div>
   );
+}
+
+// Относительное время последнего изменения заметки (из updatedAt)
+function relTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return '';
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return 'только что';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} мин назад`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} ч назад`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d} дн назад`;
+  return new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 }
 
 const primaryBtn: React.CSSProperties = {

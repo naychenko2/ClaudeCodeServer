@@ -186,7 +186,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         </div>
       )}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <NotesGraph sourceFilter={sourceFilter} selectedId={selectedId} onSelectNode={selectNote} />
+        <NotesGraph sourceFilter={sourceFilter} selectedId={selectedId} onSelectNode={selectNote} maxNodes={isMobile ? 40 : undefined} />
       </div>
     </div>
   );

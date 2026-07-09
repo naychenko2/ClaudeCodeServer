@@ -41,6 +41,7 @@ export function HubTabs({ value, onChange, mobile }: {
       draggable
       compact={mobile}
       persistKey="hub-tabs"
+      variant="hub"
       options={options}
     />
   );

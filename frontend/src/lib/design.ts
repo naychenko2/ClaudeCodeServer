@@ -65,6 +65,10 @@ export const C = {
   planText:    'var(--c-plan-text)',   // текст на planLight
   planBorder:  'var(--c-plan-border)',
 
+  // Хаб-навигатор верхнего уровня — «чернильная» гамма мимо accent
+  navInk:      'var(--c-nav-ink)',      // заливка активного раздела (тёмная плашка/светлая в dark)
+  onNavInk:    'var(--c-on-nav-ink)',   // текст/иконка на активной плашке
+
   // Diff
   diffAddBg:   'var(--c-diff-add-bg)',
   diffAddText: 'var(--c-diff-add-text)',

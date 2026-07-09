@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode, MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { useRef, useState, useCallback, useLayoutEffect, useEffect } from 'react';
-import { C, TB } from '../lib/design';
+import { C, TB, SHADOW } from '../lib/design';
 import { IconButton } from './ui/IconButton';
 
 // Компактные текстовые кнопки тулбара (выравниваются по 32px-линии icon-кнопок)
@@ -79,7 +79,7 @@ type PillGeom = { left: number; width: number };
 // так тап между вкладками анимируется, а не перескакивает.
 const pillMemory = new Map<string, PillGeom>();
 
-export function PillSwitch<T extends string>({ value, options, onChange, fill, isMobile, draggable, persistKey, compact }: {
+export function PillSwitch<T extends string>({ value, options, onChange, fill, isMobile, draggable, persistKey, compact, variant = 'default' }: {
   value: T;
   options: { value: T; label: string; icon?: ReactNode }[];
   onChange: (v: T) => void;
@@ -90,7 +90,12 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
   // Компактный режим (узкие экраны): неактивные сегменты — только иконка,
   // подпись видна лишь у активного; пилюля перетекает в новую ширину сама.
   compact?: boolean;
+  // 'hub' — навигатор верхнего уровня: своя «чернильная» гамма мимо accent
+  // (тёмная плашка активного, кремовый текст), без утопленной дорожки —
+  // чтобы отличаться от локальных переключателей внутри панелей.
+  variant?: 'default' | 'hub';
 }) {
+  const hub = variant === 'hub';
   const trackRef = useRef<HTMLDivElement>(null);
   const btnRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const suppressClick = useRef(false);               // гасим клик, если это был drag
@@ -215,7 +220,8 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
       ref={trackRef}
       onPointerDown={onPointerDown}
       style={{
-        position: 'relative', display: 'flex', gap: 3, background: TB.pillTrack,
+        position: 'relative', display: 'flex', gap: 3,
+        background: hub ? 'transparent' : TB.pillTrack,
         borderRadius: TB.pillRadius + 1, padding: 3,
         flexShrink: 0, width: fill ? '100%' : undefined, boxSizing: 'border-box',
         touchAction: draggable ? 'none' : undefined,  // не даём странице скроллиться при drag
@@ -228,7 +234,8 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
           style={{
             position: 'absolute', top: 3, bottom: 3,
             left: geom.left, width: geom.width,
-            background: TB.pillThumbBg, boxShadow: TB.pillThumbShadow,
+            background: hub ? C.navInk : TB.pillThumbBg,
+            boxShadow: hub ? SHADOW.card : TB.pillThumbShadow,
             borderRadius: TB.pillRadius - 2,
             transition: drag ? 'none' : `left 0.32s ${PILL_EASE}, width 0.32s ${PILL_EASE}`,
             cursor: draggable ? (drag ? 'grabbing' : 'grab') : undefined,
@@ -254,7 +261,7 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
               fontSize: compact ? 12 : 13, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap',
               transition: 'color 0.15s',
               background: 'transparent',
-              color: active ? C.textHeading : C.textSecondary,
+              color: active ? (hub ? C.onNavInk : C.textHeading) : C.textSecondary,
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
               touchAction: draggable ? 'none' : undefined,
             }}

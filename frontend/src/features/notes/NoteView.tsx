@@ -268,40 +268,40 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             ))}
             {/* Ручное добавление тега */}
             {addingTag ? (
-              <input
-                autoFocus
-                value={newTag}
-                onChange={e => setNewTag(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') { void acceptTag(newTag); setNewTag(''); setAddingTag(false); }
-                  if (e.key === 'Escape') { setNewTag(''); setAddingTag(false); }
-                }}
-                onBlur={() => { if (newTag.trim()) void acceptTag(newTag); setNewTag(''); setAddingTag(false); }}
-                placeholder="тег"
-                style={{ width: 90, fontSize: 11.5, fontFamily: FONT.sans, color: C.textHeading, background: C.bgWhite, border: `1px solid ${C.accent}`, borderRadius: R.sm, padding: '2px 7px', outline: 'none' }}
-              />
-            ) : (
-              <button onClick={() => setAddingTag(true)} title="Добавить тег"
-                style={{ fontSize: 11.5, fontWeight: 500, color: C.textMuted, background: 'none', border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
-                + тег
+                <input
+                  autoFocus
+                  value={newTag}
+                  onChange={e => setNewTag(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { void acceptTag(newTag); setNewTag(''); setAddingTag(false); }
+                    if (e.key === 'Escape') { setNewTag(''); setAddingTag(false); }
+                  }}
+                  onBlur={() => { if (newTag.trim()) void acceptTag(newTag); setNewTag(''); setAddingTag(false); }}
+                  placeholder="тег"
+                  style={{ width: 90, fontSize: 11.5, fontFamily: FONT.sans, color: C.textHeading, background: C.bgWhite, border: `1px solid ${C.accent}`, borderRadius: R.sm, padding: '2px 7px', outline: 'none' }}
+                />
+              ) : (
+                <button onClick={() => setAddingTag(true)} title="Добавить тег"
+                  style={{ fontSize: 11.5, fontWeight: 500, color: C.textMuted, background: 'none', border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
+                  + тег
+                </button>
+              )}
+              <button onClick={suggestTags} title="Предложить теги (AI)"
+                style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: C.textMuted, background: 'none', border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 7px', cursor: 'pointer', fontFamily: FONT.sans }}>
+                <IconSparkle />{aiTags === 'loading' ? '…' : 'теги'}
               </button>
-            )}
-            <button onClick={suggestTags} title="Предложить теги (AI)"
-              style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: C.textMuted, background: 'none', border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 7px', cursor: 'pointer', fontFamily: FONT.sans }}>
-              <IconSparkle />{aiTags === 'loading' ? '…' : 'теги'}
-            </button>
-            {aiTags === 'error' && (
-              <span style={{ fontSize: 11, color: C.dangerText }}>ИИ недоступен (claude не залогинен на сервере)</span>
-            )}
-            {Array.isArray(aiTags) && aiTags.length === 0 && (
-              <span style={{ fontSize: 11, color: C.textMuted }}>нечего предложить</span>
-            )}
-            {Array.isArray(aiTags) && aiTags.map(t => (
-              <button key={t} onClick={() => void acceptTag(t)} title="Добавить тег"
-                style={{ fontSize: 11.5, fontWeight: 500, color: C.textSecondary, background: C.bgSelected, border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
-                +#{t}
-              </button>
-            ))}
+              {aiTags === 'error' && (
+                <span style={{ fontSize: 11, color: C.dangerText }}>ИИ недоступен (claude не залогинен на сервере)</span>
+              )}
+              {Array.isArray(aiTags) && aiTags.length === 0 && (
+                <span style={{ fontSize: 11, color: C.textMuted }}>нечего предложить</span>
+              )}
+              {Array.isArray(aiTags) && aiTags.map(t => (
+                <button key={t} onClick={() => void acceptTag(t)} title="Добавить тег"
+                  style={{ fontSize: 11.5, fontWeight: 500, color: C.textSecondary, background: C.bgSelected, border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
+                  +#{t}
+                </button>
+              ))}
           </div>
         )}
         {!editing && aiLinks != null && (

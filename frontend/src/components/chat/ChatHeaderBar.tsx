@@ -9,6 +9,10 @@ import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { C, FONT, R, SHADOW, TB } from '../../lib/design';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { BackButton } from '../ui';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { bumpNotes } from '../../lib/notes';
+import { openNoteById } from '../../features/notes/saveToNote';
+import { IconNotes } from '../../features/notes/shared';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -644,6 +648,41 @@ interface ChatHeaderBarProps {
   onCompact: () => void;
 }
 
+// Кнопка «Итог сессии» — конспект сессии заметкой (флаги notes + notes-session-summary).
+// Повторный клик по галочке открывает созданную заметку; сервер обновляет ту же заметку.
+function SessionSummaryButton({ session, online, isMobile }: { session: Session; online: boolean; isMobile?: boolean }) {
+  const notesOn = useFeature(FLAGS.notes);
+  const summaryOn = useFeature(FLAGS.notesSessionSummary);
+  const [busy, setBusy] = useState(false);
+  const [savedId, setSavedId] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+  // Смена чата — сброс локального состояния кнопки
+  useEffect(() => { setSavedId(null); setError(false); setBusy(false); }, [session.id]);
+  if (!notesOn || !summaryOn || !online || session.messageCount === 0) return null;
+  const run = () => {
+    if (busy) return;
+    if (savedId) { openNoteById(savedId); return; }
+    setBusy(true);
+    setError(false);
+    api.sessions.summary(session.id)
+      .then(n => { setSavedId(n.id); bumpNotes(); setTimeout(() => setSavedId(null), 8000); })
+      .catch(() => { setError(true); setTimeout(() => setError(false), 3000); })
+      .finally(() => setBusy(false));
+  };
+  return (
+    <ToolbarIconButton onClick={run} isMobile={isMobile}
+      title={busy ? 'Составляю итог…' : error ? 'Не удалось составить итог' : savedId ? 'Итог сохранён — открыть заметку' : 'Итог сессии в заметку'}>
+      {busy
+        ? <div className="tool-spinner" style={{ width: 13, height: 13 }} />
+        : savedId
+          ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+          : error
+            ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.dangerText} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
+            : <IconNotes size={15} />}
+    </ToolbarIconButton>
+  );
+}
+
 export function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact }: ChatHeaderBarProps) {
   const sessionModelLabel = useModelLabel(session.model);
   const asstName = assistantName(session.model);
@@ -754,9 +793,10 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
 
   // На мобилке артефакты и настройки — плотная пара справа (gap 2 вместо TB.gap),
   // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
+  const summaryBtn = <SessionSummaryButton session={session} online={online} isMobile={isMobile} />;
   const actionBtns = isMobile
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{artifactsBtn}{settingsBtn}</div>
-    : <>{artifactsBtn}{settingsBtn}</>;
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{summaryBtn}{artifactsBtn}{settingsBtn}</div>
+    : <>{summaryBtn}{artifactsBtn}{settingsBtn}</>;
 
   return (
     <Toolbar isMobile={isMobile}>

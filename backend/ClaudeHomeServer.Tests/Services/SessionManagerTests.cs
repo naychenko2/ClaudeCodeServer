@@ -54,7 +54,14 @@ public class SessionManagerTests : IDisposable
         var jwt = new JwtService(config, NullLogger<JwtService>.Instance);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders);
+        var wkStore = new WorkspaceKnowledgeStore(config);
+        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
+        var flags = new FeatureFlagService(userStore);
+        var notesSvc = new NotesService(_projectManager, config, NullLogger<NotesService>.Instance);
+        var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
+            NullLogger<NotesKnowledgeService>.Instance);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, NullLogger<SessionManager>.Instance);
     }
 
     public void Dispose()

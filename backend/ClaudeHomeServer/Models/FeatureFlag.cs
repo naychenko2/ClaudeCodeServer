@@ -23,6 +23,8 @@ public static class FeatureFlagKeys
 {
     public const string SessionArtifacts = "session-artifacts";
     public const string Notes = "notes";
+    public const string NotesSessionSummary = "notes-session-summary";
+    public const string NotesAutoRecall = "notes-auto-recall";
 }
 
 /// <summary>
@@ -50,6 +52,24 @@ public static class FeatureFlagCatalog
             Description: "База знаний: markdown-заметки со связями [[…]], обратными ссылками и графом. Claude ведёт заметки, единый граф поверх личного vault и проектов.",
             Default: false,
             Stage: "beta"),
+
+        // «Итог сессии» — кнопка в шапке чата: конспект сессии one-shot вызовом LLM
+        // сохраняется заметкой (проект → notes/Сессии, чат → личный vault).
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.NotesSessionSummary,
+            Title: "Итог сессии в заметку",
+            Description: "Кнопка в шапке чата: Claude составляет конспект сессии (цель, решения, результат) и сохраняет его заметкой.",
+            Default: false,
+            Stage: "beta"),
+
+        // Auto-recall — перед каждым ходом семантический поиск по заметкам,
+        // топ релевантных подмешивается в системный промпт (нужен Dify).
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.NotesAutoRecall,
+            Title: "Заметки в контексте Claude",
+            Description: "Перед каждым ходом Claude автоматически получает выдержки из семантически близких заметок — база знаний работает как память.",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

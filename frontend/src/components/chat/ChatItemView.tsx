@@ -6,6 +6,8 @@ import { C, FONT, SHADOW } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { ChatProjectContext, useAssistantName } from './contexts';
 import { IconNotes } from '../../features/notes/shared';
+import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView } from './ToolUseView';
 import { AskQuestionView } from './AskQuestionView';
@@ -111,12 +113,27 @@ export const FileChangedRow = memo(function FileChangedRow({ item, online, onOpe
   );
 });
 
-// Ответ ассистента. Действия «Копировать/Повторить» — иконками в правом верхнем
-// углу: десктоп — fade-in по hover на сообщении, мобайл (тач) — всегда видимы.
+// Ответ ассистента. Действия «Копировать/В заметку/Повторить» — иконками в правом
+// верхнем углу: десктоп — fade-in по hover на сообщении, мобайл (тач) — всегда видимы.
 function TextMessageView({ text, online, onRetry, streaming }: { text: string; online: boolean; onRetry: () => void; streaming?: boolean }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
     navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {});
+  };
+  // «В заметку»: сохранение ответа в базу заметок (проект → notes/, чат → personal)
+  const notesOn = useFeature(FLAGS.notes);
+  const project = useContext(ChatProjectContext);
+  const [savedNoteId, setSavedNoteId] = useState<string | null>(null);
+  const [savingNote, setSavingNote] = useState(false);
+  const [noteError, setNoteError] = useState(false);
+  const saveNote = () => {
+    if (savingNote || savedNoteId) return;
+    setSavingNote(true);
+    setNoteError(false);
+    saveChatNote({ text, projectId: project?.id })
+      .then(n => { setSavedNoteId(n.id); setTimeout(() => setSavedNoteId(null), 6000); })
+      .catch(() => { setNoteError(true); setTimeout(() => setNoteError(false), 3000); })
+      .finally(() => setSavingNote(false));
   };
   const iconBtn: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -140,6 +157,28 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
               ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
               : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>}
           </button>
+          {notesOn && online && (
+            <>
+              {savedNoteId && (
+                <button onClick={() => openNoteById(savedNoteId)}
+                  style={{ ...iconBtn, width: 'auto', padding: '0 8px', fontSize: 11, fontWeight: 600, color: C.successText }}
+                  title="Открыть созданную заметку">
+                  Открыть
+                </button>
+              )}
+              <button onClick={saveNote} disabled={savingNote} style={{ ...iconBtn, opacity: savingNote ? 0.5 : 1 }}
+                title={noteError ? 'Не удалось сохранить' : savedNoteId ? 'Сохранено в заметки' : 'Сохранить в заметку'}
+                aria-label="Сохранить в заметку"
+                onMouseEnter={e => { if (!savedNoteId) e.currentTarget.style.background = C.bgInset; }}
+                onMouseLeave={e => { if (!savedNoteId) e.currentTarget.style.background = C.bgSelected; }}>
+                {savedNoteId
+                  ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                  : noteError
+                    ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.dangerText} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
+                    : <IconNotes size={13} />}
+              </button>
+            </>
+          )}
           {online && (
             <button onClick={onRetry} style={iconBtn} title="Повторить последний запрос" aria-label="Повторить последний запрос"
               onMouseEnter={e => (e.currentTarget.style.background = C.bgInset)}

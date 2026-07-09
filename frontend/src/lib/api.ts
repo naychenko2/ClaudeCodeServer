@@ -232,6 +232,10 @@ export const api = {
       request<void>(`/projects/${projectId}/sessions/${sessionId}`, { method: 'DELETE' }),
     getHistory: (projectId: string, sessionId: string) =>
       request<unknown[]>(`/projects/${projectId}/sessions/${sessionId}/history`),
+    // «Итог сессии»: конспект сессии заметкой (флаг notes-session-summary).
+    // Маршрут по id сессии — работает и для проектных сессий, и для чатов
+    summary: (sessionId: string) =>
+      request<NoteDetail>(`/sessions/${sessionId}/summary`, { method: 'POST' }),
   },
 
   // Чаты вне проекта (project-less)

@@ -46,7 +46,7 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
           border: `1px solid ${C.border}`, borderRadius: R.md, outline: 'none',
         }}
       />
-      <div style={{ marginTop: 12, maxHeight: 420, overflowY: 'auto' }}>
+      <div style={{ marginTop: 12, height: 'min(60vh, 420px)', overflowY: 'auto' }}>
         {loading && <div style={hintStyle}>Ищу…</div>}
         {empty && <div style={hintStyle}>Ничего не найдено</div>}
         {!loading && q.trim().length < 2 && (

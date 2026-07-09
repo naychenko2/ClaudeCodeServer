@@ -3,8 +3,10 @@ import type { NoteDetail } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNotesVersion } from '../../lib/notes';
 import { C, FONT, R } from '../../lib/design';
+import { lazy, Suspense } from 'react';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
-import { MarkdownEditor } from '../tasks/MarkdownEditor';
+// CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
+const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
 import { IconButton } from '../../components/ui';
 import { NotesGraph } from './NotesGraph';
 import {
@@ -123,7 +125,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         )}
         {editing ? (
           <>
-            <MarkdownEditor value={draftBody} onChange={setDraftBody} minHeight={280} placeholder="Текст заметки… связывай через [[Заголовок]]" />
+            <Suspense fallback={<div style={{ padding: 24, color: C.textMuted, fontSize: 13 }}>Загрузка редактора…</div>}>
+              <NoteEditor value={draftBody} onChange={setDraftBody} minHeight={280}
+                placeholder="Текст заметки… связывай через [[Заголовок]]" onWikilink={onWikilink} />
+            </Suspense>
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
               <button onClick={save} disabled={saving} style={primaryBtn}>{saving ? 'Сохранение…' : 'Сохранить'}</button>
               <button onClick={() => { setEditing(false); setDraftBody(note.content); setDraftTitle(note.title); }} style={ghostBtn}>Отмена</button>

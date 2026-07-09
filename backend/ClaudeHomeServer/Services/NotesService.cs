@@ -105,6 +105,8 @@ public sealed class NotesService
                 catch { continue; }
 
                 var rel = NormalizeRel(Path.GetRelativePath(src.RootDir, full));
+                // templates/ — шаблоны, не заметки: в список/граф не попадают
+                if (rel.StartsWith("templates/", StringComparison.OrdinalIgnoreCase)) continue;
                 var (title, tags) = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
                 // Inline-теги #тег из тела + теги из frontmatter (без дублей)
                 foreach (var it in InlineTag.Matches(text).Select(m => m.Groups[1].Value))
@@ -340,14 +342,38 @@ public sealed class NotesService
         if (!string.IsNullOrWhiteSpace(source)) q = q.Where(n => n.SourceKey == source);
         if (!string.IsNullOrWhiteSpace(query))
         {
-            var needle = query.Trim();
-            q = q.Where(n =>
-                n.Title.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
-                n.Content.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
-                n.Tags.Any(t => t.Contains(needle, StringComparison.OrdinalIgnoreCase)));
+            // Операторы в запросе: tag:идея source:Личный — остальное полнотекст
+            var (tags, sources, text) = ParseQuery(query);
+            foreach (var tag in tags)
+                q = q.Where(n => n.Tags.Any(t => t.Equals(tag, StringComparison.OrdinalIgnoreCase)));
+            foreach (var s in sources)
+                q = q.Where(n => n.SourceKey.Equals(s, StringComparison.OrdinalIgnoreCase) ||
+                                 n.SourceLabel.Equals(s, StringComparison.OrdinalIgnoreCase));
+            if (text.Length > 0)
+                q = q.Where(n =>
+                    n.Title.Contains(text, StringComparison.OrdinalIgnoreCase) ||
+                    n.Content.Contains(text, StringComparison.OrdinalIgnoreCase) ||
+                    n.Tags.Any(t => t.Contains(text, StringComparison.OrdinalIgnoreCase)));
         }
         return q.OrderByDescending(n => n.UpdatedAt)
                 .Select(ToSummary).ToList();
+    }
+
+    // Разбор операторов запроса: tag:x source:y (можно несколько), остаток — полнотекст
+    internal static (List<string> Tags, List<string> Sources, string Text) ParseQuery(string query)
+    {
+        var tags = new List<string>();
+        var sources = new List<string>();
+        var rest = new List<string>();
+        foreach (var token in query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (token.StartsWith("tag:", StringComparison.OrdinalIgnoreCase) && token.Length > 4)
+                tags.Add(token[4..].TrimStart('#'));
+            else if (token.StartsWith("source:", StringComparison.OrdinalIgnoreCase) && token.Length > 7)
+                sources.Add(token[7..]);
+            else rest.Add(token);
+        }
+        return (tags, sources, string.Join(' ', rest));
     }
 
     public NoteDetail? GetDetail(string userId, string id)
@@ -376,7 +402,7 @@ public sealed class NotesService
         var nodes = new List<NoteGraphNode>();
         foreach (var n in model.Notes)
             nodes.Add(new NoteGraphNode(n.Id, n.Title, n.SourceKey, n.SourceLabel,
-                degree.GetValueOrDefault(n.Id), false));
+                degree.GetValueOrDefault(n.Id), false, n.Tags));
         foreach (var (gid, name) in model.Ghosts)
             nodes.Add(new NoteGraphNode(gid, name, "", "", degree.GetValueOrDefault(gid), true));
 
@@ -402,13 +428,87 @@ public sealed class NotesService
             full = FileService.SafeJoinPublic(rootDir, relPath);
         }
 
-        var content = req.Content ?? $"# {req.Title}\n";
+        var content = req.Content
+            ?? (req.TemplateId is not null ? RenderTemplate(userId, req.TemplateId, req.Title) : null)
+            ?? $"# {req.Title}\n";
         File.WriteAllText(full, content, new UTF8Encoding(false));
 
         Invalidate(userId);
         var id = EncodeId(sourceKey, NormalizeRel(relPath));
         return GetDetail(userId, id)
             ?? throw new InvalidOperationException("Заметка создана, но не читается");
+    }
+
+    // --- Шаблоны и daily notes ---
+
+    private string TemplatesDir(string userId) =>
+        Path.Combine(_dataDir, "notes", userId, "templates");
+
+    public IReadOnlyList<NoteTemplateDto> GetTemplates(string userId)
+    {
+        var dir = TemplatesDir(userId);
+        if (!Directory.Exists(dir)) return [];
+        return Directory.EnumerateFiles(dir, "*.md")
+            .Select(f => Path.GetFileNameWithoutExtension(f))
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .Select(n => new NoteTemplateDto(n, n))
+            .ToList();
+    }
+
+    // Контент шаблона с подстановкой {{title}}, {{date}}, {{time}}; null — шаблона нет
+    private string? RenderTemplate(string userId, string templateId, string title, string? date = null)
+    {
+        var file = Path.Combine(TemplatesDir(userId), SanitizeFileName(templateId) + ".md");
+        if (!File.Exists(file)) return null;
+        var text = File.ReadAllText(file, Encoding.UTF8);
+        var now = DateTime.Now;
+        return text
+            .Replace("{{title}}", title, StringComparison.OrdinalIgnoreCase)
+            .Replace("{{date}}", date ?? now.ToString("yyyy-MM-dd"), StringComparison.OrdinalIgnoreCase)
+            .Replace("{{time}}", now.ToString("HH:mm"), StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Дневниковая заметка Journal/{date}.md в личном vault: get-or-create.
+    // Дату присылает клиент (его таймзона); без даты — серверная локальная.
+    public NoteDetail GetOrCreateDaily(string userId, string? date)
+    {
+        var day = string.IsNullOrWhiteSpace(date) ? DateTime.Now.ToString("yyyy-MM-dd") : date!.Trim();
+        var rootDir = ResolveRoot(userId, PersonalKey);
+        var rel = $"Journal/{SanitizeFileName(day)}.md";
+        var full = FileService.SafeJoinPublic(rootDir, rel);
+        var id = EncodeId(PersonalKey, NormalizeRel(rel));
+
+        if (!File.Exists(full))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            var content = RenderTemplate(userId, "Daily", day, day) ?? $"# {day}\n\n";
+            File.WriteAllText(full, content, new UTF8Encoding(false));
+            Invalidate(userId);
+        }
+        return GetDetail(userId, id)
+            ?? throw new InvalidOperationException("Дневниковая заметка не читается");
+    }
+
+    // «Связать» несвязанное упоминание: обернуть первое словесное вхождение заголовка
+    // в [[…]]; при отличии регистра исходный текст сохраняется как алиас.
+    public NoteDetail? LinkMention(string userId, string id, string targetTitle)
+    {
+        var model = GetModel(userId);
+        if (!model.ById.TryGetValue(id, out var note)) return null;
+
+        var content = File.ReadAllText(note.FullPath, Encoding.UTF8);
+        var at = FindWord(content.ToLowerInvariant(), Norm(targetTitle));
+        if (at < 0) return GetDetail(userId, id);   // упоминание уже исчезло — не ошибка
+
+        var original = content.Substring(at, targetTitle.Length);
+        var replacement = original.Equals(targetTitle, StringComparison.Ordinal)
+            ? $"[[{targetTitle}]]"
+            : $"[[{targetTitle}|{original}]]";
+        content = content[..at] + replacement + content[(at + targetTitle.Length)..];
+        File.WriteAllText(note.FullPath, content, new UTF8Encoding(false));
+
+        Invalidate(userId);
+        return GetDetail(userId, id);
     }
 
     public NoteDetail? Update(string userId, string id, UpdateNoteRequest req)

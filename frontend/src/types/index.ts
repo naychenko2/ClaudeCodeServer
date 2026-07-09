@@ -423,6 +423,13 @@ export interface NoteGraphNode {
   sourceLabel: string;
   degree: number;
   ghost: boolean;
+  tags?: string[];
+}
+
+// Шаблон заметки (templates/ личного vault)
+export interface NoteTemplate {
+  id: string;
+  title: string;
 }
 
 export interface NoteGraphEdge {
@@ -445,6 +452,7 @@ export interface CreateNoteDto {
   title: string;
   content?: string;
   source?: string;
+  templateId?: string;
 }
 
 export interface UpdateNoteDto {

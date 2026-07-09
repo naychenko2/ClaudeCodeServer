@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, CreateNoteDto, UpdateNoteDto } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteTemplate, CreateNoteDto, UpdateNoteDto } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -162,6 +162,14 @@ export const api = {
     },
     sources: () => request<NoteSource[]>('/notes/sources'),
     graph: () => request<NoteGraph>('/notes/graph'),
+    templates: () => request<NoteTemplate[]>('/notes/templates'),
+    // Дневниковая заметка: date — локальная дата клиента YYYY-MM-DD
+    daily: (date: string) =>
+      request<NoteDetail>('/notes/daily', { method: 'POST', body: JSON.stringify({ date }) }),
+    linkMention: (id: string, targetTitle: string) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/link-mention`, {
+        method: 'POST', body: JSON.stringify({ targetTitle }),
+      }),
     get: (id: string) => request<NoteDetail>(`/notes/${encodeURIComponent(id)}`),
     backlinks: (id: string) => request<NoteBacklink[]>(`/notes/${encodeURIComponent(id)}/backlinks`),
     create: (dto: CreateNoteDto) =>

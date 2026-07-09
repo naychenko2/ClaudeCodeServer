@@ -9,7 +9,7 @@ import { IconButton } from '../../components/ui';
 import { NotesGraph } from './NotesGraph';
 import {
   CollapseGroup, SourceBadge, SourceDot,
-  IconEye, IconPencil, IconChat, IconBacklink, IconOutlink, IconTrash, IconGraph,
+  IconEye, IconPencil, IconChat, IconBacklink, IconOutlink, IconTrash, IconGraph, IconLink,
 } from './shared';
 
 // Просмотр и правка одной заметки + связи (backlinks, упоминания, локальный граф).
@@ -169,13 +169,26 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 title={<span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.03em' }}>Несвязанные упоминания · {note.unlinkedMentions.length}</span>}
               >
                 {note.unlinkedMentions.map((u, i) => (
-                  <button key={i} onClick={() => onSelectNote(u.sourceId)} style={backlinkRow} title="Открыть заметку">
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <SourceDot source={u.source} size={7} />
-                      <span style={{ fontSize: 12.5, fontWeight: 500, color: C.textPrimary }}>{u.sourceTitle}</span>
-                    </span>
-                    <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, marginLeft: 13, marginTop: 2, display: 'block' }}>{u.snippet}</span>
-                  </button>
+                  <div key={i} style={{ ...backlinkRow, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                    <button onClick={() => onSelectNote(u.sourceId)} title="Открыть заметку"
+                      style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: FONT.sans }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <SourceDot source={u.source} size={7} />
+                        <span style={{ fontSize: 12.5, fontWeight: 500, color: C.textPrimary }}>{u.sourceTitle}</span>
+                      </span>
+                      <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, marginLeft: 13, marginTop: 2, display: 'block' }}>{u.snippet}</span>
+                    </button>
+                    <button
+                      onClick={() => void api.notes.linkMention(note.id, u.sourceTitle).then(n => { if (n) setNote(n); bumpNotes(); })}
+                      title={`Обернуть упоминание в [[${u.sourceTitle}]]`}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 4, flex: 'none',
+                        fontSize: 11, fontWeight: 500, color: C.accent, background: C.accentLight,
+                        border: 'none', borderRadius: R.sm, padding: '3px 8px', cursor: 'pointer', fontFamily: FONT.sans,
+                      }}>
+                      <IconLink />Связать
+                    </button>
+                  </div>
                 ))}
               </CollapseGroup>
             )}

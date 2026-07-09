@@ -24,6 +24,9 @@ export const IconBacklink = () => svg(<><path d="M9 14 4 9l5-5" /><path d="M4 9h
 export const IconOutlink = () => svg(<><path d="M7 17 17 7M8 7h9v9" /></>);
 export const IconTrash = () => svg(<><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></>);
 export const IconBack = () => svg(<><path d="M19 12H5M12 19l-7-7 7-7" /></>);
+export const IconCalendarDay = () => svg(<><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /><circle cx="12" cy="16" r="1.5" fill="currentColor" stroke="none" /></>);
+export const IconSparkle = () => svg(<><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8" /></>);
+export const IconLink = () => svg(<><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></>);
 
 // Точка-индикатор источника
 export function SourceDot({ source, size = 8 }: { source: string; size?: number }) {

@@ -53,12 +53,13 @@ function layout(nodes: NoteGraphNode[], edges: { source: string; target: string 
   return new Map(pos.map(p => [p.id, { x: p.x, y: p.y }]));
 }
 
-export function NotesGraph({ sourceFilter, selectedId, onSelectNode, focusId, maxNodes }: {
+export function NotesGraph({ sourceFilter, selectedId, onSelectNode, focusId, maxNodes, tagFilter }: {
   sourceFilter: Set<string> | null;
   selectedId: string | null;
   onSelectNode: (id: string) => void;
   focusId?: string;    // локальный режим: только эта заметка и её соседи
   maxNodes?: number;   // ограничение числа узлов (мобильный): топ-N по числу связей
+  tagFilter?: Set<string> | null;  // только заметки с любым из выбранных тегов
 }) {
   const version = useNotesVersion();
   const [graph, setGraph] = useState<NoteGraph | null>(null);
@@ -88,6 +89,12 @@ export function NotesGraph({ sourceFilter, selectedId, onSelectNode, focusId, ma
       const vis = new Set(nodes.filter(n => n.ghost || !sourceFilter || sourceFilter.has(n.source)).map(n => n.id));
       nodes = nodes.filter(n => vis.has(n.id));
       edges = edges.filter(e => vis.has(e.source) && vis.has(e.target));
+      // Фильтр по тегам: только заметки с любым из выбранных (призраки скрываем — у них нет тегов)
+      if (tagFilter && tagFilter.size > 0) {
+        const keep = new Set(nodes.filter(n => !n.ghost && n.tags?.some(t => tagFilter.has(t))).map(n => n.id));
+        nodes = nodes.filter(n => keep.has(n.id));
+        edges = edges.filter(e => keep.has(e.source) && keep.has(e.target));
+      }
       // Мобильный: ограничиваем топ-N узлами по числу связей — иначе на узком экране каша
       if (maxNodes && nodes.length > maxNodes) {
         const keep = new Set([...nodes].sort((a, b) => (b.degree ?? 0) - (a.degree ?? 0)).slice(0, maxNodes).map(n => n.id));
@@ -96,7 +103,7 @@ export function NotesGraph({ sourceFilter, selectedId, onSelectNode, focusId, ma
       }
     }
     return { nodes, edges };
-  }, [graph, sourceFilter, focusId, maxNodes]);
+  }, [graph, sourceFilter, focusId, maxNodes, tagFilter]);
 
   // Пересчёт раскладки при изменении набора узлов; закреплённые узлы сохраняют место
   useEffect(() => {

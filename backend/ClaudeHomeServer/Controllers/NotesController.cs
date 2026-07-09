@@ -46,6 +46,37 @@ public class NotesController : ControllerBase
     [HttpGet("graph")]
     public ActionResult<NoteGraph> Graph() => Ok(_notes.GetGraph(UserId));
 
+    // Шаблоны заметок (файлы templates/ личного vault).
+    [HttpGet("templates")]
+    public ActionResult<IReadOnlyList<NoteTemplateDto>> Templates() =>
+        Ok(_notes.GetTemplates(UserId));
+
+    // Дневниковая заметка (get-or-create Journal/{date}.md в личном vault).
+    [HttpPost("daily")]
+    public async Task<ActionResult<NoteDetail>> Daily([FromBody] DailyNoteRequest req)
+    {
+        var note = _notes.GetOrCreateDaily(UserId, req.Date);
+        await Broadcast("updated", note.Id);
+        return Ok(note);
+    }
+
+    // «Связать» несвязанное упоминание: первое вхождение заголовка → [[…]].
+    [HttpPost("{id}/link-mention")]
+    public async Task<ActionResult<NoteDetail>> LinkMention(string id, [FromBody] LinkMentionRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.TargetTitle))
+            return BadRequest("Не задан заголовок цели");
+        try
+        {
+            var note = _notes.LinkMention(UserId, id, req.TargetTitle);
+            if (note is null) return NotFound();
+            await Broadcast("updated", note.Id);
+            return Ok(note);
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
+    }
+
     [HttpGet("{id}")]
     public ActionResult<NoteDetail> Get(string id)
     {

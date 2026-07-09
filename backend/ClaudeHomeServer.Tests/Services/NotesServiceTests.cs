@@ -157,4 +157,83 @@ public class NotesServiceTests : IDisposable
         var found = _sut.GetSummaries(User, null, "уникальноеслово");
         found.Should().ContainSingle(n => n.Title == "Заголовок1");
     }
+
+    [Fact]
+    public void Search_ОператорTag_ФильтруетПоТегу()
+    {
+        WriteNote("СТегом", "текст про кэш #идея");
+        WriteNote("БезТега", "текст про кэш");
+
+        var found = _sut.GetSummaries(User, null, "tag:идея кэш");
+        found.Should().ContainSingle(n => n.Title == "СТегом");
+    }
+
+    [Fact]
+    public void ParseQuery_РазбираетОператорыИТекст()
+    {
+        var (tags, sources, text) = NotesService.ParseQuery("tag:#идея source:Личный про кэш");
+        tags.Should().Equal("идея");
+        sources.Should().Equal("Личный");
+        text.Should().Be("про кэш");
+    }
+
+    // ─── Шаблоны ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Create_СШаблоном_ПодставляетПеременные()
+    {
+        var tplDir = Path.Combine(_vault, "templates");
+        Directory.CreateDirectory(tplDir);
+        File.WriteAllText(Path.Combine(tplDir, "Встреча.md"), "# {{title}}\nДата: {{date}}\n");
+
+        _sut.GetTemplates(User).Should().ContainSingle(t => t.Id == "Встреча");
+
+        var note = _sut.Create(User, new CreateNoteRequest("Синк по проекту", null, "personal", "Встреча"));
+        note.Content.Should().StartWith("# Синк по проекту");
+        note.Content.Should().Contain($"Дата: {DateTime.Now:yyyy-MM-dd}");
+
+        // Шаблоны не попадают в список заметок
+        _sut.GetSummaries(User, null, null).Should().NotContain(n => n.Title == "Встреча");
+    }
+
+    // ─── Daily note ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Daily_СоздаётИВозвращаетТуЖе()
+    {
+        var first = _sut.GetOrCreateDaily(User, "2026-07-09");
+        first.Path.Should().Be("Journal/2026-07-09.md");
+
+        File.AppendAllText(Path.Combine(_vault, "Journal", "2026-07-09.md"), "дополнение");
+        var second = _sut.GetOrCreateDaily(User, "2026-07-09");
+        second.Id.Should().Be(first.Id);
+        // Повторный вызов не перезаписывает файл (контент проверяем на диске:
+        // модель кэшируется ~2с и внешнюю правку может отдать с задержкой — это ок)
+        File.ReadAllText(Path.Combine(_vault, "Journal", "2026-07-09.md"))
+            .Should().Contain("дополнение");
+    }
+
+    // ─── «Связать» упоминание ────────────────────────────────────────────────
+
+    [Fact]
+    public void LinkMention_ОборачиваетПервоеВхождение()
+    {
+        WriteNote("Гамма", "# Гамма");
+        var note = _sut.Create(User, new CreateNoteRequest("Обзор", "Тут упоминается Гамма текстом.", "personal"));
+
+        var updated = _sut.LinkMention(User, note.Id, "Гамма")!;
+        updated.Content.Should().Contain("[[Гамма]]");
+        updated.Links.Should().ContainSingle(l => l.Resolved && l.TargetTitle == "Гамма");
+        updated.UnlinkedMentions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void LinkMention_РегистрОтличается_СохраняетАлиас()
+    {
+        WriteNote("Гамма", "# Гамма");
+        var note = _sut.Create(User, new CreateNoteRequest("Обзор2", "тут гамма строчными.", "personal"));
+
+        var updated = _sut.LinkMention(User, note.Id, "Гамма")!;
+        updated.Content.Should().Contain("[[Гамма|гамма]]");
+    }
 }

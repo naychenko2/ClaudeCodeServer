@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { AuthState, NoteDetail, NoteSource, NoteSummary } from '../../types';
+import type { AuthState, NoteDetail, NoteSource, NoteSummary, NoteTemplate } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
@@ -12,7 +12,7 @@ import { NotesList } from './NotesList';
 import { NoteView } from './NoteView';
 import { NotesGraph } from './NotesGraph';
 import { EmptyState } from '../../components/EmptyState';
-import { IconSearch, IconPlus, IconBack, IconGraph, SourceDot } from './shared';
+import { IconSearch, IconPlus, IconBack, IconGraph, IconCalendarDay, SourceDot } from './shared';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -47,6 +47,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   useEffect(() => {
     localStorage.setItem('cc_notes_hidden_sources', JSON.stringify([...hiddenSources]));
   }, [hiddenSources]);
+  // Фильтр графа по тегам (пусто = все); теги собираются из заметок
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
 
   useEffect(() => { void ensureNotesLoaded(); }, []);
 
@@ -88,6 +90,13 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     return [...m.entries()].map(([key, label]) => ({ key, label }));
   }, [notes]);
 
+  // Все теги заметок — для фильтра графа
+  const allTags = useMemo(() => {
+    const s = new Set<string>();
+    notes.forEach(n => n.tags.forEach(t => s.add(t)));
+    return [...s].sort((a, b) => a.localeCompare(b, 'ru'));
+  }, [notes]);
+
   const sourceFilter = useMemo(
     () => hiddenSources.size === 0 ? null : new Set(sources.map(s => s.key).filter(k => !hiddenSources.has(k))),
     [hiddenSources, sources],
@@ -105,6 +114,13 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
       void api.notes.create({ title: target.split('/').pop()!.split('#')[0].trim(), source })
         .then(n => { bumpNotes(); selectNote(n.id); });
     }
+  };
+
+  // Дневниковая заметка на сегодня (get-or-create по локальной дате устройства)
+  const openDaily = () => {
+    const d = new Date();
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    void api.notes.daily(iso).then(n => { bumpNotes(); setMode('notes'); selectNote(n.id); });
   };
 
   const askClaude = (note: NoteDetail) => {
@@ -125,12 +141,15 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           <IconSearch />
           <input
             value={query} onChange={e => setQuery(e.target.value)}
-            placeholder="Поиск по заметкам"
+            placeholder={isMobile ? 'Поиск по заметкам' : 'Поиск… (tag:идея source:Личный)'}
             style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontFamily: FONT.sans, fontSize: 13, color: C.textHeading }}
           />
         </div>
       )}
       {mode === 'graph' && <div style={{ flex: 1 }} />}
+      <button onClick={openDaily} title="Дневниковая заметка на сегодня" style={{ ...newBtn, background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}` }}>
+        <IconCalendarDay />{!isMobile && 'Сегодня'}
+      </button>
       <button onClick={() => setShowNew(true)} style={newBtn}>
         <IconPlus />{!isMobile && 'Новая'}
       </button>
@@ -180,13 +199,34 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
               </button>
             );
           })}
+          {allTags.length > 0 && (
+            <>
+              <div style={{ fontSize: 10.5, letterSpacing: '.05em', textTransform: 'uppercase', color: C.textMuted, fontWeight: 600, margin: '16px 0 8px' }}>Теги</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                {allTags.map(t => {
+                  const on = selectedTags.has(t);
+                  return (
+                    <button key={t}
+                      onClick={() => setSelectedTags(prev => { const next = new Set(prev); on ? next.delete(t) : next.add(t); return next; })}
+                      style={{
+                        fontSize: 11, fontWeight: 500, borderRadius: R.sm, padding: '2px 7px', cursor: 'pointer',
+                        fontFamily: FONT.sans, border: 'none',
+                        background: on ? C.accent : C.bgSelected,
+                        color: on ? C.onAccent : C.textSecondary,
+                      }}>#{t}</button>
+                  );
+                })}
+              </div>
+            </>
+          )}
           <div style={{ fontSize: 10.5, color: C.textMuted, lineHeight: 1.5, marginTop: 16 }}>
             Узел — заметка. Размер = число связей. Кольцо = выбранная. Наведи — подсветятся соседи.
           </div>
         </div>
       )}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <NotesGraph sourceFilter={sourceFilter} selectedId={selectedId} onSelectNode={selectNote} maxNodes={isMobile ? 40 : undefined} />
+        <NotesGraph sourceFilter={sourceFilter} selectedId={selectedId} onSelectNode={selectNote}
+          maxNodes={isMobile ? 40 : undefined} tagFilter={selectedTags.size ? selectedTags : null} />
       </div>
     </div>
   );
@@ -220,15 +260,20 @@ function NewNoteDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
   const [title, setTitle] = useState('');
   const [source, setSource] = useState('personal');
   const [sources, setSources] = useState<NoteSource[]>([{ key: 'personal', label: 'Личный' }]);
+  const [templates, setTemplates] = useState<NoteTemplate[]>([]);
+  const [templateId, setTemplateId] = useState('');
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { api.notes.sources().then(setSources).catch(() => {}); }, []);
+  useEffect(() => {
+    api.notes.sources().then(setSources).catch(() => {});
+    api.notes.templates().then(setTemplates).catch(() => {});
+  }, []);
 
   const create = async () => {
     if (!title.trim()) return;
     setBusy(true);
     try {
-      const note = await api.notes.create({ title: title.trim(), source });
+      const note = await api.notes.create({ title: title.trim(), source, templateId: templateId || undefined });
       onCreated(note.id);
     } finally { setBusy(false); }
   };
@@ -256,6 +301,15 @@ function NewNoteDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
             {sources.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
           </select>
         </div>
+        {templates.length > 0 && (
+          <div>
+            <label style={fieldLabel}>Шаблон</label>
+            <select value={templateId} onChange={e => setTemplateId(e.target.value)} style={{ ...fieldInput, cursor: 'pointer' }}>
+              <option value="">Без шаблона</option>
+              {templates.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+            </select>
+          </div>
+        )}
       </div>
     </Modal>
   );

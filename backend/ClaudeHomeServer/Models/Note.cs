@@ -54,7 +54,8 @@ public record NoteGraphNode(
     string Source,
     string SourceLabel,
     int Degree,             // число связей (для размера узла)
-    bool Ghost);
+    bool Ghost,
+    IReadOnlyList<string>? Tags = null);   // теги заметки — для фильтра графа
 
 public record NoteGraphEdge(string Source, string Target);
 
@@ -66,12 +67,22 @@ public record NoteGraph(
 // отдаётся фронту, чтобы показать выбор «куда создать».
 public record NoteSourceDto(string Key, string Label);
 
+// Шаблон заметки (файл в templates/ личного vault)
+public record NoteTemplateDto(string Id, string Title);
+
 // --- Запросы ---
 
 public record CreateNoteRequest(
     string Title,
     string? Content = null,
-    string? Source = null);   // "personal" (по умолчанию) | projectId
+    string? Source = null,     // "personal" (по умолчанию) | projectId
+    string? TemplateId = null); // имя шаблона из templates/ (без .md)
+
+// Дата дня для daily note — клиент шлёт свою локальную (таймзона устройства)
+public record DailyNoteRequest(string? Date = null);
+
+// «Связать» несвязанное упоминание: обернуть первое вхождение заголовка в [[…]]
+public record LinkMentionRequest(string TargetTitle);
 
 public record UpdateNoteRequest(
     string? Title = null,     // непусто и отличается от текущего → переименование файла

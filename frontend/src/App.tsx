@@ -97,6 +97,15 @@ export default function App() {
     window.addEventListener(PRODUCT_HISTORY_EVENT, open)
     return () => window.removeEventListener(PRODUCT_HISTORY_EVENT, open)
   }, [])
+
+  // Переход в раздел «Заметки» по клику на [[wikilink]] из файлов/чата.
+  // Целевая заметка передаётся через sessionStorage (cc_pending_note_title),
+  // NotesPage подхватывает её при монтировании и по тому же событию.
+  useEffect(() => {
+    const open = () => { localStorage.setItem(HUB_TAB_KEY, 'notes'); setHubTab('notes'); navReplace({ screen: 'notes' }) }
+    window.addEventListener('cc-open-note', open)
+    return () => window.removeEventListener('cc-open-note', open)
+  }, [])
   const isMobileView = typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
 
   const online = useOnline()

@@ -22,6 +22,14 @@ public sealed class NotesService
 
     // [[Target]] | [[Target|подпись]] | [[Target#заголовок]] | [[Папка/Target]]
     private static readonly Regex WikiLink = new(@"\[\[([^\[\]]+?)\]\]", RegexOptions.Compiled);
+    // Inline-тег #тег (не заголовок «# » — требуется хотя бы один символ сразу за #)
+    private static readonly Regex InlineTag = new(@"(?<=^|\s)#([\p{L}\p{N}_][\p{L}\p{N}_/-]*)", RegexOptions.Compiled);
+
+    // Кэш построенной модели per-owner: сканирование всех файлов дорого, а за один
+    // ход UI дёргает список/деталь/граф подряд. TTL короткий — внешние правки (Obsidian)
+    // подхватятся быстро; свои мутации инвалидируют кэш явно.
+    private readonly ConcurrentDictionary<string, (Model Model, DateTime At)> _cache = new();
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(2);
 
     public NotesService(ProjectManager projects, IConfiguration config, ILogger<NotesService> logger)
     {
@@ -30,6 +38,17 @@ public sealed class NotesService
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
     }
+
+    private Model GetModel(string userId)
+    {
+        if (_cache.TryGetValue(userId, out var e) && DateTime.UtcNow - e.At < CacheTtl)
+            return e.Model;
+        var model = Build(userId);
+        _cache[userId] = (model, DateTime.UtcNow);
+        return model;
+    }
+
+    private void Invalidate(string userId) => _cache.TryRemove(userId, out _);
 
     // --- Источники владельца ---
 
@@ -87,6 +106,9 @@ public sealed class NotesService
 
                 var rel = NormalizeRel(Path.GetRelativePath(src.RootDir, full));
                 var (title, tags) = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
+                // Inline-теги #тег из тела + теги из frontmatter (без дублей)
+                foreach (var it in InlineTag.Matches(text).Select(m => m.Groups[1].Value))
+                    if (!tags.Contains(it, StringComparer.OrdinalIgnoreCase)) tags.Add(it);
                 var links = ParseLinks(text);
                 notes.Add(new RawNote
                 {
@@ -192,6 +214,8 @@ public sealed class NotesService
         public required Dictionary<string, string> Ghosts;
         // множество рёбер (source|target) для дедупликации
         public required HashSet<(string, string)> Edges;
+        // id заметки -> несвязанные упоминания (заголовки других заметок в тексте без [[…]])
+        public required Dictionary<string, List<NoteBacklinkDto>> Unlinked;
     }
 
     private Model Build(string userId)
@@ -247,11 +271,47 @@ public sealed class NotesService
             outLinks[n.Id] = outs;
         }
 
+        // Несвязанные упоминания: заголовок другой заметки встречается в тексте как
+        // отдельное слово, но резолвленной ссылки на неё нет. Заголовки < 3 символов
+        // не триггерим (шум). O(n²) по числу заметок — приемлемо для базы знаний.
+        var unlinked = new Dictionary<string, List<NoteBacklinkDto>>();
+        foreach (var n in notes)
+        {
+            var linked = new HashSet<string>(outLinks[n.Id].Where(l => l.Resolved).Select(l => l.TargetId));
+            var lower = n.Content.ToLowerInvariant();
+            foreach (var m in notes)
+            {
+                if (m.Id == n.Id || linked.Contains(m.Id)) continue;
+                var t = Norm(m.Title);
+                if (t.Length < 3) continue;
+                var at = FindWord(lower, t);
+                if (at < 0) continue;
+                if (!unlinked.TryGetValue(n.Id, out var lst)) unlinked[n.Id] = lst = new();
+                lst.Add(new NoteBacklinkDto(m.Id, m.Title, m.SourceKey, m.SourceLabel, SnippetAround(n.Content, at)));
+            }
+        }
+
         return new Model
         {
             Notes = notes, ById = byId, OutLinks = outLinks,
-            Backlinks = backlinks, Ghosts = ghosts, Edges = edges,
+            Backlinks = backlinks, Ghosts = ghosts, Edges = edges, Unlinked = unlinked,
         };
+    }
+
+    // Индекс вхождения needle как отдельного слова (границы — не буквы/цифры), иначе -1
+    private static int FindWord(string haystack, string needle)
+    {
+        var from = 0;
+        while (true)
+        {
+            var i = haystack.IndexOf(needle, from, StringComparison.Ordinal);
+            if (i < 0) return -1;
+            var before = i == 0 || !char.IsLetterOrDigit(haystack[i - 1]);
+            var afterIdx = i + needle.Length;
+            var after = afterIdx >= haystack.Length || !char.IsLetterOrDigit(haystack[afterIdx]);
+            if (before && after) return i;
+            from = i + 1;
+        }
     }
 
     // Разрешение коллизий имён: 1 кандидат — берём; несколько — по namespace
@@ -275,7 +335,7 @@ public sealed class NotesService
 
     public IReadOnlyList<NoteSummary> GetSummaries(string userId, string? source, string? query)
     {
-        var notes = Scan(userId);
+        var notes = GetModel(userId).Notes;
         IEnumerable<RawNote> q = notes;
         if (!string.IsNullOrWhiteSpace(source)) q = q.Where(n => n.SourceKey == source);
         if (!string.IsNullOrWhiteSpace(query))
@@ -292,20 +352,20 @@ public sealed class NotesService
 
     public NoteDetail? GetDetail(string userId, string id)
     {
-        var model = Build(userId);
+        var model = GetModel(userId);
         if (!model.ById.TryGetValue(id, out var n)) return null;
         return ToDetail(model, n);
     }
 
     public IReadOnlyList<NoteBacklinkDto> GetBacklinks(string userId, string id)
     {
-        var model = Build(userId);
+        var model = GetModel(userId);
         return model.Backlinks.TryGetValue(id, out var bl) ? bl : Array.Empty<NoteBacklinkDto>();
     }
 
     public NoteGraph GetGraph(string userId)
     {
-        var model = Build(userId);
+        var model = GetModel(userId);
         var degree = new Dictionary<string, int>();
         foreach (var (s, t) in model.Edges)
         {
@@ -345,6 +405,7 @@ public sealed class NotesService
         var content = req.Content ?? $"# {req.Title}\n";
         File.WriteAllText(full, content, new UTF8Encoding(false));
 
+        Invalidate(userId);
         var id = EncodeId(sourceKey, NormalizeRel(relPath));
         return GetDetail(userId, id)
             ?? throw new InvalidOperationException("Заметка создана, но не читается");
@@ -357,6 +418,9 @@ public sealed class NotesService
         var full = FileService.SafeJoinPublic(rootDir, relPath);
         if (!File.Exists(full)) return null;
 
+        // Заголовок, по которому на заметку ссылаются сейчас (для авто-обновления ссылок)
+        var model = GetModel(userId);
+        var oldTitle = model.ById.TryGetValue(id, out var cur) ? cur.Title : Path.GetFileNameWithoutExtension(full);
         var effectiveId = id;
 
         // Переименование файла при смене заголовка (Obsidian: файл = имя заметки)
@@ -381,7 +445,44 @@ public sealed class NotesService
         if (req.Content is not null)
             File.WriteAllText(full, req.Content, new UTF8Encoding(false));
 
+        // Авто-обновление входящих ссылок при смене заголовка: во всех заметках,
+        // ссылавшихся на старый заголовок, заменяем [[Старый]] → [[Новый]] (как Obsidian).
+        if (!string.IsNullOrWhiteSpace(req.Title) && Norm(req.Title!) != Norm(oldTitle)
+            && model.Backlinks.TryGetValue(id, out var inbound))
+        {
+            var sources = inbound.Select(b => b.SourceId).Distinct();
+            foreach (var srcId in sources)
+            {
+                if (srcId == id || !model.ById.TryGetValue(srcId, out var srcNote)) continue;
+                try
+                {
+                    var updated = RewriteLinks(File.ReadAllText(srcNote.FullPath, Encoding.UTF8), oldTitle, req.Title!);
+                    File.WriteAllText(srcNote.FullPath, updated, new UTF8Encoding(false));
+                }
+                catch (Exception ex) { _logger.LogWarning(ex, "Обновление ссылок в {File}", srcNote.FullPath); }
+            }
+        }
+
+        Invalidate(userId);
         return GetDetail(userId, effectiveId);
+    }
+
+    // Заменяет [[Старый]] / [[Старый|подпись]] / [[Старый#якорь]] / [[Папка/Старый]]
+    // на [[Новый…]] с сохранением подписи и якоря; не-совпадающие ссылки не трогает.
+    private static string RewriteLinks(string content, string oldTitle, string newTitle)
+    {
+        var oldNorm = Norm(oldTitle);
+        return WikiLink.Replace(content, m =>
+        {
+            var inner = m.Groups[1].Value;
+            var cut = inner.Length;
+            var pipe = inner.IndexOf('|'); if (pipe >= 0) cut = Math.Min(cut, pipe);
+            var hash = inner.IndexOf('#'); if (hash >= 0) cut = Math.Min(cut, hash);
+            var name = inner[..cut];
+            var rest = inner[cut..];               // подпись/якорь сохраняем
+            var lastSeg = name.Split('/')[^1].Trim();
+            return Norm(lastSeg) == oldNorm ? $"[[{newTitle}{rest}]]" : m.Value;
+        });
     }
 
     public bool Delete(string userId, string id)
@@ -391,6 +492,7 @@ public sealed class NotesService
         var full = FileService.SafeJoinPublic(rootDir, relPath);
         if (!File.Exists(full)) return false;
         File.Delete(full);
+        Invalidate(userId);
         return true;
     }
 
@@ -403,6 +505,7 @@ public sealed class NotesService
         new(n.Id, n.Title, n.SourceKey, n.SourceLabel, n.RelPath, n.Content, n.Tags,
             model.OutLinks.GetValueOrDefault(n.Id) ?? new(),
             model.Backlinks.GetValueOrDefault(n.Id) ?? new(),
+            model.Unlinked.GetValueOrDefault(n.Id) ?? new(),
             n.CreatedAt, n.UpdatedAt);
 
     // --- Разрешение источника и валидация владения ---

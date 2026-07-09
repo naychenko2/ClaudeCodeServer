@@ -6,19 +6,21 @@ import { C, FONT, R } from '../../lib/design';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { MarkdownEditor } from '../tasks/MarkdownEditor';
 import { IconButton } from '../../components/ui';
+import { NotesGraph } from './NotesGraph';
 import {
   CollapseGroup, SourceBadge, SourceDot,
-  IconEye, IconPencil, IconChat, IconBacklink, IconOutlink, IconTrash,
+  IconEye, IconPencil, IconChat, IconBacklink, IconOutlink, IconTrash, IconGraph,
 } from './shared';
 
-// Просмотр и правка одной заметки + панель обратных ссылок.
-export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted }: {
+// Просмотр и правка одной заметки + связи (backlinks, упоминания, локальный граф).
+export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted, onTag }: {
   noteId: string;
   existingTitles: Set<string>;
   onWikilink: (target: string) => void;
   onAskClaude?: (note: NoteDetail) => void;
   onSelectNote: (id: string) => void;
   onDeleted: () => void;
+  onTag?: (tag: string) => void;
 }) {
   const version = useNotesVersion();
   const [note, setNote] = useState<NoteDetail | null>(null);
@@ -100,6 +102,16 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
       {/* Тело */}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 18px 24px' }}>
+        {!editing && note.tags.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+            {note.tags.map(t => (
+              <button key={t} onClick={() => onTag?.(t)} title={`Заметки с тегом ${t}`}
+                style={{ fontSize: 11.5, fontWeight: 500, color: C.accent, background: C.accentLight, border: 'none', borderRadius: R.sm, padding: '2px 8px', cursor: onTag ? 'pointer' : 'default', fontFamily: FONT.sans }}>
+                #{t}
+              </button>
+            ))}
+          </div>
+        )}
         {editing ? (
           <>
             <MarkdownEditor value={draftBody} onChange={setDraftBody} minHeight={280} placeholder="Текст заметки… связывай через [[Заголовок]]" />
@@ -149,6 +161,32 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 ))}
               </CollapseGroup>
             )}
+
+            {note.unlinkedMentions.length > 0 && (
+              <CollapseGroup
+                defaultOpen={false}
+                title={<span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.03em' }}>Несвязанные упоминания · {note.unlinkedMentions.length}</span>}
+              >
+                {note.unlinkedMentions.map((u, i) => (
+                  <button key={i} onClick={() => onSelectNote(u.sourceId)} style={backlinkRow} title="Открыть заметку">
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <SourceDot source={u.source} size={7} />
+                      <span style={{ fontSize: 12.5, fontWeight: 500, color: C.textPrimary }}>{u.sourceTitle}</span>
+                    </span>
+                    <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, marginLeft: 13, marginTop: 2, display: 'block' }}>{u.snippet}</span>
+                  </button>
+                ))}
+              </CollapseGroup>
+            )}
+
+            <CollapseGroup
+              defaultOpen={false}
+              title={<span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.03em' }}><IconGraph />Граф связей</span>}
+            >
+              <div style={{ height: 260, border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden', background: C.bgMain }}>
+                <NotesGraph sourceFilter={null} selectedId={note.id} focusId={note.id} onSelectNode={onSelectNote} />
+              </div>
+            </CollapseGroup>
           </div>
         )}
       </div>

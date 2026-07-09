@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -27,6 +27,7 @@ import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
+import { useNotes, ensureNotesLoaded, existingTitleSet } from '../lib/notes';
 import { MermaidDiagram } from './MermaidDiagram';
 import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
@@ -299,6 +300,16 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
 
 export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isMobile, onOpenSidebar }: Props) {
   const online = useOnline();
+  // Заметки vault (notes/*.md): рендерим [[wikilinks]] и уводим по клику в раздел «Заметки»
+  const allNotes = useNotes();
+  const isNotesFile = /(^|\/)notes\//i.test(filePath);
+  useEffect(() => { if (isNotesFile) void ensureNotesLoaded(); }, [isNotesFile]);
+  const noteTitles = useMemo(() => existingTitleSet(allNotes), [allNotes]);
+  const openNoteByTitle = (t: string) => {
+    const name = t.split('/').pop()!.split('#')[0].trim();
+    sessionStorage.setItem('cc_pending_note_title', name);
+    window.dispatchEvent(new Event('cc-open-note'));
+  };
   // Подписка на тему: подсветка кода переключается light/dark вместе с приложением
   useThemeMode();
   const codeTheme = getEffectiveTheme() === 'dark' ? oneDark : oneLight;
@@ -949,7 +960,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   : isMermaid
                   ? <div style={{ padding: 16 }}><MermaidDiagram code={content} /></div>
                   : isMarkdown
-                  ? <MarkdownViewer content={content} />
+                  ? <MarkdownViewer content={content} {...(isNotesFile ? { existingTitles: noteTitles, onWikilink: openNoteByTitle } : {})} />
                   : <SyntaxHighlighter
                       language={getLanguage(filePath)}
                       style={codeTheme}

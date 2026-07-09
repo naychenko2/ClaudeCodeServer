@@ -390,6 +390,11 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
 
     case 'file_changed': {
       const fileName = relPath(item.path, project?.rootPath);
+      // Заметка (notes/*.md): подпись «Заметка · …», клик ведёт в раздел «Заметки»
+      const isNote = /(^|\/)notes\/[^/]*\.md$/i.test(item.path);
+      const noteTitle = item.path.split(/[\\/]/).pop()!.replace(/\.md$/i, '');
+      const openNote = () => { sessionStorage.setItem('cc_pending_note_title', noteTitle); window.dispatchEvent(new Event('cc-open-note')); };
+      const openAction = isNote ? openNote : (onOpenFile ? () => onOpenFile(item.path) : undefined);
       return (
         <div style={{
           border: `1px solid ${C.borderLight}`, borderRadius: 14, overflow: 'hidden',
@@ -397,10 +402,10 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         }}>
           <div style={{
             display: 'flex', alignItems: 'center', gap: 11,
-            padding: '12px 13px', cursor: onOpenFile ? 'pointer' : 'default',
+            padding: '12px 13px', cursor: openAction ? 'pointer' : 'default',
             borderBottom: `1px solid ${C.divider}`,
           }}
-            onClick={() => onOpenFile?.(item.path)}
+            onClick={openAction}
           >
             <div style={{
               width: 28, height: 28, borderRadius: 8,
@@ -414,7 +419,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
               </svg>
             </div>
             <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {fileName}
+              {isNote ? `Заметка · ${noteTitle}` : fileName}
             </span>
             <span style={{ fontSize: 11.5, color: C.diffAddText, fontFamily: FONT.mono }}>
               +{item.added}
@@ -424,15 +429,15 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             </span>
           </div>
           <div style={{ padding: '8px 13px', display: 'flex', gap: 6 }}>
-            {onOpenFile && (
+            {openAction && (
               <button
-                onClick={() => onOpenFile(item.path)}
+                onClick={openAction}
                 style={{
                   fontSize: 12, padding: '4px 10px', borderRadius: 6,
                   border: `1px solid ${C.borderLight}`, background: C.bgWhite, cursor: 'pointer', color: C.textPrimary,
                 }}
               >
-                Открыть
+                {isNote ? 'Открыть заметку' : 'Открыть'}
               </button>
             )}
             {online && onRevert && (

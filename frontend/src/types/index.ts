@@ -410,6 +410,7 @@ export interface NoteDetail {
   tags: string[];
   links: NoteLink[];
   backlinks: NoteBacklink[];
+  unlinkedMentions: NoteBacklink[];   // упоминания заголовков без [[…]]
   createdAt: string;
   updatedAt: string;
 }

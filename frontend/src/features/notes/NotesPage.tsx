@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { AuthState, NoteDetail, NoteSource } from '../../types';
+import type { AuthState, NoteDetail, NoteSource, NoteSummary } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
@@ -11,7 +11,8 @@ import { parseHash } from '../../lib/nav';
 import { NotesList } from './NotesList';
 import { NoteView } from './NoteView';
 import { NotesGraph } from './NotesGraph';
-import { IconSearch, IconPlus, IconBack, SourceDot } from './shared';
+import { EmptyState } from '../../components/EmptyState';
+import { IconSearch, IconPlus, IconBack, IconGraph, SourceDot } from './shared';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -38,8 +39,14 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const [query, setQuery] = useState('');
   const [showNew, setShowNew] = useState(false);
   const [mobileView, setMobileView] = useState<'list' | 'note'>('list');
-  // Фильтр источников для графа (null = все)
-  const [hiddenSources, setHiddenSources] = useState<Set<string>>(new Set());
+  // Фильтр источников для графа (null = все), с сохранением между заходами
+  const [hiddenSources, setHiddenSources] = useState<Set<string>>(() => {
+    try { const raw = localStorage.getItem('cc_notes_hidden_sources'); return raw ? new Set<string>(JSON.parse(raw)) : new Set(); }
+    catch { return new Set(); }
+  });
+  useEffect(() => {
+    localStorage.setItem('cc_notes_hidden_sources', JSON.stringify([...hiddenSources]));
+  }, [hiddenSources]);
 
   useEffect(() => { void ensureNotesLoaded(); }, []);
 
@@ -49,14 +56,31 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     if (t?.screen === 'notes' && t.noteId) { setSelectedId(t.noteId); setMobileView('note'); }
   }, []);
 
+  // Открытие заметки по заголовку (из [[wikilink]] в файлах/чате). Заголовок в
+  // sessionStorage; ждём загрузки списка (deps: notes) и открываем по совпадению.
+  useEffect(() => {
+    const consume = () => {
+      const title = sessionStorage.getItem('cc_pending_note_title');
+      if (!title) return;
+      const n = notes.find(x => x.title.trim().toLowerCase() === title.trim().toLowerCase());
+      if (n) { sessionStorage.removeItem('cc_pending_note_title'); setSelectedId(n.id); setMobileView('note'); }
+    };
+    consume();
+    window.addEventListener('cc-open-note', consume);
+    return () => window.removeEventListener('cc-open-note', consume);
+  }, [notes]);
+
   const existingTitles = useMemo(() => existingTitleSet(notes), [notes]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return notes;
-    return notes.filter(n =>
-      n.title.toLowerCase().includes(q) || n.tags.some(t => t.toLowerCase().includes(q)));
-  }, [notes, query]);
+  // Поиск — серверный (по заголовку, тексту и тегам), с дебаунсом. Пусто → весь список.
+  const [results, setResults] = useState<NoteSummary[] | null>(null);
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) { setResults(null); return; }
+    const t = setTimeout(() => { api.notes.list(undefined, q).then(setResults).catch(() => {}); }, 250);
+    return () => clearTimeout(t);
+  }, [query]);
+  const listed = results ?? notes;
 
   const sources = useMemo(() => {
     const m = new Map<string, string>();
@@ -85,6 +109,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
 
   const askClaude = (note: NoteDetail) => {
     sessionStorage.setItem('cc_pending_chat_prompt', `Про мою заметку «${note.title}»:\n\n${note.content}\n\n`);
+    // Событие для уже смонтированного композера + переключение на «Чаты»
+    window.dispatchEvent(new Event('cc-compose-prefill'));
     onHubTab('chats');
   };
 
@@ -114,22 +140,26 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // --- Содержимое режима «Заметки» ---
   const notesContent = isMobile ? (
     mobileView === 'list' || !selectedId
-      ? <div style={{ height: '100%', overflowY: 'auto' }}><NotesList notes={filtered} selectedId={selectedId} onSelect={selectNote} /></div>
+      ? <div style={{ height: '100%', overflowY: 'auto' }}><NotesList notes={listed} selectedId={selectedId} onSelect={selectNote} /></div>
       : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
           <button onClick={() => setMobileView('list')} style={backBar}><IconBack /> К списку</button>
           <div style={{ flex: 1, minHeight: 0 }}>
-            <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink} onAskClaude={askClaude} onSelectNote={selectNote} onDeleted={() => { setSelectedId(null); setMobileView('list'); }} />
+            <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink} onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} onDeleted={() => { setSelectedId(null); setMobileView('list'); }} />
           </div>
         </div>
   ) : (
     <div style={{ height: '100%', display: 'flex' }}>
       <div style={{ width: 250, borderRight: `1px solid ${C.border}`, overflowY: 'auto', flex: 'none', background: C.bgPanel }}>
-        <NotesList notes={filtered} selectedId={selectedId} onSelect={selectNote} />
+        <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote} />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         {selectedId
-          ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink} onAskClaude={askClaude} onSelectNote={selectNote} onDeleted={() => setSelectedId(null)} />
-          : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, fontFamily: FONT.sans, fontSize: 14 }}>Выбери заметку слева</div>}
+          ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink} onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} onDeleted={() => setSelectedId(null)} />
+          : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <EmptyState icon={<IconGraph />} title="База знаний"
+                subtitle={notes.length ? 'Выбери заметку слева или создай новую' : 'Создай первую заметку или попроси Claude законспектировать разговор'}
+                action={<button onClick={() => setShowNew(true)} style={newBtn}><IconPlus />Новая заметка</button>} />
+            </div>}
       </div>
     </div>
   );

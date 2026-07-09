@@ -41,6 +41,9 @@ public record NoteDetail(
     IReadOnlyList<string> Tags,
     IReadOnlyList<NoteLinkDto> Links,       // исходящие
     IReadOnlyList<NoteBacklinkDto> Backlinks,
+    // «Несвязанные упоминания»: заголовки других заметок встречаются в тексте,
+    // но без [[…]] — предложение связать (Snippet — строка-контекст).
+    IReadOnlyList<NoteBacklinkDto> UnlinkedMentions,
     string CreatedAt,
     string UpdatedAt);
 

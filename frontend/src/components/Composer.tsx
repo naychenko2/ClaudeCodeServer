@@ -122,11 +122,17 @@ export function Composer({
 }: ComposerProps) {
   const asstName = useAssistantName();
   const [text, setText] = useState('');
-  // Преднастройка из раздела «Заметки»: кнопка «Спросить Claude про это» кладёт
-  // контекст заметки в sessionStorage — забираем один раз при появлении композера.
+  // Преднастройка из раздела «Заметки»: «Спросить Claude про это» кладёт контекст
+  // заметки в sessionStorage — забираем при появлении композера и по событию
+  // (на случай, если чат уже открыт и композер смонтирован).
   useEffect(() => {
-    const pending = sessionStorage.getItem('cc_pending_chat_prompt');
-    if (pending) { sessionStorage.removeItem('cc_pending_chat_prompt'); setText(pending); }
+    const consume = () => {
+      const pending = sessionStorage.getItem('cc_pending_chat_prompt');
+      if (pending) { sessionStorage.removeItem('cc_pending_chat_prompt'); setText(prev => prev ? prev : pending); }
+    };
+    consume();
+    window.addEventListener('cc-compose-prefill', consume);
+    return () => window.removeEventListener('cc-compose-prefill', consume);
   }, []);
   const [isListening, setIsListening] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);

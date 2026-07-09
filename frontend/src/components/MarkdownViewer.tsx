@@ -143,7 +143,10 @@ export function MarkdownViewer({ content, onWikilink, existingTitles }: Props) {
             const live = existingTitles ? existingTitles.has(normTarget(target)) : true;
             return (
               <a
+                role="link"
+                tabIndex={0}
                 onClick={e => { e.preventDefault(); onWikilink?.(target); }}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onWikilink?.(target); } }}
                 title={live ? target : `Создать заметку «${target}»`}
                 style={{
                   color: live ? C.accent : C.textMuted,

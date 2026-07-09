@@ -50,6 +50,29 @@ public sealed class NotesKnowledgeService
 
     public bool Available => _knowledge.IsConfigured;
 
+    // Есть ли у пользователя хоть один проиндексированный документ (без похода в Dify —
+    // дешёвая отсечка для auto-recall на пустом индексе)
+    public bool HasIndex(string userId)
+    {
+        var entry = GetEntry(userId);
+        return !string.IsNullOrEmpty(entry.DatasetId) && entry.Docs.Count > 0;
+    }
+
+    // Markdown-блок с релевантными заметками для системного промпта хода (auto-recall).
+    // Пустой список / все ниже порога → null (нечего подмешивать).
+    internal static string? BuildRecallBlock(IReadOnlyList<NoteSemanticHit> hits, double minScore, int topK)
+    {
+        var top = hits.Where(h => h.Score >= minScore).Take(topK).ToList();
+        if (top.Count == 0) return null;
+        var sb = new StringBuilder();
+        sb.AppendLine("Возможно релевантные заметки из базы знаний пользователя " +
+                      "(авто-подбор по смыслу, может быть мимо — используй только если помогает):");
+        foreach (var h in top)
+            sb.AppendLine($"- [[{h.Title}]] ({h.SourceLabel}, id: {h.Id}) — {h.Snippet}");
+        sb.AppendLine("Полный текст нужной заметки — через mcp__notes__notes_read по её id.");
+        return sb.ToString();
+    }
+
     // Отложенная синхронизация после мутации заметок (дебаунс — частые правки не спамят Dify)
     public void QueueSync(string userId)
     {

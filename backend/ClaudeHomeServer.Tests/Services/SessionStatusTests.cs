@@ -71,7 +71,14 @@ public class SessionStatusTests : IDisposable
         var jwt = new JwtService(_config, NullLogger<JwtService>.Instance);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
-        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders);
+        var wkStore = new WorkspaceKnowledgeStore(_config);
+        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
+        var flags = new FeatureFlagService(userStore);
+        var notesSvc = new NotesService(_projectManager, flags, _config, NullLogger<NotesService>.Instance);
+        var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, _config,
+            NullLogger<NotesKnowledgeService>.Instance);
+        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, NullLogger<SessionManager>.Instance);
     }
 
     private void WriteSessions(IEnumerable<Session> sessions)

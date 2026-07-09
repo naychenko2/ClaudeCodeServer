@@ -21,4 +21,8 @@ public sealed record LlmSessionContext(
     string? RawSystemPrompt,
     Func<IReadOnlyList<PermissionRule>>? PermissionRules,
     TasksMcpContext? TasksMcp,
-    NotesMcpContext? NotesMcp = null);
+    NotesMcpContext? NotesMcp = null,
+    // Auto-recall заметок: по тексту хода возвращает готовый markdown-блок с
+    // релевантными заметками для системного промпта (null — не подмешивать).
+    // Провайдер-агностично; вычисляется каждый ход. Ошибки внутри — тихо в null.
+    Func<string, Task<string?>>? RecallProvider = null);

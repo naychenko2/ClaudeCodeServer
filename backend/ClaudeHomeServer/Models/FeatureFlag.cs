@@ -95,6 +95,15 @@ public static class FeatureFlagCatalog
             Description: "Агент утром собирает задачи на день, свежие заметки и активность по проектам в короткий план дня — пишет его в дневник и присылает уведомление.",
             Default: false,
             Stage: "dev"),
+
+        // Связь чекбоксов заметок и задач: `- [ ] … 📅 дата` можно превратить в настоящую
+        // задачу (календарь, напоминания); завершение с любой стороны синхронизирует галочку.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.NotesTaskSync,
+            Title: "Задачи из заметок",
+            Description: "Чекбоксы `- [ ]` в заметках можно превратить в задачи с датой и повтором. Отметка выполнения в заметке и в календаре синхронизируется.",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

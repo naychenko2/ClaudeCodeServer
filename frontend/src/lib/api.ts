@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -206,6 +206,16 @@ export const api = {
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dto) }),
     delete: (id: string) =>
       request<void>(`/notes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    // Задачи из заметок (флаг notes-task-sync): чекбоксы .md ↔ задачи
+    tasks: (id: string) => request<NoteTask[]>(`/notes/${encodeURIComponent(id)}/tasks`),
+    promoteTask: (id: string, line: number) =>
+      request<Task>(`/notes/${encodeURIComponent(id)}/tasks/promote`, {
+        method: 'POST', body: JSON.stringify({ line }),
+      }),
+    toggleTask: (id: string, line: number, done: boolean) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/tasks/toggle`, {
+        method: 'POST', body: JSON.stringify({ line, done }),
+      }),
   },
 
   // Утренний бриф (флаг daily-briefing): собрать план дня в дневник

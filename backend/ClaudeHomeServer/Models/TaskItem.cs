@@ -31,6 +31,11 @@ public class TaskItem
     public List<string> LinkedFiles { get; set; } = [];
     public List<TaskSubtask> Subtasks { get; set; } = [];
     public List<string> Labels { get; set; } = [];
+    // Связь с чекбоксом заметки (флаг notes-task-sync): задача создана из строки-чекбокса
+    // заметки. Завершение задачи ставит галочку в заметке и наоборот. Line — 0-based
+    // индекс строки в контенте заметки на момент промоута (best-effort при правках).
+    public string? SourceNoteId { get; set; }
+    public int? SourceNoteLine { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

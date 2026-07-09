@@ -81,6 +81,9 @@ export interface Task {
   linkedFiles: string[];
   subtasks: TaskSubtask[];
   labels: string[];
+  // Связь с чекбоксом заметки (флаг notes-task-sync)
+  sourceNoteId?: string;
+  sourceNoteLine?: number;
   createdAt: string;
   updatedAt: string;
   // UI-проекция повторяющейся задачи в календаре (не приходит с бэка):
@@ -88,6 +91,16 @@ export interface Task {
   // virtual — признак вычисленного будущего повтора (реально существует только один экземпляр)
   occurrenceOf?: string;
   virtual?: boolean;
+}
+
+// Строка-чекбокс заметки + связанная задача (флаг notes-task-sync)
+export interface NoteTask {
+  line: number;
+  text: string;
+  done: boolean;
+  due?: string | null;
+  taskId?: string | null;
+  taskStatus?: string | null;
 }
 
 export interface CreateTaskDto {

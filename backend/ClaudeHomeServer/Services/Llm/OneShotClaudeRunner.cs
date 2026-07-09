@@ -70,8 +70,16 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders)
             var stderr = await stderrTask;
 
             if (process.ExitCode != 0)
+            {
+                // Причину CLI пишет не только в stderr: «Not logged in · Please run /login»
+                // уходит в stdout при пустом stderr. Раньше её тут теряли, и в логах всех
+                // сервисов оставалось «завершился с кодом 1:» без объяснения.
+                var detail = stderr.Trim();
+                if (detail.Length == 0) detail = stdout.Trim();
+                if (detail.Length > 500) detail = detail[..500] + "…";
                 throw new InvalidOperationException(
-                    $"claude завершился с кодом {process.ExitCode}: {stderr.Trim()}");
+                    $"claude завершился с кодом {process.ExitCode}: {detail}");
+            }
             return stdout.Trim();
         }
         catch (OperationCanceledException)

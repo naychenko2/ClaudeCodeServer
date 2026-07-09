@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -244,6 +244,9 @@ export const api = {
     // Маршрут по id сессии — работает и для проектных сессий, и для чатов
     summary: (sessionId: string) =>
       request<NoteDetail>(`/sessions/${sessionId}/summary`, { method: 'POST' }),
+    // «Задачи из чата» (флаг chat-extract-tasks): извлечь кандидатов (не создаёт)
+    extractTasks: (sessionId: string) =>
+      request<ExtractTasksResponse>(`/sessions/${sessionId}/extract-tasks`, { method: 'POST' }),
   },
 
   // Чаты вне проекта (project-less)

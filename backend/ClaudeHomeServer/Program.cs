@@ -75,6 +75,7 @@ builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
 builder.Services.AddSingleton<SessionSummaryService>();
+builder.Services.AddSingleton<ChatTaskExtractionService>();
 builder.Services.AddSingleton<DailyBriefingService>();
 builder.Services.AddHostedService<TaskSchedulerService>();
 builder.Services.AddHttpClient("proxy");

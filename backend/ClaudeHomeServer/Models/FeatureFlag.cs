@@ -113,6 +113,15 @@ public static class FeatureFlagCatalog
             Description: "Когда Claude берёт задачу в работу, в постановку подмешиваются выдержки из семантически близких заметок — исполнение с опорой на базу знаний.",
             Default: false,
             Stage: "dev"),
+
+        // «Задачи из чата» — кнопка в шапке: Claude извлекает action items из транскрипта
+        // сессии, пользователь подтверждает — и они создаются задачами.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.ChatExtractTasks,
+            Title: "Задачи из чата",
+            Description: "Кнопка в шапке чата: Claude выделяет из диалога конкретные задачи-действия, вы отмечаете нужные — и они попадают в трекер.",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

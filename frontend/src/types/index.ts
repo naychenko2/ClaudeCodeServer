@@ -93,6 +93,17 @@ export interface Task {
   virtual?: boolean;
 }
 
+// Кандидат в задачу, извлечённый из чата (флаг chat-extract-tasks). Ещё не создан.
+export interface ExtractedTaskCandidate {
+  title: string;
+  due?: string | null;
+  priority?: TaskPriority | null;
+}
+export interface ExtractTasksResponse {
+  projectId?: string | null;
+  tasks: ExtractedTaskCandidate[];
+}
+
 // Строка-чекбокс заметки + связанная задача (флаг notes-task-sync)
 export interface NoteTask {
   line: number;

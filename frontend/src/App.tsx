@@ -15,7 +15,7 @@ import { useOnline } from './hooks/useOnline'
 import { runOfflineSnapshot, syncProjectFiles } from './lib/sync'
 import { onFilesChanged } from './lib/signalr'
 import { loadWorkspaceState } from './lib/workspaceState'
-import { navPush, navReplace, parseHash, type NavSnapshot } from './lib/nav'
+import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
@@ -279,7 +279,13 @@ export default function App() {
   const switchHubTab = (t: HubTab) => {
     localStorage.setItem(HUB_TAB_KEY, t)
     setHubTab(t)
-    navReplace({ screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : 'projects' })
+    const dest: NavSnapshot = { screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : 'projects' }
+    // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача) — уходя,
+    // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Иначе латеральное
+    // переключение табов — replace (без разрастания истории).
+    const cur = getNav()
+    if (cur && (cur.note || cur.file || cur.task)) navPush(dest)
+    else navReplace(dest)
   }
   // Из календаря: открыть задачу во вкладке «Задачи» её проекта.
   // Задача передаётся через sessionStorage — WorkspacePage подхватывает при монтировании.

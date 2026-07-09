@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -29,8 +30,9 @@ public class ChangelogServiceTests : IDisposable
                 ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json")
             }).Build();
 
+        var providers = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
         _sut = new ChangelogService(new FileService(), config, NullLogger<ChangelogService>.Instance,
-            new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config));
+            new ClaudeHomeServer.Services.Llm.OneShotClaudeRunner(providers));
     }
 
     // ─── Источник не задан ──────────────────────────────────────────────────
@@ -111,6 +113,78 @@ public class ChangelogServiceTests : IDisposable
     {
         var act = () => _sut.ClearAll();
         act.Should().NotThrow();
+    }
+
+    // ─── Умный fallback (без LLM: чистая функция) ───────────────────────────
+
+    private static GitCommitRaw Commit(string subject, string author = "Григорий") =>
+        new("sha1", author, "a@b.c", DateTimeOffset.Now, subject, "", "Claude Home");
+
+    [Theory]
+    [InlineData("feat(chat): Добавили кнопку", "feature", "Новое")]
+    [InlineData("fix(notes): Починили ссылку", "fix", "Исправления")]
+    [InlineData("refactor(llm): Причесали слой", "improvement", "Улучшения")]
+    [InlineData("perf(files): Ускорили дерево", "improvement", "Улучшения")]
+    [InlineData("Merge branch 'master'", "other", "Прочее")]
+    [InlineData("chore: Обновили зависимости", "other", "Прочее")]
+    public void FallbackItems_ОбластьИзТипаКоммита(string subject, string expectedType, string expectedArea)
+    {
+        var items = ChangelogService.FallbackItems([Commit(subject)]);
+
+        items.Should().ContainSingle();
+        items[0].Type.Should().Be(expectedType);
+        items[0].Area.Should().Be(expectedArea);
+    }
+
+    [Fact]
+    public void FallbackItems_ОписаниеПустое_ОбоснованиеЧестное()
+    {
+        var items = ChangelogService.FallbackItems([Commit("feat(chat): Добавили кнопку")]);
+
+        // Тела коммитов технические — в продуктовый раздел их не льём
+        items[0].Benefit.Should().BeEmpty();
+        // Пузырь Claude не должен пустовать: видно, что пункт сырой
+        items[0].ScoreReason.Should().NotBeEmpty();
+        items[0].Title.Should().Be("Добавили кнопку"); // conventional-префикс срезан
+    }
+
+    [Fact]
+    public void FallbackItems_РазныеТипы_ГруппируютсяПоОбластям()
+    {
+        var items = ChangelogService.FallbackItems([
+            Commit("feat(a): Раз"), Commit("feat(b): Два"), Commit("fix(c): Три"),
+        ]);
+
+        items.Select(i => i.Area).Should().Equal("Новое", "Новое", "Исправления");
+    }
+
+    // ─── Канонизация областей между чанками ─────────────────────────────────
+
+    private static ChangelogItem Item(string area) =>
+        new("feature", area, "✨", "Заголовок", "", 3, "", ["Григорий"], ["Claude Home"]);
+
+    [Fact]
+    public void NormalizeAreas_РазличияРегистраИПробелов_СхлопываютсяВПервоеНаписание()
+    {
+        var normalized = ChangelogService.NormalizeAreas([Item("Чат"), Item("чат "), Item("ЧАТ")]);
+
+        normalized.Select(i => i.Area).Should().AllBe("Чат");
+    }
+
+    [Fact]
+    public void NormalizeAreas_ПустаяОбласть_СтановитсяПрочее()
+    {
+        var normalized = ChangelogService.NormalizeAreas([Item("  "), Item("")]);
+
+        normalized.Select(i => i.Area).Should().AllBe("Прочее");
+    }
+
+    [Fact]
+    public void NormalizeAreas_РазныеОбласти_НеСливаются()
+    {
+        var normalized = ChangelogService.NormalizeAreas([Item("Чат"), Item("Файлы"), Item("чат")]);
+
+        normalized.Select(i => i.Area).Should().Equal("Чат", "Файлы", "Чат");
     }
 
     public void Dispose()

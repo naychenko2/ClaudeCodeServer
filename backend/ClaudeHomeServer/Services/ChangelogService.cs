@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -16,7 +15,7 @@ namespace ClaudeHomeServer.Services;
 /// коммитах дня.
 /// </summary>
 public class ChangelogService(FileService files, IConfiguration config, ILogger<ChangelogService> logger,
-    Llm.LlmProviderRegistry llmProviders)
+    Llm.OneShotClaudeRunner claude)
 {
     private readonly string _cacheDir = Path.Combine(
         Path.GetDirectoryName(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
@@ -24,7 +23,9 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
         "changelog");
 
     private readonly string _model = config["Changelog:Model"] ?? "haiku";
-    private readonly int _claudeTimeoutMs = int.TryParse(config["Changelog:TimeoutMs"], out var t) ? t : 240_000;
+    // Запас на самый жирный день: 59 коммитов генерятся ~141 с, так что 480 с хватает
+    // с большим запасом. Не уложились — день уходит в fallback (сырые subject'ы коммитов).
+    private readonly int _claudeTimeoutMs = int.TryParse(config["Changelog:TimeoutMs"], out var t) ? t : 480_000;
 
     // Источник changelog. Если задан SourceRepoPath — «Что нового» строится ТОЛЬКО из этой
     // репы (changelog самого продукта, одинаковый для всех, независимо от проектов юзера).
@@ -184,7 +185,47 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
 
     // ===== Суммаризация через Claude =====
 
-    private async Task<List<ChangelogItem>?> SummarizeDay(List<GitCommitRaw> commits)
+    /// <summary>
+    /// Сводка дня — один вызов claude на все коммиты дня. Дробить день на параллельные
+    /// чанки пробовали: выходит МЕДЛЕННЕЕ (старт CLI ~15 с платится за каждый вызов) и хуже
+    /// группируется (чанки не видят друг друга и дробят смысл). Замер на 59 коммитах:
+    /// один вызов — 141 с / 13 пунктов, три чанка — 182 с / 29 пунктов.
+    /// От переполнения таймаута страхует Changelog:TimeoutMs, а не батчинг.
+    /// </summary>
+    private async Task<List<ChangelogItem>?> SummarizeDay(List<GitCommitRaw> commits, CancellationToken ct = default)
+    {
+        var knownAreas = KnownAreas();
+        var items = ParseAndClean(await TryRunClaude(BuildPrompt(commits, knownAreas), ct));
+        return items is null ? null : NormalizeAreas(items);
+    }
+
+    // Частые области из уже собранных дней — подсказка модели, чтобы области не разъезжались
+    // между днями («Заметки» vs «Раздел Заметки», «Интерфейс» vs «Интерфейс чата»)
+    private List<string> KnownAreas() =>
+        [.. LoadCache().Values
+            .SelectMany(d => d.Items)
+            .Select(i => i.Area)
+            .Where(a => !string.IsNullOrWhiteSpace(a) && a != "Прочее")
+            .GroupBy(a => a, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(g => g.Count())
+            .Take(15)
+            .Select(g => g.First())];
+
+    // Канонизация областей: совпадающие без учёта регистра/пробелов схлопываются в первое
+    // встреченное написание. Вход — уже склеенный в порядке чанков список, поэтому детерминировано.
+    internal static List<ChangelogItem> NormalizeAreas(List<ChangelogItem> items)
+    {
+        var canon = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        return [.. items.Select(i =>
+        {
+            var key = (i.Area ?? "").Trim();
+            if (key.Length == 0) return i with { Area = "Прочее" };
+            if (!canon.TryGetValue(key, out var c)) canon[key] = c = key;
+            return i with { Area = c };
+        })];
+    }
+
+    private static string BuildPrompt(IEnumerable<GitCommitRaw> commits, IReadOnlyCollection<string> knownAreas)
     {
         var input = new StringBuilder();
         foreach (var c in commits)
@@ -202,7 +243,13 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
             }
         }
 
-        var prompt = $$"""
+        // Подсказка уже используемыми областями: выравнивает area между днями
+        // («Заметки» vs «Раздел Заметки»). Пустой кеш → строки просто нет.
+        var areasHint = knownAreas.Count > 0
+            ? $"\n            - ПРЕДПОЧИТАЙ уже используемые названия областей, если пункт подходит\n              под одну из них (не выдумывай новую): {string.Join(", ", knownAreas)};"
+            : "";
+
+        return $$"""
             Ты ведешь продуктовый дневник изменений для пользователей продукта. Ниже —
             git-коммиты за один день по разным проектам. Твоя задача — рассказать
             ЧЕЛОВЕЧЕСКИМ языком по-русски, ЧТО нового появилось и ЧЕМ это полезно
@@ -216,11 +263,13 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
               опиши его коротко и по-человечески (например "улучшения под капотом");
             - группируй БЛИЗКО родственные коммиты в один пункт, но не сваливай все в кучу —
               разные по смыслу изменения должны быть разными пунктами;
+            - ВСЕГО не больше 12 пунктов за день. Коммитов много — группируй агрессивнее
+              (несколько правок одной фичи = один пункт), а не плоди мелкие пункты;
             - для каждого пункта определи ОБЛАСТЬ (area) — раздел/часть продукта, которого
               касается изменение, короткое человеческое название (например «Артефакты сессии»,
               «Календарь», «Чат», «История проекта», «Файлы», «Уведомления», «Настройки»).
               Пункты про одно и то же должны иметь ОДИНАКОВУЮ область (дословно), чтобы
-              сгруппироваться. Не выдумывай новую область, если подходит уже названная;
+              сгруппироваться. Не выдумывай новую область, если подходит уже названная;{{areasHint}}
             - подбери каждому пункту подходящую по СМЫСЛУ эмодзи (например 🔔 для уведомлений,
               📊 для отчетов/экспорта, 🎨 для оформления, 🔍 для поиска, ⚙️ для настроек,
               🚀 для ускорения, 🔒 для безопасности, 💬 для чата) — по ней должно быть
@@ -229,17 +278,13 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
               5 — крупная важная фича или критичный фикс, заметно улучшает продукт;
               4 — полезное заметное улучшение; 3 — обычное изменение;
               2 — мелочь или внутреннее улучшение «под капотом»; 1 — совсем незначительное.
-              Обоснование (scoreReason) пиши ОТ ПЕРВОГО ЛИЦА, как будто ты, Claude, лично
-              оцениваешь эту задачу и делишься впечатлением с другом — живая разговорная
-              реплика в 1 предложение, С ЮМОРОМ И ПРИКОЛОМ, эмоционально и неформально:
-              можно ирония, самоирония, разговорное словечко, легкая шутка или эмодзи в тему.
-              ВАЖНО по формату: начинай со СТРОЧНОЙ (маленькой) буквы и БЕЗ точки в конце —
-              так менее формально (примеры: «ну наконец-то, а то я уже заждался»,
-              «мелочь, а на душе теплее», «вот это по-взрослому, аж горжусь»,
-              «честно, не вау, но пусть будет»). Не превращай в занудство — коротко и по-живому.
+              Обоснование (scoreReason) — твоя живая реплика от первого лица, ОЧЕНЬ КОРОТКО:
+              3-6 слов, со строчной буквы, без точки в конце, можно с юмором
+              (примеры: «ну наконец-то, заждался», «мелочь, а приятно»,
+              «вот это по-взрослому», «не вау, но пусть будет»);
 
             Верни ТОЛЬКО JSON-массив без другого текста, формат элемента:
-            {"type": "feature|improvement|fix|other", "area": "Раздел продукта", "emoji": "🔔", "title": "что нового (кратко)", "benefit": "чем полезно (1 короткое предложение)", "score": 4, "scoreReason": "ну наконец-то удобно, а то я уже извелся весь", "authors": ["имя"], "projects": ["проект"]}
+            {"type": "feature|improvement|fix|other", "area": "Раздел продукта", "emoji": "🔔", "title": "что нового (кратко)", "benefit": "чем полезно (1 короткое предложение)", "score": 4, "scoreReason": "ну наконец-то, заждался", "authors": ["имя"], "projects": ["проект"]}
 
             Правила:
             - area — короткое название раздела продукта с заглавной буквы (1-3 слова);
@@ -247,19 +292,20 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
             - title — короткий заголовок с заглавной буквы, без точки в конце;
             - benefit — понятная польза для пользователя, живым языком, КОРОТКО: одно
               предложение до ~90 символов, без перечислений и деталей реализации;
-            - score — целое 1-5; scoreReason — твоя личная оценка от первого лица, живая
-              разговорная реплика в 1 предложение С ЮМОРОМ/ПРИКОЛОМ, эмоционально и
-              неформально (как будто это говоришь ты, Claude, приятелю); со СТРОЧНОЙ буквы
-              и БЕЗ точки в конце;
+            - score — целое 1-5; scoreReason — 3-6 слов, со строчной буквы, без точки в конце;
             - authors — уникальные авторы; projects — затронутые проекты;
             - в текстах не используй букву "ё" — пиши "е".
 
             Коммиты:
             {{input}}
             """;
+    }
 
-        var json = await RunClaude(prompt);
-        if (json is null) return null;
+    // Разбор ответа модели → готовые пункты. Применяется и к одиночному вызову, и к каждому чанку.
+    // null — модель не ответила / вернула мусор (наверху сработает fallback).
+    private static List<ChangelogItem>? ParseAndClean(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
         try
         {
             var items = JsonSerializer.Deserialize<List<ChangelogItem>>(ExtractJsonArray(json),
@@ -296,74 +342,22 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
         _ => "🔹",
     };
 
-    /// <summary>Генерация сводки через claude --print; модель стороннего провайдера
-    /// подключается env-оверрайдами. null при любой ошибке (наверху сработает фолбэк).</summary>
-    private async Task<string?> RunClaude(string prompt)
+    /// <summary>Вызов claude через общий OneShotClaudeRunner. Раннер кидает исключение
+    /// (таймаут / ненулевой exit code со stderr) — гасим его в null, на котором стоит фолбэк.
+    /// NormalizeModel обязателен: на выключенном провайдере BuildCliEnv внутри раннера кидает,
+    /// а так модель мягко откатывается на дефолтный Claude.</summary>
+    private async Task<string?> TryRunClaude(string prompt, CancellationToken ct)
     {
-        if (llmProviders.ResolveByModel(_model) is { Enabled: false } disabled)
-        {
-            logger.LogWarning("Генерация changelog: Changelog:Model = {Model}, но провайдер «{Provider}» не настроен",
-                _model, disabled.DisplayName);
-            return null;
-        }
-
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = FindClaudeExecutable(),
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardInputEncoding = Encoding.UTF8,
-            };
-            foreach (var arg in new[] { "--print", "--output-format", "text", "--model", _model })
-                psi.ArgumentList.Add(arg);
-
-            // Модель стороннего провайдера → CLI на его Anthropic-совместимый эндпоинт
-            if (llmProviders.BuildCliEnv(_model) is { } env)
-                foreach (var (k, v) in env)
-                    psi.Environment[k] = v;
-
-            using var proc = Process.Start(psi);
-            if (proc is null) return null;
-
-            using var cts = new CancellationTokenSource(_claudeTimeoutMs);
-            // Читаем stdout/stderr СРАЗУ, до записи в stdin: на большом промпте (50+ коммитов)
-            // claude начнет писать в свои пайпы, буфер ОС переполнится и мы словим deadlock,
-            // если сначала целиком писать stdin, а читать вывод только потом.
-            var outputTask = proc.StandardOutput.ReadToEndAsync(cts.Token);
-            var errorTask = proc.StandardError.ReadToEndAsync(cts.Token);
-            try
-            {
-                await proc.StandardInput.WriteAsync(prompt.AsMemory(), cts.Token);
-                proc.StandardInput.Close();
-                await proc.WaitForExitAsync(cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { }
-                logger.LogWarning("Генерация changelog: claude не уложился в таймаут {TimeoutMs} мс", _claudeTimeoutMs);
-                return null;
-            }
-
-            var output = await outputTask;
-            if (proc.ExitCode != 0)
-            {
-                var err = "";
-                try { err = await errorTask; } catch { /* stderr не дочитался — не критично */ }
-                logger.LogWarning("Генерация changelog: claude вышел с кодом {Code}. stderr: {Err}",
-                    proc.ExitCode, err.Length > 500 ? err[..500] : err);
-                return null;
-            }
+            var output = await claude.RunAsync(prompt, claude.NormalizeModel(_model),
+                TimeSpan.FromMilliseconds(_claudeTimeoutMs), ct);
             return string.IsNullOrWhiteSpace(output) ? null : output;
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Генерация changelog: ошибка запуска claude");
+            // ex.Message различает «не ответил за отведённое время» и «завершился с кодом N: stderr»
+            logger.LogWarning("Генерация changelog: {Error}", ex.Message);
             return null;
         }
     }
@@ -376,8 +370,22 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
         return start >= 0 && end > start ? text[start..(end + 1)] : text;
     }
 
-    // Fallback без LLM: причесанные subject'ы коммитов (убираем conventional-префикс)
-    private static List<ChangelogItem> FallbackItems(List<GitCommitRaw> commits) =>
+    // Честная реплика вместо пустого пузыря — видно, что пункт сырой, а не оценённый
+    private const string FallbackReason = "сводку собрать не вышло, показываю коммит как есть";
+
+    // Область для fallback берём из типа коммита, а не из scope: scope дал бы английские
+    // технические имена («Chat extract tasks») рядом с русскими продуктовыми областями.
+    private static string FallbackArea(string type) => type switch
+    {
+        "feature" => "Новое",
+        "fix" => "Исправления",
+        "improvement" => "Улучшения",
+        _ => "Прочее",
+    };
+
+    // Fallback без LLM: причесанные subject'ы коммитов (убираем conventional-префикс).
+    // Benefit оставляем пустым: тела коммитов технические, а раздел — продуктовый, без жаргона.
+    internal static List<ChangelogItem> FallbackItems(List<GitCommitRaw> commits) =>
         commits.Select(c =>
         {
             var subject = c.Subject;
@@ -397,29 +405,9 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
             }
             if (subject.Length > 0)
                 subject = char.ToUpper(subject[0]) + subject[1..];
-            return new ChangelogItem(type, "Прочее", DefaultEmoji(type), Deyo(subject), "", 3, "", [c.Author], string.IsNullOrEmpty(c.Project) ? [] : [c.Project]);
+            return new ChangelogItem(type, FallbackArea(type), DefaultEmoji(type), Deyo(subject), "",
+                3, FallbackReason, [c.Author], string.IsNullOrEmpty(c.Project) ? [] : [c.Project]);
         }).ToList();
-
-    // На Windows ищем claude.exe напрямую (паттерн из ClaudeSession)
-    private static string FindClaudeExecutable()
-    {
-        if (!OperatingSystem.IsWindows()) return "claude";
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var exePath = Path.Combine(appData, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
-        if (File.Exists(exePath)) return exePath;
-        // Новый путь standalone-установки: %USERPROFILE%\.local\bin\claude.exe
-        var localBin = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "claude.exe");
-        if (File.Exists(localBin)) return localBin;
-        try
-        {
-            var where = Process.Start(new ProcessStartInfo("where.exe", "claude.exe")
-                { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true })!;
-            var line = where.StandardOutput.ReadLine();
-            if (!string.IsNullOrEmpty(line) && File.Exists(line)) return line.Trim();
-        }
-        catch { }
-        return "claude.exe";
-    }
 
     // ===== Кеш data/changelog/product.json =====
 

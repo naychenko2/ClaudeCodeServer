@@ -64,9 +64,8 @@ public record NoteGraph(
     IReadOnlyList<NoteGraphEdge> Edges);
 
 // Возможный источник для создания заметки (личный vault + проекты владельца) —
-// отдаётся фронту, чтобы показать выбор «куда создать». ReadOnly=true — источник
-// только для чтения (память Claude): создание/правка/перенос в него запрещены.
-public record NoteSourceDto(string Key, string Label, bool ReadOnly = false);
+// отдаётся фронту, чтобы показать выбор «куда создать».
+public record NoteSourceDto(string Key, string Label);
 
 // Шаблон заметки (файл в templates/ личного vault)
 public record NoteTemplateDto(string Id, string Title);
@@ -87,6 +86,10 @@ public record MoveNoteRequest(string? Folder = null, string? TargetSource = null
 // Возвращается маппинг id заметок (старый → новый), чтобы фронт обновил выбор.
 public record MoveFolderRequest(string Source, string Path, string NewPath);
 public record MovedNoteId(string OldId, string NewId);
+
+// Физическая папка источника (в т.ч. пустая) — для дерева и выбора «куда создать»
+public record NoteFolderDto(string Source, string Path);
+public record CreateNoteFolderRequest(string Source, string Path);
 
 // Дата дня для daily note — клиент шлёт свою локальную (таймзона устройства)
 public record DailyNoteRequest(string? Date = null);

@@ -38,10 +38,6 @@ public sealed class NoteTaskSyncService(
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
-        // Источник только для чтения (память Claude): промоут запрещён — обратную запись
-        // галочки в такую заметку сделать нельзя, задача осталась бы рассинхронизированной.
-        if (notes.GetSources(userId).FirstOrDefault(s => s.Key == note.Source)?.ReadOnly == true)
-            throw new InvalidOperationException("Нельзя создать задачу из заметки в источнике только для чтения");
         var parsed = NoteTaskParser.Parse(note.Content).FirstOrDefault(l => l.Line == line)
             ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");
 

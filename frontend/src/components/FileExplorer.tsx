@@ -19,8 +19,9 @@ function isKnowledgeIndexable(filename: string): boolean {
   return KB_TEXT_EXT.has(ext) || KB_FILE_EXT.has(ext);
 }
 import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
-import { bumpNotes } from '../lib/notes';
+import { bumpNotes, getNotesSnapshot } from '../lib/notes';
 import { IconNotes } from '../features/notes/shared';
+import { NewNoteDialog } from '../features/notes/NewNoteDialog';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
@@ -84,6 +85,38 @@ const inNotesVault = (p?: string | null) => {
 };
 const touchNotesStore = (...paths: (string | undefined | null)[]) => {
   if (paths.some(inNotesVault)) bumpNotes();
+};
+
+// Путь папки заметок → относительный путь внутри vault (для NewNoteDialog.folder)
+const noteFolderOf = (p: string) => {
+  const n = normPath(p);
+  return n === 'notes' ? '' : n.slice('notes/'.length);
+};
+
+// Отображаемый путь: vault заметок показываем как «Заметки», а не «notes»
+const notesDisplayPath = (p: string) => {
+  const n = normPath(p);
+  if (n === 'notes') return 'Заметки';
+  return n.startsWith('notes/') ? 'Заметки/' + n.slice('notes/'.length) : p;
+};
+
+// В vault заметок допустимы только .md и изображения (вложения ![[img]])
+const NOTES_OK_EXT = /\.(md|png|jpe?g|gif|svg|webp)$/i;
+const allowedInNotes = (name: string) => NOTES_OK_EXT.test(name);
+
+// Запрет перемещения по правилам vault заметок (dnd и диалог «Переместить»):
+//  • папку заметок нельзя вынести из vault, обычную — внести в vault
+//  • в vault-папку можно класть только .md/картинки (внешние файлы)
+const notesMoveBlocked = (fromPath: string, fromIsDir: boolean, toPath: string): boolean => {
+  const fromIn = inNotesVault(fromPath);
+  const toIn = inNotesVault(toPath);
+  if (fromIsDir) {
+    if (fromIn && !toIn) return true;
+    if (!fromIn && toIn) return true;
+    return false;
+  }
+  const name = normPath(fromPath).split('/').pop() ?? '';
+  return toIn && !fromIn && !allowedInNotes(name);
 };
 
 // Единая сортировка записей: «Заметки» первой, папки сверху, затем по имени
@@ -374,6 +407,16 @@ function MI_Trash() {
     </svg>
   );
 }
+// Иконка «Новая заметка» в контекстном меню: лист с плюсом
+function MI_NotePlus() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5"/>
+      <path d="M14 3v5h5"/>
+      <path d="M17 14v6M14 17h6"/>
+    </svg>
+  );
+}
 
 // Иконка папки с плюсом
 function FolderPlusIcon() {
@@ -444,9 +487,12 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   // === Create directory state ===
   const [showCreateDir, setShowCreateDir] = useState(false);
   const [newDirName, setNewDirName] = useState('');
+  // Диалог «Новая заметка» из раздела файлов (folder — путь внутри vault)
+  const [noteDialog, setNoteDialog] = useState<{ folder: string } | null>(null);
 
   // === Drag & drop state ===
   const [dragPath, setDragPath] = useState<string | null>(null);
+  const [dragIsDir, setDragIsDir] = useState(false);   // тащим папку или файл (для правил vault)
   const [dropTarget, setDropTarget] = useState<string | null>(null);
 
   // === Long press для мобилы ===
@@ -589,6 +635,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     if (!newDirName.trim()) return;
     const path = createInDir ? `${createInDir}/${newDirName.trim()}` : newDirName.trim();
     await api.files.mkdir(project.id, path);
+    touchNotesStore(path);
     setShowCreateDir(false);
     setNewDirName('');
     await invalidateDir(createInDir);
@@ -598,10 +645,20 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const handleUploadFiles = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     const dir = isMobile ? mobileDir : createInDir;
+    // В vault заметок грузим только .md/картинки — прочее отсеиваем с сообщением
+    let files = Array.from(fileList);
+    if (inNotesVault(dir)) {
+      const rejected = files.filter(f => !allowedInNotes(f.name));
+      files = files.filter(f => allowedInNotes(f.name));
+      if (rejected.length) {
+        setUploadError(`В заметки можно загружать только .md и изображения: ${rejected.map(f => f.name).join(', ')}`);
+        if (files.length === 0) { if (uploadInputRef.current) uploadInputRef.current.value = ''; return; }
+      }
+    }
     setUploading(true);
-    setUploadError(null);
+    if (!inNotesVault(dir)) setUploadError(null);
     try {
-      await Promise.all(Array.from(fileList).map(f => api.files.upload(project.id, f, dir)));
+      await Promise.all(files.map(f => api.files.upload(project.id, f, dir)));
       touchNotesStore(dir);
       await invalidateDir(dir);
       if (dir && !isMobile) setExpanded(prev => new Set(prev).add(dir));
@@ -672,6 +729,29 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       return;
     }
     const newPath = parentDir ? `${parentDir}/${newName}` : newName;
+    // Переименование заметки notes/*.md → через notes-API, чтобы обновились
+    // входящие [[ссылки]] (файловый rename их не трогает). Смена расширения на
+    // не-.md / только регистра / отсутствие заметки в сторе → обычный rename.
+    const isNotesMd = inNotesVault(renamingPath) && /\.md$/i.test(oldName);
+    const newIsMd = /\.md$/i.test(newName);
+    if (isNotesMd && newIsMd && newName.toLowerCase() !== oldName.toLowerCase()) {
+      const rel = normPath(renamingPath).slice('notes/'.length);
+      // Стор заметок в разделе файлов может быть не загружен → фолбэк на свежий список
+      let note = getNotesSnapshot().find(n => n.source === project.id && normPath(n.path) === rel);
+      if (!note) {
+        try { note = (await api.notes.list()).find(n => n.source === project.id && normPath(n.path) === rel); } catch { /* оффлайн — обычный rename ниже */ }
+      }
+      if (note) {
+        try {
+          await api.notes.update(note.id, { title: newName.replace(/\.md$/i, '') });
+          bumpNotes();
+          setRenamingPath(null);
+          setRenameValue('');
+          await invalidateDir(parentDir);
+          return;
+        } catch { /* коллизия имени и т.п. — оставляем режим правки */ return; }
+      }
+    }
     try {
       await api.files.rename(project.id, renamingPath, newPath);
       touchNotesStore(renamingPath, newPath);
@@ -731,11 +811,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     // нельзя бросить в ту же папку где уже лежит
     const [sourceParent] = splitPath(from);
     if (sourceParent === normPath(to)) return true;
+    // правила vault заметок (тип файла / папки заметок)
+    if (notesMoveBlocked(from, dragIsDir, to)) return true;
     return false;
-  }, []);
+  }, [dragIsDir]);
 
   const handleDragStart = useCallback((e: React.DragEvent, entry: FileEntry) => {
     setDragPath(entry.path);
+    setDragIsDir(entry.isDirectory);
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', entry.path);
   }, []);
@@ -780,6 +863,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const handleDragEnd = useCallback(() => {
     setDragPath(null);
+    setDragIsDir(false);
     setDropTarget(null);
   }, []);
 
@@ -864,7 +948,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       let acc = '';
       for (const part of parts) {
         acc = acc ? `${acc}/${part}` : part;
-        crumbs.push({ label: part, path: acc });
+        // Корень vault заметок в UI называется «Заметки», а не «notes»
+        const label = normPath(acc) === 'notes' ? 'Заметки' : part;
+        crumbs.push({ label, path: acc });
       }
     }
     return crumbs;
@@ -1033,8 +1119,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {entry.isNew && (
           <span style={{ fontSize: 9, fontWeight: 700, color: C.successText, background: C.successBg, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>+</span>
         )}
-        {/* Hover-иконки: переименовать + удалить — только десктоп при hover */}
-        {online && !isRenaming && !isMobile && hoveredPath === entry.path && (
+        {/* Hover-иконки: переименовать + удалить — только десктоп при hover.
+            Корень «Заметки» (vault) не переименовываем/не удаляем. */}
+        {online && !isRenaming && !isMobile && hoveredPath === entry.path && !isNotesRoot(entry) && (
           <>
             <IconButton
               size="xs"
@@ -1069,8 +1156,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             </IconButton>
           ) : null
         )}
-        {/* Иконка знаний: спиннер при индексации; при hover — добавить или удалить */}
-        {!entry.isDirectory && (
+        {/* Иконка знаний: спиннер при индексации; при hover — добавить или удалить.
+            Заметки (notes/*.md) в файловые «Знания» не индексируем — свой семантический индекс. */}
+        {!entry.isDirectory && !inNotesVault(entry.path) && (
           indexingFiles?.has(entry.path) ? (
             <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.successText }}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -1260,19 +1348,31 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
         {online && (
           <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
-            {/* Новый файл */}
-            <Button
-              variant="dashed"
-              size="md"
-              leftIcon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>}
-              onClick={() => {
-                if (isMobile) setCreateInDir(mobileDir);
-                setShowCreateFile(true);
-              }}
-              style={{ flex: 1 }}
-            >
-              Новый файл
-            </Button>
+            {/* Новый файл — в контексте vault заметок превращается в «Новая заметка» */}
+            {inNotesVault(isMobile ? mobileDir : createInDir) ? (
+              <Button
+                variant="dashed"
+                size="md"
+                leftIcon={<IconNotes size={15} />}
+                onClick={() => setNoteDialog({ folder: noteFolderOf(isMobile ? mobileDir : createInDir) })}
+                style={{ flex: 1 }}
+              >
+                Новая заметка
+              </Button>
+            ) : (
+              <Button
+                variant="dashed"
+                size="md"
+                leftIcon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>}
+                onClick={() => {
+                  if (isMobile) setCreateInDir(mobileDir);
+                  setShowCreateFile(true);
+                }}
+                style={{ flex: 1 }}
+              >
+                Новый файл
+              </Button>
+            )}
             {/* Новая папка */}
             <div
               onClick={() => {
@@ -1312,7 +1412,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {online && !isMobile && (
           <div style={{ marginTop: 5, fontSize: 11.5, color: C.textMuted, fontFamily: FONT.mono, paddingLeft: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-            {createInDir ? <span title={createInDir}>{createInDir}</span> : <span style={{ fontStyle: 'italic' }}>корень проекта</span>}
+            {createInDir ? <span title={createInDir}>{notesDisplayPath(createInDir)}</span> : <span style={{ fontStyle: 'italic' }}>корень проекта</span>}
           </div>
         )}
       </div>
@@ -1529,6 +1629,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         const available = allDirs.filter(d => {
           if (d.path === movingParent) return false; // уже здесь
           if (movingEntry.isDirectory && (d.path === movingEntry.path || normPath(d.path).startsWith(normPath(movingEntry.path) + '/'))) return false;
+          // правила vault заметок: тип файла / папки заметок ↔ обычные
+          if (notesMoveBlocked(movingEntry.path, movingEntry.isDirectory, d.path)) return false;
           return true;
         });
         return (
@@ -1597,11 +1699,12 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 <div style={{ padding: '4px 20px 12px', fontFamily: FONT.mono, fontSize: 13, fontWeight: 700, color: C.textPrimary, borderBottom: `1px solid ${C.border}` }}>
                   {entry.name}
                 </div>
+                {entry.isDirectory && inNotesVault(entry.path) && menuItem(<MI_NotePlus />, 'Новая заметка', () => { setContextMenu(null); setNoteDialog({ folder: noteFolderOf(entry.path) }); })}
                 {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
-                {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
+                {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
                 {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.name) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
-                {entry.isDirectory && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
-                {entry.isDirectory && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
+                {entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
+                {entry.isDirectory && !inNotesVault(entry.path) && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
                 {canToggleOffline && menuItem(<MI_Cloud />, offlineLabel, doToggleOffline)}
                 {/* «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний */}
                 {!isNotesRoot(entry) && <>
@@ -1632,11 +1735,12 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               minWidth: 190,
             }}
           >
+            {entry.isDirectory && inNotesVault(entry.path) && menuItem(<MI_NotePlus />, 'Новая заметка', () => { setContextMenu(null); setNoteDialog({ folder: noteFolderOf(entry.path) }); })}
             {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
-            {!entry.isDirectory && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
+            {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
             {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.name) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
-            {entry.isDirectory && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
-            {entry.isDirectory && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
+            {entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
+            {entry.isDirectory && !inNotesVault(entry.path) && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
             {canToggleOffline && menuItem(<MI_Cloud />, sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн', doToggleOffline)}
             {/* «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний */}
             {!isNotesRoot(entry) && <>
@@ -1649,6 +1753,21 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           </div>
         );
       })()}
+
+      {/* Диалог «Новая заметка» из раздела файлов (папка vault → source=проект) */}
+      {noteDialog && (
+        <NewNoteDialog
+          defaults={{ source: project.id, folder: noteDialog.folder }}
+          onClose={() => setNoteDialog(null)}
+          onCreated={() => {
+            setNoteDialog(null);
+            bumpNotes();
+            const dir = noteDialog.folder ? `notes/${noteDialog.folder}` : 'notes';
+            void invalidateDir(dir);
+            setExpanded(prev => new Set(prev).add(dir));
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -146,18 +146,27 @@ public class KnowledgeController(
         var p = GetOwnedProject(projectId);
         if (p is null) return NotFound();
 
+        // Папка заметок индексируется отдельной базой знаний (NotesKnowledgeService,
+        // per-owner dataset) — файловая индексация notes/ дала бы двойной индекс.
+        var rel = (req.RelativePath ?? "").Replace('\\', '/').Trim('/');
+        if (rel.Equals("notes", StringComparison.OrdinalIgnoreCase) ||
+            rel.StartsWith("notes/", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { error = "Заметки индексируются отдельной базой знаний" });
+
         IEnumerable<FileEntry> allFiles;
         try
         {
-            allFiles = files.Tree(p.RootPath, req.RelativePath, p.ShowHiddenFiles);
+            allFiles = files.Tree(p.RootPath, req.RelativePath ?? "", p.ShowHiddenFiles);
         }
         catch (DirectoryNotFoundException)
         {
             return NotFound(new { error = "Папка не найдена" });
         }
 
+        // Исключаем notes/ при индексации папки-родителя (напр. корня проекта)
         var indexable = allFiles
-            .Where(f => !f.IsDirectory && KnowledgeService.IsKnowledgeIndexable(f.Path))
+            .Where(f => !f.IsDirectory && KnowledgeService.IsKnowledgeIndexable(f.Path)
+                        && !IsInNotesVault(f.Path))
             .ToList();
 
         if (indexable.Count == 0)
@@ -231,6 +240,13 @@ public class KnowledgeController(
 
         workspaceStore.Delete(p.RootPath);
         return NoContent();
+    }
+
+    // Путь внутри vault заметок (notes/…) — такие файлы индексируются отдельно
+    private static bool IsInNotesVault(string path)
+    {
+        var n = path.Replace('\\', '/').TrimStart('/');
+        return n.StartsWith("notes/", StringComparison.OrdinalIgnoreCase);
     }
 }
 

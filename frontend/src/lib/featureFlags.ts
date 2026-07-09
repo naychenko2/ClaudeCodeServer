@@ -12,7 +12,6 @@ export const FLAGS = {
   notes: 'notes',
   notesSessionSummary: 'notes-session-summary',
   notesAutoRecall: 'notes-auto-recall',
-  notesMemorySource: 'notes-memory-source',
   dailyBriefing: 'daily-briefing',
   notesTaskSync: 'notes-task-sync',
   taskExecContext: 'task-exec-context',

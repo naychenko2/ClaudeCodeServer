@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { AuthState, NoteDetail, NoteSemanticHit, NoteSource, NoteSummary, NoteTemplate } from '../../types';
+import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
-import { Modal } from '../../components/ui';
+import { NewNoteDialog } from './NewNoteDialog';
 import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes } from '../../lib/notes';
-import { parseHash } from '../../lib/nav';
+import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
 import { NotesList } from './NotesList';
 import { NoteView } from './NoteView';
 import { NotesGraph, type GraphStats } from './NotesGraph';
@@ -15,7 +15,7 @@ import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
 import { EmptyState } from '../../components/EmptyState';
 import { Splitter } from '../../components/ui';
-import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot, usePanelWidth, isReadOnlySource } from './shared';
+import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot, usePanelWidth } from './shared';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -58,17 +58,30 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     if (t?.screen === 'notes' && t.noteId) { setSelectedId(t.noteId); setMobileView('note'); }
   }, []);
 
+  // Back/forward браузера внутри вкладки «Заметки» — синхронизируем открытую заметку из истории
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      const s = e.state as NavSnapshot | null;
+      if (s?.screen === 'notes') {
+        setSelectedId(s.note ?? null);
+        setMobileView(s.note ? 'note' : 'list');
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
   // Открытие заметки по заголовку (из [[wikilink]] в файлах/чате). Заголовок в
   // sessionStorage; ждём загрузки списка (deps: notes) и открываем по совпадению.
   useEffect(() => {
     const consume = () => {
       // По id (из графа сайдбара FileViewer) — приоритетнее
       const id = sessionStorage.getItem('cc_pending_note_id');
-      if (id) { sessionStorage.removeItem('cc_pending_note_id'); setSelectedId(id); setMobileView('note'); return; }
+      if (id) { sessionStorage.removeItem('cc_pending_note_id'); setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id }); return; }
       const title = sessionStorage.getItem('cc_pending_note_title');
       if (!title) return;
       const n = notes.find(x => x.title.trim().toLowerCase() === title.trim().toLowerCase());
-      if (n) { sessionStorage.removeItem('cc_pending_note_title'); setSelectedId(n.id); setMobileView('note'); }
+      if (n) { sessionStorage.removeItem('cc_pending_note_title'); setSelectedId(n.id); setMobileView('note'); navPush({ screen: 'notes', note: n.id }); }
     };
     consume();
     window.addEventListener('cc-open-note', consume);
@@ -110,7 +123,11 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     return [...s].sort((a, b) => a.localeCompare(b, 'ru'));
   }, [notes]);
 
-  const selectNote = (id: string) => { setSelectedId(id); setMobileView('note'); };
+  const selectNote = (id: string) => { setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id }); };
+
+  // Возврат к списку (удаление/кнопка «назад» на мобилке): снимаем выбор и
+  // откатываем запись истории с note к списку (детерминированно, как в «Чатах»).
+  const clearNote = () => { setSelectedId(null); setMobileView('list'); if (getNav()?.note) navReplace({ screen: 'notes' }); };
 
   // Клик по [[wikilink]]: найти заметку по заголовку, иначе предложить создать
   const onWikilink = (target: string) => {
@@ -118,9 +135,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     const found = notes.find(n => n.title.trim().toLowerCase() === name);
     if (found) { selectNote(found.id); return; }
     if (window.confirm(`Заметки «${target}» ещё нет. Создать?`)) {
-      // Призрачную заметку из read-only источника (память Claude) создаём в личном vault
-      const curSource = selectedId ? notes.find(n => n.id === selectedId)?.source : undefined;
-      const source = curSource && !isReadOnlySource(curSource) ? curSource : 'personal';
+      const source = selectedId ? notes.find(n => n.id === selectedId)?.source ?? 'personal' : 'personal';
       void api.notes.create({ title: target.split('/').pop()!.split('#')[0].trim(), source })
         .then(n => { bumpNotes(); selectNote(n.id); });
     }
@@ -211,13 +226,13 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // --- Содержимое режима «Заметки» ---
   const listPane = showSemantic
     ? <SemanticResults hits={semanticHits} selectedId={selectedId} onSelect={selectNote} />
-    : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote}
-        onMoved={(oldId, newId) => { if (selectedId === oldId) setSelectedId(newId); }}
+    : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote} isMobile={isMobile}
+        onMoved={(oldId, newId) => { if (selectedId === oldId) { setSelectedId(newId); navReplace({ screen: 'notes', note: newId }); } }}
         onCreateInFolder={(source, folder) => setNewDialog({ source, folder })}
-        onDeleted={ids => { if (selectedId && ids.includes(selectedId)) setSelectedId(null); }}
+        onDeleted={ids => { if (selectedId && ids.includes(selectedId)) clearNote(); }}
         onIdsRemapped={map => {
           const hit = selectedId && map.find(m => m.oldId === selectedId);
-          if (hit) setSelectedId(hit.newId);
+          if (hit) { setSelectedId(hit.newId); navReplace({ screen: 'notes', note: hit.newId }); }
         }} />;
 
   // Сайдбар целиком: управление сверху, ниже — список (режим «Заметки») или фильтры («Граф»)
@@ -239,8 +254,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     : selectedId
       ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink}
           onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} isMobile={isMobile}
-          onBack={isMobile ? () => setMobileView('list') : undefined}
-          onDeleted={() => { setSelectedId(null); setMobileView('list'); }} />
+          onBack={isMobile ? clearNote : undefined}
+          onDeleted={clearNote} />
       : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <EmptyState icon={<IconNotes />} title="Заметки"
             subtitle={notes.length ? 'Выбери заметку слева или создай новую' : 'Создай первую заметку или попроси Claude законспектировать разговор'}
@@ -286,103 +301,6 @@ const newBtn: React.CSSProperties = {
   cursor: 'pointer', fontFamily: FONT.sans, flex: 'none',
 };
 
-// --- Диалог создания заметки ---
-
-function NewNoteDialog({ defaults, onClose, onCreated }: {
-  defaults?: { source?: string; folder?: string };
-  onClose: () => void;
-  onCreated: (id: string) => void;
-}) {
-  const notes = useNotes();
-  const [title, setTitle] = useState('');
-  const [source, setSource] = useState(defaults?.source ?? 'personal');
-  const [folder, setFolder] = useState(defaults?.folder ?? '');
-  const [sources, setSources] = useState<NoteSource[]>([{ key: 'personal', label: 'Личный' }]);
-  const [templates, setTemplates] = useState<NoteTemplate[]>([]);
-  const [templateId, setTemplateId] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    api.notes.sources().then(setSources).catch(() => {});
-    api.notes.templates().then(setTemplates).catch(() => {});
-  }, []);
-
-  // В выбор «Куда» показываем только записываемые источники (память Claude — read-only)
-  const writableSources = sources.filter(s => !s.readOnly);
-
-  // Существующие папки выбранного источника — для автодополнения (можно ввести новую)
-  const folders = useMemo(() => {
-    const dirs = new Set<string>();
-    notes.filter(n => n.source === source).forEach(n => {
-      const i = n.path.lastIndexOf('/');
-      if (i > 0) {
-        const dir = n.path.slice(0, i);
-        // добавляем и промежуточные уровни ("а/б" → "а", "а/б")
-        const parts = dir.split('/');
-        for (let k = 1; k <= parts.length; k++) dirs.add(parts.slice(0, k).join('/'));
-      }
-    });
-    return [...dirs].sort((a, b) => a.localeCompare(b, 'ru'));
-  }, [notes, source]);
-
-  const create = async () => {
-    if (!title.trim()) return;
-    setBusy(true);
-    try {
-      const note = await api.notes.create({
-        title: title.trim(), source, templateId: templateId || undefined,
-        folder: folder.trim() || undefined,
-      });
-      onCreated(note.id);
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <Modal width={440} title="Новая заметка" onClose={onClose}
-      footer={
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button onClick={onClose} style={{ background: 'transparent', border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '8px 16px', fontSize: 13, cursor: 'pointer', fontFamily: FONT.sans, color: C.textSecondary }}>Отмена</button>
-          <button onClick={create} disabled={busy || !title.trim()} style={{ background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.lg, padding: '8px 16px', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: FONT.sans, opacity: busy || !title.trim() ? 0.6 : 1 }}>Создать</button>
-        </div>
-      }
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div>
-          <label style={fieldLabel}>Заголовок</label>
-          <input autoFocus value={title} onChange={e => setTitle(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') create(); }}
-            placeholder="Название заметки"
-            style={fieldInput} />
-        </div>
-        <div>
-          <label style={fieldLabel}>Куда</label>
-          <select value={source} onChange={e => setSource(e.target.value)} style={{ ...fieldInput, cursor: 'pointer' }}>
-            {writableSources.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-          </select>
-        </div>
-        <div>
-          <label style={fieldLabel}>Папка</label>
-          <input value={folder} onChange={e => setFolder(e.target.value)}
-            list="note-folders" placeholder="Корень (или введи новую: Идеи/Черновики)"
-            style={fieldInput} />
-          <datalist id="note-folders">
-            {folders.map(f => <option key={f} value={f} />)}
-          </datalist>
-        </div>
-        {templates.length > 0 && (
-          <div>
-            <label style={fieldLabel}>Шаблон</label>
-            <select value={templateId} onChange={e => setTemplateId(e.target.value)} style={{ ...fieldInput, cursor: 'pointer' }}>
-              <option value="">Без шаблона</option>
-              {templates.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
-            </select>
-          </div>
-        )}
-      </div>
-    </Modal>
-  );
-}
-
 // Результаты семантического поиска: заметка + score + сниппет чанка
 function SemanticResults({ hits, selectedId, onSelect }: {
   hits: NoteSemanticHit[] | null;
@@ -415,11 +333,3 @@ function SemanticResults({ hits, selectedId, onSelect }: {
   );
 }
 
-const fieldLabel: React.CSSProperties = {
-  display: 'block', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.04em',
-  color: C.textMuted, marginBottom: 6,
-};
-const fieldInput: React.CSSProperties = {
-  width: '100%', boxSizing: 'border-box', background: C.bgWhite, border: `1px solid ${C.border}`,
-  borderRadius: R.xl, padding: '9px 12px', fontSize: 14, fontFamily: FONT.sans, color: C.textHeading, outline: 'none',
-};

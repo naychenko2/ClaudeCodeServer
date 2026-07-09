@@ -215,6 +215,42 @@ public class NotesController : ControllerBase
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }
 
+    // Все физические папки владельца (в т.ч. пустые) — для дерева и «куда создать».
+    [HttpGet("folders")]
+    public ActionResult<IReadOnlyList<NoteFolderDto>> Folders() =>
+        Ok(_notes.GetFolders(UserId));
+
+    // Создать физическую папку (в т.ч. пустую).
+    [HttpPost("folder")]
+    public async Task<ActionResult<NoteFolderDto>> CreateFolder([FromBody] CreateNoteFolderRequest req)
+    {
+        try
+        {
+            var folder = _notes.CreateFolder(UserId, req.Source, req.Path);
+            await Broadcast("folder_created");
+            return Ok(folder);
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    // Удалить физическую папку рекурсивно (пустую или с заметками).
+    [HttpDelete("folder")]
+    public async Task<IActionResult> DeleteFolder([FromQuery] string source, [FromQuery] string path)
+    {
+        try
+        {
+            var removed = _notes.DeleteFolder(UserId, source, path);
+            await Broadcast("folder_deleted");
+            return Ok(new { removed });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+    }
+
     // Перенос заметки в другую папку того же источника (id меняется — путь в id).
     [HttpPost("{id}/move")]
     public async Task<ActionResult<NoteDetail>> Move(string id, [FromBody] MoveNoteRequest req)

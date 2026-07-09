@@ -15,7 +15,7 @@ import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
 import {
-  SourceBadge, usePanelWidth, isReadOnlySource,
+  SourceBadge, usePanelWidth,
   IconChat, IconTrash, IconCalendarDay, IconLink, IconSparkle, IconFolder, IconFolderMove,
 } from './shared';
 
@@ -196,9 +196,6 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   if (!note)
     return <div style={{ padding: 40, textAlign: 'center', color: C.textMuted, fontFamily: FONT.sans }}>Заметка не найдена</div>;
 
-  // Память Claude — только чтение: скрываем правку/удаление/перенос и запись тегов/связей
-  const ro = isReadOnlySource(note.source);
-
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Тулбар заметки — единый стиль тулбаров приложения (как FileViewer) */}
@@ -236,14 +233,6 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 {saving ? 'Сохранение…' : 'Сохранить'}
               </button>
             </>
-          ) : ro ? (
-            /* Память Claude — только чтение: доступен лишь просмотр и вопрос Claude */
-            <>
-              <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, background: C.bgInset, borderRadius: R.sm, padding: '2px 8px' }}>
-                только чтение
-              </span>
-              {onAskClaude && <IconButton title="Спросить Claude про это" onClick={() => onAskClaude(note)}><IconChat /></IconButton>}
-            </>
           ) : (
             <>
               {onAskClaude && <IconButton title="Спросить Claude про это" onClick={() => onAskClaude(note)}><IconChat /></IconButton>}
@@ -280,9 +269,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 #{t}
               </button>
             ))}
-            {/* Ручное добавление/AI-теги — только для записываемых источников */}
-            {!ro && <>
-              {addingTag ? (
+            {/* Ручное добавление тега */}
+            {addingTag ? (
                 <input
                   autoFocus
                   value={newTag}
@@ -317,7 +305,6 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                   +#{t}
                 </button>
               ))}
-            </>}
           </div>
         )}
         {!editing && aiLinks != null && (
@@ -346,9 +333,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
           resolveNote={resolveNote} embedSource={note.source} />
 
-        {/* Задачи из заметки (флаг notes-task-sync): чекбоксы .md ↔ задачи.
-            Read-only источники (память Claude) исключаем — обратная запись невозможна. */}
-        {taskSyncEnabled && !isReadOnlySource(note.source) && (
+        {/* Задачи из заметки (флаг notes-task-sync): чекбоксы .md ↔ задачи. */}
+        {taskSyncEnabled && (
           <NoteTasksSection noteId={note.id} version={version} />
         )}
 
@@ -407,8 +393,6 @@ function MoveDialog({ currentDir, currentSource, sources, foldersFor, error, onM
   const [src, setSrc] = useState(currentSource);
   const [custom, setCustom] = useState('');
   const folders = foldersFor(src);
-  // Перенести можно только в записываемые источники (память Claude исключаем)
-  const targetSources = sources.filter(s => !s.readOnly);
   const isCurrent = (folder: string) => src === currentSource && folder === currentDir;
   const row = (label: React.ReactNode, folder: string) => (
     <button key={folder || '(root)'} disabled={isCurrent(folder)} onClick={() => onMove(folder, src)}
@@ -425,10 +409,10 @@ function MoveDialog({ currentDir, currentSource, sources, foldersFor, error, onM
   );
   return (
     <Modal width={420} title="Переместить заметку" onClose={onClose}>
-      {targetSources.length > 1 && (
+      {sources.length > 1 && (
         <select value={src} onChange={e => setSrc(e.target.value)}
           style={{ width: '100%', boxSizing: 'border-box', marginBottom: 10, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, padding: '7px 10px', fontSize: 13, fontFamily: FONT.sans, color: C.textHeading, outline: 'none' }}>
-          {targetSources.map(s => (
+          {sources.map(s => (
             <option key={s.key} value={s.key}>{s.label}{s.key === currentSource ? ' (текущий)' : ''}</option>
           ))}
         </select>

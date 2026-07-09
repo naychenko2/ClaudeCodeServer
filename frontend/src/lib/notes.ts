@@ -4,12 +4,13 @@
 // версию, по которой граф и открытая заметка перезапрашиваются.
 
 import { useSyncExternalStore } from 'react';
-import type { NoteSummary } from '../types';
+import type { NoteSummary, NoteFolder } from '../types';
 import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { clearResolveCache } from '../components/MarkdownViewer';
 
 let _notes: NoteSummary[] = [];
+let _folders: NoteFolder[] = [];
 let _loaded = false;
 let _loading: Promise<void> | null = null;
 let _version = 0;   // бампается на любое изменение — deps для рефетча графа/детали
@@ -44,8 +45,13 @@ function wireRealtime() {
 }
 
 export async function reloadNotes(): Promise<void> {
-  const list = await api.notes.list();
+  // Папки грузим параллельно; их сбой не должен ронять список заметок
+  const [list, folders] = await Promise.all([
+    api.notes.list(),
+    api.notes.folders().catch(() => [] as NoteFolder[]),
+  ]);
   _notes = list;
+  _folders = folders;
   _loaded = true;
   emit();
 }
@@ -66,6 +72,18 @@ export function useNotes(): NoteSummary[] {
     () => _notes,
   );
 }
+
+// Физические папки владельца (в т.ч. пустые) — для дерева и datalist «куда создать»
+export function useNoteFolders(): NoteFolder[] {
+  return useSyncExternalStore(
+    fn => { _listeners.add(fn); return () => _listeners.delete(fn); },
+    () => _folders,
+    () => _folders,
+  );
+}
+
+// Снимок списка вне React — для колбэков (напр. rename заметки в дереве файлов)
+export function getNotesSnapshot(): NoteSummary[] { return _notes; }
 
 // Счётчик изменений — для инвалидации графа/детали (включай в deps эффекта рефетча)
 export function useNotesVersion(): number {

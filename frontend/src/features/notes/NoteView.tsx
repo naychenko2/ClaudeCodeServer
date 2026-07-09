@@ -8,14 +8,15 @@ import { MarkdownViewer } from '../../components/MarkdownViewer';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
 const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
 import { IconButton } from '../../components/ui';
-import { NotesGraph } from './NotesGraph';
+import { NoteConnections } from './NoteConnections';
 import {
-  CollapseGroup, SourceBadge, SourceDot,
-  IconEye, IconPencil, IconChat, IconBacklink, IconOutlink, IconTrash, IconGraph, IconLink, IconSparkle,
+  SourceBadge,
+  IconEye, IconPencil, IconChat, IconTrash, IconGraph, IconLink, IconSparkle,
 } from './shared';
 
-// Просмотр и правка одной заметки + связи (backlinks, упоминания, локальный граф).
-export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted, onTag }: {
+// Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
+// в правом сайдбаре на десктопе, снизу на мобильном.
+export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted, onTag, isMobile }: {
   noteId: string;
   existingTitles: Set<string>;
   onWikilink: (target: string) => void;
@@ -23,6 +24,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   onSelectNote: (id: string) => void;
   onDeleted: () => void;
   onTag?: (tag: string) => void;
+  isMobile?: boolean;
 }) {
   const version = useNotesVersion();
   const [note, setNote] = useState<NoteDetail | null>(null);
@@ -131,6 +133,12 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     onDeleted();
   };
 
+  // «Связать» несвязанное упоминание (кнопка в блоке связей)
+  const linkMention = (targetTitle: string) => {
+    if (!note) return;
+    void api.notes.linkMention(note.id, targetTitle).then(n => { if (n) setNote(n); bumpNotes(); });
+  };
+
   if (loading && !note)
     return <div style={{ padding: 40, textAlign: 'center', color: C.textMuted, fontFamily: FONT.sans }}>Загрузка…</div>;
   if (!note)
@@ -165,8 +173,9 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         </div>
       </div>
 
-      {/* Тело */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 18px 24px' }}>
+      {/* Тело: контент + сайдбар связей (десктоп) */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '4px 18px 24px' }}>
         {!editing && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12, alignItems: 'center' }}>
             {note.tags.map(t => (
@@ -224,84 +233,26 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             resolveNote={resolveNote} embedSource={note.source} />
         )}
 
-        {/* Backlinks / исходящие — только в режиме чтения */}
-        {!editing && (
+        {/* Мобильный: блок связей снизу под контентом (сайдбару нет места) */}
+        {!editing && isMobile && (
           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
-            <CollapseGroup
-              defaultOpen={note.backlinks.length > 0}
-              title={<span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.03em' }}><IconBacklink />Обратные ссылки · {note.backlinks.length}</span>}
-            >
-              {note.backlinks.length === 0
-                ? <div style={{ padding: '4px 4px 8px', color: C.textMuted, fontSize: 12 }}>Пока никто не ссылается</div>
-                : note.backlinks.map((b, i) => (
-                    <button key={i} onClick={() => onSelectNote(b.sourceId)} style={backlinkRow}>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <SourceDot source={b.source} size={7} />
-                        <span style={{ fontSize: 12.5, fontWeight: 500, color: C.textPrimary }}>{b.sourceTitle}</span>
-                      </span>
-                      <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, marginLeft: 13, marginTop: 2, display: 'block' }}>{b.snippet}</span>
-                    </button>
-                  ))}
-            </CollapseGroup>
-
-            {note.links.length > 0 && (
-              <CollapseGroup
-                defaultOpen={false}
-                title={<span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.03em' }}><IconOutlink />Исходящие · {note.links.length}</span>}
-              >
-                {note.links.map((l, i) => (
-                  <button
-                    key={i}
-                    onClick={() => l.resolved ? onSelectNote(l.targetId) : onWikilink(l.targetTitle)}
-                    style={{ ...backlinkRow, display: 'flex', alignItems: 'center', gap: 6 }}
-                  >
-                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: l.resolved ? C.accent : 'transparent', border: l.resolved ? 'none' : `1px dashed ${C.textMuted}`, flex: 'none' }} />
-                    <span style={{ fontSize: 12.5, color: l.resolved ? C.textPrimary : C.textMuted, fontStyle: l.resolved ? 'normal' : 'italic' }}>{l.targetTitle}</span>
-                  </button>
-                ))}
-              </CollapseGroup>
-            )}
-
-            {note.unlinkedMentions.length > 0 && (
-              <CollapseGroup
-                defaultOpen={false}
-                title={<span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.03em' }}>Несвязанные упоминания · {note.unlinkedMentions.length}</span>}
-              >
-                {note.unlinkedMentions.map((u, i) => (
-                  <div key={i} style={{ ...backlinkRow, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                    <button onClick={() => onSelectNote(u.sourceId)} title="Открыть заметку"
-                      style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: FONT.sans }}>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <SourceDot source={u.source} size={7} />
-                        <span style={{ fontSize: 12.5, fontWeight: 500, color: C.textPrimary }}>{u.sourceTitle}</span>
-                      </span>
-                      <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, marginLeft: 13, marginTop: 2, display: 'block' }}>{u.snippet}</span>
-                    </button>
-                    <button
-                      onClick={() => void api.notes.linkMention(note.id, u.sourceTitle).then(n => { if (n) setNote(n); bumpNotes(); })}
-                      title={`Обернуть упоминание в [[${u.sourceTitle}]]`}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 4, flex: 'none',
-                        fontSize: 11, fontWeight: 500, color: C.accent, background: C.accentLight,
-                        border: 'none', borderRadius: R.sm, padding: '3px 8px', cursor: 'pointer', fontFamily: FONT.sans,
-                      }}>
-                      <IconLink />Связать
-                    </button>
-                  </div>
-                ))}
-              </CollapseGroup>
-            )}
-
-            <CollapseGroup
-              defaultOpen={false}
-              title={<span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.03em' }}><IconGraph />Граф связей</span>}
-            >
-              <div style={{ height: 260, border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden', background: C.bgMain }}>
-                <NotesGraph sourceFilter={null} selectedId={note.id} focusId={note.id} onSelectNode={onSelectNote} />
-              </div>
-            </CollapseGroup>
+            <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
+              onWikilink={onWikilink} onLinkMention={linkMention} />
           </div>
         )}
+      </div>
+
+      {/* Десктоп: сайдбар связей справа */}
+      {!editing && !isMobile && (
+        <aside style={{
+          width: 280, flex: 'none', overflowY: 'auto',
+          borderLeft: `1px solid ${C.border}`, background: C.bgPanel,
+          padding: '12px 12px 24px',
+        }}>
+          <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
+            onWikilink={onWikilink} onLinkMention={linkMention} />
+        </aside>
+      )}
       </div>
     </div>
   );
@@ -329,8 +280,4 @@ const primaryBtn: React.CSSProperties = {
 const ghostBtn: React.CSSProperties = {
   background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}`, borderRadius: R.lg,
   padding: '8px 16px', fontSize: 13, cursor: 'pointer', fontFamily: FONT.sans,
-};
-const backlinkRow: React.CSSProperties = {
-  width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer',
-  padding: '6px 4px', borderRadius: R.sm, fontFamily: FONT.sans, display: 'block',
 };

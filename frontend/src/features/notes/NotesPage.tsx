@@ -62,6 +62,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // sessionStorage; ждём загрузки списка (deps: notes) и открываем по совпадению.
   useEffect(() => {
     const consume = () => {
+      // По id (из графа сайдбара FileViewer) — приоритетнее
+      const id = sessionStorage.getItem('cc_pending_note_id');
+      if (id) { sessionStorage.removeItem('cc_pending_note_id'); setSelectedId(id); setMobileView('note'); return; }
       const title = sessionStorage.getItem('cc_pending_note_title');
       if (!title) return;
       const n = notes.find(x => x.title.trim().toLowerCase() === title.trim().toLowerCase());
@@ -192,7 +195,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
       : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
           <button onClick={() => setMobileView('list')} style={backBar}><IconBack /> К списку</button>
           <div style={{ flex: 1, minHeight: 0 }}>
-            <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink} onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} onDeleted={() => { setSelectedId(null); setMobileView('list'); }} />
+            <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink} onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} isMobile onDeleted={() => { setSelectedId(null); setMobileView('list'); }} />
           </div>
         </div>
   ) : (
@@ -204,7 +207,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         {selectedId
           ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink} onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} onDeleted={() => setSelectedId(null)} />
           : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <EmptyState icon={<IconGraph />} title="База знаний"
+              <EmptyState icon={<IconGraph />} title="Заметки"
                 subtitle={notes.length ? 'Выбери заметку слева или создай новую' : 'Создай первую заметку или попроси Claude законспектировать разговор'}
                 action={<button onClick={() => setShowNew(true)} style={newBtn}><IconPlus />Новая заметка</button>} />
             </div>}

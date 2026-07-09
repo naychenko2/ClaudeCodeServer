@@ -27,7 +27,9 @@ import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
-import { useNotes, ensureNotesLoaded, existingTitleSet } from '../lib/notes';
+import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion } from '../lib/notes';
+import { NoteConnections } from '../features/notes/NoteConnections';
+import type { NoteDetail } from '../types';
 import { MermaidDiagram } from './MermaidDiagram';
 import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
@@ -320,6 +322,23 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       const r = await api.notes.resolve(name, anchor);
       return { title: r.note.title, content: r.fragment ?? r.note.content };
     } catch { return null; }
+  };
+  // Связи заметки (backlinks/исходящие/граф) для сайдбара просмотра
+  const notesVersion = useNotesVersion();
+  const [noteDetail, setNoteDetail] = useState<NoteDetail | null>(null);
+  useEffect(() => {
+    if (!isNotesFile) { setNoteDetail(null); return; }
+    let alive = true;
+    const title = filePath.split('/').pop()!.replace(/\.md$/i, '');
+    api.notes.resolve(title)
+      .then(r => { if (alive) setNoteDetail(r.note); })
+      .catch(() => { if (alive) setNoteDetail(null); });
+    return () => { alive = false; };
+  }, [isNotesFile, filePath, notesVersion]);
+  const openNoteById = (id: string, title: string) => {
+    if (title) { openNoteByTitle(title); return; }
+    sessionStorage.setItem('cc_pending_note_id', id);
+    window.dispatchEvent(new Event('cc-open-note'));
   };
   // Подписка на тему: подсветка кода переключается light/dark вместе с приложением
   useThemeMode();
@@ -980,8 +999,35 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                     />
                   : isMermaid
                   ? <div style={{ padding: 16 }}><MermaidDiagram code={content} /></div>
+                  : isMarkdown && isNotesFile
+                  ? (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 18 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <MarkdownViewer content={content}
+                          existingTitles={noteTitles} onWikilink={openNoteByTitle}
+                          resolveNote={resolveNoteByName} embedSource={project.id} />
+                        {noteDetail && isMobile && (
+                          <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                            <NoteConnections note={noteDetail} onOpenNote={openNoteById}
+                              onWikilink={openNoteByTitle} />
+                          </div>
+                        )}
+                      </div>
+                      {/* Связи заметки — сайдбар справа (sticky в скролле), на мобиле — снизу */}
+                      {noteDetail && !isMobile && (
+                        <aside style={{
+                          width: 270, flex: 'none', position: 'sticky', top: 0,
+                          maxHeight: 'calc(100vh - 160px)', overflowY: 'auto',
+                          borderLeft: `1px solid ${C.border}`, paddingLeft: 14,
+                        }}>
+                          <NoteConnections note={noteDetail} onOpenNote={openNoteById}
+                            onWikilink={openNoteByTitle} />
+                        </aside>
+                      )}
+                    </div>
+                  )
                   : isMarkdown
-                  ? <MarkdownViewer content={content} {...(isNotesFile ? { existingTitles: noteTitles, onWikilink: openNoteByTitle, resolveNote: resolveNoteByName, embedSource: project.id } : {})} />
+                  ? <MarkdownViewer content={content} />
                   : <SyntaxHighlighter
                       language={getLanguage(filePath)}
                       style={codeTheme}

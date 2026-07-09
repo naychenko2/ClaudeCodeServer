@@ -224,6 +224,11 @@ export const api = {
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/tasks/toggle`, {
         method: 'POST', body: JSON.stringify({ line, done }),
       }),
+    // Срок 📅 на строке-чекбоксе (дейт-пикер в секции); due=null — убрать
+    setNoteTaskDue: (id: string, line: number, due: string | null) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/tasks/set-due`, {
+        method: 'POST', body: JSON.stringify({ line, due }),
+      }),
   },
 
   // Утренний бриф (флаг daily-briefing): собрать план дня в дневник

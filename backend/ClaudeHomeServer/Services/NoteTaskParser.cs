@@ -71,6 +71,23 @@ public static partial class NoteTaskParser
         return string.Join(nl, lines);
     }
 
+    // Установить/заменить/убрать срок 📅 YYYY-MM-DD на строке-чекбоксе (0-based).
+    // due=null/пусто — убрать. Возвращает новый контент или null (не чекбокс/вне диапазона).
+    public static string? SetDue(string content, int line, string? due)
+    {
+        var nl = content.Contains("\r\n") ? "\r\n" : "\n";
+        var lines = content.Replace("\r\n", "\n").Split('\n').ToList();
+        if (line < 0 || line >= lines.Count) return null;
+        if (!CheckboxRe().Match(lines[line]).Success) return null;
+
+        // Убираем прежний токен срока (и повисшие пробелы вокруг него)
+        var stripped = DueRe().Replace(lines[line], "").TrimEnd();
+        stripped = System.Text.RegularExpressions.Regex.Replace(stripped, @"\s{2,}", " ");
+
+        lines[line] = string.IsNullOrWhiteSpace(due) ? stripped : $"{stripped} 📅 {due.Trim()}";
+        return string.Join(nl, lines);
+    }
+
     // Грубый разбор правила повтора Obsidian Tasks: "every week", "weekly", "every 2 days"…
     private static TaskRecurrence? ParseRecurrence(string? raw)
     {

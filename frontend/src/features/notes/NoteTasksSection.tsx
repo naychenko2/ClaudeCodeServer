@@ -33,6 +33,13 @@ export function NoteTasksSection({ noteId, version }: { noteId: string; version:
     catch { /* ignore */ }
     finally { setBusy(null); }
   };
+  // Срок из дейт-пикера: сервер сам впишет 📅 дату в строку заметки (value='' — убрать)
+  const setDue = async (t: NoteTask, value: string) => {
+    setBusy(t.line);
+    try { await api.notes.setNoteTaskDue(noteId, t.line, value || null); bumpNotes(); }
+    catch { /* ignore */ }
+    finally { setBusy(null); }
+  };
 
   return (
     <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
@@ -70,13 +77,36 @@ export function NoteTasksSection({ noteId, version }: { noteId: string; version:
             }}>
               {t.text}
             </span>
-            {t.due && (
-              <span style={{
-                flex: 'none', fontSize: 11, fontFamily: FONT.sans, color: C.textSecondary,
-                background: C.bgSelected, borderRadius: R.sm, padding: '1px 6px',
-              }}>
-                📅 {t.due}
-              </span>
+            {/* Дейт-пикер: чип показывает срок (или «＋ срок»), скрытый нативный date-input
+                поверх открывает системный календарь — эмодзи вводить не нужно. */}
+            <label
+              title={t.due ? 'Изменить срок' : 'Добавить срок'}
+              style={{
+                position: 'relative', flex: 'none', display: 'inline-flex', alignItems: 'center',
+                fontSize: 11, fontFamily: FONT.sans, borderRadius: R.sm, padding: '1px 6px',
+                cursor: busy === t.line ? 'default' : 'pointer',
+                color: t.due ? C.textSecondary : C.textMuted,
+                background: t.due ? C.bgSelected : 'transparent',
+                border: t.due ? 'none' : `1px dashed ${C.border}`,
+              }}
+            >
+              {t.due ? `📅 ${t.due}` : '📅 срок'}
+              <input
+                type="date" value={t.due ?? ''} disabled={busy === t.line}
+                onChange={e => void setDue(t, e.target.value)}
+                style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }}
+              />
+            </label>{t.due && (
+              <button
+                onClick={() => void setDue(t, '')} disabled={busy === t.line}
+                title="Убрать срок" aria-label="Убрать срок"
+                style={{
+                  flex: 'none', border: 'none', background: 'none', color: C.textMuted,
+                  cursor: busy === t.line ? 'default' : 'pointer', fontSize: 12, lineHeight: 1, padding: '0 2px',
+                }}
+              >
+                ✕
+              </button>
             )}
             {t.taskId ? (
               <span style={{ flex: 'none', fontSize: 11, fontFamily: FONT.sans, color: C.accent }}>

@@ -82,6 +82,31 @@ public sealed class NoteTaskSyncService(
         return saved;
     }
 
+    // Установить/убрать срок 📅 на строке-чекбоксе из UI (дейт-пикер в секции «Задачи из
+    // заметки») — без ручного ввода эмодзи. Правит .md + синхронизирует срок связанной задачи.
+    // due=null/пусто — убрать срок.
+    public async Task<NoteDetail> SetDueAsync(string userId, string noteId, int line, string? due)
+    {
+        var note = notes.GetDetail(userId, noteId)
+            ?? throw new KeyNotFoundException("Заметка не найдена");
+        var updatedContent = NoteTaskParser.SetDue(note.Content, line, due)
+            ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");
+
+        var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent))
+            ?? throw new InvalidOperationException("Заметка не обновилась");
+        kb.QueueSync(userId);
+        await BroadcastNoteChangedAsync(userId, noteId);
+
+        // Синхронизируем срок связанной задачи (пусто → очистить)
+        var linked = tasks.GetBySourceNote(noteId).FirstOrDefault(t => t.SourceNoteLine == line);
+        if (linked is not null)
+        {
+            var updated = tasks.Update(linked.Id, new UpdateTaskRequest(DueDate: due ?? ""));
+            if (updated is not null) await hub.BroadcastTaskChangedAsync(userId, "updated", updated);
+        }
+        return saved;
+    }
+
     // Обратная запись: статус задачи → галочка в заметке. Вызывается из TasksController.Update
     // при смене done-состояния (покрывает UI, MCP tasks_complete, Claude-исполнителя).
     public async Task SyncTaskToNoteAsync(string userId, TaskItem task)
@@ -139,3 +164,4 @@ public record NoteTaskDto(int Line, string Text, bool Done, string? Due, string?
 // Запросы эндпоинтов «задачи из заметок»
 public record PromoteTaskRequest(int Line);
 public record ToggleTaskRequest(int Line, bool Done);
+public record SetDueRequest(int Line, string? Due);

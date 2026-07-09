@@ -197,6 +197,20 @@ public class NotesController : ControllerBase
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // Установить/убрать срок 📅 на строке-чекбоксе (дейт-пикер в секции — без ввода эмодзи).
+    [HttpPost("{id}/tasks/set-due")]
+    public async Task<ActionResult<NoteDetail>> SetTaskDue(string id, [FromBody] SetDueRequest req)
+    {
+        if (!NotesTaskSyncEnabled) return Forbid();
+        var due = string.IsNullOrWhiteSpace(req.Due) ? null : req.Due.Trim();
+        if (due is not null && !DateOnly.TryParseExact(due, "yyyy-MM-dd", out _))
+            return BadRequest(new { error = "Некорректная дата (нужен формат YYYY-MM-DD)" });
+        try { return Ok(await _noteTasks.SetDueAsync(UserId, id, req.Line, due)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
     private bool NotesTaskSyncEnabled => _flags.IsEnabled(UserId, FeatureFlagKeys.NotesTaskSync);
 
     // Переименование/перенос папки целиком: newPath — полный новый путь папки.

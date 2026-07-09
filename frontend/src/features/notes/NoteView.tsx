@@ -333,14 +333,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
           resolveNote={resolveNote} embedSource={note.source} />
 
-        {/* Задачи из заметки (флаг notes-task-sync): чекбоксы .md ↔ задачи. */}
-        {taskSyncEnabled && (
-          <NoteTasksSection noteId={note.id} version={version} />
-        )}
-
-        {/* Мобильный: блок связей снизу под контентом (сайдбару нет места) */}
+        {/* Мобильный: задачи из заметки + связи снизу под контентом (сайдбару нет места) */}
         {isMobile && (
           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+            {taskSyncEnabled && <NoteTasksSection noteId={note.id} version={version} />}
             <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
               onWikilink={onWikilink} onLinkMention={linkMention} />
           </div>
@@ -357,6 +353,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             width: connWidth, flex: 'none', overflowY: 'auto',
             padding: '12px 14px 24px', boxSizing: 'border-box',
           }}>
+            {taskSyncEnabled && <NoteTasksSection noteId={note.id} version={version} />}
             <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
               onWikilink={onWikilink} onLinkMention={linkMention} />
           </aside>

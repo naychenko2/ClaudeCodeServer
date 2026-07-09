@@ -160,6 +160,22 @@ public class NotesController : ControllerBase
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
 
+    // Перенос заметки в другую папку того же источника (id меняется — путь в id).
+    [HttpPost("{id}/move")]
+    public async Task<ActionResult<NoteDetail>> Move(string id, [FromBody] MoveNoteRequest req)
+    {
+        try
+        {
+            var note = _notes.Move(UserId, id, req.Folder);
+            if (note is null) return NotFound();
+            await Broadcast("updated", note.Id);
+            return Ok(note);
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
+        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
     // «Связать» несвязанное упоминание: первое вхождение заголовка → [[…]].
     [HttpPost("{id}/link-mention")]
     public async Task<ActionResult<NoteDetail>> LinkMention(string id, [FromBody] LinkMentionRequest req)

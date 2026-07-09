@@ -463,6 +463,7 @@ export interface CreateNoteDto {
   content?: string;
   source?: string;
   templateId?: string;
+  folder?: string;   // папка внутри источника ("Идеи/Черновики"); пусто = корень
 }
 
 export interface UpdateNoteDto {

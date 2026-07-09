@@ -192,7 +192,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // --- Содержимое режима «Заметки» ---
   const listPane = showSemantic
     ? <SemanticResults hits={semanticHits} selectedId={selectedId} onSelect={selectNote} />
-    : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote} />;
+    : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote}
+        onMoved={(oldId, newId) => { if (selectedId === oldId) setSelectedId(newId); }} />;
 
   const notesContent = isMobile ? (
     mobileView === 'list' || !selectedId
@@ -296,8 +297,10 @@ const backBar: React.CSSProperties = {
 // --- Диалог создания заметки ---
 
 function NewNoteDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  const notes = useNotes();
   const [title, setTitle] = useState('');
   const [source, setSource] = useState('personal');
+  const [folder, setFolder] = useState('');
   const [sources, setSources] = useState<NoteSource[]>([{ key: 'personal', label: 'Личный' }]);
   const [templates, setTemplates] = useState<NoteTemplate[]>([]);
   const [templateId, setTemplateId] = useState('');
@@ -308,11 +311,29 @@ function NewNoteDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
     api.notes.templates().then(setTemplates).catch(() => {});
   }, []);
 
+  // Существующие папки выбранного источника — для автодополнения (можно ввести новую)
+  const folders = useMemo(() => {
+    const dirs = new Set<string>();
+    notes.filter(n => n.source === source).forEach(n => {
+      const i = n.path.lastIndexOf('/');
+      if (i > 0) {
+        const dir = n.path.slice(0, i);
+        // добавляем и промежуточные уровни ("а/б" → "а", "а/б")
+        const parts = dir.split('/');
+        for (let k = 1; k <= parts.length; k++) dirs.add(parts.slice(0, k).join('/'));
+      }
+    });
+    return [...dirs].sort((a, b) => a.localeCompare(b, 'ru'));
+  }, [notes, source]);
+
   const create = async () => {
     if (!title.trim()) return;
     setBusy(true);
     try {
-      const note = await api.notes.create({ title: title.trim(), source, templateId: templateId || undefined });
+      const note = await api.notes.create({
+        title: title.trim(), source, templateId: templateId || undefined,
+        folder: folder.trim() || undefined,
+      });
       onCreated(note.id);
     } finally { setBusy(false); }
   };
@@ -339,6 +360,15 @@ function NewNoteDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
           <select value={source} onChange={e => setSource(e.target.value)} style={{ ...fieldInput, cursor: 'pointer' }}>
             {sources.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
           </select>
+        </div>
+        <div>
+          <label style={fieldLabel}>Папка</label>
+          <input value={folder} onChange={e => setFolder(e.target.value)}
+            list="note-folders" placeholder="Корень (или введи новую: Идеи/Черновики)"
+            style={fieldInput} />
+          <datalist id="note-folders">
+            {folders.map(f => <option key={f} value={f} />)}
+          </datalist>
         </div>
         {templates.length > 0 && (
           <div>

@@ -7,11 +7,12 @@ import { lazy, Suspense } from 'react';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
 const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
-import { IconButton, Splitter } from '../../components/ui';
+import { IconButton, Splitter, Modal } from '../../components/ui';
+import { useNotes } from '../../lib/notes';
 import { NoteConnections } from './NoteConnections';
 import {
   SourceBadge, usePanelWidth,
-  IconEye, IconPencil, IconChat, IconTrash, IconGraph, IconLink, IconSparkle,
+  IconEye, IconPencil, IconChat, IconTrash, IconGraph, IconLink, IconSparkle, IconFolder, IconFolderMove,
 } from './shared';
 
 // Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
@@ -147,6 +148,25 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     void api.notes.linkMention(note.id, targetTitle).then(n => { if (n) setNote(n); bumpNotes(); });
   };
 
+  // Перенос в папку (модалка; на мобиле — bottom-sheet)
+  const allNotes = useNotes();
+  const [showMove, setShowMove] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const currentDir = note && note.path.includes('/') ? note.path.slice(0, note.path.lastIndexOf('/')) : '';
+  const moveTo = async (folder: string) => {
+    if (!note) return;
+    setMoveError(null);
+    try {
+      const updated = await api.notes.move(note.id, folder || null);
+      setShowMove(false);
+      bumpNotes();
+      if (updated.id !== note.id) onSelectNote(updated.id);
+      else setNote(updated);
+    } catch {
+      setMoveError('Не удалось перенести: в целевой папке уже есть заметка с таким именем');
+    }
+  };
+
   if (loading && !note)
     return <div style={{ padding: 40, textAlign: 'center', color: C.textMuted, fontFamily: FONT.sans }}>Загрузка…</div>;
   if (!note)
@@ -173,6 +193,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           <IconButton title={editing ? 'Просмотр' : 'Читать'} active={!editing} onClick={() => setEditing(false)}><IconEye /></IconButton>
           <IconButton title="Править" active={editing} onClick={startEdit}><IconPencil /></IconButton>
           {onAskClaude && <IconButton title="Спросить Claude про это" onClick={() => onAskClaude(note)}><IconChat /></IconButton>}
+          {!editing && <IconButton title="Переместить в папку…" onClick={() => { setMoveError(null); setShowMove(true); }}><IconFolderMove /></IconButton>}
           {!editing && <IconButton title="Предложить связи (AI)" tone="accent" onClick={suggestLinks}><IconSparkle /></IconButton>}
           {isDaily && !editing && (
             <IconButton title="Конспект дня (AI)" tone="accent" onClick={makeDailySummary} disabled={aiBusy}><IconGraph /></IconButton>
@@ -292,7 +313,66 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         </>
       )}
       </div>
+
+      {showMove && (
+        <MoveDialog
+          currentDir={currentDir}
+          folders={[...new Set(
+            allNotes.filter(n => n.source === note.source && n.path.includes('/'))
+              .flatMap(n => {
+                const parts = n.path.slice(0, n.path.lastIndexOf('/')).split('/');
+                return parts.map((_, i) => parts.slice(0, i + 1).join('/'));
+              }),
+          )].sort((a, b) => a.localeCompare(b, 'ru'))}
+          error={moveError}
+          onMove={moveTo}
+          onClose={() => setShowMove(false)}
+        />
+      )}
     </div>
+  );
+}
+
+// Диалог переноса в папку: существующие папки источника + ввод новой; «Корень» — наверх
+function MoveDialog({ currentDir, folders, error, onMove, onClose }: {
+  currentDir: string;
+  folders: string[];
+  error: string | null;
+  onMove: (folder: string) => void;
+  onClose: () => void;
+}) {
+  const [custom, setCustom] = useState('');
+  const row = (label: React.ReactNode, folder: string, disabled: boolean) => (
+    <button key={folder || '(root)'} disabled={disabled} onClick={() => onMove(folder)}
+      style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left',
+        padding: '8px 10px', borderRadius: R.md, border: 'none', fontFamily: FONT.sans, fontSize: 13,
+        background: 'transparent', color: disabled ? C.textMuted : C.textPrimary,
+        cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.6 : 1,
+      }}>
+      <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
+      <span style={{ flex: 1 }}>{label}</span>
+      {disabled && <span style={{ fontSize: 10.5, color: C.textMuted }}>текущая</span>}
+    </button>
+  );
+  return (
+    <Modal width={420} title="Переместить в папку" onClose={onClose}>
+      <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+        {row(<i>Корень</i>, '', currentDir === '')}
+        {folders.map(f => row(f, f, f === currentDir))}
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <input value={custom} onChange={e => setCustom(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && custom.trim()) onMove(custom.trim()); }}
+          placeholder="Новая папка (Идеи/Черновики)"
+          style={{ flex: 1, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, padding: '7px 10px', fontSize: 13, fontFamily: FONT.sans, color: C.textHeading, outline: 'none' }} />
+        <button onClick={() => custom.trim() && onMove(custom.trim())} disabled={!custom.trim()}
+          style={{ background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.md, padding: '7px 14px', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: FONT.sans, opacity: custom.trim() ? 1 : 0.6 }}>
+          Создать и перенести
+        </button>
+      </div>
+      {error && <div style={{ marginTop: 8, fontSize: 12, color: C.dangerText }}>{error}</div>}
+    </Modal>
   );
 }
 

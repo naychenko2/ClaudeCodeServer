@@ -227,6 +227,66 @@ public class NotesServiceTests : IDisposable
         updated.UnlinkedMentions.Should().BeEmpty();
     }
 
+    // ─── Папки ───────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Create_ВПапке_И_Move_МеждуПапками()
+    {
+        var n = _sut.Create(User, new CreateNoteRequest("Черновик", "тело", "personal", Folder: "Идеи/Сырое"));
+        n.Path.Should().Be("Идеи/Сырое/Черновик.md");
+        File.Exists(Path.Combine(_vault, "Идеи", "Сырое", "Черновик.md")).Should().BeTrue();
+
+        var moved = _sut.Move(User, n.Id, "Готовое")!;
+        moved.Path.Should().Be("Готовое/Черновик.md");
+        moved.Id.Should().NotBe(n.Id);
+        File.Exists(Path.Combine(_vault, "Готовое", "Черновик.md")).Should().BeTrue();
+        File.Exists(Path.Combine(_vault, "Идеи", "Сырое", "Черновик.md")).Should().BeFalse();
+
+        // В корень
+        var root = _sut.Move(User, moved.Id, null)!;
+        root.Path.Should().Be("Черновик.md");
+    }
+
+    [Fact]
+    public void Move_СсылкиНаЗаметку_НеЛомаются()
+    {
+        var target = _sut.Create(User, new CreateNoteRequest("Цель", "тело", "personal"));
+        _sut.Create(User, new CreateNoteRequest("Источник", "смотри [[Цель]]", "personal"));
+
+        _sut.Move(User, target.Id, "Папка");
+
+        var src = _sut.GetSummaries(User, null, null).Single(s => s.Title == "Источник");
+        _sut.GetDetail(User, src.Id)!.Links
+            .Should().ContainSingle(l => l.Resolved && l.TargetTitle == "Цель");
+    }
+
+    [Fact]
+    public void Resolve_ПрефиксПапки_РазрешаетДубликаты()
+    {
+        _sut.Create(User, new CreateNoteRequest("Дубль", "первая", "personal", Folder: "Идеи"));
+        _sut.Create(User, new CreateNoteRequest("Дубль", "вторая", "personal", Folder: "Архив"));
+        var linksNote = _sut.Create(User, new CreateNoteRequest("Ссылки",
+            "короткая [[Дубль]] и точная [[Архив/Дубль]]", "personal"));
+
+        var links = _sut.GetDetail(User, linksNote.Id)!.Links;
+        // Короткая неоднозначна в одном источнике → без папки не резолвится...
+        // ...но точная с префиксом папки — резолвится во «вторую»
+        var precise = _sut.ResolveByName(User, "Архив/Дубль", null);
+        precise.Should().NotBeNull();
+        precise!.Value.Note.Path.Should().Be("Архив/Дубль.md");
+        links.Should().Contain(l => l.Resolved);
+    }
+
+    [Fact]
+    public void SanitizeFolder_ЧиститTraversalИМусор()
+    {
+        NotesService.SanitizeFolder("Идеи/Черновики").Should().Be("Идеи/Черновики");
+        NotesService.SanitizeFolder("../../etc").Should().Be("etc");
+        NotesService.SanitizeFolder(@"a\b").Should().Be("a/b");
+        NotesService.SanitizeFolder("  ").Should().Be("");
+        NotesService.SanitizeFolder(null).Should().Be("");
+    }
+
     // ─── Резолв по имени и фрагменты ─────────────────────────────────────────
 
     [Fact]

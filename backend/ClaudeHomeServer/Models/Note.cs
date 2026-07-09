@@ -76,7 +76,11 @@ public record CreateNoteRequest(
     string Title,
     string? Content = null,
     string? Source = null,     // "personal" (по умолчанию) | projectId
-    string? TemplateId = null); // имя шаблона из templates/ (без .md)
+    string? TemplateId = null, // имя шаблона из templates/ (без .md)
+    string? Folder = null);    // папка внутри источника ("Идеи/Черновики"); пусто = корень
+
+// Перенос заметки в другую папку того же источника (id меняется — путь в id)
+public record MoveNoteRequest(string? Folder = null);
 
 // Дата дня для daily note — клиент шлёт свою локальную (таймзона устройства)
 public record DailyNoteRequest(string? Date = null);

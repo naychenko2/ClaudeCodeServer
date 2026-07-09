@@ -249,7 +249,7 @@ public sealed class NotesService
             {
                 var segments = rawTarget.Split('/');
                 var name = segments[^1].Trim();
-                var ns = segments.Length > 1 ? segments[0].Trim() : null;
+                var ns = segments.Length > 1 ? string.Join('/', segments[..^1]).Trim() : null;
                 var key = Norm(name);
                 if (key.Length == 0) continue;
 
@@ -321,6 +321,8 @@ public sealed class NotesService
 
     // Разрешение коллизий имён: 1 кандидат — берём; несколько — по namespace
     // (источник в записи [[Проект/Заметка]]), иначе предпочитаем тот же источник.
+    // Разрешение [[Имя]] и [[Префикс/Имя]]. Префикс — источник («Проект»), папка
+    // внутри источника («Идеи/Черновики», как в Obsidian) или «Источник/Папка».
     private static RawNote? Resolve(Dictionary<string, List<RawNote>> byName, string key, string? ns, RawNote? from)
     {
         if (!byName.TryGetValue(key, out var candidates) || candidates.Count == 0) return null;
@@ -328,12 +330,26 @@ public sealed class NotesService
 
         if (ns is not null)
         {
-            var nsKey = Norm(ns);
-            var byNs = candidates.FirstOrDefault(c => Norm(c.SourceLabel) == nsKey || c.SourceKey == ns);
+            var p = Norm(ns);
+            var byNs = candidates.FirstOrDefault(c =>
+            {
+                var dir = Norm(DirOf(c.RelPath));
+                var label = Norm(c.SourceLabel);
+                return label == p || c.SourceKey == ns
+                    || dir == p || dir.EndsWith("/" + p, StringComparison.Ordinal)
+                    || (dir.Length > 0 && label + "/" + dir == p);
+            });
             if (byNs is not null) return byNs;
         }
         var sameSource = from is null ? null : candidates.FirstOrDefault(c => c.SourceKey == from.SourceKey);
         return sameSource; // null → неоднозначно, считаем неразрешённой
+    }
+
+    // Папка относительного пути ("Идеи/Черновик.md" → "Идеи"; корень → "")
+    private static string DirOf(string relPath)
+    {
+        var i = relPath.LastIndexOf('/');
+        return i < 0 ? "" : relPath[..i];
     }
 
     // Публичный резолв заметки по имени [[X]] / [[Проект/X]] (+ фрагмент по якорю
@@ -343,7 +359,7 @@ public sealed class NotesService
         var model = GetModel(userId);
         var segments = name.Split('/');
         var shortName = segments[^1].Split('#')[0].Trim();
-        var ns = segments.Length > 1 ? segments[0].Trim() : null;
+        var ns = segments.Length > 1 ? string.Join('/', segments[..^1]).Trim() : null;
         var raw = Resolve(model.ByName, Norm(shortName), ns, null);
         if (raw is null) return null;
         var fragment = !string.IsNullOrWhiteSpace(anchor) ? ExtractFragment(raw.Content, anchor!) : null;
@@ -463,21 +479,35 @@ public sealed class NotesService
         return new NoteGraph(nodes, edges);
     }
 
+    // Папка внутри источника: сегменты чистятся по одному, traversal исключён.
+    // "Идеи/Черновики" → "Идеи/Черновики"; пусто/мусор → "" (корень).
+    internal static string SanitizeFolder(string? folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder)) return "";
+        var segments = folder.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(SanitizeFileName)
+            .Where(s => s.Length > 0 && s != "." && s != "..")
+            .ToArray();
+        return string.Join('/', segments);
+    }
+
     public NoteDetail Create(string userId, CreateNoteRequest req)
     {
         var sourceKey = string.IsNullOrWhiteSpace(req.Source) ? PersonalKey : req.Source!;
         var rootDir = ResolveRoot(userId, sourceKey);
-        Directory.CreateDirectory(rootDir);
 
         var baseName = SanitizeFileName(req.Title);
         if (baseName.Length == 0) baseName = "Без названия";
-        var relPath = baseName + ".md";
+        var folder = SanitizeFolder(req.Folder);
+        var prefix = folder.Length > 0 ? folder + "/" : "";
+        var relPath = prefix + baseName + ".md";
         var full = FileService.SafeJoinPublic(rootDir, relPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         // Разрешаем коллизию имени файла суффиксом
         var n = 2;
         while (File.Exists(full))
         {
-            relPath = $"{baseName}-{n++}.md";
+            relPath = $"{prefix}{baseName}-{n++}.md";
             full = FileService.SafeJoinPublic(rootDir, relPath);
         }
 
@@ -562,6 +592,31 @@ public sealed class NotesService
 
         Invalidate(userId);
         return GetDetail(userId, id);
+    }
+
+    // Перенос заметки в другую папку того же источника. Ссылки [[…]] не трогаем —
+    // они резолвятся по заголовку и переезд переживают; меняется только id (путь).
+    public NoteDetail? Move(string userId, string id, string? folder)
+    {
+        var (sourceKey, relPath) = DecodeId(id);
+        var rootDir = ResolveRoot(userId, sourceKey);
+        var full = FileService.SafeJoinPublic(rootDir, relPath);
+        if (!File.Exists(full)) return null;
+
+        var fileName = Path.GetFileName(relPath);
+        var target = SanitizeFolder(folder);
+        var newRel = NormalizeRel(target.Length > 0 ? $"{target}/{fileName}" : fileName);
+        if (string.Equals(newRel, NormalizeRel(relPath), StringComparison.OrdinalIgnoreCase))
+            return GetDetail(userId, id);   // уже там
+
+        var newFull = FileService.SafeJoinPublic(rootDir, newRel);
+        if (File.Exists(newFull))
+            throw new InvalidOperationException($"В папке «{(target.Length > 0 ? target : "корень")}» уже есть «{fileName}»");
+        Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
+        File.Move(full, newFull);
+
+        Invalidate(userId);
+        return GetDetail(userId, EncodeId(sourceKey, newRel));
     }
 
     public NoteDetail? Update(string userId, string id, UpdateNoteRequest req)

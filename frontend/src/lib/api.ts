@@ -177,6 +177,11 @@ export const api = {
       request<{ available: boolean; results: NoteSemanticHit[] }>(
         `/notes/semantic?q=${encodeURIComponent(q)}&topK=${topK}`),
     reindex: () => request<{ changed: number }>('/notes/reindex', { method: 'POST' }),
+    // Перенос в папку источника (folder: "Идеи/Черновики"; null/пусто = корень)
+    move: (id: string, folder: string | null) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/move`, {
+        method: 'POST', body: JSON.stringify({ folder }),
+      }),
     linkMention: (id: string, targetTitle: string) =>
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/link-mention`, {
         method: 'POST', body: JSON.stringify({ targetTitle }),

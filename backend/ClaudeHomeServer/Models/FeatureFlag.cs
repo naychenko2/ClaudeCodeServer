@@ -30,6 +30,7 @@ public static class FeatureFlagKeys
     public const string TaskExecContext = "task-exec-context";
     public const string ChatExtractTasks = "chat-extract-tasks";
     public const string UnifiedSearch = "unified-search";
+    public const string TaskBoard = "task-board";
 }
 
 /// <summary>
@@ -120,6 +121,15 @@ public static class FeatureFlagCatalog
             Description: "Поиск по всему рабочему пространству сразу — заметки (по смыслу) и задачи в одной выдаче. Кнопка-лупа в шапке.",
             Default: false,
             Stage: "dev"),
+
+        // Вид «Доска» (Kanban) в разделе «Календарь»: колонки по статусу,
+        // drag & drop, дорожки (swimlanes), фильтры и WIP-лимиты.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.TaskBoard,
+            Title: "Доска задач (Kanban)",
+            Description: "Вид «Доска» в разделе «Календарь»: колонки по статусу, drag & drop карточек, группировка по дорожкам, фильтры и WIP-лимиты.",
+            Default: false,
+            Stage: "beta"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

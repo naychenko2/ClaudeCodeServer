@@ -3,7 +3,7 @@
 // Realtime: бэк шлёт task_changed в группу user_{userId} — стор обновляется сам.
 
 import { useSyncExternalStore } from 'react';
-import type { CreateTaskDto, Task, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskStatus, UpdateTaskDto } from '../types';
+import type { BoardColumn, CreateTaskDto, Task, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskStatus, UpdateTaskDto } from '../types';
 import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { C } from './design';
@@ -100,6 +100,12 @@ export async function updateTask(taskId: string, dto: UpdateTaskDto): Promise<Ta
 export async function deleteTask(taskId: string): Promise<void> {
   await api.tasks.delete(taskId);
   remove(taskId);
+}
+
+// Оптимистичное локальное обновление задачи (без запроса) — для мгновенного
+// отклика доски на drag: карточка встаёт на место сразу, серверный ответ придёт следом.
+export function upsertTaskLocal(task: Task): void {
+  upsert(task);
 }
 
 // === Статусы ===
@@ -359,4 +365,135 @@ export function reminderLabel(minutes: number): string {
   if (minutes % 1440 === 0) return `За ${minutes / 1440} дн`;
   if (minutes % 60 === 0) return `За ${minutes / 60} ч`;
   return `За ${minutes} мин`;
+}
+
+// === Kanban-доска: порядок карточек, сортировка, дорожки (swimlanes) ===
+
+// Значение Order для вставки карточки между соседями (midpoint) или на край колонки.
+// prev — order карточки сверху слота, next — снизу. Шаг края 1000 (как на бэке).
+export function computeOrder(prev?: number, next?: number): number {
+  if (prev !== undefined && next !== undefined) return (prev + next) / 2;
+  if (prev !== undefined) return prev + 1000;
+  if (next !== undefined) return next - 1000;
+  return 1000;
+}
+
+// Сортировка карточек в колонке: по Order, тай-брейк приоритет → срок → создание.
+// Тай-брейк даёт осмысленный дефолт для нулевых (legacy) Order до первого drag.
+export function boardCardSort(a: Task, b: Task): number {
+  const ao = a.order ?? 0, bo = b.order ?? 0;
+  if (ao !== bo) return ao - bo;
+  const ap = PRIORITY_ORDER.indexOf(a.priority), bp = PRIORITY_ORDER.indexOf(b.priority);
+  if (ap !== bp) return ap - bp;
+  const ad = a.dueDate ?? '9999', bd = b.dueDate ?? '9999';
+  if (ad !== bd) return ad < bd ? -1 : 1;
+  return a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0;
+}
+
+// Дефолтные колонки доски (когда у проекта нет кастомных, а также хаб-доска и личные задачи):
+// 3 колонки = 3 категории статусов. Id = категория (совпадает со status задачи).
+export const DEFAULT_BOARD_COLUMNS: BoardColumn[] = [
+  { id: 'todo', name: STATUS_LABEL.todo, category: 'todo' },
+  { id: 'inProgress', name: STATUS_LABEL.inProgress, category: 'inProgress' },
+  { id: 'done', name: STATUS_LABEL.done, category: 'done' },
+];
+
+// Колонки для рендера: кастомные проекта или дефолтные 3
+export function resolveColumns(columns?: BoardColumn[]): BoardColumn[] {
+  return columns && columns.length ? columns : DEFAULT_BOARD_COLUMNS;
+}
+
+// Цвет колонки: явный или по её категории
+export function columnColor(col: BoardColumn): string {
+  return col.color || STATUS_DOT[col.category];
+}
+
+// В какую колонку попадает задача: явная (если её категория совпадает со статусом),
+// иначе — первая колонка категории статуса; фолбэк — первая колонка.
+export function taskColumnKey(task: Task, columns: BoardColumn[]): string {
+  if (task.columnId) {
+    const c = columns.find(x => x.id === task.columnId);
+    if (c && c.category === task.status) return c.id;
+  }
+  const byCat = columns.find(x => x.category === task.status);
+  return byCat?.id ?? columns[0]?.id ?? task.status;
+}
+
+export type BoardGroupBy = 'none' | 'priority' | 'assignee' | 'project' | 'due';
+
+export const BOARD_GROUP_LABEL: Record<BoardGroupBy, string> = {
+  none: 'Без дорожек',
+  priority: 'По приоритету',
+  assignee: 'По исполнителю',
+  project: 'По проекту',
+  due: 'По сроку',
+};
+
+// Дорожка доски (swimlane): набор задач + подпись/цвет строки
+export interface BoardLane {
+  key: string;          // стабильный ключ дорожки (для droppable id и cross-lane правок)
+  label: string;
+  color?: string;       // точка-маркер строки
+  tasks: Task[];
+}
+
+// Ведёрки для группировки «по сроку»
+type DueBucket = 'overdue' | 'today' | 'tomorrow' | 'week' | 'later' | 'none';
+function dueBucket(task: Task): DueBucket {
+  if (!task.dueDate) return 'none';
+  const d = daysFromToday(task.dueDate);
+  if (d < 0) return 'overdue';
+  if (d === 0) return 'today';
+  if (d === 1) return 'tomorrow';
+  if (d <= 7) return 'week';
+  return 'later';
+}
+const DUE_BUCKET_ORDER: DueBucket[] = ['overdue', 'today', 'tomorrow', 'week', 'later', 'none'];
+const DUE_BUCKET_LABEL: Record<DueBucket, string> = {
+  overdue: 'Просрочено', today: 'Сегодня', tomorrow: 'Завтра',
+  week: 'На этой неделе', later: 'Позже', none: 'Без срока',
+};
+const DUE_BUCKET_COLOR: Record<DueBucket, string> = {
+  overdue: C.danger, today: C.accent, tomorrow: C.warning,
+  week: C.success, later: C.textMuted, none: C.textMuted,
+};
+
+export const ASSIGNEE_LABEL: Record<string, string> = { me: 'Я', claude: 'Claude', none: 'Не назначен' };
+
+// Разбить задачи на дорожки согласно groupBy. Порядок дорожек фиксирован
+// (приоритет/срок — по важности), у проектов — личные первыми. Пустые дорожки не рисуем.
+export function boardLanes(
+  tasks: Task[], groupBy: BoardGroupBy, projectsById: Map<string, { name: string }>,
+): BoardLane[] {
+  if (groupBy === 'none') return [{ key: 'all', label: '', tasks }];
+
+  const byKey = new Map<string, Task[]>();
+  const push = (k: string, t: Task) => {
+    const arr = byKey.get(k); if (arr) arr.push(t); else byKey.set(k, [t]);
+  };
+
+  if (groupBy === 'priority') {
+    tasks.forEach(t => push(t.priority, t));
+    return PRIORITY_ORDER.filter(p => byKey.has(p))
+      .map(p => ({ key: p, label: PRIORITY_LABEL[p], color: PRIORITY_COLOR[p], tasks: byKey.get(p)! }));
+  }
+  if (groupBy === 'assignee') {
+    tasks.forEach(t => push(t.assignee ?? 'none', t));
+    return ['claude', 'me', 'none'].filter(k => byKey.has(k))
+      .map(k => ({ key: k, label: ASSIGNEE_LABEL[k], tasks: byKey.get(k)! }));
+  }
+  if (groupBy === 'due') {
+    tasks.forEach(t => push(dueBucket(t), t));
+    return DUE_BUCKET_ORDER.filter(b => byKey.has(b))
+      .map(b => ({ key: b, label: DUE_BUCKET_LABEL[b], color: DUE_BUCKET_COLOR[b], tasks: byKey.get(b)! }));
+  }
+  // project: личные (none) первыми, затем проекты в порядке появления
+  tasks.forEach(t => push(t.projectId ?? 'none', t));
+  const keys = [...byKey.keys()].sort((a, b) => (a === 'none' ? -1 : b === 'none' ? 1 : 0));
+  return keys.map(k => ({
+    key: k,
+    label: k === 'none' ? NO_PROJECT_LABEL : projectsById.get(k)?.name ?? 'Проект',
+    color: projectColor(k === 'none' ? null : k).main,
+    tasks: byKey.get(k)!,
+  }));
 }

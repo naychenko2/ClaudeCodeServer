@@ -19,7 +19,17 @@ export interface Project {
   systemPrompt?: string;
   showHiddenFiles?: boolean;
   permissionRules?: PermissionRule[];
+  boardColumns?: BoardColumn[];   // кастомные колонки Kanban-доски; отсутствует = дефолтные 3
   builtInSystemPrompt?: string;
+}
+
+// Колонка Kanban-доски проекта. category — семантическая категория статуса
+// (за ней recurrence/календарь/Claude/MCP); несколько колонок могут делить категорию.
+export interface BoardColumn {
+  id: string;
+  name: string;
+  category: TaskStatus;   // 'todo' | 'inProgress' | 'done'
+  color?: string;
 }
 
 // Часть эффективного системного промпта (в порядке отправки в claude)
@@ -67,6 +77,7 @@ export interface Task {
   title: string;
   description: string;      // markdown
   status: TaskStatus;
+  columnId?: string;         // колонка доски проекта; отсутствует = дефолтная колонка категории
   priority: TaskPriority;
   dueDate?: string;          // YYYY-MM-DD
   dueTime?: string;          // HH:MM
@@ -84,6 +95,7 @@ export interface Task {
   // Связь с чекбоксом заметки (флаг notes-task-sync)
   sourceNoteId?: string;
   sourceNoteLine?: number;
+  order: number;             // порядок карточки на Kanban-доске (ручная сортировка)
   createdAt: string;
   updatedAt: string;
   // UI-проекция повторяющейся задачи в календаре (не приходит с бэка):
@@ -129,6 +141,7 @@ export interface CreateTaskDto {
   title: string;
   description?: string;
   status?: TaskStatus;
+  columnId?: string;         // колонка доски проекта при создании (быстрое добавление)
   priority?: TaskPriority;
   dueDate?: string;
   dueTime?: string;
@@ -158,6 +171,8 @@ export interface UpdateTaskDto {
   linkedFiles?: string[];
   subtasks?: TaskSubtask[];
   labels?: string[];
+  order?: number;            // порядок карточки на доске (drag); undefined = не менять
+  columnId?: string;         // колонка доски проекта; undefined = не менять, '' = сброс на дефолт
 }
 
 // Тип доступа к Claude: подписка (стоимость ≈ API-эквивалент) или оплата по API-ключу (реальная цена)

@@ -35,9 +35,14 @@ public class ProjectTasksController(
     [HttpPost]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateTaskRequest req)
     {
-        if (OwnProject(projectId) is null) return NotFound();
+        var project = OwnProject(projectId);
+        if (project is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Title))
             return BadRequest(new { error = "Название задачи не может быть пустым" });
+
+        // Колонка доски → статус выводим из её категории
+        var cat = BoardColumnHelper.Category(project, req.ColumnId);
+        if (cat is not null) req = req with { Status = cat };
 
         var task = tasks.Create(projectId, UserId, req);
         await hub.BroadcastTaskChangedAsync(UserId, "created", task);
@@ -95,6 +100,10 @@ public class TasksController(
         if (string.IsNullOrWhiteSpace(req.Title))
             return BadRequest(new { error = "Название задачи не может быть пустым" });
 
+        // Колонка доски → статус из категории (у личных — только дефолтные колонки)
+        var cat = BoardColumnHelper.Category(null, req.ColumnId);
+        if (cat is not null) req = req with { Status = cat };
+
         var task = tasks.Create(null, UserId, req);
         await hub.BroadcastTaskChangedAsync(UserId, "created", task);
         return Ok(task);
@@ -145,6 +154,10 @@ public class TasksController(
     {
         var task = tasks.GetById(taskId);
         if (task is null || task.OwnerId != UserId) return NotFound();
+
+        // Колонка доски → статус выводим из её категории (единый источник для MCP/Claude и доски)
+        var cat = BoardColumnHelper.Category(task.ProjectId is null ? null : projects.GetById(task.ProjectId), req.ColumnId);
+        if (cat is not null) req = req with { Status = cat };
 
         var wasDone = task.Status == TaskItemStatus.Done;
         var updated = tasks.Update(taskId, req)!;
@@ -198,6 +211,20 @@ public class TasksController(
 
 public record GenerateDescriptionRequest(string Title, string? ProjectId = null);
 public record GenerateSubtasksRequest(string Title, string? Description = null, string? ProjectId = null);
+
+// Резолв категории статуса по id колонки доски
+public static class BoardColumnHelper
+{
+    // Кастомная колонка проекта → её Category; дефолтная (id == имя категории) →
+    // распарсенный статус (todo/inProgress/done); иначе null (не менять статус).
+    public static TaskItemStatus? Category(Project? project, string? columnId)
+    {
+        if (string.IsNullOrEmpty(columnId)) return null;
+        var custom = project?.BoardColumns?.FirstOrDefault(c => c.Id == columnId);
+        if (custom is not null) return custom.Category;
+        return Enum.TryParse<TaskItemStatus>(columnId, ignoreCase: true, out var cat) ? cat : null;
+    }
+}
 
 public static class TaskHubExtensions
 {

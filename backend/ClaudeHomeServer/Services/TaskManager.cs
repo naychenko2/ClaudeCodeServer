@@ -46,6 +46,7 @@ public class TaskManager
             Title = req.Title,
             Description = req.Description ?? "",
             Status = req.Status ?? TaskItemStatus.Todo,
+            ColumnId = string.IsNullOrEmpty(req.ColumnId) ? null : req.ColumnId,
             Priority = req.Priority ?? TaskItemPriority.Medium,
             DueDate = string.IsNullOrEmpty(req.DueDate) ? null : req.DueDate,
             DueTime = string.IsNullOrEmpty(req.DueTime) ? null : req.DueTime,
@@ -58,6 +59,7 @@ public class TaskManager
             Labels = req.Labels ?? [],
             SourceNoteId = req.SourceNoteId,
             SourceNoteLine = req.SourceNoteLine,
+            Order = NextOrder(ownerId),
         };
         // Серия регулярной задачи начинается с её первого экземпляра
         if (task.Recurrence is not null) task.SeriesId = task.Id;
@@ -65,6 +67,11 @@ public class TaskManager
         Save();
         return task;
     }
+
+    // Следующее значение Order для новой задачи владельца — в конец глобального порядка.
+    // Внутри колонки относительный порядок сохраняется (сортировка на доске по Order).
+    private double NextOrder(string ownerId) =>
+        _tasks.Values.Where(t => t.OwnerId == ownerId).Select(t => t.Order).DefaultIfEmpty(0).Max() + 1000;
 
     public TaskItem? Update(string id, UpdateTaskRequest req)
     {
@@ -96,6 +103,11 @@ public class TaskManager
             task.LinkedSessionId = req.LinkedSessionId == "" ? null : req.LinkedSessionId;
         if (req.LinkedFiles is not null) task.LinkedFiles = req.LinkedFiles;
         if (req.Labels is not null) task.Labels = req.Labels;
+        if (req.Order is not null) task.Order = req.Order.Value;
+        // Колонка доски: явное значение ("" = сброс на дефолт), иначе — если статус сменили
+        // НЕ через доску (columnId не прислали), колонка устаревает → сбрасываем на дефолт категории
+        if (req.ColumnId is not null) task.ColumnId = req.ColumnId == "" ? null : req.ColumnId;
+        else if (req.Status is not null) task.ColumnId = null;
         if (req.Subtasks is not null)
             task.Subtasks = req.Subtasks.Select(s => new TaskSubtask
             {
@@ -134,6 +146,7 @@ public class TaskManager
             LinkedFiles = [.. completed.LinkedFiles],
             Subtasks = completed.Subtasks.Select(s => new TaskSubtask { Title = s.Title }).ToList(),
             Labels = [.. completed.Labels],
+            Order = NextOrder(completed.OwnerId ?? ""),
         };
         _tasks[task.Id] = task;
         Save();
@@ -199,6 +212,26 @@ public class TaskManager
         if (list is null) return;
         foreach (var t in list)
             _tasks[t.Id] = t;
+        MigrateOrders();
+    }
+
+    // Одноразовая миграция Order: задачам с Order == 0 (созданным до появления доски)
+    // присваиваем возрастающие значения (шаг 1000) в текущем порядке сортировки —
+    // чтобы на доске не было «смешанных нулей». Выполняется на владельца.
+    private void MigrateOrders()
+    {
+        var changed = false;
+        foreach (var group in _tasks.Values.GroupBy(t => t.OwnerId))
+        {
+            var unset = group.Where(t => t.Order == 0)
+                .OrderBy(t => t.DueDate ?? "9999").ThenBy(t => t.CreatedAt).ToList();
+            if (unset.Count == 0) continue;
+            var baseOrder = group.Select(t => t.Order).Where(o => o != 0).DefaultIfEmpty(0).Max();
+            for (var i = 0; i < unset.Count; i++)
+                unset[i].Order = baseOrder + (i + 1) * 1000;
+            changed = true;
+        }
+        if (changed) Save();
     }
 
     private void Save()
@@ -214,6 +247,7 @@ public record CreateTaskRequest(
     string Title,
     string? Description = null,
     TaskItemStatus? Status = null,
+    string? ColumnId = null,
     TaskItemPriority? Priority = null,
     string? DueDate = null,
     string? DueTime = null,
@@ -244,6 +278,10 @@ public record UpdateTaskRequest(
     string? LinkedSessionId = null,
     List<string>? LinkedFiles = null,
     List<UpdateSubtaskRequest>? Subtasks = null,
-    List<string>? Labels = null);
+    List<string>? Labels = null,
+    // Порядок карточки на доске (drag внутри/между колонок); null = не менять
+    double? Order = null,
+    // Колонка доски проекта; null = не менять, "" = сброс на дефолт категории
+    string? ColumnId = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

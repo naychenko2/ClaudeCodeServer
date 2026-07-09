@@ -11,6 +11,7 @@ export interface NavSnapshot {
   view?: 'sidebar' | 'chat';     // мобильный вид внутри проекта / чатов
   file?: string | null;          // открытый файл (путь) или null
   task?: string | null;          // открытая задача (id) или null
+  board?: boolean;               // режим Kanban-доски проекта (screen === 'project')
   note?: string | null;          // открытая заметка (id) или null (screen === 'notes')
 }
 
@@ -18,7 +19,7 @@ export interface NavSnapshot {
 function toHash(s: NavSnapshot): string {
   switch (s.screen) {
     case 'chats': return '#/chats';
-    case 'calendar': return '#/calendar';
+    case 'calendar': return s.board ? '#/calendar/board' : '#/calendar';
     case 'notes': return s.note ? `#/notes/${encodeURIComponent(s.note)}` : '#/notes';
     case 'projects': return '#/projects';
     case 'project': {
@@ -26,6 +27,7 @@ function toHash(s: NavSnapshot): string {
       let h = `#/project/${s.project.id}`;
       if (s.task) h += `/task/${s.task}`;
       else if (s.file) h += `/file/${encodeURIComponent(s.file)}`;
+      else if (s.board) h += '/board';
       return h;
     }
   }
@@ -37,6 +39,7 @@ export interface HashTarget {
   projectId?: string;
   taskId?: string;
   file?: string;
+  board?: boolean;
   noteId?: string;
 }
 
@@ -49,6 +52,7 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
       const target: HashTarget = { screen: 'calendar' };
       // #/calendar/task/{id} — диплинк на личную задачу (модал в календаре)
       if (parts[1] === 'task' && parts[2]) target.taskId = parts[2];
+      else if (parts[1] === 'board') target.board = true;
       return target;
     }
     case 'notes': {
@@ -62,6 +66,7 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
       const target: HashTarget = { screen: 'project', projectId: parts[1] };
       if (parts[2] === 'task' && parts[3]) target.taskId = parts[3];
       else if (parts[2] === 'file' && parts[3]) target.file = decodeURIComponent(parts.slice(3).join('/'));
+      else if (parts[2] === 'board') target.board = true;
       return target;
     }
     default: return null;

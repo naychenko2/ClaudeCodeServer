@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { Project, Session, AgentInfo, SkillsData, AuthState, Task } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -16,11 +16,15 @@ import { PillSwitch } from '../components/Toolbar';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { BackButton, IconButton, Splitter } from '../components/ui';
-import { navPush, type NavSnapshot } from '../lib/nav';
+import { navPush, parseHash, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
+import { TaskBoard } from '../features/tasks/board/TaskBoard';
+import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
+import { resolveColumns, taskColumnKey } from '../lib/tasks';
+import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
 
 interface Props {
@@ -156,6 +160,84 @@ const windowWidth = useWindowWidth();
   const selectedTask = selectedTaskId
     ? allTasks.find(t => t.id === selectedTaskId && t.projectId === project.id) ?? null
     : null;
+
+  // Режим доски задач проекта (за флагом): доска рендерится в основной области.
+  const boardFlag = useFeature(FLAGS.taskBoard);
+  const [projectBoard, setProjectBoard] = useState<boolean>(() => {
+    const t = parseHash();
+    if (t && t.screen === 'project' && t.projectId === project.id && t.board) return true;
+    try { return localStorage.getItem(`cc_proj_board_${project.id}`) === '1'; } catch { return false; }
+  });
+  const showProjectBoard = tasksMode && boardFlag && projectBoard && !selectedTask;
+  const handleProjectBoard = (on: boolean) => {
+    setProjectBoard(on);
+    try { localStorage.setItem(`cc_proj_board_${project.id}`, on ? '1' : '0'); } catch { /* ignore */ }
+    if (on) setSelectedTaskId(null);
+    // Запись истории: браузерные «назад/вперёд» входят/выходят из доски.
+    // На мобиле доска живёт в основной области — переходим туда из сайдбара.
+    const view: 'sidebar' | 'chat' = on && isMobile ? 'chat' : isMobile ? 'sidebar' : mobileView;
+    if (on && isMobile) setMobileView('chat');
+    navPush({ screen: 'project', project, view, file: null, task: null, board: on });
+  };
+  const projectTasks = useMemo(
+    () => allTasks.filter(t => t.projectId === project.id),
+    [allTasks, project.id],
+  );
+  const projectBoardById = useMemo(() => new Map([[project.id, project]]), [project]);
+  // Кастомные колонки доски проекта (правятся в редакторе, обновляются локально после сохранения)
+  const [boardColumns, setBoardColumns] = useState<BoardColumn[] | undefined>(project.boardColumns);
+  const [columnsDialog, setColumnsDialog] = useState(false);
+  // Проект мог освежиться серверными данными (App refetch) — подхватываем колонки из пропа
+  useEffect(() => { setBoardColumns(project.boardColumns); }, [project]);
+  const projectColumns = useMemo(() => resolveColumns(boardColumns), [boardColumns]);
+  // Число задач в каждой колонке — для предупреждения при удалении непустой колонки
+  const columnTaskCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    projectColumns.forEach(c => { counts[c.id] = 0; });
+    projectTasks.forEach(t => {
+      if (t.virtual) return;
+      const key = taskColumnKey(t, projectColumns);
+      counts[key] = (counts[key] ?? 0) + 1;
+    });
+    return counts;
+  }, [projectTasks, projectColumns]);
+  const openColumnsEditor = () => setColumnsDialog(true);
+  const columnsDialogEl = columnsDialog && (
+    <BoardColumnsDialog
+      projectId={project.id}
+      columns={projectColumns}
+      taskCounts={columnTaskCounts}
+      onSaved={p => { setBoardColumns(p.boardColumns); setColumnsDialog(false); }}
+      onClose={() => setColumnsDialog(false)}
+    />
+  );
+  const ProjectBoardArea = (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {isMobile && (
+        <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: `1px solid ${C.border}`, background: C.bgPanel }}>
+          <IconButton size="md" variant="soft" onClick={() => window.history.back()} title="К списку задач">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+          </IconButton>
+          <span style={{ fontFamily: FONT.sans, fontWeight: 700, fontSize: 15, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            Доска · {project.name}
+          </span>
+        </div>
+      )}
+      <div style={{ flex: 1, overflowY: 'auto', boxSizing: 'border-box', padding: isMobile ? '12px 14px 20px' : '16px 22px 20px' }}>
+        <TaskBoard
+          tasks={projectTasks}
+          columns={projectColumns}
+          projectsById={projectBoardById}
+          onOpenTask={t => handleSelectTask(t)}
+          isMobile={isMobile}
+          quickAddProjectId={project.id}
+          scope="project"
+          inlineToolbar={isMobile}
+          onEditColumns={openColumnsEditor}
+        />
+      </div>
+    </div>
+  );
 
   const handleSelectTask = (task: Task, autoEdit?: boolean) => {
     setSelectedTaskId(task.id);
@@ -386,6 +468,7 @@ const windowWidth = useWindowWidth();
       setOpenFile(f);
       if (f === null) setFileFullscreen(false);
       setSelectedTaskId(s.task ?? null);
+      setProjectBoard(!!s.board);   // режим доски проекта из снимка истории
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -569,7 +652,7 @@ const windowWidth = useWindowWidth();
         {leftTab === 'sessions' ? (
           <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
         ) : leftTab === 'tasks' ? (
-          <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} />
+          <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
@@ -615,7 +698,7 @@ const windowWidth = useWindowWidth();
             {leftTab === 'sessions'
               ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
               : leftTab === 'tasks'
-              ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} />
+              ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'
@@ -632,6 +715,8 @@ const windowWidth = useWindowWidth();
           {tasksMode
             ? (selectedTask
                 ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={() => window.history.back()} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
+                : showProjectBoard
+                ? ProjectBoardArea
                 : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите задачу</div>)
             : activeSession
             ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} onWorkflowRunning={handleWorkflowRunning} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined} />
@@ -655,6 +740,7 @@ const windowWidth = useWindowWidth();
             </div>
           </>
         )}
+        {columnsDialogEl}
         {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
         {editProjectOpen && (
           <EditDialog
@@ -747,10 +833,12 @@ const windowWidth = useWindowWidth();
               </div>
             )}
 
-            {/* Нет открытого файла и задачи — чат */}
+            {/* Нет открытого файла и задачи — доска задач проекта, иначе чат */}
             {!openFile && !selectedTask && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                {activeSession
+                {showProjectBoard
+                  ? ProjectBoardArea
+                  : activeSession
                   ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={skillsData?.skills} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined} />
                   : NoSessionWithBar}
               </div>
@@ -808,6 +896,7 @@ const windowWidth = useWindowWidth();
 
       </div>
 
+      {columnsDialogEl}
       {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
       {editProjectOpen && (
         <EditDialog

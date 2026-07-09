@@ -163,13 +163,12 @@ export default function App() {
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
-    navReplace(
-      hubTab === 'chats' ? { screen: 'chats' }
-      : hubTab === 'calendar' ? { screen: 'calendar' }
-      // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
-      : hubTab === 'notes' ? { screen: 'notes', note: initialHash?.screen === 'notes' ? initialHash.noteId ?? null : null }
-      : { screen: 'projects' }
-    )
+    const seed: NavSnapshot = { screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : 'projects' }
+    // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
+    if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
+    // Диплинк #/calendar/board: сохраняем доску, чтобы URL пережил перезагрузку
+    if (seed.screen === 'calendar' && initialHash?.screen === 'calendar' && initialHash.board) seed.board = true
+    navReplace(seed)
     // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
     // проектом — при hubTab==='chats' проект «спит» и в истории не отражается.
     // Если hash-диплинк указывает на ДРУГОЙ проект — восстановленный не пушим,
@@ -248,11 +247,16 @@ export default function App() {
     api.projects.list()
       .then(list => {
         if (cancelled) return
-        if (!list.some(p => p.id === project.id)) {
+        const fresh = list.find(p => p.id === project.id)
+        if (!fresh) {
           localStorage.removeItem(OPEN_PROJECT_KEY)
           navReplace({ screen: 'projects' })
           setProject(null)
+          return
         }
+        // Освежаем объект проекта серверными данными (в т.ч. boardColumns) — кэш мог устареть
+        localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(fresh))
+        setProject(fresh)
       })
       .catch(() => { /* сервер недоступен — остаёмся в проекте, не трогаем состояние */ })
     return () => { cancelled = true }

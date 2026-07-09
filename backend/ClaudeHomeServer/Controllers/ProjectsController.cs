@@ -19,7 +19,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         var basePath = appSettings.Get().DefaultProjectsPath;
         var relativePath = string.IsNullOrEmpty(basePath) ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
     }
 
     [HttpGet("builtin-prompt")]
@@ -75,6 +75,16 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // Кастомные колонки Kanban-доски проекта (пустой список → дефолтные 3)
+    [HttpPut("{id}/board-columns")]
+    public IActionResult UpdateBoardColumns(string id, [FromBody] UpdateBoardColumnsRequest req)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        var updated = projects.UpdateBoardColumns(id, req.Columns);
+        return Ok(WithCount(updated));
+    }
+
     [HttpDelete("{id}")]
     public IActionResult Delete(string id)
     {
@@ -88,3 +98,4 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null);
 public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, List<PermissionRule>? PermissionRules = null, string? GroupId = null);
+public record UpdateBoardColumnsRequest(List<BoardColumn>? Columns);

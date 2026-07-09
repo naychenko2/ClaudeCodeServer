@@ -310,6 +310,13 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
     sessionStorage.setItem('cc_pending_note_title', name);
     window.dispatchEvent(new Event('cc-open-note'));
   };
+  // Hover-preview и embed ![[…]] в проектных notes/*.md
+  const resolveNoteByName = async (name: string, anchor?: string) => {
+    try {
+      const r = await api.notes.resolve(name, anchor);
+      return { title: r.note.title, content: r.fragment ?? r.note.content };
+    } catch { return null; }
+  };
   // Подписка на тему: подсветка кода переключается light/dark вместе с приложением
   useThemeMode();
   const codeTheme = getEffectiveTheme() === 'dark' ? oneDark : oneLight;
@@ -960,7 +967,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   : isMermaid
                   ? <div style={{ padding: 16 }}><MermaidDiagram code={content} /></div>
                   : isMarkdown
-                  ? <MarkdownViewer content={content} {...(isNotesFile ? { existingTitles: noteTitles, onWikilink: openNoteByTitle } : {})} />
+                  ? <MarkdownViewer content={content} {...(isNotesFile ? { existingTitles: noteTitles, onWikilink: openNoteByTitle, resolveNote: resolveNoteByName, embedSource: project.id } : {})} />
                   : <SyntaxHighlighter
                       language={getLanguage(filePath)}
                       style={codeTheme}

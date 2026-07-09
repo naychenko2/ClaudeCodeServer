@@ -218,6 +218,8 @@ public sealed class NotesService
         public required HashSet<(string, string)> Edges;
         // id заметки -> несвязанные упоминания (заголовки других заметок в тексте без [[…]])
         public required Dictionary<string, List<NoteBacklinkDto>> Unlinked;
+        // нормализованное имя -> заметки (для публичного резолва [[имени]])
+        public required Dictionary<string, List<RawNote>> ByName;
     }
 
     private Model Build(string userId)
@@ -297,6 +299,7 @@ public sealed class NotesService
         {
             Notes = notes, ById = byId, OutLinks = outLinks,
             Backlinks = backlinks, Ghosts = ghosts, Edges = edges, Unlinked = unlinked,
+            ByName = byName,
         };
     }
 
@@ -318,7 +321,7 @@ public sealed class NotesService
 
     // Разрешение коллизий имён: 1 кандидат — берём; несколько — по namespace
     // (источник в записи [[Проект/Заметка]]), иначе предпочитаем тот же источник.
-    private static RawNote? Resolve(Dictionary<string, List<RawNote>> byName, string key, string? ns, RawNote from)
+    private static RawNote? Resolve(Dictionary<string, List<RawNote>> byName, string key, string? ns, RawNote? from)
     {
         if (!byName.TryGetValue(key, out var candidates) || candidates.Count == 0) return null;
         if (candidates.Count == 1) return candidates[0];
@@ -329,9 +332,59 @@ public sealed class NotesService
             var byNs = candidates.FirstOrDefault(c => Norm(c.SourceLabel) == nsKey || c.SourceKey == ns);
             if (byNs is not null) return byNs;
         }
-        var sameSource = candidates.FirstOrDefault(c => c.SourceKey == from.SourceKey);
+        var sameSource = from is null ? null : candidates.FirstOrDefault(c => c.SourceKey == from.SourceKey);
         return sameSource; // null → неоднозначно, считаем неразрешённой
     }
+
+    // Публичный резолв заметки по имени [[X]] / [[Проект/X]] (+ фрагмент по якорю
+    // #Заголовок или #^blockid) — для hover-preview и embed-вставок.
+    public (NoteDetail Note, string? Fragment)? ResolveByName(string userId, string name, string? anchor)
+    {
+        var model = GetModel(userId);
+        var segments = name.Split('/');
+        var shortName = segments[^1].Split('#')[0].Trim();
+        var ns = segments.Length > 1 ? segments[0].Trim() : null;
+        var raw = Resolve(model.ByName, Norm(shortName), ns, null);
+        if (raw is null) return null;
+        var fragment = !string.IsNullOrWhiteSpace(anchor) ? ExtractFragment(raw.Content, anchor!) : null;
+        return (ToDetail(model, raw), fragment);
+    }
+
+    // Фрагмент по якорю: "^id" — параграф с блочной меткой ^id;
+    // иначе — секция markdown от заголовка до следующего того же/высшего уровня.
+    internal static string? ExtractFragment(string content, string anchor)
+    {
+        anchor = anchor.TrimStart('#').Trim();
+        if (anchor.StartsWith('^'))
+        {
+            var id = Regex.Escape(anchor[1..].Trim());
+            foreach (var p in content.Split("\n\n"))
+                if (Regex.IsMatch(p, $@"\^{id}\s*$", RegexOptions.Multiline))
+                    return p.Trim();
+            return null;
+        }
+
+        var lines = content.Split('\n');
+        var norm = Norm(anchor);
+        int start = -1, level = 0;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var m = Regex.Match(lines[i], @"^(#{1,6})\s+(.+?)\s*#*\s*$");
+            if (!m.Success) continue;
+            if (start < 0)
+            {
+                if (Norm(m.Groups[2].Value) == norm) { start = i; level = m.Groups[1].Length; }
+            }
+            else if (m.Groups[1].Length <= level)
+                return string.Join('\n', lines[start..i]).Trim();
+        }
+        return start >= 0 ? string.Join('\n', lines[start..]).Trim() : null;
+    }
+
+    // Абсолютный путь вложения (картинки и т.п.) внутри vault источника — для отдачи
+    // в <img>; владение источником проверяет ResolveRoot, traversal — SafeJoin.
+    public string ResolveAttachmentPath(string userId, string sourceKey, string relativePath) =>
+        FileService.SafeJoinPublic(ResolveRoot(userId, sourceKey), relativePath);
 
     // --- Публичное API ---
 

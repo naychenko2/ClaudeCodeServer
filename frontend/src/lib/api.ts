@@ -163,6 +163,12 @@ export const api = {
     sources: () => request<NoteSource[]>('/notes/sources'),
     graph: () => request<NoteGraph>('/notes/graph'),
     templates: () => request<NoteTemplate[]>('/notes/templates'),
+    // Резолв по имени вики-ссылки (+ фрагмент по якорю) — hover-preview и embeds
+    resolve: (name: string, anchor?: string) => {
+      const qs = new URLSearchParams({ name });
+      if (anchor) qs.set('anchor', anchor);
+      return request<{ note: NoteDetail; fragment: string | null }>(`/notes/resolve?${qs}`);
+    },
     // Дневниковая заметка: date — локальная дата клиента YYYY-MM-DD
     daily: (date: string) =>
       request<NoteDetail>('/notes/daily', { method: 'POST', body: JSON.stringify({ date }) }),

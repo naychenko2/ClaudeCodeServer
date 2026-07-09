@@ -227,6 +227,37 @@ public class NotesServiceTests : IDisposable
         updated.UnlinkedMentions.Should().BeEmpty();
     }
 
+    // ─── Резолв по имени и фрагменты ─────────────────────────────────────────
+
+    [Fact]
+    public void ResolveByName_НаходитЗаметкуИФрагментПоЗаголовку()
+    {
+        WriteNote("Дока", "# Дока\n\n## Установка\nшаг один\nшаг два\n\n## Использование\nтекст");
+
+        var r = _sut.ResolveByName(User, "Дока", "Установка");
+        r.Should().NotBeNull();
+        r!.Value.Note.Title.Should().Be("Дока");
+        r.Value.Fragment.Should().Contain("шаг один").And.Contain("шаг два")
+            .And.NotContain("Использование");
+    }
+
+    [Fact]
+    public void ExtractFragment_БлочнаяМетка()
+    {
+        const string content = "первый абзац\n\nвторой абзац с меткой ^block1\n\nтретий";
+        NotesService.ExtractFragment(content, "^block1")
+            .Should().Be("второй абзац с меткой ^block1");
+        NotesService.ExtractFragment(content, "нет такого заголовка").Should().BeNull();
+    }
+
+    [Fact]
+    public void ExtractFragment_СекцияДоКонцаФайла()
+    {
+        const string content = "# Т\n\n## Последняя\nхвост файла";
+        NotesService.ExtractFragment(content, "Последняя")
+            .Should().Contain("хвост файла");
+    }
+
     [Fact]
     public void LinkMention_РегистрОтличается_СохраняетАлиас()
     {

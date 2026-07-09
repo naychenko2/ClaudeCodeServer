@@ -45,6 +45,14 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
   const startEdit = () => { if (note) { setDraftTitle(note.title); setDraftBody(note.content); setEditing(true); } };
 
+  // Резолв вики-имени для hover-preview и embed ![[…]] (фрагмент по якорю приоритетен)
+  const resolveNote = async (name: string, anchor?: string) => {
+    try {
+      const r = await api.notes.resolve(name, anchor);
+      return { title: r.note.title, content: r.fragment ?? r.note.content };
+    } catch { return null; }
+  };
+
   const save = async () => {
     if (!note) return;
     setSaving(true);
@@ -122,7 +130,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             </div>
           </>
         ) : (
-          <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink} />
+          <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
+            resolveNote={resolveNote} embedSource={note.source} />
         )}
 
         {/* Backlinks / исходящие — только в режиме чтения */}

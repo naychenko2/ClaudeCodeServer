@@ -7,6 +7,7 @@ import { useSyncExternalStore } from 'react';
 import type { NoteSummary } from '../types';
 import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
+import { clearResolveCache } from '../components/MarkdownViewer';
 
 let _notes: NoteSummary[] = [];
 let _loaded = false;
@@ -17,6 +18,7 @@ let _realtimeWired = false;
 
 function emit() {
   _version++;
+  clearResolveCache();   // hover/embed-кэш резолва протухает вместе со списком
   _listeners.forEach(fn => fn());
 }
 

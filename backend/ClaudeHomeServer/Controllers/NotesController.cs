@@ -46,6 +46,36 @@ public class NotesController : ControllerBase
     [HttpGet("graph")]
     public ActionResult<NoteGraph> Graph() => Ok(_notes.GetGraph(UserId));
 
+    // Резолв заметки по имени вики-ссылки (+ фрагмент по якорю #Заголовок / #^блок) —
+    // для hover-preview и embed-вставок ![[…]].
+    [HttpGet("resolve")]
+    public ActionResult Resolve([FromQuery] string name, [FromQuery] string? anchor)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return BadRequest("Не задано имя");
+        var r = _notes.ResolveByName(UserId, name, anchor);
+        return r is null ? NotFound() : Ok(new { note = r.Value.Note, fragment = r.Value.Fragment });
+    }
+
+    // Вложение из vault (картинка для ![[img.png]]): JWT принимается и в query
+    // access_token (браузерный <img> не шлёт Authorization-заголовок).
+    [HttpGet("attachment")]
+    public IActionResult Attachment([FromQuery] string source, [FromQuery] string path)
+    {
+        if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(path))
+            return BadRequest();
+        try
+        {
+            var full = _notes.ResolveAttachmentPath(UserId, source, path);
+            if (!System.IO.File.Exists(full)) return NotFound();
+            var provider = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
+            if (!provider.TryGetContentType(full, out var contentType))
+                contentType = "application/octet-stream";
+            return PhysicalFile(full, contentType);
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
     // Шаблоны заметок (файлы templates/ личного vault).
     [HttpGet("templates")]
     public ActionResult<IReadOnlyList<NoteTemplateDto>> Templates() =>

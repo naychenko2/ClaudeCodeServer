@@ -16,4 +16,6 @@ public class Project
     public Dictionary<string, List<string>>? DocumentTags { get; set; }
     // Правила авто-разрешений/запретов для permission-запросов (см. PermissionRule)
     public List<PermissionRule>? PermissionRules { get; set; }
+    // Кастомные колонки Kanban-доски проекта; null = дефолтные 3 (по категориям статусов)
+    public List<BoardColumn>? BoardColumns { get; set; }
 }

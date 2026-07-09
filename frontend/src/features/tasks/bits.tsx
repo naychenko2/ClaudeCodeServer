@@ -90,6 +90,17 @@ export function AgendaIcon({ size = 14 }: { size?: number }) {
   );
 }
 
+// Иконка вида «Доска» (Kanban) — три вертикальные колонки
+export function BoardIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg {...strokeIconProps(size)}>
+      <rect x="3" y="4" width="4.5" height="16" rx="1.5" />
+      <rect x="9.75" y="4" width="4.5" height="11" rx="1.5" />
+      <rect x="16.5" y="4" width="4.5" height="7" rx="1.5" />
+    </svg>
+  );
+}
+
 export function ListIcon({ size = 14 }: { size?: number }) {
   return (
     <svg {...strokeIconProps(size)}>

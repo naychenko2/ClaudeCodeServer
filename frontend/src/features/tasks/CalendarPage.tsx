@@ -1,19 +1,22 @@
 // Раздел «Календарь» хаба: все задачи пользователя по всем проектам.
 // Виды Месяц / Неделя / Агенда, фильтр по группам проектов, «+ Задача».
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AuthState, Project, ProjectGroup, Task } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
+import { navPush, navReplace, parseHash, type NavSnapshot } from '../../lib/nav';
 import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
-import { addDaysIso, ensureTasksLoaded, expandRecurringTasks, todayIso, toIsoDate, useTasks } from '../../lib/tasks';
-import { AgendaIcon, IconViewSwitcher, MonthIcon, WeekIcon } from './bits';
+import { addDaysIso, DEFAULT_BOARD_COLUMNS, ensureTasksLoaded, expandRecurringTasks, todayIso, toIsoDate, useTasks } from '../../lib/tasks';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { AgendaIcon, BoardIcon, IconViewSwitcher, MonthIcon, WeekIcon } from './bits';
 import { TaskDetailsModal } from './TaskDetailsModal';
 import { CalendarMonth } from './CalendarMonth';
 import { CalendarWeek } from './CalendarWeek';
 import { CalendarAgenda } from './CalendarAgenda';
+import { TaskBoard } from './board/TaskBoard';
 import { NewTaskDialog } from './NewTaskDialog';
 
 interface Props {
@@ -24,7 +27,7 @@ interface Props {
   onOpenTask: (project: Project, taskId: string) => void;
 }
 
-type CalView = 'month' | 'week' | 'agenda';
+type CalView = 'month' | 'week' | 'agenda' | 'board';
 const VIEW_KEY = 'cc_cal_view';
 
 // Горизонт проекции повторов для агенды (у неё нет верхней границы навигации)
@@ -64,19 +67,50 @@ function useIsMobile() {
 function ViewIcon({ view, size = 16 }: { view: CalView; size?: number }) {
   if (view === 'month') return <MonthIcon size={size} />;
   if (view === 'week') return <WeekIcon size={size} />;
+  if (view === 'board') return <BoardIcon size={size} />;
   return <AgendaIcon size={size} />;
 }
 
-const VIEW_LABEL: Record<CalView, string> = { month: 'Месяц', week: 'Неделя', agenda: 'Агенда' };
+const VIEW_LABEL: Record<CalView, string> = { month: 'Месяц', week: 'Неделя', agenda: 'Агенда', board: 'Доска' };
 
 export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   const isMobile = useIsMobile();
+  const boardOn = useFeature(FLAGS.taskBoard);
   const allTasks = useTasks();
   const [view, setView] = useState<CalView>(() => {
+    // Диплинк #/calendar/board восстанавливает доску; иначе — сохранённый вид
+    const t = parseHash();
+    if (t?.screen === 'calendar' && t.board) return 'board';
     const v = localStorage.getItem(VIEW_KEY);
-    return v === 'week' || v === 'agenda' ? v : 'month';
+    return v === 'week' || v === 'agenda' || v === 'board' ? v : 'month';
   });
-  useEffect(() => { localStorage.setItem(VIEW_KEY, view); }, [view]);
+  // Последний НЕ-доска вид — куда вернуться по «назад» из доски
+  const lastNonBoardView = useRef<CalView>(view === 'board' ? 'month' : view);
+  useEffect(() => {
+    localStorage.setItem(VIEW_KEY, view);
+    if (view !== 'board') lastNonBoardView.current = view;
+  }, [view]);
+  // Флаг доски выключен, а сохранён вид «board» — откатываемся на месяц
+  useEffect(() => { if (view === 'board' && !boardOn) setView('month'); }, [view, boardOn]);
+
+  // Браузерная навигация: доска — отдельная запись истории (#/calendar/board).
+  // Монтирование пропускаем — историю экрана сидирует App (иначе гонка перетрёт URL).
+  const didMountNav = useRef(false);
+  useEffect(() => {
+    if (!didMountNav.current) { didMountNav.current = true; return; }
+    if (view === 'board') navPush({ screen: 'calendar', board: true });
+    else navReplace({ screen: 'calendar' });
+  }, [view]);
+  // Кнопки «назад/вперёд»: восстанавливаем вид доски из снимка истории
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      const s = e.state as NavSnapshot | null;
+      if (s?.screen !== 'calendar') return;
+      setView(s.board ? 'board' : lastNonBoardView.current);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   const [navDate, setNavDate] = useState(todayIso());
   const [projects, setProjects] = useState<Project[]>([]);
@@ -207,7 +241,9 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
     </div>
   );
 
-  const currentView = view === 'month' ? (
+  const currentView = view === 'board' ? (
+    <TaskBoard tasks={tasks} columns={DEFAULT_BOARD_COLUMNS} projectsById={projectsById} onOpenTask={handleOpenTask} isMobile={isMobile} />
+  ) : view === 'month' ? (
     <CalendarMonth tasks={calendarTasks} projectsById={projectsById} navDate={navDate} onNavigate={setNavDate} onOpenTask={handleOpenTask} onQuickCreate={iso => setCreateDialog({ date: iso })} isMobile={isMobile} />
   ) : view === 'week' ? (
     <CalendarWeek tasks={calendarTasks} projectsById={projectsById} navDate={navDate} onNavigate={setNavDate} onOpenTask={handleOpenTask} isMobile={isMobile} />
@@ -225,7 +261,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
           <div style={{ marginBottom: 12 }}>
             <IconViewSwitcher<CalView>
               value={view}
-              options={(['month', 'week', 'agenda'] as CalView[]).map(v => ({
+              options={(['month', 'week', 'agenda', ...(boardOn ? ['board'] : [])] as CalView[]).map(v => ({
                 value: v, label: VIEW_LABEL[v], icon: <ViewIcon view={v} />,
               }))}
               onChange={setView}
@@ -250,6 +286,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
                     { value: 'month', label: 'Месяц', icon: <MonthIcon /> },
                     { value: 'week', label: 'Неделя', icon: <WeekIcon /> },
                     { value: 'agenda', label: 'Агенда', icon: <AgendaIcon /> },
+                    ...(boardOn ? [{ value: 'board' as const, label: 'Доска', icon: <BoardIcon /> }] : []),
                   ]}
                   onChange={setView}
                 />

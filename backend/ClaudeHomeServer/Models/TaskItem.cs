@@ -10,6 +10,9 @@ public class TaskItem
     public string Title { get; set; } = "";
     public string Description { get; set; } = "";   // markdown
     public TaskItemStatus Status { get; set; } = TaskItemStatus.Todo;
+    // Колонка на доске проекта (BoardColumn.Id); null = дефолтная колонка своей категории.
+    // Status остаётся категорией — за ним вся семантика; ColumnId лишь уточняет размещение.
+    public string? ColumnId { get; set; }
     public TaskItemPriority Priority { get; set; } = TaskItemPriority.Medium;
     public string? DueDate { get; set; }   // ISO: YYYY-MM-DD
     public string? DueTime { get; set; }   // HH:MM
@@ -31,6 +34,10 @@ public class TaskItem
     public List<string> LinkedFiles { get; set; } = [];
     public List<TaskSubtask> Subtasks { get; set; } = [];
     public List<string> Labels { get; set; } = [];
+    // Порядок карточки на Kanban-доске (ручная сортировка внутри колонки).
+    // double — чтобы вставлять между соседями через midpoint без перенумерации.
+    // 0 = не назначен (миграция/сортировка по дефолту); задаётся в Create и при drag.
+    public double Order { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

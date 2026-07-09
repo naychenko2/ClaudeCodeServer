@@ -517,12 +517,15 @@ public class ClaudeSession : ILlmSessionAdapter
                 var scope = _tasksMcp.ProjectId is not null
                     ? "Текущий контекст — задачи этого проекта."
                     : "Текущий контекст — личные задачи пользователя (вне проектов).";
+                var columnsHint = _tasksMcp.ProjectId is not null
+                    ? " У проекта может быть Kanban-доска с кастомными колонками: получи их через tasks_board_columns и клади задачу в нужную колонку, передавая columnId в tasks_create/tasks_update (статус выставится по категории колонки)."
+                    : "";
                 var tasksHint =
                     "У пользователя есть встроенная система задач (вкладка «Задачи» в проекте и раздел «Календарь»). " +
                     "Управляй ею через MCP-инструменты mcp__tasks__* (tasks_list, tasks_search, tasks_get, tasks_create, " +
-                    "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask). " + scope + " " +
+                    "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
-                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM.";
+                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint;
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? tasksHint
                     : basePrompt + "\n\n" + tasksHint;

@@ -26,6 +26,7 @@ public static class FeatureFlagKeys
     public const string NotesSessionSummary = "notes-session-summary";
     public const string NotesAutoRecall = "notes-auto-recall";
     public const string NotesMemorySource = "notes-memory-source";
+    public const string TaskBoard = "task-board";
 }
 
 /// <summary>
@@ -80,6 +81,15 @@ public static class FeatureFlagCatalog
             Description: "Файлы памяти Claude Code по проектам показываются как источник заметок (только чтение): видно, что Claude помнит.",
             Default: false,
             Stage: "dev"),
+
+        // Вид «Доска» (Kanban) в разделе «Календарь»: колонки по статусу,
+        // drag & drop, дорожки (swimlanes), фильтры и WIP-лимиты.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.TaskBoard,
+            Title: "Доска задач (Kanban)",
+            Description: "Вид «Доска» в разделе «Календарь»: колонки по статусу, drag & drop карточек, группировка по дорожкам, фильтры и WIP-лимиты.",
+            Default: false,
+            Stage: "beta"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

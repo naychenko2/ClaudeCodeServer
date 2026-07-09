@@ -13,6 +13,7 @@ export const FLAGS = {
   notesSessionSummary: 'notes-session-summary',
   notesAutoRecall: 'notes-auto-recall',
   notesMemorySource: 'notes-memory-source',
+  taskBoard: 'task-board',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

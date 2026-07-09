@@ -163,7 +163,10 @@ export default function App() {
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
-    navReplace({ screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : 'projects' })
+    const seed: NavSnapshot = { screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : 'projects' }
+    // Сохраняем диплинк на календарную доску (#/calendar/board), чтобы URL пережил перезагрузку
+    if (seed.screen === 'calendar' && initialHash?.screen === 'calendar' && initialHash.board) seed.board = true
+    navReplace(seed)
     // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
     // проектом — при hubTab==='chats' проект «спит» и в истории не отражается.
     // Если hash-диплинк указывает на ДРУГОЙ проект — восстановленный не пушим,
@@ -242,11 +245,16 @@ export default function App() {
     api.projects.list()
       .then(list => {
         if (cancelled) return
-        if (!list.some(p => p.id === project.id)) {
+        const fresh = list.find(p => p.id === project.id)
+        if (!fresh) {
           localStorage.removeItem(OPEN_PROJECT_KEY)
           navReplace({ screen: 'projects' })
           setProject(null)
+          return
         }
+        // Освежаем объект проекта серверными данными (в т.ч. boardColumns) — кэш мог устареть
+        localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(fresh))
+        setProject(fresh)
       })
       .catch(() => { /* сервер недоступен — остаёмся в проекте, не трогаем состояние */ })
     return () => { cancelled = true }

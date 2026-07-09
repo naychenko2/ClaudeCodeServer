@@ -87,6 +87,17 @@ public class ProjectManager
         return project;
     }
 
+    // Кастомные колонки Kanban-доски проекта; пустой список/null → дефолтные 3
+    public Project UpdateBoardColumns(string id, List<BoardColumn>? columns)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.BoardColumns = columns is null || columns.Count == 0 ? null : columns;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
     // Отвязывает все проекты от удаляемой группы (вызывается при удалении группы)
     public void ClearGroup(string groupId)
     {

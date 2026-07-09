@@ -45,6 +45,7 @@ function brief(t) {
     recurrence: t.recurrence && t.recurrence.type !== 'none' ? t.recurrence : null,
     assignee: t.assignee ?? null,
     projectId: t.projectId ?? null,
+    columnId: t.columnId ?? null,
     labels: t.labels,
     subtasks: `${(t.subtasks ?? []).filter(s => s.isDone).length}/${(t.subtasks ?? []).length}`,
   };
@@ -60,6 +61,20 @@ const ENUMS = {
   status: ['todo', 'inProgress', 'done'],
   priority: ['urgent', 'high', 'medium', 'low'],
   assignee: ['me', 'claude'],
+};
+
+// Дефолтные колонки доски (когда у проекта нет кастомных, а также для личных задач)
+const DEFAULT_COLUMNS = [
+  { id: 'todo', name: 'К выполнению', category: 'todo' },
+  { id: 'inProgress', name: 'В работе', category: 'inProgress' },
+  { id: 'done', name: 'Готово', category: 'done' },
+];
+
+// Схема columnId: колонка доски проекта. Статус выводится из категории колонки на бэке —
+// достаточно указать columnId (список — через tasks_board_columns).
+const COLUMN_ID_SCHEMA = {
+  type: 'string',
+  description: 'ID колонки доски проекта (см. tasks_board_columns). Статус выставится по категории колонки. Актуально только для проектных задач.',
 };
 
 // Правило повторения задачи (соответствует TaskRecurrence на бэке).
@@ -141,6 +156,7 @@ const TOOLS = [
         assignee: { type: 'string', enum: ENUMS.assignee, description: 'Исполнитель' },
         subtasks: { type: 'array', items: { type: 'string' }, description: 'Названия подзадач' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки' },
+        columnId: COLUMN_ID_SCHEMA,
       },
     },
   },
@@ -162,8 +178,14 @@ const TOOLS = [
         recurrence: RECURRENCE_SCHEMA,
         assignee: { type: 'string', enum: ENUMS.assignee },
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки (заменяют список целиком)' },
+        columnId: { ...COLUMN_ID_SCHEMA, description: COLUMN_ID_SCHEMA.description + ' Пустая строка — сброс на дефолтную колонку категории.' },
       },
     },
+  },
+  {
+    name: 'tasks_board_columns',
+    description: `Колонки Kanban-доски ${PROJECT_ID ? 'текущего проекта' : '(личные задачи используют дефолтные)'}: id, name, category (todo/inProgress/done). Нужен, чтобы задать columnId в tasks_create/tasks_update.`,
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'tasks_complete',
@@ -240,9 +262,17 @@ async function callTool(name, args) {
     case 'tasks_get':
       return json(await api(`/api/tasks/${args.id}`));
 
+    case 'tasks_board_columns': {
+      if (!PROJECT_ID)
+        return json({ note: 'Личные задачи используют дефолтные колонки.', columns: DEFAULT_COLUMNS });
+      const proj = await api(`/api/projects/${PROJECT_ID}`);
+      const cols = proj.boardColumns && proj.boardColumns.length ? proj.boardColumns : DEFAULT_COLUMNS;
+      return json(cols.map(c => ({ id: c.id, name: c.name, category: c.category })));
+    }
+
     case 'tasks_create': {
       const body = { title: args.title };
-      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'labels'])
+      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'labels', 'columnId'])
         if (args[k] !== undefined) body[k] = args[k];
       if (Array.isArray(args.subtasks) && args.subtasks.length)
         body.subtasks = args.subtasks.map(t => ({ title: String(t) }));

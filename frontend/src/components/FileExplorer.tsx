@@ -20,6 +20,7 @@ function isKnowledgeIndexable(filename: string): boolean {
 }
 import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { bumpNotes } from '../lib/notes';
+import { IconNotes } from '../features/notes/shared';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
@@ -146,16 +147,9 @@ function FolderIcon() {
   );
 }
 
-// Иконка папки «Заметки» (vault проекта): связанные ноды графа знаний
+// Иконка папки «Заметки» (vault проекта) — единая IconNotes в accent-цвете
 function NotesFolderIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="6" cy="7" r="2.5" />
-      <circle cx="18" cy="8" r="2.5" />
-      <circle cx="12" cy="18" r="2.5" />
-      <path d="M7.7 9 10.7 16M16.6 10 13.4 16M8.5 7.4 15.5 7.8" />
-    </svg>
-  );
+  return <span style={{ color: C.accent, display: 'flex' }}><IconNotes size={17} /></span>;
 }
 
 function ChevronRight() {

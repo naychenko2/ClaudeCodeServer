@@ -14,7 +14,7 @@ import type { NoteSource } from '../../types';
 import { NoteConnections } from './NoteConnections';
 import {
   SourceBadge, usePanelWidth,
-  IconChat, IconTrash, IconGraph, IconLink, IconSparkle, IconFolder, IconFolderMove,
+  IconChat, IconTrash, IconCalendarDay, IconLink, IconSparkle, IconFolder, IconFolderMove,
 } from './shared';
 
 // Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
@@ -236,7 +236,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               <IconButton title="Переместить…" onClick={openMove}><IconFolderMove /></IconButton>
               <IconButton title="Предложить связи (AI)" tone="accent" onClick={suggestLinks}><IconSparkle /></IconButton>
               {isDaily && (
-                <IconButton title="Конспект дня (AI)" tone="accent" onClick={makeDailySummary} disabled={aiBusy}><IconGraph /></IconButton>
+                <IconButton title="Конспект дня (AI)" tone="accent" onClick={makeDailySummary} disabled={aiBusy}><IconCalendarDay /></IconButton>
               )}
               <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>
               <button onClick={startEdit} style={{ ...tbBtnPrimary, marginLeft: 6 }}>Править</button>
@@ -248,6 +248,15 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
       {/* Тело: контент + сайдбар связей (десктоп) */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+      {editing ? (
+        /* Правка — редактор на всю контентную зону (как правка файла); кнопки — в тулбаре */
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <Suspense fallback={<div style={{ padding: 24, color: C.textMuted, fontSize: 13 }}>Загрузка редактора…</div>}>
+            <NoteEditor value={draftBody} onChange={setDraftBody} fill
+              placeholder="Текст заметки… связывай через [[Заголовок]]" onWikilink={onWikilink} />
+          </Suspense>
+        </div>
+      ) : (
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '4px 18px 24px' }}>
         {!editing && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12, alignItems: 'center' }}>
@@ -318,24 +327,18 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             ))}
           </div>
         )}
-        {editing ? (
-          <Suspense fallback={<div style={{ padding: 24, color: C.textMuted, fontSize: 13 }}>Загрузка редактора…</div>}>
-            <NoteEditor value={draftBody} onChange={setDraftBody} minHeight={280}
-              placeholder="Текст заметки… связывай через [[Заголовок]]" onWikilink={onWikilink} />
-          </Suspense>
-        ) : (
-          <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
-            resolveNote={resolveNote} embedSource={note.source} />
-        )}
+        <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
+          resolveNote={resolveNote} embedSource={note.source} />
 
         {/* Мобильный: блок связей снизу под контентом (сайдбару нет места) */}
-        {!editing && isMobile && (
+        {isMobile && (
           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
             <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
               onWikilink={onWikilink} onLinkMention={linkMention} />
           </div>
         )}
       </div>
+      )}
 
       {/* Десктоп: сайдбар связей справа — стиль как при просмотре заметки в файлах
           (прозрачный фон, тонкая линия-сплиттер), ширина перетаскивается */}

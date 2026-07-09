@@ -55,6 +55,12 @@ export const IconEye = () => svg(<><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 
 export const IconPencil = () => svg(<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></>);
 export const IconChat = () => svg(<><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /></>);
 export const IconGraph = () => svg(<><circle cx="5" cy="6" r="2.5" /><circle cx="18" cy="7" r="2.5" /><circle cx="12" cy="18" r="2.5" /><path d="M7 7.5 10.5 16M15.8 8.6 13.5 16" /></>);
+// Единая иконка «Заметки» (связанные ноды базы знаний) — та же в дереве файлов,
+// пустом состоянии раздела и карточке заметки в чате
+export const IconNotes = ({ size = 16 }: { size?: number }) => svg(<>
+  <circle cx="6" cy="7" r="2.5" /><circle cx="18" cy="8" r="2.5" /><circle cx="12" cy="18" r="2.5" />
+  <path d="M7.7 9 10.7 16M16.6 10 13.4 16M8.5 7.4 15.5 7.8" />
+</>, size);
 export const IconBacklink = () => svg(<><path d="M9 14 4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 5 5v6" /></>);
 export const IconOutlink = () => svg(<><path d="M7 17 17 7M8 7h9v9" /></>);
 export const IconTrash = () => svg(<><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></>);

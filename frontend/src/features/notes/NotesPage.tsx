@@ -13,7 +13,7 @@ import { NoteView } from './NoteView';
 import { NotesGraph } from './NotesGraph';
 import { EmptyState } from '../../components/EmptyState';
 import { Splitter } from '../../components/ui';
-import { IconSearch, IconPlus, IconGraph, IconCalendarDay, SourceDot, usePanelWidth } from './shared';
+import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot, usePanelWidth } from './shared';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -263,7 +263,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           onBack={isMobile ? () => setMobileView('list') : undefined}
           onDeleted={() => { setSelectedId(null); setMobileView('list'); }} />
       : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <EmptyState icon={<IconGraph />} title="Заметки"
+          <EmptyState icon={<IconNotes />} title="Заметки"
             subtitle={notes.length ? 'Выбери заметку слева или создай новую' : 'Создай первую заметку или попроси Claude законспектировать разговор'}
             action={<button onClick={() => setNewDialog({})} style={newBtn}><IconPlus />Новая заметка</button>} />
         </div>;

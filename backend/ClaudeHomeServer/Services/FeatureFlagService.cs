@@ -23,4 +23,8 @@ public class FeatureFlagService(UserStore users)
             result[def.Key] = overrides != null && overrides.TryGetValue(def.Key, out var v) ? v : def.Default;
         return result;
     }
+
+    /// <summary>Эффективное значение одного флага для юзера (для гейтов в сервисах).</summary>
+    public bool IsEnabled(string userId, string key) =>
+        GetEffective(userId).TryGetValue(key, out var v) && v;
 }

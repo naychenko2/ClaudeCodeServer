@@ -37,6 +37,10 @@ function dayLabel(date: string): string {
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', ...(d.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}) });
 }
 
+// ≤ столько пунктов дня — показываем все категории списком (секциями), а не вкладками:
+// на «тонких» днях кликать по вкладкам ради 1-2 пунктов незачем, лучше сразу весь обзор.
+const LIST_MODE_MAX = 12;
+
 // Русская плюрализация: 1 изменение / 2 изменения / 5 изменений
 function plural(n: number, one: string, few: string, many: string): string {
   const abs = Math.abs(n) % 100;
@@ -219,6 +223,9 @@ export function ProductHistory({ isMobile, onClose }: {
   // Группы-области (вкладки категорий) и активная — вычисляем заранее, чтобы вкладки
   // можно было вынести в sticky-шапку отдельно от скроллящейся ленты пунктов
   const groups = selSum && selItems.length > 0 ? groupByArea(selItems) : [];
+  // Мало пунктов → списочный режим (все категории секциями сразу), иначе → вкладки.
+  // Считаем от selItems (после фильтра по автору): сужение фильтром тоже переключает режим.
+  const listMode = groups.length > 0 && selItems.length <= LIST_MODE_MAX;
   const activeAreaName = groups.length
     ? (selDay && activeArea[selDay.date] && groups.some(g => g.area === activeArea[selDay.date])
         ? activeArea[selDay.date] : groups[0].area)
@@ -282,8 +289,9 @@ export function ProductHistory({ isMobile, onClose }: {
                   ))}
                 </div>
               )}
-              {/* Вкладки категорий — часть sticky-шапки */}
-              {groups.length > 0 && shownGroup && (
+              {/* Вкладки категорий — часть sticky-шапки. В списочном режиме их нет:
+                  все категории показываются секциями в теле дня. */}
+              {!listMode && groups.length > 0 && shownGroup && (
                 <AreaTabs groups={groups} active={shownGroup.area}
                   onChange={area => setActiveArea(prev => ({ ...prev, [selDay.date]: area }))} />
               )}
@@ -317,13 +325,21 @@ export function ProductHistory({ isMobile, onClose }: {
                 {authorFilter ? `Нет изменений (${authorFilter})` : 'Заметных изменений нет'}
               </div>
             )}
-            {/* Лента пунктов выбранной категории — скроллится под sticky-шапкой */}
-            {groups.length > 0 && shownGroup && (
-              <div key={shownGroup.area} style={{ position: 'relative', paddingLeft: 28, animation: 'cc-fade-in 0.2s ease' }}>
-                <div style={{ position: 'absolute', left: 5, top: 6, bottom: 10, width: 2, background: C.divider }} />
-                {shownGroup.list.map((item, i) => (
-                  <TimelineNode key={i} item={item} last={i === shownGroup.list.length - 1} />
+            {/* Списочный режим: все категории секциями (заголовок + свой таймлайн) друг под другом */}
+            {listMode && (
+              <div style={{ animation: 'cc-fade-in 0.2s ease' }}>
+                {groups.map((g, gi) => (
+                  <div key={g.area} style={{ marginTop: gi === 0 ? 0 : 18 }}>
+                    <CategoryHeader area={g.area} list={g.list} />
+                    <GroupTimeline list={g.list} />
+                  </div>
                 ))}
+              </div>
+            )}
+            {/* Вкладочный режим: лента пунктов выбранной категории — скроллится под sticky-шапкой */}
+            {!listMode && groups.length > 0 && shownGroup && (
+              <div key={shownGroup.area} style={{ animation: 'cc-fade-in 0.2s ease' }}>
+                <GroupTimeline list={shownGroup.list} />
               </div>
             )}
         </div>
@@ -414,6 +430,31 @@ function groupByArea(items: ChangelogItem[]): { area: string; list: ChangelogIte
 // Эмодзи группы-области: берём у первого пункта (репрезентативно для раздела)
 function groupEmoji(list: ChangelogItem[]): string {
   return list.find(i => i.emoji)?.emoji || '📋';
+}
+
+// Таймлайн одной категории: вертикальная линия + узлы пунктов.
+// Общий для вкладочного (одна активная группа) и списочного (все группы) режимов.
+function GroupTimeline({ list }: { list: ChangelogItem[] }) {
+  return (
+    <div style={{ position: 'relative', paddingLeft: 28 }}>
+      <div style={{ position: 'absolute', left: 5, top: 6, bottom: 10, width: 2, background: C.divider }} />
+      {list.map((item, i) => (
+        <TimelineNode key={i} item={item} last={i === list.length - 1} />
+      ))}
+    </div>
+  );
+}
+
+// Заголовок секции-категории в списочном режиме: эмодзи области + название + счётчик.
+// Визуально в духе вкладок, но это статичный заголовок, а не кликабельная вкладка.
+function CategoryHeader({ area, list }: { area: string; list: ChangelogItem[] }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10 }}>
+      <span style={{ fontSize: 15 }}>{groupEmoji(list)}</span>
+      <span style={{ fontSize: 13.5, fontWeight: 700, color: C.textHeading }}>{area}</span>
+      <span style={{ fontSize: 11.5, color: C.textMuted }}>{list.length}</span>
+    </div>
+  );
 }
 
 // Бейдж значимости по оценке 1-5: ярлык + цвет (обоснование — в пузыре-реплике при наведении).

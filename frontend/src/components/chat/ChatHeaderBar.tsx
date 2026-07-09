@@ -12,6 +12,7 @@ import { BackButton, Modal, ModalActions } from '../ui';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { bumpNotes } from '../../lib/notes';
 import { createTask } from '../../lib/tasks';
+import { showToast } from '../../lib/toast';
 import { openNoteById } from '../../features/notes/saveToNote';
 import { IconNotes } from '../../features/notes/shared';
 import type { ExtractedTaskCandidate } from '../../types';
@@ -699,21 +700,23 @@ const IconTaskPlus = () => (
 function ExtractTasksButton({ session, online, isMobile }: { session: Session; online: boolean; isMobile?: boolean }) {
   const on = useFeature(FLAGS.chatExtractTasks);
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<{ projectId: string | null; items: (ExtractedTaskCandidate & { sel: boolean })[] } | null>(null);
-  useEffect(() => { setDialog(null); setNote(null); setBusy(false); }, [session.id]);
+  useEffect(() => { setDialog(null); setBusy(false); }, [session.id]);
   if (!on || !online || session.messageCount === 0) return null;
 
   const run = () => {
     if (busy) return;
-    setBusy(true); setNote(null);
+    setBusy(true);
     api.sessions.extractTasks(session.id)
       .then(r => {
-        if (r.tasks.length === 0) { setNote('Задач в чате не найдено'); setTimeout(() => setNote(null), 3000); return; }
+        if (r.tasks.length === 0) {
+          showToast('Задачи из чата', 'В этом чате задач-действий не нашлось', 'info');
+          return;
+        }
         setDialog({ projectId: r.projectId ?? null, items: r.tasks.map(t => ({ ...t, sel: true })) });
       })
-      .catch(() => { setNote('Не удалось извлечь задачи'); setTimeout(() => setNote(null), 3000); })
+      .catch(() => showToast('Задачи из чата', 'Не удалось извлечь задачи из чата', 'info'))
       .finally(() => setBusy(false));
   };
   const toggle = (i: number) =>
@@ -727,7 +730,8 @@ function ExtractTasksButton({ session, online, isMobile }: { session: Session; o
       for (const t of chosen)
         await createTask(dialog.projectId, { title: t.title, dueDate: t.due ?? undefined, priority: t.priority ?? undefined });
       setDialog(null);
-    } catch { /* оставляем диалог — можно повторить */ }
+      showToast('Задачи из чата', `Создано задач: ${chosen.length}`, 'claude');
+    } catch { showToast('Задачи из чата', 'Не удалось создать задачи', 'info'); }
     finally { setCreating(false); }
   };
   const selectedCount = dialog?.items.filter(t => t.sel).length ?? 0;
@@ -735,7 +739,7 @@ function ExtractTasksButton({ session, online, isMobile }: { session: Session; o
   return (
     <>
       <ToolbarIconButton onClick={run} isMobile={isMobile}
-        title={busy ? 'Ищу задачи…' : note ?? 'Задачи из чата'}>
+        title={busy ? 'Ищу задачи…' : 'Задачи из чата'}>
         {busy ? <div className="tool-spinner" style={{ width: 13, height: 13 }} /> : <IconTaskPlus />}
       </ToolbarIconButton>
       {dialog && (

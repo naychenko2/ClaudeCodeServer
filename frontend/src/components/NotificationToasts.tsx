@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { C, FONT, R, SHADOW, Z } from '../lib/design';
 import { joinUser, onMessage, onReconnected } from '../lib/signalr';
+import type { LocalToast } from '../lib/toast';
 
 interface ToastItem {
   id: number;
@@ -55,13 +56,22 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
   useEffect(() => {
     joinUserGroup();
     const offReconnect = onReconnected(joinUserGroup);
+    const pushToast = (t: Omit<ToastItem, 'id'>) => {
+      const item: ToastItem = { id: nextId++, ...t };
+      setToasts(prev => [...prev, item]);
+      setTimeout(() => setToasts(prev => prev.filter(x => x.id !== item.id)), AUTO_DISMISS_MS);
+    };
     const off = onMessage(msg => {
       if (msg.type !== 'notification') return;
-      const item: ToastItem = { id: nextId++, title: msg.title, body: msg.body, url: msg.url, kind: msg.kind };
-      setToasts(prev => [...prev, item]);
-      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== item.id)), AUTO_DISMISS_MS);
+      pushToast({ title: msg.title, body: msg.body, url: msg.url, kind: msg.kind });
     });
-    return () => { off(); offReconnect(); };
+    // Локальные тосты (клиентские события без сервера)
+    const onLocal = (e: Event) => {
+      const d = (e as CustomEvent<LocalToast>).detail;
+      pushToast({ title: d.title, body: d.body, kind: d.kind ?? 'info' });
+    };
+    window.addEventListener('cc-local-toast', onLocal);
+    return () => { off(); offReconnect(); window.removeEventListener('cc-local-toast', onLocal); };
   }, []);
 
   if (toasts.length === 0) return null;

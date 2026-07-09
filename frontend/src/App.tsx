@@ -277,6 +277,15 @@ export default function App() {
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTab) => {
+    // Повторный клик по активному разделу «Проекты» с открытым проектом — выход к списку.
+    if (t === 'projects' && hubTab === 'projects' && project) {
+      localStorage.removeItem(OPEN_PROJECT_KEY)
+      localStorage.setItem(HUB_TAB_KEY, 'projects')
+      setProject(null)
+      setHubTab('projects')
+      navPush({ screen: 'projects' })
+      return
+    }
     localStorage.setItem(HUB_TAB_KEY, t)
     setHubTab(t)
     const dest: NavSnapshot = { screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : 'projects' }

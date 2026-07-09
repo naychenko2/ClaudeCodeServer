@@ -668,6 +668,65 @@ public sealed class NotesService
         }).ToList();
     }
 
+    // --- Физические папки (в т.ч. пустые: дерево заметок строится из заметок,
+    //     а пустая папка иначе бы «исчезла») ---
+
+    // Все физические подпапки всех источников владельца (включая пустые, включая
+    // промежуточные уровни). Скрытые (сегмент на «.») и templates/ пропускаются.
+    public IReadOnlyList<NoteFolderDto> GetFolders(string userId)
+    {
+        var result = new List<NoteFolderDto>();
+        foreach (var src in SourcesFor(userId))
+        {
+            if (!Directory.Exists(src.RootDir)) continue;
+            IEnumerable<string> dirs;
+            try { dirs = Directory.EnumerateDirectories(src.RootDir, "*", SearchOption.AllDirectories); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Сканирование папок заметок {Dir}", src.RootDir); continue; }
+            foreach (var dir in dirs)
+            {
+                var rel = NormalizeRel(Path.GetRelativePath(src.RootDir, dir));
+                if (rel.Length == 0) continue;
+                // Скрытые папки (.obsidian и т.п.) и шаблоны — не показываем
+                if (rel.Split('/').Any(seg => seg.StartsWith('.'))) continue;
+                if (rel.Equals("templates", StringComparison.OrdinalIgnoreCase) ||
+                    rel.StartsWith("templates/", StringComparison.OrdinalIgnoreCase)) continue;
+                result.Add(new NoteFolderDto(src.Key, rel));
+            }
+        }
+        return result;
+    }
+
+    // Создать физическую папку (идемпотентно — дубликат не ошибка).
+    public NoteFolderDto CreateFolder(string userId, string sourceKey, string path)
+    {
+        var rootDir = ResolveRoot(userId, sourceKey);   // проверка владения
+        var folder = SanitizeFolder(path);
+        if (folder.Length == 0) throw new ArgumentException("Не задана папка");
+        var full = FileService.SafeJoinPublic(rootDir, folder);
+        if (File.Exists(full))
+            throw new InvalidOperationException($"«{folder}» — уже файл, не папка");
+        Directory.CreateDirectory(full);
+        Invalidate(userId);
+        return new NoteFolderDto(sourceKey, folder);
+    }
+
+    // Удалить физическую папку рекурсивно (пустую или с заметками/вложениями).
+    // Возвращает число удалённых .md-заметок.
+    public int DeleteFolder(string userId, string sourceKey, string path)
+    {
+        var rootDir = ResolveRoot(userId, sourceKey);   // проверка владения
+        var folder = SanitizeFolder(path);
+        if (folder.Length == 0) throw new ArgumentException("Не задана папка");
+        var full = FileService.SafeJoinPublic(rootDir, folder);
+        if (!Directory.Exists(full)) throw new KeyNotFoundException("Папка не найдена");
+        int mdCount;
+        try { mdCount = Directory.EnumerateFiles(full, "*.md", SearchOption.AllDirectories).Count(); }
+        catch { mdCount = 0; }
+        Directory.Delete(full, recursive: true);
+        Invalidate(userId);
+        return mdCount;
+    }
+
     public NoteDetail? Update(string userId, string id, UpdateNoteRequest req)
     {
         var (sourceKey, relPath) = DecodeId(id);

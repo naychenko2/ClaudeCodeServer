@@ -285,6 +285,95 @@ public class NotesServiceTests : IDisposable
             .Should().ContainSingle(l => l.Resolved && l.TargetTitle == "Цель");
     }
 
+    // ─── Физические папки (пустые) ────────────────────────────────────────────
+
+    [Fact]
+    public void CreateFolder_СоздаётФизическуюПапку_ВидноВGetFolders()
+    {
+        var f = _sut.CreateFolder(User, "personal", "Идеи/Черновики");
+        f.Source.Should().Be("personal");
+        f.Path.Should().Be("Идеи/Черновики");
+        Directory.Exists(Path.Combine(_vault, "Идеи", "Черновики")).Should().BeTrue();
+
+        var folders = _sut.GetFolders(User).Select(x => x.Path).ToList();
+        folders.Should().Contain("Идеи");            // промежуточный уровень тоже
+        folders.Should().Contain("Идеи/Черновики");
+    }
+
+    [Fact]
+    public void CreateFolder_Дубликат_НеПадает()
+    {
+        _sut.CreateFolder(User, "personal", "Архив");
+        var act = () => _sut.CreateFolder(User, "personal", "Архив");
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void CreateFolder_Traversal_Санитайзится()
+    {
+        _sut.CreateFolder(User, "personal", "../../злая");
+        // Вне vault ничего не создано; папка «злая» — внутри
+        Directory.Exists(Path.Combine(_vault, "злая")).Should().BeTrue();
+        Directory.Exists(Path.GetFullPath(Path.Combine(_vault, "..", "..", "злая"))).Should().BeFalse();
+    }
+
+    [Fact]
+    public void CreateFolder_ИмяЗанятоФайлом_Ошибка()
+    {
+        _sut.Create(User, new CreateNoteRequest("Заметка", "тело", "personal"));
+        // Файл «Заметка.md» есть, но «Заметка» (без .md) как папка — свободно; берём занятое имя
+        File.WriteAllText(Path.Combine(_vault, "конфликт"), "x");
+        var act = () => _sut.CreateFolder(User, "personal", "конфликт");
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void GetFolders_ПустойVault_ПустойСписок()
+    {
+        _sut.GetFolders("newbie").Should().BeEmpty();   // vault не существует — без исключения
+    }
+
+    [Fact]
+    public void GetFolders_ИсключаетСкрытыеИTemplates()
+    {
+        Directory.CreateDirectory(Path.Combine(_vault, ".obsidian", "plugins"));
+        Directory.CreateDirectory(Path.Combine(_vault, "templates"));
+        _sut.CreateFolder(User, "personal", "Обычная");
+
+        var folders = _sut.GetFolders(User).Select(x => x.Path).ToList();
+        folders.Should().Contain("Обычная");
+        folders.Should().NotContain(p => p.StartsWith(".obsidian"));
+        folders.Should().NotContain(p => p == "templates" || p.StartsWith("templates/"));
+    }
+
+    [Fact]
+    public void DeleteFolder_Пустая_Удаляется()
+    {
+        _sut.CreateFolder(User, "personal", "Пусто");
+        var removed = _sut.DeleteFolder(User, "personal", "Пусто");
+        removed.Should().Be(0);
+        Directory.Exists(Path.Combine(_vault, "Пусто")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void DeleteFolder_СЗаметками_РекурсивноИИнвалидируетСписок()
+    {
+        _sut.Create(User, new CreateNoteRequest("A", "тело", "personal", Folder: "Раздел"));
+        _sut.Create(User, new CreateNoteRequest("B", "тело", "personal", Folder: "Раздел/Внутри"));
+
+        var removed = _sut.DeleteFolder(User, "personal", "Раздел");
+        removed.Should().Be(2);
+        Directory.Exists(Path.Combine(_vault, "Раздел")).Should().BeFalse();
+        _sut.GetSummaries(User, null, null).Should().NotContain(s => s.Title == "A" || s.Title == "B");
+    }
+
+    [Fact]
+    public void DeleteFolder_Несуществующая_KeyNotFound()
+    {
+        var act = () => _sut.DeleteFolder(User, "personal", "Нет");
+        act.Should().Throw<KeyNotFoundException>();
+    }
+
     [Fact]
     public void Resolve_ПрефиксПапки_РазрешаетДубликаты()
     {

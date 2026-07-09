@@ -87,6 +87,10 @@ public record MoveNoteRequest(string? Folder = null, string? TargetSource = null
 public record MoveFolderRequest(string Source, string Path, string NewPath);
 public record MovedNoteId(string OldId, string NewId);
 
+// Физическая папка источника (в т.ч. пустая) — для дерева и выбора «куда создать»
+public record NoteFolderDto(string Source, string Path);
+public record CreateNoteFolderRequest(string Source, string Path);
+
 // Дата дня для daily note — клиент шлёт свою локальную (таймзона устройства)
 public record DailyNoteRequest(string? Date = null);
 

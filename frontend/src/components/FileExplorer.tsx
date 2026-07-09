@@ -729,7 +729,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     const newIsMd = /\.md$/i.test(newName);
     if (isNotesMd && newIsMd && newName.toLowerCase() !== oldName.toLowerCase()) {
       const rel = normPath(renamingPath).slice('notes/'.length);
-      const note = getNotesSnapshot().find(n => n.source === project.id && normPath(n.path) === rel);
+      // Стор заметок в разделе файлов может быть не загружен → фолбэк на свежий список
+      let note = getNotesSnapshot().find(n => n.source === project.id && normPath(n.path) === rel);
+      if (!note) {
+        try { note = (await api.notes.list()).find(n => n.source === project.id && normPath(n.path) === rel); } catch { /* оффлайн — обычный rename ниже */ }
+      }
       if (note) {
         try {
           await api.notes.update(note.id, { title: newName.replace(/\.md$/i, '') });

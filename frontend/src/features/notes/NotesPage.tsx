@@ -247,7 +247,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
 
   // Центральная зона: заметка/пустое состояние или граф
   const centerPane = mode === 'graph'
-    ? <NotesGraph selectedId={selectedId} onSelectNode={selectNote}
+    ? <NotesGraph selectedId={selectedId} onSelectNode={id => { setMode('notes'); selectNote(id); }}
         maxNodes={isMobile ? 40 : undefined}
         settings={graphSettings} onSettingsChange={setGraphSettings}
         hidePanel={!isMobile} onStats={setGraphStats} />

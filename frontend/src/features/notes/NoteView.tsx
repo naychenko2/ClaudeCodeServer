@@ -59,10 +59,14 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     } catch { return null; }
   };
 
-  // ✨ AI-помощь: предложение связей, тегов, конспект дня
-  const [aiLinks, setAiLinks] = useState<{ title: string; why: string }[] | 'loading' | null>(null);
-  const [aiTags, setAiTags] = useState<string[] | 'loading' | null>(null);
+  // ✨ AI-помощь: предложение связей, тегов, конспект дня.
+  // 'error' — ИИ недоступен (нет логина claude/таймаут): показываем явно, не молчим.
+  const [aiLinks, setAiLinks] = useState<{ title: string; why: string }[] | 'loading' | 'error' | null>(null);
+  const [aiTags, setAiTags] = useState<string[] | 'loading' | 'error' | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
+  // Ручное добавление тега (инлайн-инпут у чипов)
+  const [addingTag, setAddingTag] = useState(false);
+  const [newTag, setNewTag] = useState('');
   const isDaily = note?.source === 'personal' && note.path.startsWith('Journal/');
 
   const suggestLinks = () => {
@@ -70,14 +74,14 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     setAiLinks('loading');
     api.notes.suggestLinks(note.id)
       .then(l => setAiLinks(l))
-      .catch(() => setAiLinks([]));
+      .catch(() => setAiLinks('error'));
   };
   const suggestTags = () => {
     if (!note) return;
     setAiTags('loading');
     api.notes.suggestTags(note.id)
       .then(t => setAiTags(t))
-      .catch(() => setAiTags([]));
+      .catch(() => setAiTags('error'));
   };
   // Принять связь: секция «## Связанное» с [[…]] в конце заметки
   const acceptLink = async (title: string) => {
@@ -91,12 +95,14 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     setAiLinks(prev => Array.isArray(prev) ? prev.filter(l => l.title !== title) : prev);
     bumpNotes();
   };
-  // Принять тег: inline #тег в конец заметки
-  const acceptTag = async (tag: string) => {
+  // Принять тег (ИИ-предложение или ручной ввод): inline #тег в конец заметки
+  const acceptTag = async (tagRaw: string) => {
     if (!note) return;
+    const tag = tagRaw.trim().replace(/^#+/, '').replace(/\s+/g, '-');
+    if (!tag || note.tags.some(t => t.toLowerCase() === tag.toLowerCase())) return;
     const updated = await api.notes.update(note.id, { content: note.content.trimEnd() + ` #${tag}\n` });
     setNote(updated);
-    setAiTags(prev => Array.isArray(prev) ? prev.filter(t => t !== tag) : prev);
+    setAiTags(prev => Array.isArray(prev) ? prev.filter(t => t !== tagRaw) : prev);
     bumpNotes();
   };
   // Конспект дня (только в daily-заметке)
@@ -186,10 +192,36 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 #{t}
               </button>
             ))}
+            {/* Ручное добавление тега */}
+            {addingTag ? (
+              <input
+                autoFocus
+                value={newTag}
+                onChange={e => setNewTag(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { void acceptTag(newTag); setNewTag(''); setAddingTag(false); }
+                  if (e.key === 'Escape') { setNewTag(''); setAddingTag(false); }
+                }}
+                onBlur={() => { if (newTag.trim()) void acceptTag(newTag); setNewTag(''); setAddingTag(false); }}
+                placeholder="тег"
+                style={{ width: 90, fontSize: 11.5, fontFamily: FONT.sans, color: C.textHeading, background: C.bgWhite, border: `1px solid ${C.accent}`, borderRadius: R.sm, padding: '2px 7px', outline: 'none' }}
+              />
+            ) : (
+              <button onClick={() => setAddingTag(true)} title="Добавить тег"
+                style={{ fontSize: 11.5, fontWeight: 500, color: C.textMuted, background: 'none', border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
+                + тег
+              </button>
+            )}
             <button onClick={suggestTags} title="Предложить теги (AI)"
               style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: C.textMuted, background: 'none', border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 7px', cursor: 'pointer', fontFamily: FONT.sans }}>
               <IconSparkle />{aiTags === 'loading' ? '…' : 'теги'}
             </button>
+            {aiTags === 'error' && (
+              <span style={{ fontSize: 11, color: C.dangerText }}>ИИ недоступен (claude не залогинен на сервере)</span>
+            )}
+            {Array.isArray(aiTags) && aiTags.length === 0 && (
+              <span style={{ fontSize: 11, color: C.textMuted }}>нечего предложить</span>
+            )}
             {Array.isArray(aiTags) && aiTags.map(t => (
               <button key={t} onClick={() => void acceptTag(t)} title="Добавить тег"
                 style={{ fontSize: 11.5, fontWeight: 500, color: C.textSecondary, background: C.bgSelected, border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
@@ -200,9 +232,11 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         )}
         {!editing && aiLinks != null && (
           <div style={{ marginBottom: 12, padding: '9px 12px', background: C.accentLight, borderRadius: R.lg, border: `1px solid ${C.accentMuted}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, color: C.textSecondary, marginBottom: aiLinks === 'loading' || aiLinks.length === 0 ? 0 : 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, color: aiLinks === 'error' ? C.dangerText : C.textSecondary, marginBottom: Array.isArray(aiLinks) && aiLinks.length > 0 ? 8 : 0 }}>
               <IconSparkle />
-              {aiLinks === 'loading' ? 'Ищу связи…' : aiLinks.length === 0 ? 'Подходящих связей не нашлось' : 'Предложенные связи'}
+              {aiLinks === 'loading' ? 'Ищу связи…'
+                : aiLinks === 'error' ? 'ИИ недоступен (claude не залогинен на сервере)'
+                : aiLinks.length === 0 ? 'Подходящих связей не нашлось' : 'Предложенные связи'}
               <button onClick={() => setAiLinks(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 13 }}>✕</button>
             </div>
             {Array.isArray(aiLinks) && aiLinks.map(l => (

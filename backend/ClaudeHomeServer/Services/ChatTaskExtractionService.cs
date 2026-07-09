@@ -10,7 +10,8 @@ namespace ClaudeHomeServer.Services;
 // на фронте через обычный tasks-API по выбору пользователя.
 public sealed class ChatTaskExtractionService(
     SessionManager sessions, ProjectManager projects,
-    Llm.OneShotClaudeRunner runner, FeatureFlagService flags, IConfiguration config)
+    Llm.OneShotClaudeRunner runner, FeatureFlagService flags, IConfiguration config,
+    ILogger<ChatTaskExtractionService> log)
 {
     private const int TranscriptBudget = 30_000;
     private static readonly TimeSpan LlmTimeout = TimeSpan.FromSeconds(120);
@@ -38,21 +39,35 @@ public sealed class ChatTaskExtractionService(
             runner.NormalizeModel(config["Tasks:AiModel"] ?? config["Notes:AiModel"] ?? "haiku"),
             LlmTimeout, ct);
 
-        return new ExtractTasksResult(session.ProjectId, ParseTasks(raw));
+        var result = ParseTasks(raw);
+        log.LogInformation(
+            "extract-tasks: сессия {SessionId}, история {HistCount} сообщ., транскрипт {Len} симв., распознано {Count} задач",
+            sessionId, history.Count, transcript.Length, result.Count);
+
+        return new ExtractTasksResult(session.ProjectId, result);
     }
 
     internal static string BuildPrompt(string transcript)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Ниже — транскрипт рабочей сессии с Claude Code. Выдели из него конкретные " +
-                      "задачи-действия (action items), которые ещё предстоит сделать: договорённости, " +
-                      "следующие шаги, TODO, обещанные доработки. НЕ включай уже выполненное в сессии.");
+        sb.AppendLine("Ниже — транскрипт беседы пользователя с ассистентом. Выпиши практические дела, " +
+                      "которые пользователю имеет смысл занести в список задач по итогам разговора.");
+        sb.AppendLine("Включай:");
+        sb.AppendLine("- явные договорённости, TODO и обещанные доработки;");
+        sb.AppendLine("- конкретные действия и следующие шаги, которые советует ассистент;");
+        sb.AppendLine("- то, что пользователь сам собирается сделать.");
+        sb.AppendLine("НЕ включай: чисто развлекательные/тестовые реплики (ASCII-арт, «нарисуй…»), " +
+                      "общие рассуждения без действия и уже завершённое.");
+        sb.AppendLine("Формулируй каждую задачу коротко, в повелительном наклонении, по-русски.");
+        sb.AppendLine();
+        sb.AppendLine("Пример: если обсуждали, как почистить бассейн, подходящие задачи — " +
+                      "«Убрать листья сачком», «Почистить стенки щёткой», «Проверить pH и уровень хлора».");
+        sb.AppendLine();
         sb.AppendLine("Для каждой задачи верни объект:");
-        sb.AppendLine("  title — краткая формулировка в повелительном наклонении, по-русски (обязательно);");
-        sb.AppendLine("  due — дата в формате YYYY-MM-DD, если в тексте явно назван срок, иначе null;");
-        sb.AppendLine("  priority — one of low|medium|high|urgent, если очевидно из контекста, иначе null.");
-        sb.AppendLine("Ответь ТОЛЬКО JSON-массивом таких объектов, без пояснений и markdown-обёртки. " +
-                      "Если задач нет — верни [].");
+        sb.AppendLine("  title — краткая формулировка в повелительном наклонении (обязательно);");
+        sb.AppendLine("  due — дата YYYY-MM-DD, если в тексте явно назван срок, иначе null;");
+        sb.AppendLine("  priority — one of low|medium|high|urgent, если очевидно, иначе null.");
+        sb.AppendLine("Ответь ТОЛЬКО JSON-массивом таких объектов, без пояснений. Если подходящих дел нет — [].");
         sb.AppendLine();
         sb.AppendLine("Транскрипт:");
         sb.AppendLine(transcript);

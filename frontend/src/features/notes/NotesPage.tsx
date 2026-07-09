@@ -209,7 +209,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // --- Содержимое режима «Заметки» ---
   const listPane = showSemantic
     ? <SemanticResults hits={semanticHits} selectedId={selectedId} onSelect={selectNote} />
-    : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote}
+    : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote} isMobile={isMobile}
         onMoved={(oldId, newId) => { if (selectedId === oldId) setSelectedId(newId); }}
         onCreateInFolder={(source, folder) => setNewDialog({ source, folder })}
         onDeleted={ids => { if (selectedId && ids.includes(selectedId)) setSelectedId(null); }}

@@ -93,6 +93,13 @@ const noteFolderOf = (p: string) => {
   return n === 'notes' ? '' : n.slice('notes/'.length);
 };
 
+// Отображаемый путь: vault заметок показываем как «Заметки», а не «notes»
+const notesDisplayPath = (p: string) => {
+  const n = normPath(p);
+  if (n === 'notes') return 'Заметки';
+  return n.startsWith('notes/') ? 'Заметки/' + n.slice('notes/'.length) : p;
+};
+
 // В vault заметок допустимы только .md и изображения (вложения ![[img]])
 const NOTES_OK_EXT = /\.(md|png|jpe?g|gif|svg|webp)$/i;
 const allowedInNotes = (name: string) => NOTES_OK_EXT.test(name);
@@ -941,7 +948,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       let acc = '';
       for (const part of parts) {
         acc = acc ? `${acc}/${part}` : part;
-        crumbs.push({ label: part, path: acc });
+        // Корень vault заметок в UI называется «Заметки», а не «notes»
+        const label = normPath(acc) === 'notes' ? 'Заметки' : part;
+        crumbs.push({ label, path: acc });
       }
     }
     return crumbs;
@@ -1403,7 +1412,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {online && !isMobile && (
           <div style={{ marginTop: 5, fontSize: 11.5, color: C.textMuted, fontFamily: FONT.mono, paddingLeft: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-            {createInDir ? <span title={createInDir}>{createInDir}</span> : <span style={{ fontStyle: 'italic' }}>корень проекта</span>}
+            {createInDir ? <span title={createInDir}>{notesDisplayPath(createInDir)}</span> : <span style={{ fontStyle: 'italic' }}>корень проекта</span>}
           </div>
         )}
       </div>

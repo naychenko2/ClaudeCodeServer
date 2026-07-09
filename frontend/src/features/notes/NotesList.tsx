@@ -3,6 +3,7 @@ import type { NoteSummary } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNoteFolders } from '../../lib/notes';
 import { C, FONT, R, SHADOW } from '../../lib/design';
+import { IconButton } from '../../components/ui';
 import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconTrash } from './shared';
 
 // Иконка «Новая папка» для меню (папка с плюсом)
@@ -51,10 +52,12 @@ function buildTree(notes: NoteSummary[], folderPaths: string[] = []): FolderNode
 
 // Список заметок: источники → дерево папок → заметки. Перенос — drag&drop
 // заметки на папку/заголовок источника (в пределах источника).
-export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFolder, onDeleted, onIdsRemapped }: {
+export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFolder, onDeleted, onIdsRemapped, isMobile }: {
   notes: NoteSummary[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  // Мобайл: инлайн-иконки скрыты, действия — через long-press контекстное меню (как в файлах)
+  isMobile?: boolean;
   // Заметка перенесена (id сменился) — вызывающий обновляет выбор
   onMoved?: (oldId: string, newId: string) => void;
   // «+» на папке: создать заметку сразу в этой папке источника
@@ -73,6 +76,8 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
 
   // Свёрнутые папки (ключ source|path); по умолчанию всё раскрыто
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Наведённая строка (ключ folder=source|path, note=note.id) — иконки только при ховере
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);   // source|path
   // Переименование папки: ключ source|path + редактируемый полный путь
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -229,12 +234,15 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
 
   const renderNote = (n: NoteSummary, depth: number) => {
     const active = n.id === selectedId;
+    const hovered = hoveredKey === n.id;
     return (
-      <button
+      <div
         key={n.id}
         onClick={() => onSelect(n.id)}
         onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'note', source: n.source, note: n }); }}
         {...longPress((x, y) => setCtxMenu({ x, y, kind: 'note', source: n.source, note: n }))}
+        onMouseEnter={() => setHoveredKey(n.id)}
+        onMouseLeave={() => setHoveredKey(prev => prev === n.id ? null : prev)}
         title={n.title}
         draggable
         onDragStart={e => {
@@ -243,16 +251,25 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           e.dataTransfer.effectAllowed = 'move';
         }}
         style={{
-          width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
-          padding: `5px 8px 5px ${24 + depth * 14}px`, borderRadius: R.sm, fontFamily: FONT.sans,
-          fontSize: 12.5, marginBottom: 1,
-          background: active ? C.accentMuted : 'transparent',
-          color: active ? C.textHeading : C.textSecondary,
-          fontWeight: active ? 500 : 400,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
+          padding: `2px 6px 2px ${24 + depth * 14}px`, borderRadius: R.sm, marginBottom: 1,
+          background: active ? C.accentMuted : (hovered && !isMobile ? C.bgSelected : 'transparent'),
           WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none',
         }}
-      >{n.title}</button>
+      >
+        <span style={{
+          flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: 12.5,
+          color: active ? C.textHeading : C.textSecondary, fontWeight: active ? 500 : 400,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '3px 0',
+        }}>{n.title}</span>
+        {/* Действия — только при ховере на десктопе (на мобиле — long-press меню) */}
+        {!isMobile && hovered && (
+          <IconButton size="xs" tone="danger" title="Удалить заметку"
+            onClick={e => { e.stopPropagation(); void deleteNote(n); }}>
+            <IconTrash />
+          </IconButton>
+        )}
+      </div>
     );
   };
 
@@ -292,20 +309,12 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
     onDeleted?.(all.map(n => n.id));
   };
 
-  const iconBtn = (title: string, onClick: () => void, children: React.ReactNode) => (
-    <span role="button" tabIndex={0} title={title}
-      onClick={e => { e.stopPropagation(); onClick(); }}
-      onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); onClick(); } }}
-      style={{ display: 'flex', alignItems: 'center', color: C.textMuted, cursor: 'pointer', padding: '0 2px' }}>
-      {children}
-    </span>
-  );
-
   const renderFolder = (source: string, node: FolderNode, depth: number): React.ReactNode => {
     const key = `${source}|${node.path}`;
     const isCollapsed = collapsed.has(key);
     const isDrop = dropTarget === key;
     const isRenaming = renaming === key;
+    const hovered = hoveredKey === key;
     return (
       <div key={key}>
         {isRenaming ? (
@@ -329,10 +338,12 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
             />
           </div>
         ) : (
-        <button
+        <div
           onClick={() => setCollapsed(prev => { const next = new Set(prev); isCollapsed ? next.delete(key) : next.add(key); return next; })}
           onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'folder', source, node }); }}
           {...longPress((x, y) => setCtxMenu({ x, y, kind: 'folder', source, node }))}
+          onMouseEnter={() => setHoveredKey(key)}
+          onMouseLeave={() => setHoveredKey(prev => prev === key ? null : prev)}
           draggable
           onDragStart={e => {
             e.dataTransfer.setData('application/x-folder-path', node.path);
@@ -341,25 +352,33 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           }}
           {...dropProps(source, node.path)}
           style={{
-            width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: `4px 8px 4px ${10 + depth * 14}px`, borderRadius: R.sm, fontFamily: FONT.sans,
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+            padding: `1px 6px 1px ${10 + depth * 14}px`, borderRadius: R.sm, fontFamily: FONT.sans,
             fontSize: 12, fontWeight: 500, color: C.textSecondary,
-            background: isDrop ? C.accentMuted : 'transparent',
+            background: isDrop ? C.accentMuted : (hovered && !isMobile ? C.bgSelected : 'transparent'),
             boxShadow: isDrop ? `inset 0 0 0 1.5px ${C.accent}` : 'none',
+            WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none',
           }}
         >
           <span style={{ fontSize: 8, color: C.textMuted, width: 8 }}>{isCollapsed ? '▸' : '▾'}</span>
           <span style={{ color: C.accent, display: 'flex' }}><IconFolder /></span>
-          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</span>
-          {onCreateInFolder && iconBtn('Новая заметка в папке', () => onCreateInFolder(source, node.path),
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>)}
-          {iconBtn('Переименовать/перенести папку', () => { setRenaming(key); setRenameValue(node.path); },
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>)}
-          {iconBtn('Удалить папку', () => void deleteFolder(source, node),
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></svg>)}
-          <span style={{ fontSize: 10, color: C.textMuted }}>{countNotes(node)}</span>
-        </button>
+          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '3px 0' }}>{node.name}</span>
+          {/* Действия — только при ховере на десктопе; иначе счётчик (на мобиле — long-press) */}
+          {!isMobile && hovered ? (
+            <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+              {onCreateInFolder && (
+                <IconButton size="xs" tone="accent" title="Новая заметка в папке"
+                  onClick={e => { e.stopPropagation(); onCreateInFolder(source, node.path); }}><IconPlus /></IconButton>
+              )}
+              <IconButton size="xs" title="Переименовать/перенести папку"
+                onClick={e => { e.stopPropagation(); setRenaming(key); setRenameValue(node.path); }}><IconPencil /></IconButton>
+              <IconButton size="xs" tone="danger" title="Удалить папку"
+                onClick={e => { e.stopPropagation(); void deleteFolder(source, node); }}><IconTrash /></IconButton>
+            </span>
+          ) : (
+            <span style={{ fontSize: 10, color: C.textMuted }}>{countNotes(node)}</span>
+          )}
+        </div>
         )}
         {!isCollapsed && (
           <>

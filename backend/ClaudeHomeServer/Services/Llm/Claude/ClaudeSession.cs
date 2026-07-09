@@ -62,6 +62,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // Провайдер правил разрешений проекта — резолвим каждый запрос (правила могут меняться)
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
     private readonly TasksMcpContext? _tasksMcp;
+    private readonly NotesMcpContext? _notesMcp;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -81,6 +82,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _wkStore = workspaceStore;
         _permissionRules = context.PermissionRules;
         _tasksMcp = context.TasksMcp;
+        _notesMcp = context.NotesMcp;
         _disallowedTools = disallowedTools ?? [];
         _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage);
     }
@@ -93,9 +95,11 @@ public class ClaudeSession : ILlmSessionAdapter
     {
         var tasksServerPath = _tasksMcp is not null ? TasksServerLocator.FindTasksServerPath() : null;
         var hasTasks = tasksServerPath is not null;
+        var notesServerPath = _notesMcp is not null ? NotesServerLocator.FindNotesServerPath() : null;
+        var hasNotes = notesServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var userServers = LoadUserScopeMcpServers();
-        if (!hasTasks && !hasDataset && userServers is null) return null;
+        if (!hasTasks && !hasNotes && !hasDataset && userServers is null) return null;
 
         try
         {
@@ -139,6 +143,21 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["TASKS_API_URL"] = _tasksMcp!.ApiUrl,
                         ["TASKS_API_TOKEN"] = _tasksMcp.Token,
                         ["TASKS_PROJECT_ID"] = _tasksMcp.ProjectId ?? "",
+                    },
+                };
+            }
+
+            if (hasNotes)
+            {
+                servers["notes"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["command"] = "node",
+                    ["args"] = new System.Text.Json.Nodes.JsonArray { notesServerPath! },
+                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["NOTES_API_URL"] = _notesMcp!.ApiUrl,
+                        ["NOTES_API_TOKEN"] = _notesMcp.Token,
+                        ["NOTES_PROJECT_ID"] = _notesMcp.ProjectId ?? "",
                     },
                 };
             }
@@ -504,6 +523,23 @@ public class ClaudeSession : ILlmSessionAdapter
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? tasksHint
                     : basePrompt + "\n\n" + tasksHint;
+            }
+
+            // Подсказка про базу заметок — только когда notes-server подключён
+            if (_notesMcp is not null)
+            {
+                var scope = _notesMcp.ProjectId is not null
+                    ? "По умолчанию создавай заметки в notes/ текущего проекта; source=\"personal\" — в личный vault."
+                    : "По умолчанию создавай заметки в личный vault пользователя; source=<projectId> — в notes/ проекта.";
+                var notesHint =
+                    "У пользователя есть база знаний «Заметки» (Obsidian-совместимая: markdown-файлы со связями [[Заголовок]], " +
+                    "обратными ссылками и графом). Веди её через MCP-инструменты mcp__notes__* (notes_list, notes_search, " +
+                    "notes_read, notes_create, notes_update, notes_backlinks, notes_graph, notes_delete). " + scope + " " +
+                    "Связывай заметки друг с другом через [[Заголовок другой заметки]] — по этим ссылкам строится граф знаний. " +
+                    "Когда пользователь просит записать/законспектировать/связать мысль или найти по заметкам — используй эти инструменты.";
+                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                    ? notesHint
+                    : basePrompt + "\n\n" + notesHint;
             }
 
             string? agentPrompt = null;

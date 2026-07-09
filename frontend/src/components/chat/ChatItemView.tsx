@@ -5,6 +5,7 @@ import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { ChatProjectContext, useAssistantName } from './contexts';
+import { IconNotes } from '../../features/notes/shared';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView } from './ToolUseView';
 import { AskQuestionView } from './AskQuestionView';
@@ -390,6 +391,11 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
 
     case 'file_changed': {
       const fileName = relPath(item.path, project?.rootPath);
+      // Заметка (notes/*.md): подпись «Заметка · …», клик ведёт в раздел «Заметки»
+      const isNote = /(^|\/)notes\/[^/]*\.md$/i.test(item.path);
+      const noteTitle = item.path.split(/[\\/]/).pop()!.replace(/\.md$/i, '');
+      const openNote = () => { sessionStorage.setItem('cc_pending_note_title', noteTitle); window.dispatchEvent(new Event('cc-open-note')); };
+      const openAction = isNote ? openNote : (onOpenFile ? () => onOpenFile(item.path) : undefined);
       return (
         <div style={{
           border: `1px solid ${C.borderLight}`, borderRadius: 14, overflow: 'hidden',
@@ -397,10 +403,10 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         }}>
           <div style={{
             display: 'flex', alignItems: 'center', gap: 11,
-            padding: '12px 13px', cursor: onOpenFile ? 'pointer' : 'default',
+            padding: '12px 13px', cursor: openAction ? 'pointer' : 'default',
             borderBottom: `1px solid ${C.divider}`,
           }}
-            onClick={() => onOpenFile?.(item.path)}
+            onClick={openAction}
           >
             <div style={{
               width: 28, height: 28, borderRadius: 8,
@@ -408,13 +414,15 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               flexShrink: 0,
             }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-              </svg>
+              {isNote
+                ? <IconNotes size={14} />
+                : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                  </svg>}
             </div>
             <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {fileName}
+              {isNote ? `Заметка · ${noteTitle}` : fileName}
             </span>
             <span style={{ fontSize: 11.5, color: C.diffAddText, fontFamily: FONT.mono }}>
               +{item.added}
@@ -424,15 +432,15 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             </span>
           </div>
           <div style={{ padding: '8px 13px', display: 'flex', gap: 6 }}>
-            {onOpenFile && (
+            {openAction && (
               <button
-                onClick={() => onOpenFile(item.path)}
+                onClick={openAction}
                 style={{
                   fontSize: 12, padding: '4px 10px', borderRadius: 6,
                   border: `1px solid ${C.borderLight}`, background: C.bgWhite, cursor: 'pointer', color: C.textPrimary,
                 }}
               >
-                Открыть
+                {isNote ? 'Открыть заметку' : 'Открыть'}
               </button>
             )}
             {online && onRevert && (

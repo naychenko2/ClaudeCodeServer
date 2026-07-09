@@ -1,0 +1,443 @@
+import { useEffect, useMemo, useState } from 'react';
+import type { AuthState, NoteDetail, NoteSemanticHit, NoteSource, NoteSummary, NoteTemplate } from '../../types';
+import type { HubTab } from '../../components/HubTabs';
+import { HubHeader } from '../../components/HubHeader';
+import { PillSwitch } from '../../components/Toolbar';
+import { Modal } from '../../components/ui';
+import { C, FONT, R } from '../../lib/design';
+import { api } from '../../lib/api';
+import { useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes } from '../../lib/notes';
+import { parseHash } from '../../lib/nav';
+import { NotesList } from './NotesList';
+import { NoteView } from './NoteView';
+import { NotesGraph } from './NotesGraph';
+import { EmptyState } from '../../components/EmptyState';
+import { Splitter } from '../../components/ui';
+import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot, usePanelWidth } from './shared';
+
+function useIsMobile(): boolean {
+  const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const h = (e: MediaQueryListEvent) => setM(e.matches);
+    mq.addEventListener('change', h);
+    return () => mq.removeEventListener('change', h);
+  }, []);
+  return m;
+}
+
+type Mode = 'notes' | 'graph';
+
+export function NotesPage({ auth, onLogout, onHubTab }: {
+  auth: AuthState;
+  onLogout: () => void;
+  onHubTab: (t: HubTab) => void;
+}) {
+  const isMobile = useIsMobile();
+  const notes = useNotes();
+  const [mode, setMode] = useState<Mode>('notes');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  // Диалог создания: null — закрыт; поля — préfill (создание из «+» на папке)
+  const [newDialog, setNewDialog] = useState<{ source?: string; folder?: string } | null>(null);
+  const [mobileView, setMobileView] = useState<'list' | 'note'>('list');
+  // Фильтр источников для графа (null = все), с сохранением между заходами
+  const [hiddenSources, setHiddenSources] = useState<Set<string>>(() => {
+    try { const raw = localStorage.getItem('cc_notes_hidden_sources'); return raw ? new Set<string>(JSON.parse(raw)) : new Set(); }
+    catch { return new Set(); }
+  });
+  useEffect(() => {
+    localStorage.setItem('cc_notes_hidden_sources', JSON.stringify([...hiddenSources]));
+  }, [hiddenSources]);
+  // Фильтр графа по тегам (пусто = все); теги собираются из заметок
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+
+  // Перетаскиваемая ширина сайдбара (персист, как в Workspace)
+  const [listWidth, listDragging, startListDrag] = usePanelWidth('cc_notes_list_width', 260, 210, 420);
+
+  useEffect(() => { void ensureNotesLoaded(); }, []);
+
+  // Диплинк #/notes/{id}
+  useEffect(() => {
+    const t = parseHash();
+    if (t?.screen === 'notes' && t.noteId) { setSelectedId(t.noteId); setMobileView('note'); }
+  }, []);
+
+  // Открытие заметки по заголовку (из [[wikilink]] в файлах/чате). Заголовок в
+  // sessionStorage; ждём загрузки списка (deps: notes) и открываем по совпадению.
+  useEffect(() => {
+    const consume = () => {
+      // По id (из графа сайдбара FileViewer) — приоритетнее
+      const id = sessionStorage.getItem('cc_pending_note_id');
+      if (id) { sessionStorage.removeItem('cc_pending_note_id'); setSelectedId(id); setMobileView('note'); return; }
+      const title = sessionStorage.getItem('cc_pending_note_title');
+      if (!title) return;
+      const n = notes.find(x => x.title.trim().toLowerCase() === title.trim().toLowerCase());
+      if (n) { sessionStorage.removeItem('cc_pending_note_title'); setSelectedId(n.id); setMobileView('note'); }
+    };
+    consume();
+    window.addEventListener('cc-open-note', consume);
+    return () => window.removeEventListener('cc-open-note', consume);
+  }, [notes]);
+
+  const existingTitles = useMemo(() => existingTitleSet(notes), [notes]);
+
+  // Поиск: точный (по заголовку/тексту/тегам, серверный) или «по смыслу» (Dify RAG).
+  const [semanticAvailable, setSemanticAvailable] = useState(false);
+  const [searchMode, setSearchMode] = useState<'exact' | 'semantic'>('exact');
+  useEffect(() => { api.notes.caps().then(c => setSemanticAvailable(c.semantic)).catch(() => {}); }, []);
+
+  const [results, setResults] = useState<NoteSummary[] | null>(null);
+  const [semanticHits, setSemanticHits] = useState<NoteSemanticHit[] | null>(null);
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) { setResults(null); setSemanticHits(null); return; }
+    const t = setTimeout(() => {
+      if (searchMode === 'semantic' && semanticAvailable)
+        api.notes.semantic(q).then(r => setSemanticHits(r.results)).catch(() => setSemanticHits([]));
+      else
+        api.notes.list(undefined, q).then(setResults).catch(() => {});
+    }, searchMode === 'semantic' ? 450 : 250);
+    return () => clearTimeout(t);
+  }, [query, searchMode, semanticAvailable]);
+  const listed = results ?? notes;
+  const showSemantic = searchMode === 'semantic' && query.trim().length > 0;
+
+  const sources = useMemo(() => {
+    const m = new Map<string, string>();
+    notes.forEach(n => m.set(n.source, n.sourceLabel));
+    return [...m.entries()].map(([key, label]) => ({ key, label }));
+  }, [notes]);
+
+  // Все теги заметок — для фильтра графа
+  const allTags = useMemo(() => {
+    const s = new Set<string>();
+    notes.forEach(n => n.tags.forEach(t => s.add(t)));
+    return [...s].sort((a, b) => a.localeCompare(b, 'ru'));
+  }, [notes]);
+
+  const sourceFilter = useMemo(
+    () => hiddenSources.size === 0 ? null : new Set(sources.map(s => s.key).filter(k => !hiddenSources.has(k))),
+    [hiddenSources, sources],
+  );
+
+  const selectNote = (id: string) => { setSelectedId(id); setMobileView('note'); };
+
+  // Клик по [[wikilink]]: найти заметку по заголовку, иначе предложить создать
+  const onWikilink = (target: string) => {
+    const name = target.split('/').pop()!.split('#')[0].trim().toLowerCase();
+    const found = notes.find(n => n.title.trim().toLowerCase() === name);
+    if (found) { selectNote(found.id); return; }
+    if (window.confirm(`Заметки «${target}» ещё нет. Создать?`)) {
+      const source = selectedId ? notes.find(n => n.id === selectedId)?.source ?? 'personal' : 'personal';
+      void api.notes.create({ title: target.split('/').pop()!.split('#')[0].trim(), source })
+        .then(n => { bumpNotes(); selectNote(n.id); });
+    }
+  };
+
+  // Дневниковая заметка на сегодня (get-or-create по локальной дате устройства)
+  const openDaily = () => {
+    const d = new Date();
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    void api.notes.daily(iso).then(n => { bumpNotes(); setMode('notes'); selectNote(n.id); });
+  };
+
+  const askClaude = (note: NoteDetail) => {
+    sessionStorage.setItem('cc_pending_chat_prompt', `Про мою заметку «${note.title}»:\n\n${note.content}\n\n`);
+    // Событие для уже смонтированного композера + переключение на «Чаты»
+    window.dispatchEvent(new Event('cc-compose-prefill'));
+    onHubTab('chats');
+  };
+
+  // Панель управления в сайдбаре (как у Workspace: всё управление разделом — слева)
+  const sidebarControls = (
+    <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 8, flex: 'none' }}>
+      <PillSwitch<Mode>
+        fill
+        value={mode} onChange={setMode}
+        options={[{ value: 'notes', label: 'Заметки' }, { value: 'graph', label: 'Граф' }]}
+      />
+      {mode === 'notes' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, height: 30, padding: '0 8px', color: C.textMuted }}>
+          <IconSearch />
+          <input
+            value={query} onChange={e => setQuery(e.target.value)}
+            placeholder="Поиск…"
+            title="Операторы: tag:идея source:Личный"
+            style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: FONT.sans, fontSize: 12.5, color: C.textHeading }}
+          />
+          {semanticAvailable && (
+            <button
+              onClick={() => setSearchMode(m => m === 'exact' ? 'semantic' : 'exact')}
+              title={searchMode === 'semantic' ? 'Поиск по смыслу (семантический) — включён' : 'Точный поиск по тексту — включён; клик = по смыслу'}
+              style={{
+                fontSize: 10, fontWeight: 600, border: 'none', borderRadius: 5, padding: '3px 6px',
+                cursor: 'pointer', fontFamily: FONT.sans, flex: 'none',
+                background: searchMode === 'semantic' ? C.accent : C.bgSelected,
+                color: searchMode === 'semantic' ? C.onAccent : C.textMuted,
+              }}>смысл</button>
+          )}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button onClick={() => setNewDialog({})} style={{ ...newBtn, flex: 1, justifyContent: 'center' }}>
+          <IconPlus />Новая
+        </button>
+        <button onClick={openDaily} title="Дневниковая заметка на сегодня"
+          style={{ ...newBtn, background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}` }}>
+          <IconCalendarDay />
+        </button>
+      </div>
+    </div>
+  );
+
+  // Фильтры графа (содержимое сайдбара в режиме «Граф»)
+  const graphFilters = (
+    <div style={{ padding: '12px 12px' }}>
+      <div style={{ fontSize: 10.5, letterSpacing: '.05em', textTransform: 'uppercase', color: C.textMuted, fontWeight: 600, marginBottom: 10 }}>Источники</div>
+      {sources.map(s => {
+        const on = !hiddenSources.has(s.key);
+        return (
+          <button key={s.key} onClick={() => setHiddenSources(prev => { const next = new Set(prev); on ? next.add(s.key) : next.delete(s.key); return next; })}
+            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '5px 4px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: FONT.sans, fontSize: 12.5, color: on ? C.textPrimary : C.textMuted, opacity: on ? 1 : 0.55 }}>
+            <SourceDot source={s.key} />
+            <span style={{ flex: 1, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.label}</span>
+          </button>
+        );
+      })}
+      {allTags.length > 0 && (
+        <>
+          <div style={{ fontSize: 10.5, letterSpacing: '.05em', textTransform: 'uppercase', color: C.textMuted, fontWeight: 600, margin: '16px 0 8px' }}>Теги</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+            {allTags.map(t => {
+              const on = selectedTags.has(t);
+              return (
+                <button key={t}
+                  onClick={() => setSelectedTags(prev => { const next = new Set(prev); on ? next.delete(t) : next.add(t); return next; })}
+                  style={{
+                    fontSize: 11, fontWeight: 500, borderRadius: R.sm, padding: '2px 7px', cursor: 'pointer',
+                    fontFamily: FONT.sans, border: 'none',
+                    background: on ? C.accent : C.bgSelected,
+                    color: on ? C.onAccent : C.textSecondary,
+                  }}>#{t}</button>
+              );
+            })}
+          </div>
+        </>
+      )}
+      <div style={{ fontSize: 10.5, color: C.textMuted, lineHeight: 1.5, marginTop: 16 }}>
+        Узел — заметка. Размер = число связей. Кольцо = выбранная. Наведи — подсветятся соседи.
+      </div>
+    </div>
+  );
+
+  // --- Содержимое режима «Заметки» ---
+  const listPane = showSemantic
+    ? <SemanticResults hits={semanticHits} selectedId={selectedId} onSelect={selectNote} />
+    : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote}
+        onMoved={(oldId, newId) => { if (selectedId === oldId) setSelectedId(newId); }}
+        onCreateInFolder={(source, folder) => setNewDialog({ source, folder })}
+        onDeleted={ids => { if (selectedId && ids.includes(selectedId)) setSelectedId(null); }}
+        onIdsRemapped={map => {
+          const hit = selectedId && map.find(m => m.oldId === selectedId);
+          if (hit) setSelectedId(hit.newId);
+        }} />;
+
+  // Сайдбар целиком: управление сверху, ниже — список (режим «Заметки») или фильтры («Граф»)
+  const sidebar = (
+    <>
+      {sidebarControls}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        {mode === 'notes' ? listPane : graphFilters}
+      </div>
+    </>
+  );
+
+  // Центральная зона: заметка/пустое состояние или граф
+  const centerPane = mode === 'graph'
+    ? <NotesGraph sourceFilter={sourceFilter} selectedId={selectedId} onSelectNode={selectNote}
+        maxNodes={isMobile ? 40 : undefined} tagFilter={selectedTags.size ? selectedTags : null} />
+    : selectedId
+      ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink}
+          onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} isMobile={isMobile}
+          onBack={isMobile ? () => setMobileView('list') : undefined}
+          onDeleted={() => { setSelectedId(null); setMobileView('list'); }} />
+      : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <EmptyState icon={<IconNotes />} title="Заметки"
+            subtitle={notes.length ? 'Выбери заметку слева или создай новую' : 'Создай первую заметку или попроси Claude законспектировать разговор'}
+            action={<button onClick={() => setNewDialog({})} style={newBtn}><IconPlus />Новая заметка</button>} />
+        </div>;
+
+  const body = isMobile ? (
+    // Мобайл: один экран за раз — сайдбар (список/фильтры+граф) ↔ заметка
+    mode === 'graph'
+      ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>
+          {sidebarControls}
+          <div style={{ flex: 1, minHeight: 0, background: C.bgMain }}>{centerPane}</div>
+        </div>
+      : (mobileView === 'list' || !selectedId)
+        ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
+        // Возврат к списку — стрелкой/заголовком в тулбаре заметки (onBack), как у файлов
+        : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
+  ) : (
+    // Десктоп: сайдбар (управление + список/фильтры) | центр — как в Workspace
+    <div style={{ height: '100%', display: 'flex' }}>
+      <div style={{ width: listWidth, flex: 'none', background: C.bgPanel, display: 'flex', flexDirection: 'column' }}>
+        {sidebar}
+      </div>
+      <Splitter active={listDragging} onMouseDown={startListDrag} />
+      <div style={{ flex: 1, minWidth: 0 }}>{centerPane}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <HubHeader value="notes" onTab={onHubTab} auth={auth} onLogout={onLogout} />
+      <div style={{ flex: 1, minHeight: 0 }}>
+        {body}
+      </div>
+      {newDialog && <NewNoteDialog defaults={newDialog} onClose={() => setNewDialog(null)} onCreated={id => { setNewDialog(null); bumpNotes(); selectNote(id); }} />}
+    </div>
+  );
+}
+
+const newBtn: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 5, background: C.accent, color: C.onAccent,
+  border: 'none', borderRadius: R.md, padding: '7px 12px', fontSize: 13, fontWeight: 500,
+  cursor: 'pointer', fontFamily: FONT.sans, flex: 'none',
+};
+
+// --- Диалог создания заметки ---
+
+function NewNoteDialog({ defaults, onClose, onCreated }: {
+  defaults?: { source?: string; folder?: string };
+  onClose: () => void;
+  onCreated: (id: string) => void;
+}) {
+  const notes = useNotes();
+  const [title, setTitle] = useState('');
+  const [source, setSource] = useState(defaults?.source ?? 'personal');
+  const [folder, setFolder] = useState(defaults?.folder ?? '');
+  const [sources, setSources] = useState<NoteSource[]>([{ key: 'personal', label: 'Личный' }]);
+  const [templates, setTemplates] = useState<NoteTemplate[]>([]);
+  const [templateId, setTemplateId] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.notes.sources().then(setSources).catch(() => {});
+    api.notes.templates().then(setTemplates).catch(() => {});
+  }, []);
+
+  // Существующие папки выбранного источника — для автодополнения (можно ввести новую)
+  const folders = useMemo(() => {
+    const dirs = new Set<string>();
+    notes.filter(n => n.source === source).forEach(n => {
+      const i = n.path.lastIndexOf('/');
+      if (i > 0) {
+        const dir = n.path.slice(0, i);
+        // добавляем и промежуточные уровни ("а/б" → "а", "а/б")
+        const parts = dir.split('/');
+        for (let k = 1; k <= parts.length; k++) dirs.add(parts.slice(0, k).join('/'));
+      }
+    });
+    return [...dirs].sort((a, b) => a.localeCompare(b, 'ru'));
+  }, [notes, source]);
+
+  const create = async () => {
+    if (!title.trim()) return;
+    setBusy(true);
+    try {
+      const note = await api.notes.create({
+        title: title.trim(), source, templateId: templateId || undefined,
+        folder: folder.trim() || undefined,
+      });
+      onCreated(note.id);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal width={440} title="Новая заметка" onClose={onClose}
+      footer={
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ background: 'transparent', border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '8px 16px', fontSize: 13, cursor: 'pointer', fontFamily: FONT.sans, color: C.textSecondary }}>Отмена</button>
+          <button onClick={create} disabled={busy || !title.trim()} style={{ background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.lg, padding: '8px 16px', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: FONT.sans, opacity: busy || !title.trim() ? 0.6 : 1 }}>Создать</button>
+        </div>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div>
+          <label style={fieldLabel}>Заголовок</label>
+          <input autoFocus value={title} onChange={e => setTitle(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') create(); }}
+            placeholder="Название заметки"
+            style={fieldInput} />
+        </div>
+        <div>
+          <label style={fieldLabel}>Куда</label>
+          <select value={source} onChange={e => setSource(e.target.value)} style={{ ...fieldInput, cursor: 'pointer' }}>
+            {sources.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={fieldLabel}>Папка</label>
+          <input value={folder} onChange={e => setFolder(e.target.value)}
+            list="note-folders" placeholder="Корень (или введи новую: Идеи/Черновики)"
+            style={fieldInput} />
+          <datalist id="note-folders">
+            {folders.map(f => <option key={f} value={f} />)}
+          </datalist>
+        </div>
+        {templates.length > 0 && (
+          <div>
+            <label style={fieldLabel}>Шаблон</label>
+            <select value={templateId} onChange={e => setTemplateId(e.target.value)} style={{ ...fieldInput, cursor: 'pointer' }}>
+              <option value="">Без шаблона</option>
+              {templates.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// Результаты семантического поиска: заметка + score + сниппет чанка
+function SemanticResults({ hits, selectedId, onSelect }: {
+  hits: NoteSemanticHit[] | null;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  if (hits === null)
+    return <div style={{ padding: '20px 12px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans }}>Ищу по смыслу…</div>;
+  if (hits.length === 0)
+    return <div style={{ padding: '20px 12px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans }}>Ничего близкого не нашлось</div>;
+  return (
+    <div style={{ padding: '8px 8px 20px' }}>
+      {hits.map(h => (
+        <button key={h.id} onClick={() => onSelect(h.id)}
+          style={{
+            width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
+            padding: '7px 8px', borderRadius: R.md, fontFamily: FONT.sans, marginBottom: 2,
+            background: h.id === selectedId ? C.accentMuted : 'transparent',
+          }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <SourceDot source={h.source} size={7} />
+            <span style={{ flex: 1, fontSize: 12.5, fontWeight: 500, color: C.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{h.title}</span>
+            <span style={{ fontSize: 10, fontFamily: FONT.mono, color: C.accent }}>{Math.round(h.score * 100)}%</span>
+          </span>
+          <span style={{ display: 'block', fontSize: 11, color: C.textMuted, marginTop: 2, lineHeight: 1.4,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.snippet}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const fieldLabel: React.CSSProperties = {
+  display: 'block', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.04em',
+  color: C.textMuted, marginBottom: 6,
+};
+const fieldInput: React.CSSProperties = {
+  width: '100%', boxSizing: 'border-box', background: C.bgWhite, border: `1px solid ${C.border}`,
+  borderRadius: R.xl, padding: '9px 12px', fontSize: 14, fontFamily: FONT.sans, color: C.textHeading, outline: 'none',
+};

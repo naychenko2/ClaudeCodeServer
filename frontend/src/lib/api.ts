@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -149,6 +149,63 @@ export const api = {
       request<{ subtasks: string[] }>('/tasks/ai/subtasks', {
         method: 'POST', body: JSON.stringify({ title, description, projectId: projectId ?? null }),
       }),
+  },
+
+  // Заметки (Obsidian-совместимая база знаний): .md файлы в личном vault + notes/ проектов
+  notes: {
+    list: (source?: string, q?: string) => {
+      const qs = new URLSearchParams();
+      if (source) qs.set('source', source);
+      if (q) qs.set('q', q);
+      const s = qs.toString();
+      return request<NoteSummary[]>(`/notes${s ? `?${s}` : ''}`);
+    },
+    sources: () => request<NoteSource[]>('/notes/sources'),
+    graph: () => request<NoteGraph>('/notes/graph'),
+    templates: () => request<NoteTemplate[]>('/notes/templates'),
+    // Резолв по имени вики-ссылки (+ фрагмент по якорю) — hover-preview и embeds
+    resolve: (name: string, anchor?: string) => {
+      const qs = new URLSearchParams({ name });
+      if (anchor) qs.set('anchor', anchor);
+      return request<{ note: NoteDetail; fragment: string | null }>(`/notes/resolve?${qs}`);
+    },
+    // Дневниковая заметка: date — локальная дата клиента YYYY-MM-DD
+    daily: (date: string) =>
+      request<NoteDetail>('/notes/daily', { method: 'POST', body: JSON.stringify({ date }) }),
+    caps: () => request<{ semantic: boolean }>('/notes/caps'),
+    semantic: (q: string, topK = 8) =>
+      request<{ available: boolean; results: NoteSemanticHit[] }>(
+        `/notes/semantic?q=${encodeURIComponent(q)}&topK=${topK}`),
+    reindex: () => request<{ changed: number }>('/notes/reindex', { method: 'POST' }),
+    // Переименование/перенос папки целиком (newPath — полный новый путь)
+    moveFolder: (source: string, path: string, newPath: string) =>
+      request<{ notes: { oldId: string; newId: string }[] }>('/notes/folder/move', {
+        method: 'POST', body: JSON.stringify({ source, path, newPath }),
+      }),
+    // Перенос: в папку и/или другой источник (личный vault ↔ notes/ проекта)
+    move: (id: string, folder: string | null, targetSource?: string) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/move`, {
+        method: 'POST', body: JSON.stringify({ folder, targetSource }),
+      }),
+    linkMention: (id: string, targetTitle: string) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/link-mention`, {
+        method: 'POST', body: JSON.stringify({ targetTitle }),
+      }),
+    // ✨ one-shot AI: связи, теги, конспект дня
+    suggestLinks: (id: string) =>
+      request<{ title: string; why: string }[]>(`/notes/${encodeURIComponent(id)}/suggest-links`, { method: 'POST' }),
+    suggestTags: (id: string) =>
+      request<string[]>(`/notes/${encodeURIComponent(id)}/suggest-tags`, { method: 'POST' }),
+    dailySummary: (date: string) =>
+      request<NoteDetail>('/notes/daily/summary', { method: 'POST', body: JSON.stringify({ date }) }),
+    get: (id: string) => request<NoteDetail>(`/notes/${encodeURIComponent(id)}`),
+    backlinks: (id: string) => request<NoteBacklink[]>(`/notes/${encodeURIComponent(id)}/backlinks`),
+    create: (dto: CreateNoteDto) =>
+      request<NoteDetail>('/notes', { method: 'POST', body: JSON.stringify(dto) }),
+    update: (id: string, dto: UpdateNoteDto) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dto) }),
+    delete: (id: string) =>
+      request<void>(`/notes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   },
 
   sessions: {

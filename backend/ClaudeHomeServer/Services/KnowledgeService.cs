@@ -35,6 +35,26 @@ public record DifyDatasetResponse(
 public record DifyDocumentCreateResponse(
     [property: JsonPropertyName("document")] DifyDocumentItem Document);
 
+// --- Retrieve (семантический поиск по датасету) ---
+
+public record DifyRetrieveDocument(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name);
+
+public record DifyRetrieveSegment(
+    [property: JsonPropertyName("content")] string Content,
+    [property: JsonPropertyName("document")] DifyRetrieveDocument Document);
+
+public record DifyRetrieveRecord(
+    [property: JsonPropertyName("segment")] DifyRetrieveSegment Segment,
+    [property: JsonPropertyName("score")] double Score);
+
+public record DifyRetrieveResponse(
+    [property: JsonPropertyName("records")] List<DifyRetrieveRecord> Records);
+
+// Чанк результата семантического поиска
+public record DifyRetrieveChunk(string Content, double Score, string DocumentId, string DocumentName);
+
 public class KnowledgeService
 {
     // Расширения, которые индексируем как текст (прямая отправка содержимого)
@@ -91,6 +111,51 @@ public class KnowledgeService
         client.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _cfg.ApiKey);
         return client;
+    }
+
+    // Dify настроен (ApiUrl + ApiKey) — для graceful degradation семантики заметок
+    public bool IsConfigured =>
+        !string.IsNullOrEmpty(_cfg.ApiUrl) && !string.IsNullOrEmpty(_cfg.ApiKey);
+
+    // Создание датасета по имени, без привязки к проекту (для заметок пользователя)
+    public async Task<string> CreateDatasetAsync(string name)
+    {
+        if (!IsConfigured)
+            throw new InvalidOperationException("Dify не настроен: задайте Dify:ApiUrl и Dify:ApiKey в конфигурации");
+        var client = CreateClient();
+        var resp = await client.PostAsJsonAsync("datasets", new
+        {
+            name,
+            indexing_technique = _cfg.IndexingTechnique,
+            permission = "only_me",
+        });
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<DifyDatasetResponse>()
+            ?? throw new InvalidOperationException("Пустой ответ от Dify при создании датасета");
+        return body.Id;
+    }
+
+    // Семантический поиск по датасету: чанки со score и документом-источником
+    public async Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8)
+    {
+        var client = CreateClient();
+        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/retrieve", new
+        {
+            query,
+            retrieval_model = new
+            {
+                search_method = "semantic_search",
+                reranking_enable = false,
+                top_k = topK,
+                score_threshold_enabled = false,
+            },
+        });
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<DifyRetrieveResponse>()
+            ?? throw new InvalidOperationException("Пустой ответ от Dify при поиске");
+        return body.Records
+            .Select(r => new DifyRetrieveChunk(r.Segment.Content, r.Score, r.Segment.Document.Id, r.Segment.Document.Name))
+            .ToList();
     }
 
     // Lazy-создание датасета при первом обращении; SemaphoreSlim с double-check защищает от гонки.

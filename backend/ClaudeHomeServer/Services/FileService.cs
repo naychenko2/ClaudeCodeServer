@@ -34,7 +34,14 @@ public class FileService
     public IEnumerable<FileEntry> List(string rootPath, string relativePath = "", bool showHidden = false)
     {
         var dir = SafeJoin(rootPath, relativePath);
-        if (!Directory.Exists(dir)) throw new DirectoryNotFoundException();
+        if (!Directory.Exists(dir))
+        {
+            // Виртуальная папка заметок: показываем notes/ в дереве всегда, физически
+            // она появляется при первой заметке (NotesService.Create). Раскрытие
+            // несозданной папки — пустой список, не 404.
+            if (IsNotesPath(relativePath)) return [];
+            throw new DirectoryNotFoundException();
+        }
 
         var (modified, newFiles) = GetGitStatus(rootPath);
         var entries = new List<FileEntry>();
@@ -57,7 +64,23 @@ public class FileService
                 modified.Contains(rel), IsNew: newFiles.Contains(rel)));
         }
 
+        // Папка заметок в корне проекта присутствует всегда (даже если ещё не создана
+        // физически) — vault проекта виден и до первой заметки.
+        if (string.IsNullOrEmpty(relativePath) &&
+            !entries.Any(e => e.IsDirectory && e.Name.Equals("notes", StringComparison.OrdinalIgnoreCase)))
+        {
+            entries.Insert(0, new FileEntry("notes", "notes", true, null, DateTime.UtcNow, false));
+        }
+
         return entries;
+    }
+
+    // Путь указывает на папку заметок проекта (сам notes/ или внутри неё)
+    private static bool IsNotesPath(string relativePath)
+    {
+        var norm = relativePath.Replace('\\', '/').Trim('/');
+        return norm.Equals("notes", StringComparison.OrdinalIgnoreCase) ||
+               norm.StartsWith("notes/", StringComparison.OrdinalIgnoreCase);
     }
 
     public IEnumerable<FileEntry> Search(string rootPath, string query)

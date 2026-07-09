@@ -76,13 +76,16 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
-    public async Task List_EmptyProject_Returns200EmptyArray()
+    public async Task List_EmptyProject_Returns200WithVirtualNotes()
     {
         var id = await CreateProjectAsync("EmptyList");
         var response = await _client.GetAsync($"/api/projects/{id}/files");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
-        body.GetArrayLength().Should().Be(0);
+        // Пустой проект содержит только виртуальную папку заметок «notes»
+        body.GetArrayLength().Should().Be(1);
+        body[0].GetProperty("name").GetString().Should().Be("notes");
+        body[0].GetProperty("isDirectory").GetBoolean().Should().BeTrue();
     }
 
     [Fact]

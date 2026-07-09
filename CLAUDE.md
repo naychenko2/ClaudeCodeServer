@@ -149,6 +149,44 @@ WorkingDirectory = `project.RootPath`
 (пусто = чат вне проекта → контекст личных задач). В системный промпт добавляется
 подсказка об инструментах. Задачи per-owner: токен владельца ограничивает доступ его задачами.
 
+## Заметки (Obsidian-совместимая база знаний)
+
+Раздел «Заметки» (4-й хаб-таб, фич-флаг `notes`): markdown-vault со связями
+`[[wikilinks]]`, backlinks, unlinked mentions и графом. Заметки — настоящие `.md` файлы:
+личный vault `data/notes/{userId}` + `notes/` проектов владельца (в дереве файлов папка
+всегда видна первой как «Заметки»). Единый per-owner граф; изоляция — сервисный JWT
+(как задачи).
+
+- **Бэкенд**: [NotesService.cs](backend/ClaudeHomeServer/Services/NotesService.cs) —
+  скан источников (кэш TTL 2с), парсер frontmatter/`[[links]]`/inline-`#тегов`, резолв
+  с коллизиями (`[[Проект/Имя]]`), backlinks, unlinked mentions, авто-обновление входящих
+  ссылок при переименовании, фрагменты `#заголовок`/`^блок` (ExtractFragment), шаблоны
+  `templates/` ({{title}}/{{date}}/{{time}}), daily notes `Journal/YYYY-MM-DD.md`.
+  [NotesController.cs](backend/ClaudeHomeServer/Controllers/NotesController.cs) —
+  `/api/notes/*` (CRUD, resolve, attachment, graph, sources, caps, templates, daily,
+  link-mention, semantic, reindex, suggest-links/tags, daily/summary); realtime —
+  `NotesChangedMessage` в группу user_*.
+- **Семантика (Dify RAG)**: [NotesKnowledgeService.cs](backend/ClaudeHomeServer/Services/NotesKnowledgeService.cs) —
+  dataset per-owner «{username}:notes», дифф-синхронизация по хешам (дебаунс 15с на
+  мутации), store `data/notes-knowledge.json`; `KnowledgeService.RetrieveAsync` —
+  Dify retrieve. Без `Dify:ApiKey` — тихо выключено (`caps.semantic=false`).
+- **ИИ-фичи**: [NotesAiService.cs](backend/ClaudeHomeServer/Services/NotesAiService.cs)
+  (модель `Notes:AiModel`, дефолт haiku) — предложение связей, авто-теги, конспект дня;
+  one-shot вызовы через общий [OneShotClaudeRunner.cs](backend/ClaudeHomeServer/Services/Llm/OneShotClaudeRunner.cs)
+  (на нём же TaskAiService).
+- **MCP**: [mcp/notes-server/index.js](mcp/notes-server/index.js) (без зависимостей) —
+  notes_list/search/read/create/update/backlinks/graph/delete/semantic_search; подключение
+  как tasks-server (env NOTES_API_URL/TOKEN/PROJECT_ID в BuildTurnMcpConfig + подсказка
+  в системный промпт).
+- **Фронт**: [features/notes/](frontend/src/features/notes/) — NotesPage (список по
+  источникам, поиск с операторами `tag:`/`source:` и режимом «По смыслу», граф с
+  drag-pin/фильтрами), NoteView (просмотр/правка, backlinks, упоминания с «Связать»,
+  локальный граф, ✨-кнопки), NoteEditor — CodeMirror 6 c live preview (скрытие маркеров,
+  интерактивные чекбоксы, Ctrl+клик по ссылке) и автокомплитом `[[`/`#`;
+  [MarkdownViewer.tsx](frontend/src/components/MarkdownViewer.tsx) — рендер wikilinks
+  (живая/призрачная/внешняя), embeds `![[…]]`, hover-preview; стор
+  [lib/notes.ts](frontend/src/lib/notes.ts) (realtime notes_changed).
+
 ## REST API
 
 Все эндпоинты (кроме `/api/auth/ping`) и SignalR-хаб защищены `[Authorize]` —

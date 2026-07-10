@@ -215,6 +215,8 @@ export interface Session {
   model?: string;
   effort?: string;
   agentName?: string;
+  // Временный чат: авто-удаление через N минут после последней активности (updatedAt)
+  expiresAfterMinutes?: number | null;
 }
 
 export interface FileEntry {
@@ -265,6 +267,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'redacted_thinking' }
   | { type: 'exited' }
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
+  | { type: 'chat_deleted' }
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }

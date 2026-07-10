@@ -282,6 +282,21 @@ public class SessionManager
         return true;
     }
 
+    // Включить/выключить временность чата: minutes > 0 — авто-удаление через N минут
+    // после последней активности, null — обычный чат. Включение перезапускает отсчёт (UpdatedAt)
+    public Session? SetExpiry(string sessionId, int? minutes)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        entry.Info.ExpiresAfterMinutes = minutes;
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        return entry.Info;
+    }
+
+    // Все сессии (для планировщика авто-удаления временных чатов)
+    public IReadOnlyCollection<Session> GetAll() =>
+        _sessions.Values.Select(e => e.Info).ToList();
+
     // Рабочая папка чата, принадлежащего пользователю (для загрузки вложений).
     // null — если это не project-less чат данного владельца.
     public string? GetChatRoot(string sessionId, string ownerId)
@@ -728,9 +743,27 @@ public class SessionManager
 
     public async Task DeleteAsync(string sessionId)
     {
-        if (_sessions.TryRemove(sessionId, out var entry) && entry.Process is not null)
+        if (!_sessions.TryRemove(sessionId, out var entry)) return;
+        if (entry.Process is not null)
             await entry.Process.DisposeAsync();
+        // Дочищаем историю на диске — иначе data/sessions/{id} копится мусором
+        if (entry.Info.ClaudeSessionId is string csid)
+            _history.Delete(csid);
         SaveSessions();
+        await BroadcastChatDeletedAsync(sessionId, entry.Info);
+    }
+
+    // Уведомить клиентов об удалении чата (в т.ч. авто-удалении временного) —
+    // адресация как у BroadcastStatusChangeAsync: проект или владелец чата
+    private async Task BroadcastChatDeletedAsync(string sessionId, Session info)
+    {
+        var msg = new ChatDeletedMessage() with { SessionId = sessionId };
+        var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", msg) };
+        if (info.ProjectId is string pid)
+            tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", msg));
+        else if (info.OwnerId is string oid)
+            tasks.Add(_hub.Clients.Group("user_" + oid).SendAsync("message", msg));
+        await Task.WhenAll(tasks);
     }
 
     public async Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId)

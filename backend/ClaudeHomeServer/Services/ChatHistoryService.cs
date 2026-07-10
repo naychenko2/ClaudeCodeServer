@@ -31,5 +31,17 @@ public class ChatHistoryService
         return Task.CompletedTask;
     }
 
+    // Удалить историю чата вместе с папкой сессии (при удалении чата)
+    public void Delete(string claudeSessionId)
+    {
+        var dir = Path.Combine(_basePath, claudeSessionId);
+        try
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+        catch (IOException) { /* файл занят — мусор дочистится при следующем удалении вручную */ }
+        catch (UnauthorizedAccessException) { }
+    }
+
     private string GetPath(string id) => Path.Combine(_basePath, id, "history.json");
 }

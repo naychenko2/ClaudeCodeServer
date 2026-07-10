@@ -239,6 +239,61 @@ public class SessionManagerTests : IDisposable
         await act.Should().NotThrowAsync();
     }
 
+    [Fact]
+    public async Task DeleteAsync_SessionWithHistory_RemovesHistoryDir()
+    {
+        var dir = MkProjectDir("dh");
+        var project = _projectManager.Create("DH", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        var claudeSessionId = "test-claude-session-" + Guid.NewGuid().ToString("N");
+        session.ClaudeSessionId = claudeSessionId;
+        await _historyService.SaveAsync(claudeSessionId,
+            [new ClaudeHomeServer.Protocol.StoredTextMessage("будет удалено")]);
+
+        var historyDir = Path.Combine(_tempDir, "sessions", claudeSessionId);
+        Directory.Exists(historyDir).Should().BeTrue();
+
+        await _sut.DeleteAsync(session.Id);
+
+        Directory.Exists(historyDir).Should().BeFalse();
+    }
+
+    // --- SetExpiry ---
+
+    [Fact]
+    public async Task SetExpiry_ВключаетИВыключаетВременность()
+    {
+        var dir = MkProjectDir("ex");
+        var project = _projectManager.Create("EX", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        var updated = _sut.SetExpiry(session.Id, 1440);
+        updated!.ExpiresAfterMinutes.Should().Be(1440);
+
+        updated = _sut.SetExpiry(session.Id, null);
+        updated!.ExpiresAfterMinutes.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SetExpiry_ПерезапускаетОтсчёт_UpdatedAt()
+    {
+        var dir = MkProjectDir("ex2");
+        var project = _projectManager.Create("EX2", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var before = DateTime.UtcNow;
+
+        var updated = _sut.SetExpiry(session.Id, 60);
+
+        updated!.UpdatedAt.Should().BeOnOrAfter(before);
+    }
+
+    [Fact]
+    public void SetExpiry_NonExistentSession_ReturnsNull()
+    {
+        _sut.SetExpiry("nonexistent", 60).Should().BeNull();
+    }
+
     // --- GetHistoryAsync ---
 
     [Fact]

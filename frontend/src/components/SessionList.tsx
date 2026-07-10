@@ -12,6 +12,7 @@ import { getPersonaById, usePersonas, usePersonasVersion, personaLabel } from '.
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
 import { agentDotColor } from './AgentSelector';
+import { ExpiryBadge } from './ExpiryBadge';
 
 // Время создания сессии: сегодня — часы:минуты, иначе — дата
 function sessTime(iso: string): string {
@@ -59,6 +60,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [editTarget, setEditTarget] = useState<Session | null>(null);
   const initializedRef = useRef(false);
+  // Свежие activeSession/onSelect для обработчика chat_deleted (realtime-подписка живёт дольше рендера)
+  const activeRef = useRef(activeSession);
+  activeRef.current = activeSession;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
 
   useEffect(() => { onSessionsChanged?.(sessions.length); }, [sessions.length, onSessionsChanged]);
 
@@ -120,6 +126,17 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
     const unsub = onMessage(msg => {
       if (!mounted) return;
+      // Сессия удалена на сервере (в т.ч. авто-удаление временной) — убираем из списка;
+      // если была открыта — переключаемся на первую оставшуюся
+      if (msg.type === 'chat_deleted') {
+        setSessions(prev => {
+          const updated = prev.filter(s => s.id !== msg.sessionId);
+          if (activeRef.current?.id === msg.sessionId && updated.length > 0)
+            queueMicrotask(() => onSelectRef.current(updated[0], undefined, true));
+          return updated;
+        });
+        return;
+      }
       if (msg.type !== 'status_changed') return;
       setSessions(prev => prev.map(s =>
         s.id === msg.sessionId
@@ -293,6 +310,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, lineHeight: 1, whiteSpace: 'nowrap' }}>
                 {sessTime(s.createdAt)}
               </span>
+              <ExpiryBadge session={s} />
               {online && (<div style={{ display: 'flex' }}>
               <IconButton onClick={e => { e.stopPropagation(); setEditTarget(s); }} title="Настройки чата" size="xs">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

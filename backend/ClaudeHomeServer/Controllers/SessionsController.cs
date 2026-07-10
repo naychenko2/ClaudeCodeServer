@@ -35,6 +35,11 @@ public class SessionsController(SessionManager sessions) : ControllerBase
     {
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
+        if (req.ExpiresAfterMinutes is not -1)
+        {
+            if (req.ExpiresAfterMinutes is <= 0) return BadRequest(new { error = "Срок жизни чата должен быть положительным" });
+            sessions.SetExpiry(sessionId, req.ExpiresAfterMinutes);
+        }
         try
         {
             var updated = sessions.Update(sessionId, req.Name, req.Model, req.Effort);
@@ -77,4 +82,6 @@ public class SessionsController(SessionManager sessions) : ControllerBase
 
 public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null);
 
-public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null);
+// ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать сессию постоянной;
+// N > 0 — временная, авто-удаление через N минут после последней активности
+public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1);

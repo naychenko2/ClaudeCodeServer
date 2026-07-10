@@ -44,6 +44,11 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
     {
         if (OwnedChat(id) is null) return NotFound();
         if (req.Pinned is bool pinned) sessions.SetPinned(id, pinned);
+        if (req.ExpiresAfterMinutes is not -1)
+        {
+            if (req.ExpiresAfterMinutes is <= 0) return BadRequest(new { error = "Срок жизни чата должен быть положительным" });
+            sessions.SetExpiry(id, req.ExpiresAfterMinutes);
+        }
         try
         {
             var updated = sessions.Update(id, req.Name, req.Model, req.Effort);
@@ -113,6 +118,8 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
 
 public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? Effort = null);
 
-public record UpdateChatRequest(string? Name = null, string? Model = null, string? Effort = null, bool? Pinned = null);
+// ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать чат постоянным;
+// N > 0 — временный, авто-удаление через N минут после последней активности
+public record UpdateChatRequest(string? Name = null, string? Model = null, string? Effort = null, bool? Pinned = null, int? ExpiresAfterMinutes = -1);
 
 public record SetPersonaRequest(string? PersonaId = null, string? AgentName = null);

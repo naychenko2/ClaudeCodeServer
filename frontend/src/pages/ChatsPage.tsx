@@ -99,6 +99,17 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (auth.id) joinUser(auth.id).catch(() => {});
     const off = onMessage(msg => {
       if (msg.type === 'status_changed') refresh();
+      // Чат удалён на сервере (в т.ч. авто-удаление временного) — убираем из списка,
+      // открытый чат закрываем. Side-эффекты в апдейтере идемпотентны.
+      if (msg.type === 'chat_deleted') {
+        setChats(prev => prev.filter(c => c.id !== msg.sessionId));
+        setActiveId(prev => {
+          if (prev !== msg.sessionId) return prev;
+          localStorage.removeItem(OPEN_CHAT_KEY);
+          if (getNav()?.chatId) navReplace({ screen: 'chats' });
+          return null;
+        });
+      }
     });
     return () => {
       clearInterval(poll);

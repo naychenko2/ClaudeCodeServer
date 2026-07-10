@@ -56,6 +56,8 @@ public class Session
     public string? PersonaId { get; set; }
     // Заметка-итог сессии (кнопка «Итог сессии»): повторная генерация обновляет её, а не плодит дубли
     public string? SummaryNoteId { get; set; }
+    // Временный чат: авто-удаление через N минут после последней активности (UpdatedAt). null — обычный
+    public int? ExpiresAfterMinutes { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

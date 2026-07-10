@@ -3,6 +3,7 @@ import type { Project, Session, ClaudeBilling, Persona } from '../../types';
 import { api } from '../../lib/api';
 import { modelLabel, modelProvider, assistantName, useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
+import { formatTimeLeft } from '../../lib/expiry';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { personaTitleLines } from '../../lib/personas';
 import { AGENT_COLORS, agentDotColor } from '../AgentSelector';
@@ -855,6 +856,27 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const titleEl = isMobile && onBack
     ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
     : titleBlock;
+  // Пилюля временного чата: остаток до авто-удаления; клик — быстрый путь к настройке.
+  // На мобиле не показываем — шапка и так плотная, метка есть в списке чатов
+  const expiryLeft = formatTimeLeft(session);
+  const expiryBadge = expiryLeft && !isMobile ? (
+    <button
+      type="button"
+      onClick={online ? onOpenSettings : undefined}
+      title={`Временный чат — удалится ${expiryLeft}, если не будет активности. Нажмите, чтобы изменить.`}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
+        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, flexShrink: 0,
+        cursor: online ? 'pointer' : 'default',
+        fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, whiteSpace: 'nowrap',
+      }}
+    >
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M6 2h12M6 22h12M8 2v4l4 4 4-4V2M8 22v-4l4-4 4 4v4" />
+      </svg>
+      {expiryLeft}
+    </button>
+  ) : null;
   const workflowBadge = activeWorkflow ? (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
@@ -930,7 +952,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
 
   return (
     <Toolbar isMobile={isMobile} style={personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : undefined}>
-      {openBtn}{titleEl}{workflowBadge}{costBadges}{actionBtns}
+      {openBtn}{titleEl}{expiryBadge}{workflowBadge}{costBadges}{actionBtns}
     </Toolbar>
   );
 }

@@ -91,6 +91,11 @@ public record ExitedMessage()
 public record StatusChangedMessage(string Status, string? LastMessage = null, int MessageCount = 0)
     : ServerMessage("status_changed");
 
+// Чат удалён (вручную или авто-удалением временного чата) — клиенты убирают его из списков
+// и закрывают, если он открыт. SessionId — в базовом поле.
+public record ChatDeletedMessage()
+    : ServerMessage("chat_deleted");
+
 public record UsageInfo(int InputTokens, int OutputTokens, int CacheReadTokens, int CacheCreationTokens);
 
 // Прогресс фоновых агентов Workflow (шлётся через SignalR по мере завершения)

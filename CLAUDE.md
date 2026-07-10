@@ -370,7 +370,8 @@ GET                 /api/personas/{id}/avatar          → картинка (acc
 ## Соглашения
 
 - Хранилище проектов: `data/projects.json` рядом с executable
-- Сессии только in-memory; resume через `--resume <claude-session-id>`
+- Метаданные сессий персистятся в `data/sessions.json`, история чата — `data/sessions/{claudeSessionId}/history.json`; процессы claude in-memory, resume через `--resume <claude-session-id>`
+- Временные чаты: `Session.ExpiresAfterMinutes` (null — обычный чат), тумблер + пресеты срока в «Настройках чата»; `ChatExpiryService` (тик 60с) удаляет чаты, неактивные дольше срока (кроме статусов Working/Waiting); `DeleteAsync` чистит историю на диске и шлёт `chat_deleted`
 - Path traversal защита: `FileService.SafeJoin` — все пути через неё
 - git diff/revert через `git` CLI; если не git-репо — возвращает null
 - Комментарии в коде по-русски

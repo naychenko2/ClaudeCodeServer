@@ -98,6 +98,7 @@ builder.Services.AddSingleton<SessionSummaryService>();
 builder.Services.AddSingleton<ChatTaskExtractionService>();
 builder.Services.AddSingleton<DailyBriefingService>();
 builder.Services.AddHostedService<TaskSchedulerService>();
+builder.Services.AddHostedService<ChatExpiryService>();
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");
 builder.Services.AddHttpClient("fal");

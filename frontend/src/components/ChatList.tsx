@@ -8,6 +8,7 @@ import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
 import { groupChats } from '../lib/chatGroups';
 import { getPersonaById, usePersonasVersion, personaLabel } from '../lib/personas';
+import { ExpiryBadge } from './ExpiryBadge';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { agentDotColor } from './AgentSelector';
 
@@ -153,6 +154,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                     <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, lineHeight: 1, whiteSpace: 'nowrap' }}>
                       {chatTime(chat.createdAt)}
                     </span>
+                    <ExpiryBadge session={chat} />
                     {online && (<div style={{ display: 'flex' }}>
                       <IconButton
                         onClick={e => { e.stopPropagation(); togglePin(chat); }}

@@ -7,6 +7,7 @@ import { C, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, SegmentedControl, Toggle } from './ui';
 import { ModelPicker } from './ModelPicker';
 import { isNotifySupported, isNotifyEnabled, setNotifyEnabled } from '../lib/notify';
+import { EXPIRY_PRESETS, DEFAULT_EXPIRY, expiresAt, formatExpiryDate } from '../lib/expiry';
 import { SkillsPanel } from './SkillsPanel';
 
 interface Props {
@@ -26,6 +27,9 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
   const [model, setModel] = useState(session.model ?? '');
   const [effort, setEffort] = useState(session.effort ?? '');
   const [notifyOn, setNotifyOn] = useState(isNotifyEnabled());
+  // Временный чат: тумблер + срок жизни (пресеты); при выключении срок запоминаем в стейте
+  const [temporary, setTemporary] = useState(!!session.expiresAfterMinutes);
+  const [ttl, setTtl] = useState(session.expiresAfterMinutes ?? DEFAULT_EXPIRY);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Поле effort скрываем, если провайдер модели его не поддерживает
@@ -39,6 +43,7 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
         name: name.trim() || null,
         model: model || null,
         effort: effort || null,
+        expiresAfterMinutes: temporary ? ttl : null,
       };
       // Проектная сессия обновляется через /projects/{id}/sessions,
       // чат вне проекта (нет projectId) — через /chats
@@ -107,6 +112,35 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
               <SegmentedControl value={effort} options={effortsForProvider(modelProvider(model))} onChange={setEffort} columns={3} />
             </Field>
           )}
+
+          <Field label="Временный чат" hint="Удалится сам вместе с историей, если не будет активности выбранное время.">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Toggle checked={temporary} onChange={setTemporary} />
+              <span style={{ fontSize: 13, color: C.textSecondary }}>
+                {temporary ? 'Удаляется автоматически' : 'Хранится бессрочно'}
+              </span>
+            </div>
+            {temporary && (
+              <div style={{ marginTop: 10 }}>
+                <SegmentedControl
+                  value={String(ttl)}
+                  options={EXPIRY_PRESETS.map(p => ({ value: String(p.minutes), label: p.label }))}
+                  onChange={v => setTtl(Number(v))}
+                  columns={4}
+                />
+                {(() => {
+                  // Сохранение перезапускает отсчёт, поэтому для нового срока считаем от «сейчас»
+                  const base = session.expiresAfterMinutes === ttl ? session.updatedAt : new Date().toISOString();
+                  const at = expiresAt({ updatedAt: base, expiresAfterMinutes: ttl });
+                  return at && (
+                    <p style={{ margin: '8px 0 0', fontSize: 12, color: C.textMuted }}>
+                      Удалится ~{formatExpiryDate(at)}, если не будет активности.
+                    </p>
+                  );
+                })()}
+              </div>
+            )}
+          </Field>
 
           {isNotifySupported() && (
             <Field label="Уведомления браузера" hint="Сигнал, когда нужно решение или ход завершён (если вкладка не в фокусе).">

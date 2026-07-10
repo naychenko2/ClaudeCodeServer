@@ -143,8 +143,9 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
                 <div style={{ fontSize: 11.5, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
                   Поговорить с…
                 </div>
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 360 }}>
-                  {personas.slice(0, 5).map(p => {
+                {/* Все агенты контекста: команда проекта + глобальные, без обрезки (переносятся рядами) */}
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 480 }}>
+                  {personas.map(p => {
                     const active = p.id === selectedPersonaId;
                     return (
                       <button

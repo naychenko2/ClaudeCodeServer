@@ -12,7 +12,7 @@ import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHe
 import { initConnectivity } from './lib/offline'
 import { C } from './lib/design'
 import { useOnline } from './hooks/useOnline'
-import { runOfflineSnapshot, syncProjectFiles } from './lib/sync'
+import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
 import { onFilesChanged } from './lib/signalr'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
@@ -235,7 +235,12 @@ export default function App() {
 
   // Прогрев/синхронизация: при входе и при возврате в онлайн — все проекты, начиная с текущего
   useEffect(() => {
-    if (auth && online) runOfflineSnapshot(projectIdRef.current)
+    if (auth && online) {
+      // Сперва проигрываем офлайн-очереди (задачи/заметки) на сервер, затем прогреваем кэш —
+      // независимо от того, какой раздел открыт (подписки в разделах заводятся при монтировании)
+      void drainOfflineQueues()
+      runOfflineSnapshot(projectIdRef.current)
+    }
   }, [auth, online])
 
   // Восстановленный из localStorage проект мог быть удалён на сервере (или список очищен).

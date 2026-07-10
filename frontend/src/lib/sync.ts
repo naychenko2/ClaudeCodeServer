@@ -11,7 +11,9 @@ import { api } from './api';
 import { isOnline } from './offline';
 import { idbGet, idbSet, idbKeys, idbDelete } from './idb';
 import { getFlag, FLAGS } from './featureFlags';
-import { warmNote } from './notesOffline';
+import { warmNote, drainNotesOutbox } from './notesOffline';
+import { drainTaskOutbox } from './taskOutbox';
+import './tasks';   // side-effect: configureOutbox регистрирует store-хуки очереди задач
 
 function parentDir(path: string): string {
   const i = path.lastIndexOf('/');
@@ -243,6 +245,15 @@ async function downloadSyncedContent(projectId: string, entry: { path: string; i
 }
 
 // --- Снапшот ---
+
+// Проиграть офлайн-очереди задач и заметок на сервер. Вызывается из App при переходе
+// в онлайн — независимо от того, какая страница смонтирована (иначе синк заметок/задач
+// сработал бы только если открыт их раздел, где подписка на online заводится при монтировании).
+export async function drainOfflineQueues(): Promise<void> {
+  if (!isOnline()) return;
+  if (getFlag(FLAGS.tasksOffline)) await drainTaskOutbox().catch(() => {});
+  if (getFlag(FLAGS.notesOffline)) await drainNotesOutbox().catch(() => {});
+}
 
 let _snapshotRunning = false;
 

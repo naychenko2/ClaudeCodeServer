@@ -26,8 +26,8 @@ import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
 import { resolveColumns, taskColumnKey } from '../lib/tasks';
 import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
-import { ensurePersonasLoaded } from '../lib/personas';
-import { ProjectAgentsPanel } from '../features/agents/ProjectAgentsPanel';
+import { ensurePersonasLoaded, usePersonas } from '../lib/personas';
+import { ProjectAgentsPanel, ProjectAgentPane, ProjectAgentEmpty } from '../features/agents/ProjectAgentsPanel';
 
 interface Props {
   project: Project;
@@ -112,8 +112,37 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const activeSessionRef = useRef<Session | null>(null);
   activeSessionRef.current = activeSession;
 
-  // Стор персон — чтобы SessionList показал аватар/имя агента у его сессий
+  // Стор персон — чтобы SessionList показал аватар/имя агента у его сессий,
+  // а вкладка «Агенты» знала, есть ли агенты у проекта (для пустого стейта)
   useEffect(() => { void ensurePersonasLoaded(); }, []);
+  const personas = usePersonas();
+  const projectHasAgents = personas.some(p => p.scope === 'project' && p.projectId === project.id);
+
+  // Вкладка «Агенты»: список — в сайдбаре, форма — в центральной зоне.
+  // Состояние выбора поднято сюда, чтобы синхронизировать список ↔ форму.
+  const agentsMode = leftTab === 'agents';
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [agentCreating, setAgentCreating] = useState(false);
+  const handleAgentSelect = (id: string) => {
+    setSelectedAgentId(id);
+    setAgentCreating(false);
+    if (isMobile) setMobileView('chat');
+  };
+  const handleAgentNew = () => {
+    setSelectedAgentId(null);
+    setAgentCreating(true);
+    if (isMobile) setMobileView('chat');
+  };
+  const handleAgentCleared = () => {
+    setSelectedAgentId(null);
+    setAgentCreating(false);
+    if (isMobile) setMobileView('sidebar');
+  };
+  // После создания нового агента переключаемся с «создания» на его редактирование
+  const handleAgentSelectAfterCreate = (id: string) => {
+    setSelectedAgentId(id);
+    setAgentCreating(false);
+  };
 
   const handleWorkflowRunning = useCallback((active: boolean, sessionId: string) => {
     setWorkflowRunningFor(prev => {
@@ -287,7 +316,7 @@ const windowWidth = useWindowWidth();
     { value: 'sessions', label: 'Чаты' },
     { value: 'files', label: 'Файлы' },
     { value: 'tasks', label: 'Задачи' },
-    ...(personasEnabled ? [{ value: 'agents' as LeftTab, label: 'Агенты' }] : []),
+    ...(personasEnabled ? [{ value: 'agents' as LeftTab, label: 'Команда' }] : []),
   ];
 
   // Флаг мог выключиться — не оставляем недоступную вкладку активной
@@ -687,7 +716,7 @@ const windowWidth = useWindowWidth();
         ) : leftTab === 'tasks' ? (
           <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
         ) : leftTab === 'agents' ? (
-          <ProjectAgentsPanel project={project} onOpenChat={handleOpenAgentChat} />
+          <ProjectAgentsPanel project={project} selectedId={agentCreating ? null : selectedAgentId} onSelect={handleAgentSelect} onNew={handleAgentNew} />
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
@@ -735,7 +764,7 @@ const windowWidth = useWindowWidth();
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
               : leftTab === 'agents'
-              ? <ProjectAgentsPanel project={project} onOpenChat={handleOpenAgentChat} />
+              ? <ProjectAgentsPanel project={project} selectedId={agentCreating ? null : selectedAgentId} onSelect={handleAgentSelect} onNew={handleAgentNew} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'
@@ -749,7 +778,11 @@ const windowWidth = useWindowWidth();
         </div>
         {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
-          {tasksMode
+          {agentsMode
+            ? ((selectedAgentId || agentCreating)
+                ? <ProjectAgentPane project={project} personaId={agentCreating ? null : selectedAgentId} creating={agentCreating} onOpenChat={handleOpenAgentChat} onSelectAgent={handleAgentSelectAfterCreate} onCleared={handleAgentCleared} onBack={handleAgentCleared} />
+                : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите агента</div>)
+            : tasksMode
             ? (selectedTask
                 ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={() => window.history.back()} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
                 : showProjectBoard
@@ -767,7 +800,7 @@ const windowWidth = useWindowWidth();
           </div>
         )}
         {/* Панель «Артефакты сессии» — мобайл: drawer поверх чата */}
-        {artifactsEnabled && artifactsOpen && activeSession && !openFile && (
+        {artifactsEnabled && artifactsOpen && activeSession && !openFile && !agentsMode && (
           <>
             <div onClick={() => setArtifactsOpen(false)}
               style={{ position: 'absolute', inset: 0, zIndex: 900, background: C.overlay }} />
@@ -861,6 +894,30 @@ const windowWidth = useWindowWidth();
           </div>
         );
 
+        // Вкладка «Агенты»: центральная зона = широкая форма профиля (тулбар сверху)
+        // либо пустой стейт. Сайдбар держит только список.
+        if (agentsMode) {
+          const collapsedBar = sidebarMode === 'collapsed' && (
+            <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
+              <IconButton size="md" variant="soft" onClick={() => setSidebarMode('open')} title="Открыть панель">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                  <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                </svg>
+              </IconButton>
+            </div>
+          );
+          return (
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              {collapsedBar}
+              <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                {(selectedAgentId || agentCreating)
+                  ? <ProjectAgentPane project={project} personaId={agentCreating ? null : selectedAgentId} creating={agentCreating} onOpenChat={handleOpenAgentChat} onSelectAgent={handleAgentSelectAfterCreate} onCleared={handleAgentCleared} />
+                  : <ProjectAgentEmpty hasAgents={projectHasAgents} onNew={handleAgentNew} />}
+              </div>
+            </div>
+          );
+        }
+
         return (
           <>
             {/* Открытая задача — карточка в основной зоне (как открытый файл), ✕ возвращает чат */}
@@ -908,7 +965,7 @@ const windowWidth = useWindowWidth();
       })()}
 
       {/* Панель «Артефакты сессии» — десктоп: боковая колонка в потоке (никогда поверх) */}
-      {artifactsEnabled && artifactsOpen && activeSession && !isTablet && (
+      {artifactsEnabled && artifactsOpen && activeSession && !isTablet && !agentsMode && (
         <>
           <Splitter orientation="v" active={draggingSplitter === 'artifacts'}
             onMouseDown={e => { setDraggingSplitter('artifacts'); handleArtifactsSplitterMouseDown(e); }} />
@@ -920,7 +977,7 @@ const windowWidth = useWindowWidth();
       )}
 
       {/* Панель «Артефакты сессии» — планшет: drawer поверх контента (узкий экран) */}
-      {artifactsEnabled && artifactsOpen && activeSession && isTablet && (
+      {artifactsEnabled && artifactsOpen && activeSession && isTablet && !agentsMode && (
         <>
           <div onClick={() => setArtifactsOpen(false)}
             style={{ position: 'absolute', inset: 0, zIndex: 19, background: C.overlay }} />

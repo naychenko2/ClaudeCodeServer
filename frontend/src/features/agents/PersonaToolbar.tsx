@@ -1,0 +1,178 @@
+import { useState } from 'react';
+import type { Persona } from '../../types';
+import { C, FONT, R } from '../../lib/design';
+import { Menu, MenuItem, IconButton } from '../../components/ui';
+import { Toolbar, PillSwitch, tbBtnPrimary, tbBtnGhost } from '../../components/Toolbar';
+import { PersonaAvatar } from './PersonaAvatar';
+import { personaTitleLines } from '../../lib/personas';
+import type { PersonaFormStatus } from './PersonaForm';
+
+// Единый тулбар студии персоны — общий для глобальной студии (AgentsPage) и
+// проектной панели (ProjectAgentPane). Состав в режиме редактирования:
+// [полоса цвета] аватар + Роль(Имя) + бейдж зоны | сегмент Профиль|Память |
+// Поговорить | ⋯-меню (Удалить внутри) | Сохранить (+точка dirty).
+// В режиме создания: «Новый агент» + [Отмена] [Создать].
+
+export type PersonaView = 'profile' | 'memory';
+
+interface CommonProps {
+  accent: string;
+  status: PersonaFormStatus;
+  onSave: () => void;
+  onBack?: () => void;
+  isMobile?: boolean;
+}
+
+interface EditProps extends CommonProps {
+  mode: 'edit';
+  persona: Persona;
+  zoneLabel: string;
+  view: PersonaView;
+  onView: (v: PersonaView) => void;
+  talking?: boolean;
+  onTalk: () => void;
+  onDelete: () => void;
+}
+
+interface CreateProps extends CommonProps {
+  mode: 'create';
+  onCancel: () => void;
+}
+
+export function PersonaToolbar(props: EditProps | CreateProps) {
+  const { accent, status, onSave, onBack, isMobile } = props;
+  const creating = props.mode === 'create';
+
+  // Текст и доступность кнопки сохранения зависят от режима
+  const saveLabel = status.saving
+    ? (creating ? 'Создаю…' : 'Сохраняю…')
+    : (creating ? 'Создать' : 'Сохранить');
+  const saveDisabled = creating
+    ? (!status.canSave || status.saving)
+    : (!status.canSave || status.saving || !status.dirty);
+
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // Полоса цвета персоны слева — допустимая персонализация поверх общего Toolbar
+  const rowOverride: React.CSSProperties = {
+    borderLeft: `3px solid ${accent}`, position: 'relative',
+  };
+
+  const backBtn = onBack && (
+    <IconButton onClick={onBack} title="Назад" size={isMobile ? 'lg' : 'md'}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M15 18l-6-6 6-6" />
+      </svg>
+    </IconButton>
+  );
+
+  const saveArea = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
+      {/* Индикатор несохранённых правок */}
+      {!creating && status.dirty && !status.saving && (
+        <span title="Есть несохранённые изменения"
+          style={{ width: 7, height: 7, borderRadius: R.full, background: accent, flexShrink: 0 }} />
+      )}
+      <button onClick={onSave} disabled={saveDisabled}
+        style={{ ...tbBtnPrimary, opacity: saveDisabled ? 0.55 : 1, cursor: saveDisabled ? 'default' : 'pointer' }}>
+        {saveLabel}
+      </button>
+    </div>
+  );
+
+  if (creating) {
+    return (
+      <Toolbar isMobile={isMobile} style={rowOverride}>
+        {backBtn}
+        <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
+          Новый агент
+        </div>
+        <button onClick={props.onCancel} style={tbBtnGhost}>Отмена</button>
+        {saveArea}
+      </Toolbar>
+    );
+  }
+
+  const { persona, zoneLabel, view, onView, talking, onTalk, onDelete } = props;
+  const lines = personaTitleLines(persona);
+
+  return (
+    <Toolbar isMobile={isMobile} style={rowOverride}>
+      {backBtn}
+      <PersonaAvatar persona={persona} size={32} />
+
+      {/* Идентичность: роль (serif, цвет персоны) + имя + бейдж зоны */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <div style={{ fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: accent, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {lines.primary}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+          {lines.secondary && (
+            <span style={{ fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
+              {lines.secondary}
+            </span>
+          )}
+          <span style={zoneBadge(accent)}>{zoneLabel}</span>
+        </div>
+      </div>
+
+      {/* Сегмент Профиль | Память */}
+      <PillSwitch<PersonaView>
+        value={view}
+        onChange={onView}
+        options={[{ value: 'profile', label: 'Профиль' }, { value: 'memory', label: 'Память' }]}
+      />
+
+      {/* Поговорить — доступно в обоих видах */}
+      <button onClick={onTalk} disabled={talking} title="Поговорить"
+        style={{ ...talkBtn(accent), opacity: talking ? 0.6 : 1, cursor: talking ? 'default' : 'pointer' }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 11.5a8.5 8.5 0 0 1-12 7.7L3 21l1.8-6A8.5 8.5 0 1 1 21 11.5z" />
+        </svg>
+        {!isMobile && (talking ? 'Создаём…' : 'Поговорить')}
+      </button>
+
+      {/* Действия профиля — только в виде «Профиль» */}
+      {view === 'profile' && (
+        <>
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <IconButton onClick={() => setMenuOpen(o => !o)} title="Ещё" size={isMobile ? 'lg' : 'md'}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" />
+              </svg>
+            </IconButton>
+            {menuOpen && (
+              <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={180}>
+                <MenuItem
+                  danger
+                  icon={<><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></>}
+                  label="Удалить агента"
+                  onClick={() => { setMenuOpen(false); onDelete(); }}
+                />
+              </Menu>
+            )}
+          </div>
+          {saveArea}
+        </>
+      )}
+    </Toolbar>
+  );
+}
+
+// Бейдж зоны персоны — тонирован акцентом персоны
+function zoneBadge(accent: string): React.CSSProperties {
+  return {
+    display: 'inline-block', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.02em',
+    padding: '1px 7px', borderRadius: R.pill, width: 'fit-content', flexShrink: 0,
+    background: `${accent}1F`, color: accent, whiteSpace: 'nowrap',
+  };
+}
+
+// Кнопка «Поговорить» — как tbBtnPrimary, но залита акцентом персоны
+function talkBtn(accent: string): React.CSSProperties {
+  return {
+    ...tbBtnPrimary,
+    display: 'inline-flex', gap: 7,
+    background: accent, color: C.onAccent,
+  };
+}

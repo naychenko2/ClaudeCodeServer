@@ -35,7 +35,7 @@ export function HubTabs({ value, onChange, mobile }: {
     { value: 'projects' as HubTab, label: 'Проекты' },
     { value: 'calendar' as HubTab, label: 'Календарь' },
     ...(notesOn ? [{ value: 'notes' as HubTab, label: 'Заметки' }] : []),
-    ...(agentsOn ? [{ value: 'agents' as HubTab, label: 'Агенты' }] : []),
+    ...(agentsOn ? [{ value: 'agents' as HubTab, label: 'Команда' }] : []),
   ].map(o => mobile ? { ...o, icon: TAB_ICONS[o.value] } : o);
   return (
     <PillSwitch<HubTab>

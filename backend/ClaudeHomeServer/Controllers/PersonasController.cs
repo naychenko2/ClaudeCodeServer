@@ -23,12 +23,13 @@ public class PersonasController : ControllerBase
     private readonly FalImageService _falImage;
     private readonly Services.Llm.OneShotClaudeRunner _oneShot;
     private readonly IConfiguration _config;
+    private readonly ILogger<PersonasController> _log;
     private readonly IHubContext<SessionHub> _hub;
 
     public PersonasController(PersonaManager personas, ProjectManager projects,
         SessionManager sessions, PersonaMemoryService memory, FalImageService falImage,
         Services.Llm.OneShotClaudeRunner oneShot, IConfiguration config,
-        IHubContext<SessionHub> hub)
+        ILogger<PersonasController> log, IHubContext<SessionHub> hub)
     {
         _personas = personas;
         _projects = projects;
@@ -37,6 +38,7 @@ public class PersonasController : ControllerBase
         _falImage = falImage;
         _oneShot = oneShot;
         _config = config;
+        _log = log;
         _hub = hub;
     }
 
@@ -307,20 +309,34 @@ public class PersonasController : ControllerBase
         if (scope == PersonaScope.Project && !ValidProject(req.ProjectId))
             return BadRequest(new { error = "Для проектной персоны нужен корректный projectId" });
 
-        // 1. Черновик всех полей одним one-shot вызовом (строгий JSON-объект)
+        // 1. Черновик всех полей одним one-shot вызовом (строгий JSON-объект).
+        // LLM иногда отвечает без валидного JSON — логируем сырой ответ и повторяем один раз.
         var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
-        DraftRaw? draft;
-        try
+        DraftRaw? draft = null;
+        for (var attempt = 1; attempt <= 2 && draft is null; attempt++)
         {
-            var raw = await _oneShot.RunAsync(BuildDraftPrompt(req.Prompt), model,
-                TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
+            string raw;
+            try
+            {
+                raw = await _oneShot.RunAsync(BuildDraftPrompt(req.Prompt), model,
+                    TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "quick-create: one-shot упал (попытка {Attempt})", attempt);
+                if (attempt == 2)
+                    return StatusCode(502, new { error = $"Не удалось сгенерировать черновик: {ex.Message}" });
+                continue;
+            }
             draft = ParseDraft(raw);
+            if (draft is null || string.IsNullOrWhiteSpace(draft.Name))
+            {
+                _log.LogWarning("quick-create: черновик не распознан (попытка {Attempt}); сырой ответ: {Raw}",
+                    attempt, raw.Length > 600 ? raw[..600] + "…" : raw);
+                draft = null;
+            }
         }
-        catch (Exception ex)
-        {
-            return StatusCode(502, new { error = $"Не удалось сгенерировать черновик: {ex.Message}" });
-        }
-        if (draft is null || string.IsNullOrWhiteSpace(draft.Name))
+        if (draft is null)
             return StatusCode(502, new { error = "Модель не вернула корректный черновик — попробуйте ещё раз" });
 
         // 2. Создаём персону с заполненными полями

@@ -16,6 +16,7 @@ import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { useFeature, FLAGS } from '../lib/featureFlags';
+import { setChatContext } from '../lib/ai/chatContext';
 import { ChatHeaderBar, RateLimitBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { ChatProjectContext, FalCostContext, AssistantNameContext } from './chat/contexts';
 import { WaitingIndicator } from './chat/WaitingIndicator';
@@ -318,6 +319,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // у активной проектной сессии не синхронизируется по realtime). Управляет показом кнопок
   // «Итог сессии» и «Задачи из чата» в шапке.
   const hasMessages = useMemo(() => items.some(it => it.kind === 'user_message'), [items]);
+
+  // Сообщаем AI-палитре, что чат открыт (и есть ли переписка) — чтобы действия чата
+  // были доступны и в проектных чатах, где активная сессия не отражается в nav.
+  useEffect(() => {
+    setChatContext(true, hasMessages);
+    return () => setChatContext(false, false);
+  }, [hasMessages]);
 
   // Фаза режима «План» (для контекстного индикатора и подписи WaitingIndicator)
   const planPhase = useMemo(() => derivePlanPhase(items, mode, isWaiting), [items, mode, isWaiting]);

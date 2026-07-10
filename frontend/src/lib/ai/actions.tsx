@@ -29,6 +29,9 @@ export interface AiActionCtx {
   online: boolean;
   flag: (key: string) => boolean;
   caps: { semantic: boolean };
+  // Открыт ли сейчас чат (проектный или в разделе «Чаты») и есть ли в нём переписка.
+  // Активная сессия проекта не отражается в nav — ChatPanel сообщает это отдельно.
+  chat: { active: boolean; hasMessages: boolean };
 }
 
 export interface AiAction {
@@ -62,7 +65,7 @@ const IcPlus = sIco(<><rect x="3" y="4" width="13" height="16" rx="2" /><path d=
 // --- Предикаты контекста ---
 const noteOpen = (c: AiActionCtx) => c.nav?.screen === 'notes' && !!c.nav.note;
 const taskOpen = (c: AiActionCtx) => !!c.nav?.task;
-const chatOpen = (c: AiActionCtx) => c.nav?.screen === 'chats' && !!c.nav.chatId;
+const chatOpen = (c: AiActionCtx) => c.chat.active;
 
 // --- Каталог действий (порядок задаёт ранжирование контекстной группы) ---
 export const AI_ACTIONS: AiAction[] = [
@@ -123,13 +126,13 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'chat.extract', title: 'Извлечь задачи из чата', hint: 'action items из диалога',
     section: 'chat', sectionLabel: 'Чат', icon: IcPlus,
-    when: c => chatOpen(c) && c.flag('ai-assist') && c.online, contextual: chatOpen,
+    when: c => chatOpen(c) && c.chat.hasMessages && c.flag('ai-assist') && c.online, contextual: chatOpen,
     run: () => dispatchAiRun('chat.extract'),
   },
   {
     id: 'chat.summary', title: 'Итог сессии в заметку', hint: 'конспект чата заметкой',
     section: 'chat', sectionLabel: 'Чат', icon: IcDoc,
-    when: c => chatOpen(c) && c.flag('notes') && c.flag('ai-assist') && c.online, contextual: chatOpen,
+    when: c => chatOpen(c) && c.chat.hasMessages && c.flag('notes') && c.flag('ai-assist') && c.online, contextual: chatOpen,
     run: () => dispatchAiRun('chat.summary'),
   },
 

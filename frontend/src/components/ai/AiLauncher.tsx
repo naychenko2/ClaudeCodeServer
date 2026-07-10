@@ -6,6 +6,7 @@ import { getFlag } from '../../lib/featureFlags';
 import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
 import { rankedActions, runActionById, type AiAction, type AiActionCtx } from '../../lib/ai/actions';
+import { getChatContext } from '../../lib/ai/chatContext';
 import {
   computeSuggestion, canShow, markShown, markDismissed,
   isProactiveEnabled, setProactiveEnabled, type Suggestion,
@@ -38,7 +39,7 @@ export function AiLauncher() {
   }, []);
 
   // Контекст собираем на момент открытия (getNav синхронен вне React)
-  const buildCtx = (): AiActionCtx => ({ nav: getNav(), online, flag: getFlag, caps: { semantic: semanticCaps } });
+  const buildCtx = (): AiActionCtx => ({ nav: getNav(), online, flag: getFlag, caps: { semantic: semanticCaps }, chat: getChatContext() });
 
   // Список действий пересчитывается на каждый ввод, пока палитра открыта
   const items = useMemo(

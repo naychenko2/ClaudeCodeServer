@@ -187,6 +187,48 @@ WorkingDirectory = `project.RootPath`
   (живая/призрачная/внешняя), embeds `![[…]]`, hover-preview; стор
   [lib/notes.ts](frontend/src/lib/notes.ts) (realtime notes_changed).
 
+## Агенты (олицетворённые агенты / персоны)
+
+Раздел «Агенты» (хаб-таб, фич-флаг `personas`): персоны с именем, аватаром, характером
+(system-промпт), отдельным чатом, долгой памятью и зоной контекста. Персона — **отдельная
+сущность** (JSON-стор, не .md-агент). Изоляция per-owner (как задачи/заметки).
+
+- **Модель**: [Persona.cs](backend/ClaudeHomeServer/Models/Persona.cs) — `Persona`
+  (Name, Handle, Description, SystemPrompt, Model/Effort, Scope `Global|Project`, ProjectId,
+  Avatar `{Kind initials|image, Color, ImageFile}`, Greeting, MemoryEnabled) +
+  `PersonaMemoryEntry` (Type `Semantic|Episodic|Procedural`, Text, Tags, Salience). Хранилище —
+  `data/personas.json`, ассеты (аватары) — `data/personas/{id}/`.
+- **CRUD**: [PersonaManager.cs](backend/ClaudeHomeServer/Services/PersonaManager.cs) — per-owner
+  (`Get(id, userId)` проверяет OwnerId), генерация уникального slug-`Handle`.
+  [PersonasController.cs](backend/ClaudeHomeServer/Controllers/PersonasController.cs) —
+  `/api/personas/*` (CRUD, `{id}/chats`, `{id}/memory*`, `{id}/avatar*`); realtime —
+  `PersonasChangedMessage` (action created/updated/deleted/memory) в группу user_*.
+- **Чат с персоной**: `Session.PersonaId`; `SessionManager.CreatePersonaChatAsync` маршрутизирует
+  по зоне — **глобальная** персона → чат вне проекта (scope = все данные владельца, `ProjectId=null`
+  в tasks/notes MCP), **проектная** → сессия в её проекте (scope = только проект). Характер персоны
+  инжектится в системный промпт как персональный слой ([ClaudeSession.cs](backend/ClaudeHomeServer/Services/Llm/Claude/ClaudeSession.cs),
+  приоритет над .md-агентом). Scope НЕ требует спец-логики — он предопределён типом сессии.
+- **Долгая память** (типизация 2026 semantic/episodic/procedural):
+  [PersonaMemoryService.cs](backend/ClaudeHomeServer/Services/PersonaMemoryService.cs) — записи в
+  `data/persona-memory.json` (источник правды) + семантический слой в Dify-датасет
+  `{username}:persona:{handle}` (дифф по хешам, дебаунс 15с; без Dify — полнотекст-fallback).
+  Retrieval со скорингом `relevance × recency(полураспад 30д) × typeWeight(0.6/0.3/0.1) × salience`.
+  Auto-recall в системный промпт каждого хода (`BuildPersonaRecallProvider`, независим от заметок).
+- **MCP**: [mcp/memory-server/index.js](mcp/memory-server/index.js) (без зависимостей) —
+  memory_remember/search/list/forget; подключение как tasks/notes (env `MEMORY_API_URL/TOKEN/PERSONA_ID`
+  в `BuildTurnMcpConfig` + подсказка в промпт). Явный write-path: персона сама решает, что запомнить.
+- **Аватар**: инициалы+цвет (палитра `AGENT_COLORS`) базой; AI-генерация через fal.ai —
+  [FalImageService.cs](backend/ClaudeHomeServer/Services/FalImageService.cs) (`Fal:ApiKey`, модель
+  `Fal:ImageModel`, дефолт `fal-ai/flux/schnell`) → файл в `data/personas/{id}/`, отдача через
+  `GET {id}/avatar` (access_token в query для `<img>`).
+- **Фронт**: [features/agents/](frontend/src/features/agents/) — AgentsPage (сайдбар персон | центр:
+  переключатель «Чат | Память»), PersonaList, PersonaEditor (имя/характер/модель/зона/цвет/генерация
+  аватара), PersonaChat (переиспользует `ChatPanel`), PersonaMemoryPanel (записи по типам, ручное
+  добавление/удаление), PersonaAvatar (инициалы/картинка); стор
+  [lib/personas.ts](frontend/src/lib/personas.ts) (realtime personas_changed).
+- **Флаги**: `personas` (раздел + чат + память), `persona-memory-autolearn` (dev — авто-извлечение
+  фактов из диалога, задел на будущее).
+
 ## REST API
 
 Все эндпоинты (кроме `/api/auth/ping`) и SignalR-хаб защищены `[Authorize]` —
@@ -216,6 +258,13 @@ PUT                 /api/auth/timezone                { timeZone }  (IANA-зон
 POST                /api/tasks/{id}/execute           → Task  (запуск Claude-исполнителя, флаг task-claude-exec)
 GET                 /api/push/vapid-public-key        → { publicKey }
 POST                /api/push/subscribe|unsubscribe   { endpoint, p256dh?, auth? }  (web-push подписки устройств)
+GET/POST/PUT/DELETE /api/personas                     (CRUD персон; ?scope=context&projectId= — доступные в контексте)  [флаг personas]
+GET/POST            /api/personas/{id}/chats          POST body { mode?, resumeSessionId?, name? } → Session (чат от лица персоны)
+GET/POST            /api/personas/{id}/memory         ?type=  / body { type, text, tags? } → записи памяти
+GET                 /api/personas/{id}/memory/search  ?q=&topK=  → hits (relevance×recency×type)
+DELETE              /api/personas/{id}/memory/{entryId}
+POST                /api/personas/{id}/avatar/generate { prompt? } → Persona  (AI-аватар через fal)
+GET                 /api/personas/{id}/avatar          → картинка (access_token в query для <img>)
 ```
 
 Эффективные значения флагов также возвращаются в `GET /api/auth/me` (поле `featureFlags`),

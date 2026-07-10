@@ -629,6 +629,8 @@ function MobileCombinedBadge(props: {
 interface ChatHeaderBarProps {
   session: Session;
   project?: Project;
+  // Есть ли в чате переписка (из ленты) — показ кнопок «Итог сессии»/«Задачи из чата»
+  hasMessages: boolean;
   online: boolean;
   cost: CostStats;
   falCost: FalCostStats;
@@ -653,7 +655,7 @@ interface ChatHeaderBarProps {
 
 // Кнопка «Итог сессии» — конспект сессии заметкой (флаги notes + notes-session-summary).
 // Повторный клик по галочке открывает созданную заметку; сервер обновляет ту же заметку.
-function SessionSummaryButton({ session, online, isMobile }: { session: Session; online: boolean; isMobile?: boolean }) {
+function SessionSummaryButton({ session, hasMessages, online, isMobile }: { session: Session; hasMessages: boolean; online: boolean; isMobile?: boolean }) {
   const notesOn = useFeature(FLAGS.notes);
   const summaryOn = useFeature(FLAGS.notesSessionSummary);
   const [busy, setBusy] = useState(false);
@@ -661,7 +663,7 @@ function SessionSummaryButton({ session, online, isMobile }: { session: Session;
   const [error, setError] = useState(false);
   // Смена чата — сброс локального состояния кнопки
   useEffect(() => { setSavedId(null); setError(false); setBusy(false); }, [session.id]);
-  if (!notesOn || !summaryOn || !online || session.messageCount === 0) return null;
+  if (!notesOn || !summaryOn || !online || !hasMessages) return null;
   const run = () => {
     if (busy) return;
     if (savedId) { openNoteById(savedId); return; }
@@ -697,13 +699,13 @@ const IconTaskPlus = () => (
 
 // Кнопка «Задачи из чата» (флаг chat-extract-tasks): Claude извлекает action items
 // из транскрипта, пользователь подтверждает выбор — задачи создаются в трекере.
-function ExtractTasksButton({ session, online, isMobile }: { session: Session; online: boolean; isMobile?: boolean }) {
+function ExtractTasksButton({ session, hasMessages, online, isMobile }: { session: Session; hasMessages: boolean; online: boolean; isMobile?: boolean }) {
   const on = useFeature(FLAGS.chatExtractTasks);
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<{ projectId: string | null; items: (ExtractedTaskCandidate & { sel: boolean })[] } | null>(null);
   useEffect(() => { setDialog(null); setBusy(false); }, [session.id]);
-  if (!on || !online || session.messageCount === 0) return null;
+  if (!on || !online || !hasMessages) return null;
 
   const run = () => {
     if (busy) return;
@@ -769,7 +771,7 @@ function ExtractTasksButton({ session, online, isMobile }: { session: Session; o
   );
 }
 
-export function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact }: ChatHeaderBarProps) {
   const sessionModelLabel = useModelLabel(session.model);
   const asstName = assistantName(session.model);
   const providerKey = modelProvider(session.model);
@@ -879,8 +881,8 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
 
   // На мобилке артефакты и настройки — плотная пара справа (gap 2 вместо TB.gap),
   // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
-  const summaryBtn = <SessionSummaryButton session={session} online={online} isMobile={isMobile} />;
-  const extractBtn = <ExtractTasksButton session={session} online={online} isMobile={isMobile} />;
+  const summaryBtn = <SessionSummaryButton session={session} hasMessages={hasMessages} online={online} isMobile={isMobile} />;
+  const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} isMobile={isMobile} />;
   const actionBtns = isMobile
     ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>
     : <>{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</>;

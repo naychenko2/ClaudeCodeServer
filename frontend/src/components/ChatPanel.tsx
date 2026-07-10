@@ -304,6 +304,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     [items]
   );
 
+  // Есть ли в чате переписка — по загруженной ленте (надёжнее session.messageCount, который
+  // у активной проектной сессии не синхронизируется по realtime). Управляет показом кнопок
+  // «Итог сессии» и «Задачи из чата» в шапке.
+  const hasMessages = useMemo(() => items.some(it => it.kind === 'user_message'), [items]);
+
   // Фаза режима «План» (для контекстного индикатора и подписи WaitingIndicator)
   const planPhase = useMemo(() => derivePlanPhase(items, mode, isWaiting), [items, mode, isWaiting]);
   const planningKind = planPhase === 'planning' ? 'planning' : planPhase === 'replanning' ? 'replanning' : undefined;
@@ -626,6 +631,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       <ChatHeaderBar
         session={session}
         project={project}
+        hasMessages={hasMessages}
         online={online}
         cost={costStats}
         falCost={falCostStats}

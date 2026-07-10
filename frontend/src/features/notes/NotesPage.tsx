@@ -21,16 +21,23 @@ import { EmptyState } from '../../components/EmptyState';
 import { Splitter, IconButton } from '../../components/ui';
 import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot } from './shared';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
-import { useIsMobile } from '../../lib/breakpoints';
+import { useWindowWidth } from '../../lib/breakpoints';
 
 type Mode = 'notes' | 'graph';
+
+// Заметкам нужно три зоны (список | контент | связи справа), поэтому им тесно на
+// узких экранах даже в «десктопной» ширине приложения (порог 699). Ниже этого
+// значения раздел переходит на мобильную раскладку: один экран за раз, связи под
+// контентом, контенту — вся ширина. Актуально для раскладных (Galaxy Fold в
+// развёрнутом виде ~716px CSS).
+const NOTES_DESKTOP_MIN = 900;
 
 export function NotesPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
   onLogout: () => void;
   onHubTab: (t: HubTab) => void;
 }) {
-  const isMobile = useIsMobile();
+  const isMobile = useWindowWidth() < NOTES_DESKTOP_MIN;
   const notes = useNotes();
   const offlineEnabled = useFeature(FLAGS.offline);
   const online = useOnline();

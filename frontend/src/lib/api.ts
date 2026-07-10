@@ -331,6 +331,14 @@ export const api = {
       if (token) params.set('access_token', token);
       return `/api/personas/${encodeURIComponent(id)}/avatar/candidate/${encodeURIComponent(file)}?${params}`;
     },
+    // AI-редактирование «характера» (system-промпта): без current — генерация с нуля
+    // по имени/роли/описанию; с current (+ опц. instruction) — улучшение текущего текста.
+    // Может занять до ~30с; 502 при ошибке.
+    aiCharacter: (body: { name?: string; role?: string; description?: string; current?: string; instruction?: string }) =>
+      request<{ character: string }>('/personas/ai/character', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
   },
 
   // Утренний бриф (флаг daily-briefing): собрать план дня в дневник

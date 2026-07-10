@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { Persona, PersonaScope, Project } from '../../types';
 import { api } from '../../lib/api';
-import { Field, TextField, TextArea, Toggle, Button } from '../../components/ui';
+import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl } from '../../components/ui';
 import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
-import { useModels } from '../../lib/models';
+import { useModels, useModelCaps, modelProvider } from '../../lib/models';
+import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { bumpPersonas } from '../../lib/personas';
 import { C, FONT, R } from '../../lib/design';
@@ -43,6 +44,7 @@ export function PersonaForm({ persona, projects, onSaved, onCancel, onDelete, de
   const [description, setDescription] = useState(persona?.description ?? '');
   const [systemPrompt, setSystemPrompt] = useState(persona?.systemPrompt ?? '');
   const [model, setModel] = useState(persona?.model ?? '');
+  const [effort, setEffort] = useState(persona?.effort ?? '');
   const [scope, setScope] = useState<PersonaScope>(persona?.scope ?? defaultScope ?? 'global');
   const [projectId, setProjectId] = useState(persona?.projectId ?? defaultProjectId ?? '');
   const [greeting, setGreeting] = useState(persona?.greeting ?? '');
@@ -62,6 +64,15 @@ export function PersonaForm({ persona, projects, onSaved, onCancel, onDelete, de
   // Галерея сгенерированных кандидатов (имена файлов) — выбор перекладывает картинку в аватар
   const [candidates, setCandidates] = useState<string[]>([]);
   const [selecting, setSelecting] = useState<string | null>(null);
+
+  // AI-редактирование характера: активное действие (генерация/улучшение), ошибка,
+  // опциональная инструкция «что изменить» для режима улучшения.
+  const [aiAction, setAiAction] = useState<null | 'generate' | 'improve'>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [improveInstruction, setImproveInstruction] = useState('');
+
+  // Возможности провайдера выбранной модели — показываем «Усилие рассуждения» только если поддерживается
+  const caps = useModelCaps(model);
 
   // Один раз узнаём, доступна ли генерация аватара (fal настроен)
   useEffect(() => { api.personas.avatarCaps().then(c => setCanGenerate(c.generate)).catch(() => {}); }, []);
@@ -121,6 +132,47 @@ export function PersonaForm({ persona, projects, onSaved, onCancel, onDelete, de
     });
   };
 
+  // AI-генерация характера с нуля по текущим полям (имя/роль/описание)
+  const generateCharacter = async () => {
+    if (aiAction) return;
+    setAiAction('generate');
+    setAiError(null);
+    try {
+      const { character } = await api.personas.aiCharacter({
+        name: name.trim() || undefined,
+        role: role.trim() || undefined,
+        description: description.trim() || undefined,
+      });
+      setSystemPrompt(character);
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'Не удалось сгенерировать характер');
+    } finally {
+      setAiAction(null);
+    }
+  };
+
+  // AI-улучшение текущего характера (опц. с инструкцией «что изменить»)
+  const improveCharacter = async () => {
+    if (aiAction) return;
+    setAiAction('improve');
+    setAiError(null);
+    try {
+      const { character } = await api.personas.aiCharacter({
+        name: name.trim() || undefined,
+        role: role.trim() || undefined,
+        description: description.trim() || undefined,
+        current: systemPrompt,
+        instruction: improveInstruction.trim() || undefined,
+      });
+      setSystemPrompt(character);
+      setImproveInstruction('');
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'Не удалось улучшить характер');
+    } finally {
+      setAiAction(null);
+    }
+  };
+
   // При выборе зоны «Проект» без выбранного проекта — подставим первый доступный
   useEffect(() => {
     if (scope === 'project' && !projectId && projects.length > 0) setProjectId(projects[0].id);
@@ -138,6 +190,7 @@ export function PersonaForm({ persona, projects, onSaved, onCancel, onDelete, de
       description: description.trim() || undefined,
       systemPrompt: systemPrompt.trim() || undefined,
       model: model || undefined,
+      effort: effort || undefined,
       scope,
       projectId: scope === 'project' ? projectId : undefined,
       color,
@@ -161,24 +214,23 @@ export function PersonaForm({ persona, projects, onSaved, onCancel, onDelete, de
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.bgMain }}>
       {/* Прокручиваемое тело формы */}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? '20px 16px 28px' : '28px 24px 36px' }}>
-        <div style={{ maxWidth: 620, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Field label="Роль" hint="Главная подпись агента: «Роль (Имя)»">
-            <TextField value={role} onChange={setRole} placeholder="Дизайнер, PM, Тестировщик…" autoFocus />
-          </Field>
-
-          <Field label="Имя">
-            <TextField value={name} onChange={setName} placeholder="Например, Ассистент" />
-          </Field>
-
-          <Field label="Описание" hint="Короткая подпись под именем в списке">
-            <TextField value={description} onChange={setDescription} placeholder="Чем занимается агент" />
-          </Field>
-
-          <Field label="Характер" hint="Системный промпт: тон, роль, правила поведения">
-            <TextArea value={systemPrompt} onChange={setSystemPrompt} minHeight={90}
+        {/* На десктопе — две колонки: «Характер» (крупное поле) слева и остальные настройки справа.
+            На мобилке — одна колонка, характер просто высокий. */}
+        <div style={{
+          maxWidth: isMobile ? 620 : 1000, margin: '0 auto',
+          display: 'flex', flexDirection: isMobile ? 'column' : 'row',
+          gap: isMobile ? 16 : 28, alignItems: 'stretch',
+        }}>
+          {/* Колонка «Характер»: большое поле промпта + пресеты тона + AI-кнопки */}
+          <div style={{ flex: isMobile ? undefined : '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <FieldLabel>Характер</FieldLabel>
+            <span style={{ fontSize: 11.5, color: C.textMuted }}>Системный промпт: тон, роль, правила поведения</span>
+            <TextArea value={systemPrompt} onChange={setSystemPrompt}
+              minHeight={isMobile ? 220 : 340}
+              style={{ flex: isMobile ? undefined : 1 }}
               placeholder="Ты — внимательный ассистент. Отвечай кратко и по делу…" />
             {/* Пресеты тона: клик дополняет промпт заготовкой (пользователь может править текст свободно) */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               {TONE_PRESETS.map(p => (
                 <button
                   key={p.label}
@@ -193,11 +245,50 @@ export function PersonaForm({ persona, projects, onSaved, onCancel, onDelete, de
                 </button>
               ))}
             </div>
+            {/* AI-редактирование характера: генерация с нуля и улучшение текущего текста */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 2 }}>
+              <Button variant="ghostAccent" size="sm" loading={aiAction === 'generate'} disabled={!!aiAction} onClick={generateCharacter}>
+                {aiAction === 'generate' ? 'Генерирую…' : '✨ Сгенерировать'}
+              </Button>
+              {systemPrompt.trim().length > 0 && (
+                <Button variant="ghostAccent" size="sm" loading={aiAction === 'improve'} disabled={!!aiAction} onClick={improveCharacter}>
+                  {aiAction === 'improve' ? 'Улучшаю…' : '✨ Улучшить'}
+                </Button>
+              )}
+            </div>
+            {/* Опциональная инструкция «что изменить» — только когда есть что улучшать */}
+            {systemPrompt.trim().length > 0 && (
+              <TextField value={improveInstruction} onChange={setImproveInstruction}
+                placeholder="Что изменить (необязательно): например, добавить строгости" />
+            )}
+            {aiError && (
+              <span style={{ fontSize: 12, color: C.dangerText, fontFamily: FONT.sans }}>{aiError}</span>
+            )}
+          </div>
+
+          {/* Колонка остальных настроек */}
+          <div style={{ flex: isMobile ? undefined : '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Field label="Роль" hint="Главная подпись агента: «Роль (Имя)»">
+            <TextField value={role} onChange={setRole} placeholder="Дизайнер, PM, Тестировщик…" autoFocus />
+          </Field>
+
+          <Field label="Имя">
+            <TextField value={name} onChange={setName} placeholder="Например, Ассистент" />
+          </Field>
+
+          <Field label="Описание" hint="Короткая подпись под именем в списке">
+            <TextField value={description} onChange={setDescription} placeholder="Чем занимается агент" />
           </Field>
 
           <Field label="Модель">
             <ModelPicker value={model} options={models} onChange={setModel} />
           </Field>
+
+          {caps.supportsEffort && (
+            <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
+              <SegmentedControl value={effort} options={effortsForProvider(modelProvider(model))} onChange={setEffort} columns={3} />
+            </Field>
+          )}
 
           <Field label="Зона">
             <PillSwitch<PersonaScope>
@@ -344,6 +435,7 @@ export function PersonaForm({ persona, projects, onSaved, onCancel, onDelete, de
           {error && (
             <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>
           )}
+          </div>
         </div>
       </div>
 

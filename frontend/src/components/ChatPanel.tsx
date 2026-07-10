@@ -147,30 +147,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     }
   }, [project, session.id, onSessionUpdated]);
 
-  // Форк «Продолжить с другим агентом» — новый чат от лица выбранной персоны (старый не трогаем).
-  // Механизм открытия — как в разделе «Агенты»: проектная персона → её проект (cc-open-session),
-  // глобальная → раздел «Чаты» (cc-open-chat). App/страницы подхватывают событие.
-  const handleFork = useCallback(async (p: Persona) => {
-    try {
-      const chat = await api.personas.createChat(p.id, { mode: 'auto' });
-      if (chat.projectId) {
-        if (project && chat.projectId === project.id) {
-          sessionStorage.setItem('cc_pending_session', JSON.stringify(chat));
-          window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project } }));
-        } else {
-          // Персона другого проекта — сохраняем чат, пусть его проект откроется по событию
-          sessionStorage.setItem('cc_pending_session', JSON.stringify(chat));
-          window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
-        }
-      } else {
-        localStorage.setItem('cc_open_chat', chat.id);
-        window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
-      }
-    } catch (e) {
-      showToast('Агент', e instanceof Error ? e.message : 'Не удалось создать чат', 'info');
-    }
-  }, [project]);
-
   // Приветственный пузырь персоны для пустого чата (если у персоны задан greeting).
   // Явный greetingBubble-проп имеет приоритет.
   const personaGreeting = useMemo(
@@ -722,8 +698,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         onCompact={compact}
         persona={persona}
         personaZoneName={project?.name ?? null}
-        forkPersonas={persona ? ctxPersonas.filter(p => p.id !== persona.id) : ctxPersonas}
-        onForkPersona={handleFork}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}

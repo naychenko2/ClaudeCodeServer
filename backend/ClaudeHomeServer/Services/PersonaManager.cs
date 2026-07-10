@@ -169,6 +169,17 @@ public class PersonaManager
         }
     }
 
+    // Транслитерация кириллицы для slug: без неё русские имена давали handle «agent»,
+    // и @упоминания превращались в безликие @agent-2
+    private static readonly Dictionary<char, string> Translit = new()
+    {
+        ['а'] = "a", ['б'] = "b", ['в'] = "v", ['г'] = "g", ['д'] = "d", ['е'] = "e", ['ё'] = "e",
+        ['ж'] = "zh", ['з'] = "z", ['и'] = "i", ['й'] = "y", ['к'] = "k", ['л'] = "l", ['м'] = "m",
+        ['н'] = "n", ['о'] = "o", ['п'] = "p", ['р'] = "r", ['с'] = "s", ['т'] = "t", ['у'] = "u",
+        ['ф'] = "f", ['х'] = "h", ['ц'] = "ts", ['ч'] = "ch", ['ш'] = "sh", ['щ'] = "sch",
+        ['ъ'] = "", ['ы'] = "y", ['ь'] = "", ['э'] = "e", ['ю'] = "yu", ['я'] = "ya",
+    };
+
     private static string Slugify(string s)
     {
         var sb = new StringBuilder();
@@ -179,6 +190,10 @@ public class PersonaManager
             {
                 sb.Append(ch);
                 prevDash = false;
+            }
+            else if (Translit.TryGetValue(ch, out var tr))
+            {
+                if (tr.Length > 0) { sb.Append(tr); prevDash = false; }
             }
             else if (!prevDash && sb.Length > 0)
             {

@@ -21,6 +21,7 @@ export default defineConfig({
     proxy: {
       '/api': { target: 'http://127.0.0.1:5099', changeOrigin: true },
       '/hubs': { target: 'http://127.0.0.1:5099', changeOrigin: true, ws: true },
+      '/drawio': { target: 'http://127.0.0.1:5099', changeOrigin: true },
     },
   },
 });

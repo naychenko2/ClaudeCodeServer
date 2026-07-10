@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Тема OnlyOffice Document Server: Claude Home
+  Цветовая схема гармонирует с дизайн-системой приложения ClaudeCodeServer.
+
+  Установка:
+    cp onlyoffice-theme-claude-home.xml \
+       /var/www/onlyoffice/documentserver/sdkjs/common/themes/
+
+  После установки перезапустите DocumentServer и очистите кэш браузера.
+  Тема появится в меню: Вид → Цветовая схема → Claude Home
+-->
+<themes>
+  <theme id="theme-claude-home" name="Claude Home">
+    <colors>
+
+      <!-- ── Header (верхняя панель с логотипом и меню) ── -->
+      <!-- Используем bgPanel (#EDE7DC) — тёплый бежевый, чуть темнее фона -->
+      <color id="header-bg"    val="#EDE7DC" />
+      <!-- Логотип и иконки в header — тёмно-коричневый, хорошо читается на бежевом -->
+      <color id="header-logo"  val="#39332B" />
+
+      <!-- ── Вкладки документов (табы) ── -->
+      <!-- Активная вкладка выделяется акцентом — оранжево-терракотовый -->
+      <color id="tabs-mask-color"       val="#D97757" />
+      <!-- Фон активной вкладки — белый (как фон документа, визуально "открывает" его) -->
+      <color id="tabs-active-bg"        val="#FFFFFF" />
+      <!-- Текст активной вкладки — тёмно-коричневый -->
+      <color id="tabs-active-color"     val="#39332B" />
+      <!-- Неактивные вкладки — приглушённый текст на бежевом фоне -->
+      <color id="tabs-inactive-color"   val="#9C8E7E" />
+
+      <!-- ── Тулбар (панель инструментов с кнопками форматирования) ── -->
+      <!-- Фон тулбара — немного светлее bgPanel, практически сливается с header -->
+      <color id="toolbar-bg"              val="#EDE7DC" />
+      <!-- Иконки тулбара — тёмно-коричневый, достаточно контрастно на бежевом -->
+      <color id="toolbar-icon-color"      val="#39332B" />
+      <!-- Hover иконки — лёгкий тёплый оттенок, мягче акцента -->
+      <color id="toolbar-icon-hover-bg"   val="#E0D7C8" />
+      <!-- Нажатая иконка — насыщеннее, видно взаимодействие -->
+      <color id="toolbar-icon-pressed-bg" val="#D2C8B8" />
+      <!-- Разделители между группами инструментов — цвет border -->
+      <color id="toolbar-divider-color"   val="#E0D7C8" />
+
+      <!-- ── Кнопки ── -->
+      <!-- Обычная кнопка — светлый нейтральный бежевый -->
+      <color id="button-normal-bg"    val="#F4F0E8" />
+      <!-- Текст обычной кнопки — тёмно-коричневый -->
+      <color id="button-normal-color" val="#39332B" />
+      <!-- Активная / основная кнопка — акцент (#D97757) -->
+      <color id="button-active-bg"    val="#D97757" />
+      <!-- Текст активной кнопки — белый (onAccent) -->
+      <color id="button-active-color" val="#FFFFFF" />
+
+      <!-- ── Рабочая область (canvas) ── -->
+      <!-- Фон вокруг страницы документа — bgMain (#F4F0E8), тёплый бежевый -->
+      <color id="canvas-bg"         val="#F4F0E8" />
+      <!-- Сам документ — белый (чистый лист) -->
+      <color id="canvas-content-bg" val="#FFFFFF" />
+
+      <!-- ── Левая панель (навигация, листы, закладки) ── -->
+      <!-- bgPanel — чуть темнее основного фона, визуально отделяет панель -->
+      <color id="left-menu-bg"         val="#EDE7DC" />
+      <!-- Иконки левой панели — приглушённый коричневый -->
+      <color id="left-menu-icon-color" val="#6B5F52" />
+
+      <!-- ── Правая панель (инспектор свойств, комментарии) ── -->
+      <!-- Такой же бежевый как левая, единый стиль боковых панелей -->
+      <color id="right-menu-bg" val="#EDE7DC" />
+
+      <!-- ── Скроллбар ── -->
+      <!-- Ползунок — нейтральный бежево-серый, ненавязчивый -->
+      <color id="scrollbar-thumb-bg" val="#C8BEB0" />
+
+      <!-- ── Типографика и вспомогательные элементы ── -->
+      <!-- Основной текст UI — textPrimary (#39332B) -->
+      <color id="text-normal"      val="#39332B" />
+      <!-- Выделение / подсветка активного элемента — акцент с прозрачностью ~20% -->
+      <!-- В XML OO прозрачность задаётся через AARRGGBB; 33 ≈ 20% alpha -->
+      <color id="highlight-color"  val="#33D97757" />
+      <!-- Границы элементов UI — border (#E0D7C8) -->
+      <color id="border-color"     val="#E0D7C8" />
+
+    </colors>
+  </theme>
+</themes>

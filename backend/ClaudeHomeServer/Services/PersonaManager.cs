@@ -49,9 +49,21 @@ public class PersonaManager
     // где владелец берётся из самой персоны. Не использовать в обработчиках запросов.
     public Persona? GetByIdInternal(string id) => _personas.GetValueOrDefault(id);
 
+    // Известные ключи возможностей персоны. Полный набор эквивалентен «без ограничений»
+    // и нормализуется в null (поведение как раньше, по фич-флагам владельца).
+    private static readonly string[] AllTools = ["tasks", "notes", "web"];
+
+    private static List<string>? NormalizeTools(List<string>? tools)
+    {
+        if (tools is null) return null;
+        var clean = tools.Select(t => t.Trim().ToLowerInvariant())
+            .Where(t => AllTools.Contains(t)).Distinct().ToList();
+        return AllTools.All(clean.Contains) ? null : clean;
+    }
+
     public Persona Create(string userId, string name, string? role, string? description, string? systemPrompt,
         string? model, string? effort, PersonaScope scope, string? projectId,
-        string? color, string? greeting, bool memoryEnabled)
+        string? color, string? greeting, bool memoryEnabled, List<string>? tools = null)
     {
         var persona = new Persona
         {
@@ -66,6 +78,7 @@ public class PersonaManager
             ProjectId = scope == PersonaScope.Project ? projectId : null,
             Greeting = greeting,
             MemoryEnabled = memoryEnabled,
+            Tools = NormalizeTools(tools),
             Avatar = new PersonaAvatar { Kind = PersonaAvatarKind.Initials, Color = color },
         };
         persona.Handle = MakeUniqueHandle(persona.Name, userId);
@@ -76,7 +89,7 @@ public class PersonaManager
 
     public Persona Update(string id, string userId, string? name, string? role, string? description,
         string? systemPrompt, string? model, string? effort, PersonaScope? scope, string? projectId,
-        string? color, string? greeting, bool? memoryEnabled)
+        string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -99,6 +112,8 @@ public class PersonaManager
         if (color is not null) persona.Avatar.Color = color.Length == 0 ? null : color;
         if (greeting is not null) persona.Greeting = greeting.Length == 0 ? null : greeting;
         if (memoryEnabled is not null) persona.MemoryEnabled = memoryEnabled.Value;
+        // null — не менять; список — установить (полный набор нормализуется в null)
+        if (tools is not null) persona.Tools = NormalizeTools(tools);
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
         return persona;

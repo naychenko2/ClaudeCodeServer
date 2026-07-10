@@ -562,6 +562,8 @@ export interface Persona {
   avatar: PersonaAvatar;
   greeting?: string;          // приветствие персоны в начале чата
   memoryEnabled: boolean;     // долгая память (этап 2)
+  // Возможности персоны (ключи tasks/notes/web); null/отсутствие — без ограничений
+  tools?: string[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -579,6 +581,8 @@ export interface CreatePersonaDto {
   color?: string;             // ключ палитры AGENT_COLORS для аватара-инициалов
   greeting?: string;
   memoryEnabled?: boolean;
+  // Возможности (tasks/notes/web); полный набор бэкенд нормализует в «без ограничений»
+  tools?: string[];
 }
 
 // Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны

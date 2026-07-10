@@ -85,7 +85,7 @@ public class PersonasController : ControllerBase
 
         var persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled ?? true);
+            req.MemoryEnabled ?? true, req.Tools);
         await Broadcast("created", persona.Id);
         return Ok(persona);
     }
@@ -102,7 +102,7 @@ public class PersonasController : ControllerBase
 
         var persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled);
+            req.MemoryEnabled, req.Tools);
         await Broadcast("updated", id);
         return Ok(persona);
     }
@@ -489,7 +489,8 @@ public record CreatePersonaRequest(
     string? ProjectId,
     string? Color,
     string? Greeting,
-    bool? MemoryEnabled);
+    bool? MemoryEnabled,
+    List<string>? Tools = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -502,7 +503,8 @@ public record UpdatePersonaRequest(
     string? ProjectId,
     string? Color,
     string? Greeting,
-    bool? MemoryEnabled);
+    bool? MemoryEnabled,
+    List<string>? Tools = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null);
 

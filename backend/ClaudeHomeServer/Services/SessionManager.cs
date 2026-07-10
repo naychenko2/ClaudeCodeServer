@@ -417,20 +417,31 @@ public class SessionManager
     private string? SessionOwner(Session s) =>
         s.ProjectId is not null ? _projects.GetById(s.ProjectId)?.OwnerId : s.OwnerId;
 
-    // Персона-слой сессии (промпт характера + контекст памяти + auto-recall). Строится
-    // одинаково при первом старте и при восстановлении процесса. Пусто, если персоны нет.
-    private (string? Prompt, MemoryMcpContext? Memory, Func<string, Task<string?>>? Recall)
+    // Персона-слой сессии (промпт характера + контекст памяти + auto-recall + возможности).
+    // Строится одинаково при первом старте и при восстановлении процесса. Пусто, если персоны нет.
+    private (string? Prompt, MemoryMcpContext? Memory, Func<string, Task<string?>>? Recall, List<string>? Tools)
         BuildPersonaLayer(Session session, string? ownerId)
     {
-        if (session.PersonaId is null || ownerId is null) return (null, null, null);
+        if (session.PersonaId is null || ownerId is null) return (null, null, null, null);
         var persona = _personas.Get(session.PersonaId, ownerId);
-        if (persona is null) return (null, null, null);
+        if (persona is null) return (null, null, null, null);
         var prompt = BuildPersonaPrompt(persona);
         // Долгая память — только если включена у персоны и владелец имеет доступ к фиче
         if (persona.MemoryEnabled && _flags.IsEnabled(ownerId, FeatureFlagKeys.Personas))
-            return (prompt, BuildMemoryContext(ownerId, persona.Id), BuildPersonaRecallProvider(ownerId, persona.Id));
-        return (prompt, null, null);
+            return (prompt, BuildMemoryContext(ownerId, persona.Id), BuildPersonaRecallProvider(ownerId, persona.Id), persona.Tools);
+        return (prompt, null, null, persona.Tools);
     }
+
+    // Возможность персоны (tasks/notes/web): null-список — без ограничений (как раньше)
+    private static bool PersonaToolEnabled(List<string>? tools, string key) =>
+        tools is null || tools.Contains(key, StringComparer.OrdinalIgnoreCase);
+
+    // Ограничение «web»: у персоны с выключенным веб-поиском запрещаем встроенные
+    // тулы CLI (не MCP) поверх конфига Claude:DisallowedTools
+    private static IReadOnlyList<string>? BuildExtraDisallowed(List<string>? tools) =>
+        tools is not null && !PersonaToolEnabled(tools, "web")
+            ? new[] { "WebSearch", "WebFetch" }
+            : null;
 
     // Назначить/сменить собеседника чату ДО первого хода (единый селектор в пустом чате):
     // персону (personaId) ИЛИ стандартного .md-агента Claude (agentName) — взаимоисключающе.
@@ -515,12 +526,13 @@ public class SessionManager
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
             rawSystemPrompt, permissionRules,
-            BuildTasksContext(ownerId, session.ProjectId),
-            BuildNotesContext(ownerId, session.ProjectId),
+            PersonaToolEnabled(persona.Tools, "tasks") ? BuildTasksContext(ownerId, session.ProjectId) : null,
+            PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(ownerId, session.ProjectId) : null,
             BuildRecallProvider(ownerId),
             persona.Prompt,
             persona.Memory,
-            persona.Recall));
+            persona.Recall,
+            BuildExtraDisallowed(persona.Tools)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -605,10 +617,11 @@ public class SessionManager
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 RawSystemPrompt: null, PermissionRules: null,
-                BuildTasksContext(entry.Info.OwnerId, null),
-                BuildNotesContext(entry.Info.OwnerId, null),
+                PersonaToolEnabled(persona.Tools, "tasks") ? BuildTasksContext(entry.Info.OwnerId, null) : null,
+                PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(entry.Info.OwnerId, null) : null,
                 BuildRecallProvider(entry.Info.OwnerId),
-                persona.Prompt, persona.Memory, persona.Recall);
+                persona.Prompt, persona.Memory, persona.Recall,
+                BuildExtraDisallowed(persona.Tools));
         }
         else
         {
@@ -619,10 +632,11 @@ public class SessionManager
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                BuildTasksContext(project.OwnerId, project.Id),
-                BuildNotesContext(project.OwnerId, project.Id),
+                PersonaToolEnabled(persona.Tools, "tasks") ? BuildTasksContext(project.OwnerId, project.Id) : null,
+                PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
                 BuildRecallProvider(project.OwnerId),
-                persona.Prompt, persona.Memory, persona.Recall);
+                persona.Prompt, persona.Memory, persona.Recall,
+                BuildExtraDisallowed(persona.Tools));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

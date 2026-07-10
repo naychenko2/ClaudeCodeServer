@@ -37,4 +37,7 @@ public sealed record LlmSessionContext(
     MemoryMcpContext? MemoryMcp = null,
     // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок
     // релевантных записей памяти. Подмешивается независимо от заметок. Ошибки → null.
-    Func<string, Task<string?>>? PersonaRecallProvider = null);
+    Func<string, Task<string?>>? PersonaRecallProvider = null,
+    // Дополнительные запрещённые инструменты сессии (поверх конфига Claude:DisallowedTools) —
+    // например, WebSearch/WebFetch у персоны с выключенной возможностью «web».
+    IReadOnlyList<string>? ExtraDisallowedTools = null);

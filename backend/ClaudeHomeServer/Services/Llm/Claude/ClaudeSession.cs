@@ -94,7 +94,10 @@ public class ClaudeSession : ILlmSessionAdapter
         _personaPrompt = context.PersonaSystemPrompt;
         _memoryMcp = context.MemoryMcp;
         _personaRecallProvider = context.PersonaRecallProvider;
-        _disallowedTools = disallowedTools ?? [];
+        // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
+        _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
+            ? [.. (disallowedTools ?? []), .. extra]
+            : disallowedTools ?? [];
         _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage);
     }
 

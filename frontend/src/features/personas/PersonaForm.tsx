@@ -36,11 +36,23 @@ export interface PersonaFormStatus {
   dirty: boolean;
 }
 
+// Предзаполнение формы создания из шаблона персоны (см. personaTemplates.ts)
+export interface PersonaFormInitial {
+  role?: string;
+  description?: string;
+  systemPrompt?: string;
+  greeting?: string;
+  color?: string;
+  tools?: string[];
+}
+
 interface PersonaFormProps {
   persona?: Persona | null;
   projects: Project[];
   onSaved: (p: Persona) => void;
   onDelete?: (p: Persona) => void;
+  // Предзаполнение при создании (выбор шаблона); для существующей персоны игнорируется
+  initial?: PersonaFormInitial;
   // Родитель подписывается на состояние формы, чтобы включать/выключать кнопки тулбара
   onStatus?: (s: PersonaFormStatus) => void;
   // Живой цвет персоны — чтобы тулбар/полоса перекрашивались мгновенно при выборе цвета
@@ -60,29 +72,32 @@ interface PersonaFormProps {
 // (сохранить/удалить/отмена) живут в тулбаре РОДИТЕЛЯ: форма экспонирует
 // save()/remove() через ref и сообщает своё состояние через onStatus.
 export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(function PersonaForm(
-  { persona, projects, onSaved, onDelete, onStatus, onColorChange, onOpenMemory, defaultScope, defaultProjectId }, ref,
+  { persona, projects, onSaved, onDelete, initial, onStatus, onColorChange, onOpenMemory, defaultScope, defaultProjectId }, ref,
 ) {
   const isEdit = !!persona;
   const isMobile = useIsMobile();
   const models = useModels();
 
   const [name, setName] = useState(persona?.name ?? '');
-  const [role, setRole] = useState(persona?.role ?? '');
-  const [description, setDescription] = useState(persona?.description ?? '');
-  const [systemPrompt, setSystemPrompt] = useState(persona?.systemPrompt ?? '');
+  const [role, setRole] = useState(persona?.role ?? initial?.role ?? '');
+  const [description, setDescription] = useState(persona?.description ?? initial?.description ?? '');
+  const [systemPrompt, setSystemPrompt] = useState(persona?.systemPrompt ?? initial?.systemPrompt ?? '');
   const [model, setModel] = useState(persona?.model ?? '');
   const [effort, setEffort] = useState(persona?.effort ?? '');
   const [scope, setScope] = useState<PersonaScope>(persona?.scope ?? defaultScope ?? 'global');
   const [projectId, setProjectId] = useState(persona?.projectId ?? defaultProjectId ?? '');
-  const [greeting, setGreeting] = useState(persona?.greeting ?? '');
-  const [color, setColor] = useState(persona?.avatar?.color ?? 'orange');
+  const [greeting, setGreeting] = useState(persona?.greeting ?? initial?.greeting ?? '');
+  const [color, setColor] = useState(persona?.avatar?.color ?? initial?.color ?? 'orange');
+  // Возможности персоны: массив включённых ключей. null у персоны = все включены.
+  const [tools, setTools] = useState<string[]>(
+    persona ? (persona.tools ?? ALL_TOOL_KEYS) : (initial?.tools ?? ALL_TOOL_KEYS));
   const [memoryEnabled, setMemoryEnabled] = useState(persona?.memoryEnabled ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Аватар: текущее состояние (обновляется после выбора кандидата), возможность
   // генерации (настроен ли fal), поле промпта и статус генерации.
-  const [avatar, setAvatar] = useState<Persona['avatar']>(persona?.avatar ?? { kind: 'initials', color: 'orange' });
+  const [avatar, setAvatar] = useState<Persona['avatar']>(persona?.avatar ?? { kind: 'initials', color: initial?.color ?? 'orange' });
   const [canGenerate, setCanGenerate] = useState(false);
   const [avatarPrompt, setAvatarPrompt] = useState('');
   const [generating, setGenerating] = useState(false);
@@ -217,6 +232,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     systemPrompt: systemPrompt.trim(), model, effort, scope,
     projectId: scope === 'project' ? projectId : '',
     color, greeting: greeting.trim(), memoryEnabled,
+    tools: [...tools].sort(),
   });
   const initialSnapshot = useMemo(() => {
     const s = persona?.scope ?? defaultScope ?? 'global';
@@ -232,6 +248,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       color: persona?.avatar?.color ?? 'orange',
       greeting: (persona?.greeting ?? '').trim(),
       memoryEnabled: persona?.memoryEnabled ?? false,
+      tools: [...(persona ? (persona.tools ?? ALL_TOOL_KEYS) : ALL_TOOL_KEYS)].sort(),
     });
   }, [persona, defaultScope, defaultProjectId]);
   const dirty = snapshot !== initialSnapshot;
@@ -252,6 +269,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       color,
       greeting: greeting.trim() || undefined,
       memoryEnabled,
+      // Всегда явный список: полный набор бэкенд нормализует в «без ограничений»
+      tools,
     };
     try {
       const saved = isEdit
@@ -589,6 +608,30 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     </div>
   );
 
+  // === Секция 3.5 — Возможности (инструменты per-persona) ===
+  const toggleTool = (key: string) =>
+    setTools(prev => prev.includes(key) ? prev.filter(t => t !== key) : [...prev, key]);
+
+  const toolsSection = (
+    <div style={section}>
+      <SectionLabel style={{ marginBottom: 4 }}>Возможности</SectionLabel>
+      <div style={{ fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans, marginBottom: 14 }}>
+        Какими инструментами персона может пользоваться в чате
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {TOOL_OPTIONS.map(t => (
+          <div key={t.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans }}>{t.title}</div>
+              <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, marginTop: 1 }}>{t.hint}</div>
+            </div>
+            <Toggle checked={tools.includes(t.key)} onChange={() => toggleTool(t.key)} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   // === Секция 4 — Долгая память (summary) ===
   const memorySection = (
     <div style={section}>
@@ -650,6 +693,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         {heroSection}
         {characterSection}
         {behaviorSection}
+        {toolsSection}
         {memorySection}
         {error && (
           <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>
@@ -658,6 +702,14 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     </div>
   );
 });
+
+// Возможности персоны: ключи и подписи тумблеров. Полный набор = «без ограничений».
+const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];
+const TOOL_OPTIONS: { key: string; title: string; hint: string }[] = [
+  { key: 'tasks', title: 'Задачи', hint: 'Ведёт ваши задачи через инструменты задач' },
+  { key: 'notes', title: 'Заметки', hint: 'Читает и пишет в базу знаний' },
+  { key: 'web', title: 'Веб', hint: 'Ищет и читает страницы в интернете' },
+];
 
 // Пресеты тона характера — клик добавляет заготовку в системный промпт
 const TONE_PRESETS: { label: string; text: string }[] = [

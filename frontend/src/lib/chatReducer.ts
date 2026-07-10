@@ -55,7 +55,8 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
 
     case 'text_delta': {
       const last = prev.items[prev.items.length - 1];
-      if (last?.kind === 'text') return withItems([...prev.items.slice(0, -1), { kind: 'text', text: last.text + msg.text }]);
+      // spread сохраняет прочие поля реплики (personaId — авторство)
+      if (last?.kind === 'text') return withItems([...prev.items.slice(0, -1), { ...last, text: last.text + msg.text }]);
       return withItems([...prev.items, { kind: 'text', text: msg.text }]);
     }
 

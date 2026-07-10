@@ -6,6 +6,7 @@ import { C, FONT, SHADOW } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
@@ -225,6 +226,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   const project = useContext(ChatProjectContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
+  // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
+  usePersonasVersion();
   switch (item.kind) {
     case 'user_message':
       return (
@@ -256,11 +259,14 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
 
     case 'text': {
       const msg = <TextMessageView text={item.text} online={online} onRetry={onRetry} streaming={streaming} />;
-      // В персон-чате слева от реплики ассистента — её аватар (главный сигнал «говорит она»)
-      if (persona) {
+      // В персон-чате слева от реплики ассистента — её аватар (главный сигнал «говорит она»).
+      // Авторство реплики (personaId из истории) главнее текущей персоны чата: после
+      // смены собеседника старые реплики сохраняют аватар прежней персоны.
+      const author = item.personaId ? (getPersonaById(item.personaId) ?? persona) : persona;
+      if (author) {
         return (
           <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
-            <div style={{ flexShrink: 0, marginTop: 1 }}><PersonaAvatar persona={persona} size={28} /></div>
+            <div style={{ flexShrink: 0, marginTop: 1 }}><PersonaAvatar persona={author} size={28} /></div>
             <div style={{ flex: 1, minWidth: 0 }}>{msg}</div>
           </div>
         );

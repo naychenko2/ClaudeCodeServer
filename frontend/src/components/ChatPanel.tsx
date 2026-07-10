@@ -151,7 +151,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const label = sel.persona ? personaLabel(sel.persona)
           : sel.agent ? sel.agent.name
           : 'обычный ассистент';
-        noteCompanionSwitch(label);
+        // Прежняя персона «замораживается» как автор уже написанных реплик
+        noteCompanionSwitch(label, session.personaId ?? null);
       }
     } catch (e) {
       showToast('Собеседник', e instanceof Error ? e.message : 'Не удалось сменить собеседника', 'info');

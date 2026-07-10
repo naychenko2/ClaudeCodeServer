@@ -213,12 +213,18 @@ export function useSession(sessionId: string | null, projectId?: string) {
   }, [sessionId]);
 
   // Локальный разделитель «Теперь отвечает: …» при смене собеседника по ходу разговора.
-  // Client-side сахар: не с сервера, не переживает перезагрузку истории.
-  const noteCompanionSwitch = useCallback((label: string) => {
+  // Client-side сахар: не с сервера, не переживает перезагрузку (после неё авторство
+  // реплик приходит из истории — personaId в text-сообщениях). prevPersonaId «замораживает»
+  // прежнего автора у live-реплик без personaId, чтобы их аватар не сменился на нового.
+  const noteCompanionSwitch = useCallback((label: string, prevPersonaId?: string | null) => {
     if (!sessionId) return;
     setState(sessionId, prev => ({
       ...prev,
-      items: [...prev.items, { kind: 'companion_switched', label }],
+      items: [
+        ...prev.items.map(it =>
+          prevPersonaId && it.kind === 'text' && !it.personaId ? { ...it, personaId: prevPersonaId } : it),
+        { kind: 'companion_switched', label },
+      ],
     }));
   }, [sessionId]);
 

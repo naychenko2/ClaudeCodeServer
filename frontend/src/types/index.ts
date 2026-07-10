@@ -335,7 +335,9 @@ export interface FalAccountResponse {
 export type ChatItem =
   | { kind: 'user_message'; text: string; attachedPaths?: string[] }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
-  | { kind: 'text'; text: string }
+  // personaId — авторство реплики (персона на момент хода); после смены собеседника
+  // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
+  | { kind: 'text'; text: string; personaId?: string }
   | { kind: 'thinking'; text: string; expanded: boolean }
   | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean }
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean }

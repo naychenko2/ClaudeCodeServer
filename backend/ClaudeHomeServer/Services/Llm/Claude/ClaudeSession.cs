@@ -189,6 +189,10 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     ["command"] = "node",
                     ["args"] = new System.Text.Json.Nodes.JsonArray { memoryServerPath! },
+                    // MCP подключается лениво (claude-code#19282): без alwaysLoad первый вызов
+                    // инструмента в ходе падает «No such tool available». Память/персон модель
+                    // зовёт первым же действием — ждём подключения до старта хода.
+                    ["alwaysLoad"] = true,
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["MEMORY_API_URL"] = _memoryMcp!.ApiUrl,
@@ -204,6 +208,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     ["command"] = "node",
                     ["args"] = new System.Text.Json.Nodes.JsonArray { personasServerPath! },
+                    ["alwaysLoad"] = true,
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["PERSONAS_API_URL"] = _personasMcp!.ApiUrl,
@@ -688,6 +693,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // Из-за этого длинные workflow обрывались на 10-й минуте, не доходя до конца. 0 = ждать без
         // ограничения по времени; нас страхует watchdog IdleTimeout (если claude замолчит дольше — прервём сами).
         psi.Environment["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] = "0";
+
+        // Даём MCP-серверам больше времени на подключение при старте хода: с дефолтным
+        // таймаутом медленно стартующий node-сервер (personas и др.) не успевал
+        // зарегистрировать тулы, и первый же вызов падал «No such tool available»
+        // (модель ретраила, но карточка ошибки засоряла ленту).
+        psi.Environment["MCP_TIMEOUT"] = "30000";
 
         // Сторонний провайдер (DeepSeek/GLM): перенаправляем CLI на его Anthropic-совместимый
         // эндпоинт. Env считаются каждый ход — модель сессии могла смениться между ходами.

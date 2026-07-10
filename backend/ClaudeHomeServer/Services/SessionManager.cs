@@ -456,7 +456,8 @@ public class SessionManager
             "точное имя тула смотри в списке доступных инструментов) — она ответит от своего " +
             "лица, со своим характером и памятью. Когда пользователь упоминает персону через @handle — " +
             "обязательно обратись к ней через persona_ask и учти её ответ. Вопрос формулируй " +
-            "самодостаточно: персона не видит этот разговор. Доступные персоны:");
+            "самодостаточно: персона не видит этот разговор. Если вызов вернул «No such tool available» — " +
+            "сервер персон ещё подключается: подожди мгновение и повтори тот же вызов. Доступные персоны:");
         foreach (var p in others)
         {
             var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
@@ -615,6 +616,10 @@ public class SessionManager
 
         await EnsureProcessAsync(sessionId, entry);
 
+        // Авторство реплик хода: text-сообщения истории получают персону на момент хода
+        // (после смены собеседника старые реплики сохраняют прежний аватар)
+        entry.Accumulator?.SetPersona(entry.Info.PersonaId);
+
         // Авто-имя сессии по первому сообщению (Claude в --print не отдаёт title/summary).
         // Ставим только если имя ещё не задано — последующие сообщения название не меняют.
         // Работает и для чатов вне проекта, и для проектных сессий.
@@ -644,6 +649,7 @@ public class SessionManager
             return; // провайдер не умеет compact — защита от рассинхрона UI
 
         await EnsureProcessAsync(sessionId, entry);
+        entry.Accumulator?.SetPersona(entry.Info.PersonaId);
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 

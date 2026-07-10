@@ -34,6 +34,15 @@ internal class TurnAccumulator
         lock (_lock) _saveKey = claudeSessionId;
     }
 
+    // Персона текущего хода: её id пишется в text-сообщения истории (авторство реплик).
+    // Обновляется перед каждым ходом — после смены собеседника новые реплики получают
+    // новую персону, а старые сохраняют прежнюю.
+    private string? _personaId;
+    public void SetPersona(string? personaId)
+    {
+        lock (_lock) _personaId = personaId;
+    }
+
     public void OnUserMessage(string text, IReadOnlyList<string> attachedPaths)
     {
         lock (_lock)
@@ -190,7 +199,7 @@ internal class TurnAccumulator
             if (_thinkingBuf.Length > 0)
                 result.Add(new StoredThinkingMessage(_thinkingBuf.ToString()));
             if (_textBuf.Length > 0)
-                result.Add(new StoredTextMessage(_textBuf.ToString()));
+                result.Add(new StoredTextMessage(_textBuf.ToString(), _personaId));
             return result;
         }
     }
@@ -215,7 +224,7 @@ internal class TurnAccumulator
     {
         if (_textBuf.Length > 0)
         {
-            _currentTurn.Add(new StoredTextMessage(_textBuf.ToString()));
+            _currentTurn.Add(new StoredTextMessage(_textBuf.ToString(), _personaId));
             _textBuf.Clear();
         }
         if (_thinkingBuf.Length > 0)

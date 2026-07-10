@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
-import type { Project, Session, ClaudeBilling } from '../../types';
+import type { Project, Session, ClaudeBilling, Persona } from '../../types';
 import { api } from '../../lib/api';
 import { modelLabel, modelProvider, assistantName, useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
+import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { personaTitleLines } from '../../lib/personas';
+import { AGENT_COLORS, agentDotColor } from '../AgentSelector';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from '../../lib/rateLimit';
 import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
@@ -650,6 +653,11 @@ interface ChatHeaderBarProps {
   canCompact: boolean;
   compactNote?: string;
   onCompact: () => void;
+  // Персона чата — идентификация встроена прямо в тулбар
+  persona?: Persona | null;
+  personaZoneName?: string | null;         // имя проекта для бейджа зоны проектной персоны
+  // .md-агент чата (когда персоны нет) — компактная точка + имя в подзаголовке
+  agent?: { name: string; color?: string } | null;
 }
 
 // «Итог сессии в заметку» — теперь запускается ТОЛЬКО через AI-палитру (действие
@@ -758,7 +766,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent }: ChatHeaderBarProps) {
   const sessionModelLabel = useModelLabel(session.model);
   const asstName = assistantName(session.model);
   const providerKey = modelProvider(session.model);
@@ -777,13 +785,59 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       .catch(() => { /* баланс — необязательная информация */ });
     return () => { alive = false; };
   }, [session.model, providerKey, isCliProvider]);
+  // Цвет персоны (её акцент бренда) — тонирует заголовок, пилюлю зоны и левую границу тулбара.
+  const personaAccent = persona ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? C.accent) : null;
+  const personaIsProject = persona?.scope === 'project';
+  const personaZoneText = personaIsProject
+    ? (personaZoneName ? `Проект · ${personaZoneName}` : 'Проект')
+    : 'Глобальный';
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
-  const titleBlock = (
+  // При наличии персоны — её идентификация доминирует: аватар + роль (serif, цвет персоны)
+  // и вторая строка «имя · зона · модель». session.name уходит в тултип, чтобы не потеряться.
+  const titleBlock = persona && personaAccent ? (
+    <div title={session.name ?? undefined} style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 9 }}>
+      <PersonaAvatar persona={persona} size={28} />
+      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        {/* Роль — заголовок (serif, цвет персоны) */}
+        <span style={{ fontFamily: FONT.serif, fontSize: 16, fontWeight: 600, color: personaAccent, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {personaTitleLines(persona).primary}
+        </span>
+        {/* Строка 2: имя персоны + пилюля зоны + модель/effort (компактно) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: 1 }}>
+          {personaTitleLines(persona).secondary && (
+            <span style={{ flexShrink: 0, fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {personaTitleLines(persona).secondary}
+            </span>
+          )}
+          <span style={{
+            flexShrink: 0, fontSize: 10, fontWeight: 600, letterSpacing: '0.02em',
+            padding: '1px 7px', borderRadius: R.pill,
+            background: `${personaAccent}${personaIsProject ? '2E' : '17'}`, color: personaAccent,
+          }}>
+            {personaZoneText}
+          </span>
+          {!isMobile && (
+            <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+              {sessionModelLabel}{session.effort && ` · ${effortLabel(session.effort)}`}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  ) : (
     <div style={{ minWidth: 0, flex: 1 }}>
       <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {session.name ?? 'Новый чат'}
       </div>
       <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {/* .md-агент чата — лёгкая пометка: цветная точка + имя (не персона-блок) */}
+        {agent && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 4, verticalAlign: 'baseline' }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: agentDotColor(agent.color), display: 'inline-block', flexShrink: 0 }} />
+            <span style={{ fontFamily: FONT.sans, fontWeight: 600, color: C.textSecondary }}>{agent.name}</span>
+            <span> ·</span>
+          </span>
+        )}
         {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
         {!isMobile && <span>{project ? project.name : 'без проекта'} · </span>}{sessionModelLabel}
         {session.effort && <span> · {effortLabel(session.effort)}</span>}
@@ -875,7 +929,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     : <>{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</>;
 
   return (
-    <Toolbar isMobile={isMobile}>
+    <Toolbar isMobile={isMobile} style={personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : undefined}>
       {openBtn}{titleEl}{workflowBadge}{costBadges}{actionBtns}
     </Toolbar>
   );

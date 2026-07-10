@@ -65,6 +65,11 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly NotesMcpContext? _notesMcp;
     // Auto-recall заметок: по тексту хода возвращает markdown-блок для системного промпта
     private readonly Func<string, Task<string?>>? _recallProvider;
+    // Системный промпт персоны: её имя/роль/характер
+    private readonly string? _personaPrompt;
+    // MCP-сервер долгой памяти персоны + auto-recall её памяти
+    private readonly MemoryMcpContext? _memoryMcp;
+    private readonly Func<string, Task<string?>>? _personaRecallProvider;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -86,6 +91,9 @@ public class ClaudeSession : ILlmSessionAdapter
         _tasksMcp = context.TasksMcp;
         _notesMcp = context.NotesMcp;
         _recallProvider = context.RecallProvider;
+        _personaPrompt = context.PersonaSystemPrompt;
+        _memoryMcp = context.MemoryMcp;
+        _personaRecallProvider = context.PersonaRecallProvider;
         _disallowedTools = disallowedTools ?? [];
         _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage);
     }
@@ -100,9 +108,11 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasTasks = tasksServerPath is not null;
         var notesServerPath = _notesMcp is not null ? NotesServerLocator.FindNotesServerPath() : null;
         var hasNotes = notesServerPath is not null;
+        var memoryServerPath = _memoryMcp is not null ? MemoryServerLocator.FindMemoryServerPath() : null;
+        var hasMemory = memoryServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var userServers = LoadUserScopeMcpServers();
-        if (!hasTasks && !hasNotes && !hasDataset && userServers is null) return null;
+        if (!hasTasks && !hasNotes && !hasMemory && !hasDataset && userServers is null) return null;
 
         try
         {
@@ -161,6 +171,21 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["NOTES_API_URL"] = _notesMcp!.ApiUrl,
                         ["NOTES_API_TOKEN"] = _notesMcp.Token,
                         ["NOTES_PROJECT_ID"] = _notesMcp.ProjectId ?? "",
+                    },
+                };
+            }
+
+            if (hasMemory)
+            {
+                servers["memory"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["command"] = "node",
+                    ["args"] = new System.Text.Json.Nodes.JsonArray { memoryServerPath! },
+                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["MEMORY_API_URL"] = _memoryMcp!.ApiUrl,
+                        ["MEMORY_API_TOKEN"] = _memoryMcp.Token,
+                        ["MEMORY_PERSONA_ID"] = _memoryMcp.PersonaId,
                     },
                 };
             }
@@ -562,8 +587,37 @@ public class ClaudeSession : ILlmSessionAdapter
                         : basePrompt + "\n\n" + recall;
             }
 
-            string? agentPrompt = null;
-            if (!string.IsNullOrEmpty(Info.AgentName) && _skills is not null)
+            // Подсказка про долгую память — только когда memory-server подключён (персонная сессия)
+            if (_memoryMcp is not null)
+            {
+                var memoryHint =
+                    "У тебя есть долгая память между разговорами — управляй ей через MCP-инструменты mcp__memory__* " +
+                    "(memory_remember, memory_search, memory_list, memory_forget). Типы: semantic — устойчивые факты и " +
+                    "предпочтения пользователя; episodic — что было/обсуждалось в прошлых разговорах; procedural — выученные " +
+                    "приёмы и правила. Когда узнаёшь что-то важное о пользователе или договариваешься о чём-то на будущее — " +
+                    "запоминай это (memory_remember). Когда нужно вспомнить контекст — ищи в памяти (memory_search).";
+                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                    ? memoryHint
+                    : basePrompt + "\n\n" + memoryHint;
+            }
+
+            // Auto-recall долгой памяти персоны: релевантные записи по тексту хода.
+            // Независим от заметок; провайдер сам гейтит по MemoryEnabled/флагу, ошибки не роняют ход.
+            if (_personaRecallProvider is not null && _memoryMcp is not null)
+            {
+                string? memRecall = null;
+                try { memRecall = await _personaRecallProvider(text); }
+                catch { /* recall памяти не должен ронять ход */ }
+                if (!string.IsNullOrWhiteSpace(memRecall))
+                    basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                        ? memRecall
+                        : basePrompt + "\n\n" + memRecall;
+            }
+
+            // Персональный слой: промпт персоны имеет приоритет
+            // над .md-агентом — чат ведётся от её лица, характер задаёт именно персона.
+            string? agentPrompt = _personaPrompt;
+            if (agentPrompt is null && !string.IsNullOrEmpty(Info.AgentName) && _skills is not null)
                 agentPrompt = _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName);
 
             var combinedPrompt = agentPrompt is not null

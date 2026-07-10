@@ -29,6 +29,8 @@ public static class FeatureFlagKeys
     public const string AiAssist = "ai-assist";
     // Единый офлайн-режим для заметок и задач.
     public const string Offline = "offline";
+    public const string Personas = "personas";
+    public const string PersonaMemoryAutolearn = "persona-memory-autolearn";
 }
 
 /// <summary>
@@ -83,6 +85,23 @@ public static class FeatureFlagCatalog
             Description: "Заметки и задачи работают без соединения — просмотр, правка и создание сохраняются на устройстве и синхронизируются с сервером, как только связь вернётся. Конфликты сохраняются копией.",
             Default: false,
             Stage: "beta"),
+
+        // Раздел «Персоны»: имя, аватар, характер, отдельный чат, долгая память и доступ
+        // к контексту (глобально или в рамках проекта). Не путать с .md-агентами Claude Code.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.Personas,
+            Title: "Персоны",
+            Description: "Персоны с именем, аватаром и характером: у каждой свой чат, долгая память и доступ ко всей информации в своей зоне контекста (глобально или по проекту).",
+            Default: false,
+            Stage: "beta"),
+
+        // Персона сама извлекает факты из диалога в долгую память (авто-обучение) после сессии.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PersonaMemoryAutolearn,
+            Title: "Авто-память персон",
+            Description: "После разговора персона сама вычленяет из диалога факты и выводы и сохраняет их в свою долгую память — без явной команды «запомни».",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

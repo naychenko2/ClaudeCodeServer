@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { SkillsDropdown } from './SkillsDropdown';
-import { AgentSelector } from './AgentSelector';
+import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
-import type { SkillInfo, AgentInfo } from '../types';
+import type { SkillInfo, AgentInfo, Persona } from '../types';
 
 export interface ComposerProps {
   // Ключ чата — под него хранится черновик недовведённого текста
@@ -28,9 +28,15 @@ export interface ComposerProps {
   // иначе теряется набранный черновик при кратком пропадании сети
   offline?: boolean;
   skills?: SkillInfo[];
+  // Единый селектор «собеседника» (персона или .md-агент Claude). Показывается только
+  // у пустого чата (hasMessages=false): назначить собеседника можно, пока не пошли ходы.
+  personas?: Persona[];
   agents?: AgentInfo[];
-  selectedAgent?: AgentInfo | null;
-  onAgentChange?: (agent: AgentInfo | null) => void;
+  selectedPersona?: Persona | null;
+  selectedAgentName?: string | null;
+  onCompanionChange?: (sel: CompanionSelection) => void;
+  canPickCompanion?: boolean;
+  hasMessages?: boolean;
 }
 
 // Получить имя файла из пути
@@ -120,9 +126,13 @@ export function Composer({
   isMobile,
   offline,
   skills = [],
+  personas = [],
   agents = [],
-  selectedAgent = null,
-  onAgentChange,
+  selectedPersona = null,
+  selectedAgentName = null,
+  onCompanionChange,
+  canPickCompanion,
+  hasMessages,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
@@ -647,12 +657,15 @@ export function Composer({
     );
   }
 
-  // AgentSelector кнопка — переиспользуется в обоих раскладках
-  const agentSelector = agents.length > 0 ? (
-    <AgentSelector
+  // Единый селектор собеседника (персона или .md-агент). Только у пустого чата:
+  // назначить/сменить можно, пока не пошли ходы (после первого сообщения бэкенд отклонит смену).
+  const companionSelector = canPickCompanion && !hasMessages && (personas.length > 0 || agents.length > 0) && onCompanionChange ? (
+    <CompanionSelector
+      personas={personas}
       agents={agents}
-      selectedAgent={selectedAgent ?? null}
-      onSelect={onAgentChange ?? (() => {})}
+      selectedPersona={selectedPersona ?? null}
+      selectedAgentName={selectedAgentName ?? null}
+      onSelect={onCompanionChange}
       isMobile={isMobile}
     />
   ) : null;
@@ -733,7 +746,7 @@ export function Composer({
             {attachButton}
             {slashButton}
             {modeButton}
-            {agentSelector}
+            {companionSelector}
             <div style={{ flex: 1 }} />
             {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
           </div>
@@ -745,7 +758,7 @@ export function Composer({
           {attachButton}
           {slashButton}
           {inputArea}
-          {agentSelector}
+          {companionSelector}
           {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <><div style={{ width: 12, flexShrink: 0 }} />{micButton}{sendButton}</>}
         </div>
       )}

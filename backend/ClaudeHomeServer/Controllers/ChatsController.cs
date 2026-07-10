@@ -52,6 +52,22 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // Назначить/снять собеседника у чата ДО первого хода (селектор в пустом чате):
+    // персону (personaId) или .md-агента (agentName) — взаимоисключающе; оба пустые = снять.
+    // Начатую сессию менять нельзя (клиент делает форк).
+    [HttpPost("{id}/persona")]
+    public IActionResult SetPersona(string id, [FromBody] SetPersonaRequest req)
+    {
+        if (OwnedChat(id) is null) return NotFound();
+        try
+        {
+            var updated = sessions.SetPersona(id, UserId, req.PersonaId, req.AgentName);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
     [HttpGet("{id}/history")]
     public async Task<IActionResult> GetHistory(string id)
     {
@@ -98,3 +114,5 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
 public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? Effort = null);
 
 public record UpdateChatRequest(string? Name = null, string? Model = null, string? Effort = null, bool? Pinned = null);
+
+public record SetPersonaRequest(string? PersonaId = null, string? AgentName = null);

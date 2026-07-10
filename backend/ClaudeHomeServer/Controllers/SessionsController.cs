@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -10,6 +12,8 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/sessions")]
 public class SessionsController(SessionManager sessions) : ControllerBase
 {
+    private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
     [HttpGet]
     public IActionResult GetAll(string projectId) => Ok(sessions.GetByProject(projectId));
 
@@ -37,6 +41,21 @@ public class SessionsController(SessionManager sessions) : ControllerBase
             return updated == null ? NotFound() : Ok(updated);
         }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    // Назначить/снять собеседника (персону или .md-агента) у проектной сессии ДО первого хода
+    [HttpPost("{sessionId}/persona")]
+    public IActionResult SetPersona(string projectId, string sessionId, [FromBody] SetPersonaRequest req)
+    {
+        var session = sessions.GetById(sessionId);
+        if (session == null || session.ProjectId != projectId) return NotFound();
+        try
+        {
+            var updated = sessions.SetPersona(sessionId, UserId, req.PersonaId, req.AgentName);
+            return updated == null ? NotFound() : Ok(updated);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     [HttpGet("{sessionId}/history")]

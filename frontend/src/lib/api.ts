@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -231,6 +231,123 @@ export const api = {
     setNoteTaskDue: (id: string, line: number, due: string | null) =>
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/tasks/set-due`, {
         method: 'POST', body: JSON.stringify({ line, due }),
+      }),
+  },
+
+  // Персоны (олицетворённые ИИ-собеседники): CRUD персон владельца (флаг personas)
+  personas: {
+    // scope=context&projectId= — только доступные в контексте (глобальные + этого проекта)
+    list: (opts?: { scope?: string; projectId?: string }) => {
+      const qs = new URLSearchParams();
+      if (opts?.scope) qs.set('scope', opts.scope);
+      if (opts?.projectId) qs.set('projectId', opts.projectId);
+      const s = qs.toString();
+      return request<Persona[]>(`/personas${s ? `?${s}` : ''}`);
+    },
+    get: (id: string) => request<Persona>(`/personas/${encodeURIComponent(id)}`),
+    create: (dto: CreatePersonaDto) =>
+      request<Persona>('/personas', { method: 'POST', body: JSON.stringify(dto) }),
+    update: (id: string, dto: UpdatePersonaDto) =>
+      request<Persona>(`/personas/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dto) }),
+    remove: (id: string) =>
+      request<void>(`/personas/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    // Чаты, ведущиеся от лица персоны (этап 2): список + создание нового
+    chats: (id: string) => request<Session[]>(`/personas/${encodeURIComponent(id)}/chats`),
+    createChat: (id: string, body: { mode?: string; resumeSessionId?: string; name?: string }) =>
+      request<Session>(`/personas/${encodeURIComponent(id)}/chats`, { method: 'POST', body: JSON.stringify(body) }),
+
+    // Назначить/снять собеседника чату вне проекта: персона (personaId) либо .md-агент
+    // (agentName) — взаимоисключающе, оба null = снять. 400, если чат уже начат.
+    assignPersonaToChat: (chatId: string, personaId: string | null, agentName: string | null = null) =>
+      request<Session>(`/chats/${encodeURIComponent(chatId)}/persona`, {
+        method: 'POST',
+        body: JSON.stringify({ personaId, agentName }),
+      }),
+    // То же для проектной сессии
+    assignPersonaToSession: (projectId: string, sessionId: string, personaId: string | null, agentName: string | null = null) =>
+      request<Session>(`/projects/${projectId}/sessions/${sessionId}/persona`, {
+        method: 'POST',
+        body: JSON.stringify({ personaId, agentName }),
+      }),
+
+    // Долгая память персоны (этап 3): список / поиск / ручное добавление / забывание.
+    // type — необязательный фильтр по категории.
+    memory: (id: string, type?: PersonaMemoryType) =>
+      request<PersonaMemoryEntry[]>(
+        `/personas/${encodeURIComponent(id)}/memory${type ? `?type=${encodeURIComponent(type)}` : ''}`,
+      ),
+    memorySearch: (id: string, q: string, topK?: number) =>
+      request<PersonaMemoryHit[]>(
+        `/personas/${encodeURIComponent(id)}/memory/search?q=${encodeURIComponent(q)}${topK ? `&topK=${topK}` : ''}`,
+      ),
+    remember: (id: string, body: { type: PersonaMemoryType; text: string; tags?: string[] }) =>
+      request<PersonaMemoryEntry>(`/personas/${encodeURIComponent(id)}/memory`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    forget: (id: string, entryId: string) =>
+      request<void>(`/personas/${encodeURIComponent(id)}/memory/${encodeURIComponent(entryId)}`, {
+        method: 'DELETE',
+      }),
+
+    // Аватар (этап 4): можно ли генерировать (настроен ли fal),
+    // генерация картинки и построение URL для <img>.
+    avatarCaps: () => request<{ generate: boolean }>('/personas/avatar/caps'),
+    // Генерация галереи кандидатов: возвращает имена файлов (аватар персоны НЕ меняется
+    // до явного выбора). count — сколько вариантов (1..4).
+    generateAvatar: (id: string, opts?: { prompt?: string; count?: number }) =>
+      request<{ candidates: string[] }>(`/personas/${encodeURIComponent(id)}/avatar/generate`, {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt: opts?.prompt?.trim() || undefined,
+          count: opts?.count,
+        }),
+      }),
+    // Выбор кандидата — он становится аватаром персоны, возвращается обновлённая персона
+    selectAvatar: (id: string, file: string) =>
+      request<Persona>(`/personas/${encodeURIComponent(id)}/avatar/select`, {
+        method: 'POST',
+        body: JSON.stringify({ file }),
+      }),
+    // URL картинки-аватара для браузерного <img>: токен уходит через ?access_token=
+    // (заголовок Authorization <img> не шлёт — как у notes attachment / files stream).
+    // Возвращает null, если у персоны нет картинки. cache-busting по imageFile —
+    // иначе после перегенерации браузер покажет старый кадр из кэша.
+    avatarUrl: (persona: Persona): string | null => {
+      if (persona.avatar?.kind !== 'image' || !persona.avatar.imageFile) return null;
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const params = new URLSearchParams();
+      if (token) params.set('access_token', token);
+      params.set('v', persona.avatar.imageFile);
+      return `/api/personas/${encodeURIComponent(persona.id)}/avatar?${params}`;
+    },
+    // URL картинки-кандидата (галерея генерации) для <img>: токен через ?access_token=
+    avatarCandidateUrl: (id: string, file: string): string => {
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const params = new URLSearchParams();
+      if (token) params.set('access_token', token);
+      return `/api/personas/${encodeURIComponent(id)}/avatar/candidate/${encodeURIComponent(file)}?${params}`;
+    },
+    // Быстрое создание персоны по свободному промпту: LLM заполняет роль/имя/описание/
+    // характер/приветствие/цвет, фото-аватар генерируется автоматически.
+    // Запрос долгий (LLM ~10-40с + fal ~10-40с, до ~90с) — таймаут расширен. 502 — можно повторить.
+    quickCreate: (body: { prompt: string; scope?: PersonaScope; projectId?: string }) =>
+      request<Persona>('/personas/ai/quick-create', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        timeoutMs: 150_000,
+      }),
+    // AI-редактирование «характера» (system-промпта): без current — генерация с нуля
+    // по имени/роли/описанию; с current (+ опц. instruction) — улучшение текущего текста.
+    // Может занять до ~30с; 502 при ошибке.
+    aiCharacter: (body: { name?: string; role?: string; description?: string; current?: string; instruction?: string }) =>
+      request<{ character: string }>('/personas/ai/character', {
+        method: 'POST',
+        body: JSON.stringify(body),
       }),
   },
 

@@ -187,6 +187,73 @@ WorkingDirectory = `project.RootPath`
   (живая/призрачная/внешняя), embeds `![[…]]`, hover-preview; стор
   [lib/notes.ts](frontend/src/lib/notes.ts) (realtime notes_changed).
 
+## Персоны
+
+Концепция **«Персоны = контакты, Чаты = разговоры»** (фич-флаг `personas`): глобальный раздел
+«Персоны» (хаб-таб) и вкладка «Команда» внутри проекта — **только настройка** (профиль + память);
+разговор с агентом живёт среди обычных чатов и везде помечен его лицом (аватар/роль/цвет).
+Персона — **отдельная сущность** (JSON-стор, не .md-агент): роль (главная в отображении:
+«Роль (Имя)»), имя, характер, аватар, модель/усилие, зона, приветствие, долгая память.
+Изоляция per-owner (как задачи/заметки).
+
+- **Модель**: [Persona.cs](backend/ClaudeHomeServer/Models/Persona.cs) — `Persona`
+  (Name, Role, Handle, Description, SystemPrompt, Model/Effort, Scope `Global|Project`, ProjectId,
+  Avatar `{Kind initials|image, Color, ImageFile}`, Greeting, MemoryEnabled) +
+  `PersonaMemoryEntry` (Type `Semantic|Episodic|Procedural`, Text, Tags, Salience). Хранилище —
+  `data/personas.json`, ассеты (аватары) — `data/personas/{id}/`.
+- **CRUD**: [PersonaManager.cs](backend/ClaudeHomeServer/Services/PersonaManager.cs) — per-owner
+  (`Get(id, userId)` проверяет OwnerId), генерация уникального slug-`Handle`.
+  [PersonasController.cs](backend/ClaudeHomeServer/Controllers/PersonasController.cs) —
+  `/api/personas/*` (CRUD с фильтрами `?scope=context|project|global&projectId=`, `{id}/chats`,
+  `{id}/memory*`, `{id}/avatar*`, `ai/character` — LLM-генерация/улучшение характера с
+  уточняющим промптом); realtime — `PersonasChangedMessage` (created/updated/deleted/memory).
+- **Чат с персоной**: `Session.PersonaId`; `SessionManager.CreatePersonaChatAsync` маршрутизирует
+  по зоне — **глобальная** персона → чат вне проекта (scope = все данные владельца, `ProjectId=null`
+  в tasks/notes MCP), **проектная** → сессия в её проекте (scope = только проект). Характер персоны
+  инжектится в системный промпт как персональный слой ([ClaudeSession.cs](backend/ClaudeHomeServer/Services/Llm/Claude/ClaudeSession.cs),
+  приоритет над .md-агентом); персона-слой (промпт+память) восстанавливается и после рестарта
+  (`BuildPersonaLayer` в `EnsureProcessAsync`). Назначение агента пустому чату —
+  `SessionManager.SetPersona` (`POST /chats/{id}/persona`, `POST .../sessions/{sid}/persona`;
+  400 после первого хода — смена агента = новый чат). Scope НЕ требует спец-логики — он
+  предопределён типом сессии.
+- **Долгая память** (типизация 2026 semantic/episodic/procedural):
+  [PersonaMemoryService.cs](backend/ClaudeHomeServer/Services/PersonaMemoryService.cs) — записи в
+  `data/persona-memory.json` (источник правды) + семантический слой в Dify-датасет
+  `{username}:persona:{handle}` (дифф по хешам, дебаунс 15с; без Dify — полнотекст-fallback).
+  Retrieval со скорингом `relevance × recency(полураспад 30д) × typeWeight(0.6/0.3/0.1) × salience`.
+  Auto-recall в системный промпт каждого хода (`BuildPersonaRecallProvider`, независим от заметок).
+- **MCP**: [mcp/memory-server/index.js](mcp/memory-server/index.js) (без зависимостей) —
+  memory_remember/search/list/forget; подключение как tasks/notes (env `MEMORY_API_URL/TOKEN/PERSONA_ID`
+  в `BuildTurnMcpConfig` + подсказка в промпт). Явный write-path: персона сама решает, что запомнить.
+- **Аватар**: инициалы+цвет (палитра `AGENT_COLORS`) базой; фото-генерация через fal.ai —
+  [FalImageService.cs](backend/ClaudeHomeServer/Services/FalImageService.cs) (`Fal:ApiKey`, модель
+  `Fal:ImageModel`, дефолт `fal-ai/flux/schnell`; для фото-аватаров задают `flux/dev`). Генерация
+  возвращает 1-4 **кандидата** (`POST {id}/avatar/generate` {prompt?,count?} → candidates во временную
+  папку, аватар НЕ меняется), пользователь выбирает (`POST {id}/avatar/select`), отдача — `GET {id}/avatar`
+  (access_token в query для `<img>`).
+- **Авто-память** (флаг `persona-memory-autolearn`): [PersonaMemoryAutolearnService.cs](backend/ClaudeHomeServer/Services/PersonaMemoryAutolearnService.cs) —
+  IHostedService на `SessionManager.OnSessionMessage`; по завершении хода персонной сессии one-shot
+  извлекает факты (semantic) и итог (episodic) из транскрипта и сохраняет в память (дедуп в `Remember`).
+- **Фронт**: [features/personas/](frontend/src/features/personas/) — PersonasPage (глобальный раздел,
+  только `scope=global`): сайдбар PersonaList | центр «Студия-профиль»; редактор
+  [PersonaForm.tsx](frontend/src/features/personas/PersonaForm.tsx) — одна колонка 680 в стиле
+  TaskEditForm: hero-аватар 80 (инлайн-генерация 4 кандидатов + цвет), безрамочная serif-«Роль»,
+  Характер во всю ширину (липкая панель пресетов + ✨Сгенерировать/✨Улучшить с уточняющим
+  промптом-поповером, autoGrow без скролла), Поведение (модель/усилие/зона/приветствие),
+  Память-summary (счётчики + «Открыть память»); действия — в [PersonaToolbar.tsx](frontend/src/features/personas/PersonaToolbar.tsx)
+  (общий Toolbar: Профиль|Память, Поговорить, ⋯-меню с Удалить, Сохранить + dirty-индикатор).
+  В проекте — вкладка «Команда» (`leftTab='agents'` WorkspacePage): список в сайдбаре
+  ([ProjectPersonasPanel.tsx](frontend/src/features/personas/ProjectPersonasPanel.tsx)), форма — в
+  контентной зоне. Идентификация в чатах: плашки ChatList/SessionList (аватар+«Роль (Имя)»+цвет),
+  агент в тулбаре чата (ChatHeaderBar: аватар+роль/имя+зона+полоса цвета), аватар у реплик
+  (PersonaContext→ChatItemView), приветствие (PersonaGreeting). Запуск чата: «Поговорить» из
+  студии, [PersonaSelector](frontend/src/components/PersonaSelector.tsx) в композере пустого чата
+  (группы «Команда проекта»/«Глобальные»), пилюли «Поговорить с…» в empty state (в проекте
+  команда сразу, глобальные за «+N ещё»). Стор [lib/personas.ts](frontend/src/lib/personas.ts)
+  (realtime personas_changed; `personaLabel`/`personaTitleLines` — единый формат «Роль (Имя)»).
+- **Флаги**: `personas` (раздел + чат + память + аватар), `persona-memory-autolearn` (авто-извлечение
+  фактов из диалога).
+
 ## REST API
 
 Все эндпоинты (кроме `/api/auth/ping`) и SignalR-хаб защищены `[Authorize]` —
@@ -216,6 +283,13 @@ PUT                 /api/auth/timezone                { timeZone }  (IANA-зон
 POST                /api/tasks/{id}/execute           → Task  (запуск Claude-исполнителя, флаг task-claude-exec)
 GET                 /api/push/vapid-public-key        → { publicKey }
 POST                /api/push/subscribe|unsubscribe   { endpoint, p256dh?, auth? }  (web-push подписки устройств)
+GET/POST/PUT/DELETE /api/personas                     (CRUD персон; ?scope=context&projectId= — доступные в контексте)  [флаг personas]
+GET/POST            /api/personas/{id}/chats          POST body { mode?, resumeSessionId?, name? } → Session (чат от лица персоны)
+GET/POST            /api/personas/{id}/memory         ?type=  / body { type, text, tags? } → записи памяти
+GET                 /api/personas/{id}/memory/search  ?q=&topK=  → hits (relevance×recency×type)
+DELETE              /api/personas/{id}/memory/{entryId}
+POST                /api/personas/{id}/avatar/generate { prompt? } → Persona  (AI-аватар через fal)
+GET                 /api/personas/{id}/avatar          → картинка (access_token в query для <img>)
 ```
 
 Эффективные значения флагов также возвращаются в `GET /api/auth/me` (поле `featureFlags`),

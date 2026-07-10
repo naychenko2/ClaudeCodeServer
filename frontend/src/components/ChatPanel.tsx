@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from 'react';
-import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling } from '../types';
+import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona } from '../types';
 import { useSession } from '../hooks/useSession';
+import { usePersonasVersion, getPersonaById, ensurePersonasLoaded } from '../lib/personas';
+import { showToast } from '../lib/toast';
+import { PersonaGreeting } from '../features/personas/PersonaGreeting';
 import { countFiles, computeTodos } from '../hooks/useSessionArtifacts';
 import { useChatScroll } from '../hooks/useChatScroll';
 import { useOnline } from '../hooks/useOnline';
@@ -18,7 +21,7 @@ import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { setChatContext } from '../lib/ai/chatContext';
 import { ChatHeaderBar, RateLimitBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
-import { ChatProjectContext, FalCostContext, AssistantNameContext } from './chat/contexts';
+import { ChatProjectContext, FalCostContext, AssistantNameContext, PersonaContext } from './chat/contexts';
 import { WaitingIndicator } from './chat/WaitingIndicator';
 import { ChatEmptyState } from './chat/EmptyState';
 import { AttachPicker } from './chat/AttachPicker';
@@ -40,15 +43,17 @@ interface Props {
   onWorkflowRunning?: (active: boolean, sessionId: string) => void;
   onOpenSidebar?: () => void;
   skills?: SkillInfo[];
+  // .md-агенты Claude проекта — для единого селектора собеседника и индикации в шапке
   agents?: AgentInfo[];
-  selectedAgent?: AgentInfo | null;
-  onAgentChange?: (agent: AgentInfo | null) => void;
   attachedFiles: string[];
   onAttachedFilesChange: (files: string[]) => void;
   onResume?: (message?: string) => void;
   // Тумблер панели «Артефакты сессии» в шапке (приходит только при включённом фич-флаге)
   artifactsOpen?: boolean;
   onToggleArtifacts?: () => void;
+  // Приветственный бабл персоны: показывается в пустом чате вместо обычного empty state
+  // (чисто визуально, в бэкенд не отправляется). Как только пойдут реальные сообщения — исчезает.
+  greetingBubble?: React.ReactNode;
 }
 
 // Фаза работы режима «План» — выводится из ленты, mode и isWaiting (сервер фазу не присылает)
@@ -90,7 +95,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
   return null;
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking } = useSession(session.id, project?.id);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
@@ -107,6 +112,68 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     () => caps.supportsCompact && items.filter(it => it.kind === 'result').length >= 2,
     [items, caps.supportsCompact]);
   const online = useOnline();
+
+  // === Персона чата ===
+  // Резолвим персону сессии из стора (реактивно — при обновлении списка перечитываем).
+  const personasVersion = usePersonasVersion();
+  const persona = useMemo(
+    () => session.personaId ? getPersonaById(session.personaId) ?? null : null,
+    [session.personaId, personasVersion]
+  );
+  useEffect(() => { void ensurePersonasLoaded(); }, []);
+  // Есть ли уже ходы — назначать/менять персону можно только у пустого чата (бэкенд иначе 400)
+  const chatEmpty = items.length === 0;
+  // Персоны, доступные в контексте чата (глобальные + этого проекта) — для селектора,
+  // пилюль пустого состояния и форка. Грузим лениво, пока чат пуст либо ведётся персоной.
+  const [ctxPersonas, setCtxPersonas] = useState<Persona[]>([]);
+  useEffect(() => {
+    if (!online) return;
+    if (!chatEmpty && !persona) return; // список нужен только для пустого чата или форка
+    let alive = true;
+    api.personas.list({ scope: 'context', projectId: project?.id })
+      .then(list => { if (alive) setCtxPersonas(list); })
+      .catch(() => { /* персоны — необязательная фича */ });
+    return () => { alive = false; };
+  }, [online, chatEmpty, persona, project?.id]);
+
+  // Назначить/снять собеседника пустому чату: персона либо .md-агент — взаимоисключающе
+  // (проектная сессия ↔ чат вне проекта — разные эндпоинты)
+  const handleCompanionChange = useCallback(async (sel: { persona?: Persona | null; agent?: AgentInfo | null }) => {
+    const personaId = sel.persona?.id ?? null;
+    const agentName = sel.agent?.fileName ?? null;
+    try {
+      const updated = project
+        ? await api.personas.assignPersonaToSession(project.id, session.id, personaId, agentName)
+        : await api.personas.assignPersonaToChat(session.id, personaId, agentName);
+      onSessionUpdated?.(updated);
+    } catch (e) {
+      showToast('Собеседник', e instanceof Error ? e.message : 'Не удалось сменить собеседника', 'info');
+    }
+  }, [project, session.id, onSessionUpdated]);
+
+  // Обратная совместимость для пилюль «Поговорить с…» пустого состояния (выбор только персоны)
+  const handlePersonaChange = useCallback(
+    (p: Persona | null) => handleCompanionChange({ persona: p, agent: null }),
+    [handleCompanionChange]
+  );
+
+  // Выбранный .md-агент чата (Session.agentName) — для селектора и индикации в шапке.
+  // Если агента нет в списке (файл удалили/вне проекта) — показываем имя как есть.
+  const chatAgent = useMemo(
+    () => session.agentName
+      ? agents?.find(a => a.fileName === session.agentName)
+        ?? { name: session.agentName, color: undefined as string | undefined }
+      : null,
+    [session.agentName, agents]
+  );
+
+  // Приветственный пузырь персоны для пустого чата (если у персоны задан greeting).
+  // Явный greetingBubble-проп имеет приоритет.
+  const personaGreeting = useMemo(
+    () => (persona && persona.greeting?.trim() ? <PersonaGreeting persona={persona} /> : undefined),
+    [persona]
+  );
+  const effectiveGreeting = greetingBubble ?? personaGreeting;
 
   // Число изменённых файлов — для бейджа на кнопке «Артефакты» (только когда тумблер проброшен)
   const artifactFileCount = useMemo(
@@ -645,6 +712,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
   return (
     <AssistantNameContext.Provider value={asstName}>
+    <PersonaContext.Provider value={persona}>
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', background: C.bgMain }}>
       <ChatHeaderBar
         session={session}
@@ -670,6 +738,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         canCompact={canCompact}
         compactNote={compactNote}
         onCompact={compact}
+        persona={persona}
+        personaZoneName={project?.name ?? null}
+        agent={persona ? null : chatAgent}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
@@ -684,10 +755,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           </div>
         )}
 
-        {/* Empty state */}
+        {/* Empty state: для персоны с приветствием — её бабл, иначе обычный empty state
+            (с рядом персон «Поговорить с…») */}
         {items.length === 0 && !isHistoryLoading && online && (
-          <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}
-            session={session} onSessionUpdated={onSessionUpdated} isMobile={isMobile} />
+          effectiveGreeting ?? (
+            <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}
+              session={session} onSessionUpdated={onSessionUpdated} isMobile={isMobile}
+              personas={ctxPersonas} selectedPersonaId={session.personaId} onPickPersona={handlePersonaChange} />
+          )
         )}
 
         <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}>{renderedItems}</ChatProjectContext.Provider></FalCostContext.Provider>
@@ -798,9 +873,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onAttachImages={project ? handleAttachImages : handleChatUpload}
             isMobile={isMobile}
             skills={skills}
-            agents={agents}
-            selectedAgent={selectedAgent}
-            onAgentChange={onAgentChange}
+            personas={ctxPersonas}
+            agents={agents ?? []}
+            selectedPersona={persona}
+            selectedAgentName={session.agentName ?? null}
+            onCompanionChange={handleCompanionChange}
+            canPickCompanion={online}
+            hasMessages={items.length > 0}
           />
           </div>
         </div>
@@ -827,6 +906,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         />
       )}
     </div>
+    </PersonaContext.Provider>
     </AssistantNameContext.Provider>
   );
 }

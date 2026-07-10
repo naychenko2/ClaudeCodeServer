@@ -198,6 +198,8 @@ export interface Session {
   id: string;
   // Отсутствует у чатов вне проекта (project-less)
   projectId?: string;
+  // Привязка чата к персоне, если он ведётся от её лица
+  personaId?: string;
   // Владелец чата вне проекта
   ownerId?: string;
   // Закреплён в списке чатов
@@ -266,6 +268,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }
+  | { type: 'personas_changed'; action: 'created' | 'updated' | 'deleted' | 'memory'; personaId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' }
 );
 
@@ -529,4 +532,84 @@ export interface CreateNoteDto {
 export interface UpdateNoteDto {
   title?: string;
   content?: string;
+}
+
+// ===== Персоны (олицетворённые ИИ-собеседники) =====
+
+// Зона контекста персоны: глобально (личное пространство) или в рамках проекта
+export type PersonaScope = 'global' | 'project';
+
+// Аватар персоны: инициалы на цветном фоне или загруженная картинка (этап 4).
+// color — ключ палитры AGENT_COLORS; imageFile — имя файла в хранилище персоны.
+export interface PersonaAvatar {
+  kind: 'initials' | 'image';
+  color?: string;
+  imageFile?: string;
+}
+
+export interface Persona {
+  id: string;
+  ownerId: string;
+  name: string;
+  role?: string;              // роль персоны (главная подпись: «Роль (Имя)»)
+  handle: string;             // машинное имя (@handle) — уникально у владельца
+  description?: string;
+  systemPrompt?: string;      // «характер» — системный промпт персоны
+  model?: string;
+  effort?: string;
+  scope: PersonaScope;
+  projectId?: string;         // задан только для scope === 'project'
+  avatar: PersonaAvatar;
+  greeting?: string;          // приветствие персоны в начале чата
+  memoryEnabled: boolean;     // долгая память (этап 2)
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Тело создания персоны (POST /api/personas). Большинство полей опциональны.
+export interface CreatePersonaDto {
+  name: string;
+  role?: string;
+  description?: string;
+  systemPrompt?: string;
+  model?: string;
+  effort?: string;
+  scope?: PersonaScope;
+  projectId?: string;
+  color?: string;             // ключ палитры AGENT_COLORS для аватара-инициалов
+  greeting?: string;
+  memoryEnabled?: boolean;
+}
+
+// Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны
+export type UpdatePersonaDto = Partial<CreatePersonaDto>;
+
+// === Долгая память персоны (этап 3) ===
+// Тип записи памяти:
+//  - semantic   — факты («Факты»): устойчивые сведения о мире/пользователе
+//  - episodic   — эпизоды («Эпизоды»): что произошло в конкретном разговоре
+//  - procedural — приёмы («Приёмы»): как персона привыкла что-то делать
+export type PersonaMemoryType = 'semantic' | 'episodic' | 'procedural';
+
+// Запись долгой памяти персоны
+export interface PersonaMemoryEntry {
+  id: string;
+  personaId: string;
+  type: PersonaMemoryType;
+  text: string;
+  tags?: string[];
+  salience: number;           // значимость (для приоритизации/забывания)
+  sourceSessionId?: string;   // чат, из которого запомнилось
+  createdAt: string;
+  lastAccessedAt: string;
+}
+
+// Результат семантического поиска по памяти
+export interface PersonaMemoryHit {
+  id: string;
+  type: PersonaMemoryType;
+  text: string;
+  tags: string[];
+  score: number;
+  createdAt: string;
 }

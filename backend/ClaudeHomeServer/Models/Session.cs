@@ -51,6 +51,9 @@ public class Session
     public string? Name { get; set; }
     // Имя агента (.claude/agents/<name>.md), чей промпт инжектируется в системный контекст
     public string? AgentName { get; set; }
+    // Персона, от лица которой ведётся чат: задаёт характер,
+    // модель и зону контекста (см. Persona). null — обычная сессия.
+    public string? PersonaId { get; set; }
     // Заметка-итог сессии (кнопка «Итог сессии»): повторная генерация обновляет её, а не плодит дубли
     public string? SummaryNoteId { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;

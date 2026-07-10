@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Session, Persona } from '../../types';
 import { C, R, FONT } from '../../lib/design';
 import { NewChatSetup } from './NewChatSetup';
@@ -137,52 +138,16 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
               </>
             )}
 
-            {/* Ряд агентов «Поговорить с…» — назначить персону текущему пустому чату */}
+            {/* Ряд агентов «Поговорить с…» — назначить персону текущему пустому чату.
+                В проекте команда проекта видна сразу, глобальные свёрнуты за кнопкой;
+                если проектных агентов нет — глобальные показываются сразу. */}
             {personas && personas.length > 0 && onPickPersona && (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 6 }}>
-                <div style={{ fontSize: 11.5, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
-                  Поговорить с…
-                </div>
-                {/* Все агенты контекста: команда проекта + глобальные, без обрезки (переносятся рядами) */}
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 480 }}>
-                  {personas.map(p => {
-                    const active = p.id === selectedPersonaId;
-                    return (
-                      <button
-                        key={p.id}
-                        onClick={() => onPickPersona(p)}
-                        title={`Поговорить с «${personaLabel(p)}»`}
-                        style={{
-                          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-                          border: 'none', background: 'none', cursor: 'pointer', padding: 2, width: 64,
-                        }}
-                      >
-                        <span style={{
-                          borderRadius: R.full, padding: 2,
-                          border: `2px solid ${active ? C.accent : 'transparent'}`,
-                        }}>
-                          <PersonaAvatar persona={p} size={44} />
-                        </span>
-                        {/* Роль — главная строка, имя под ней (мельче, приглушённо) */}
-                        <span style={{
-                          fontFamily: FONT.sans, fontSize: 11.5, color: C.textSecondary,
-                          maxWidth: 64, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                        }}>
-                          {personaTitleLines(p).primary}
-                        </span>
-                        {personaTitleLines(p).secondary && (
-                          <span style={{
-                            fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted,
-                            maxWidth: 64, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                          }}>
-                            {personaTitleLines(p).secondary}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+              <PersonaPills
+                personas={personas}
+                hasProject={hasProject}
+                selectedPersonaId={selectedPersonaId}
+                onPick={onPickPersona}
+              />
             )}
 
             {/* Настройка чата — модель и усилие рассуждения (до первого сообщения) */}
@@ -190,5 +155,86 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
               <NewChatSetup session={session} onSessionUpdated={onSessionUpdated} isMobile={isMobile} />
             )}
           </div>
+  );
+}
+
+// Одна пилюля-аватар агента (роль над именем)
+function PersonaPill({ p, active, onPick }: { p: Persona; active: boolean; onPick: (p: Persona) => void }) {
+  return (
+    <button
+      onClick={() => onPick(p)}
+      title={`Поговорить с «${personaLabel(p)}»`}
+      style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+        border: 'none', background: 'none', cursor: 'pointer', padding: 2, width: 64,
+      }}
+    >
+      <span style={{ borderRadius: R.full, padding: 2, border: `2px solid ${active ? C.accent : 'transparent'}` }}>
+        <PersonaAvatar persona={p} size={44} />
+      </span>
+      <span style={{
+        fontFamily: FONT.sans, fontSize: 11.5, color: C.textSecondary,
+        maxWidth: 64, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {personaTitleLines(p).primary}
+      </span>
+      {personaTitleLines(p).secondary && (
+        <span style={{
+          fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted,
+          maxWidth: 64, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {personaTitleLines(p).secondary}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// Ряд «Поговорить с…»: в проекте команда видна сразу, глобальные — за кнопкой-раскрывашкой.
+// Без проектных агентов (или вне проекта) глобальные показываются сразу.
+function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
+  personas: Persona[];
+  hasProject: boolean;
+  selectedPersonaId?: string;
+  onPick: (p: Persona) => void;
+}) {
+  const [showGlobals, setShowGlobals] = useState(false);
+  const projectAgents = personas.filter(p => p.scope === 'project');
+  const globalAgents = personas.filter(p => p.scope === 'global');
+  // Скрываем глобальных только в проекте и только когда есть своя команда
+  const collapseGlobals = hasProject && projectAgents.length > 0 && !showGlobals;
+  const visible = collapseGlobals ? projectAgents : [...projectAgents, ...globalAgents];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 6 }}>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+        Поговорить с…
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 480 }}>
+        {visible.map(p => (
+          <PersonaPill key={p.id} p={p} active={p.id === selectedPersonaId} onPick={onPick} />
+        ))}
+        {collapseGlobals && globalAgents.length > 0 && (
+          <button
+            onClick={() => setShowGlobals(true)}
+            title="Показать глобальных агентов"
+            style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+              border: 'none', background: 'none', cursor: 'pointer', padding: 2, width: 64,
+            }}
+          >
+            <span style={{
+              width: 44, height: 44, borderRadius: R.full, margin: 2,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: C.bgWhite, border: `1px dashed ${C.border}`,
+              fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textMuted,
+            }}>
+              +{globalAgents.length}
+            </span>
+            <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted }}>ещё</span>
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

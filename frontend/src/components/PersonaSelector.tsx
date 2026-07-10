@@ -1,7 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import type { Persona } from '../types';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
-import { agentDotColor } from './AgentSelector';
 import { personaLabel } from '../lib/personas';
 import { PersonaAvatar } from '../features/agents/PersonaAvatar';
 
@@ -120,38 +119,54 @@ export function PersonaSelector({ personas, selectedPersona, onSelect, isMobile,
             </button>
           )}
 
-          {personas.map(persona => {
-            const active = selectedPersona?.id === persona.id;
-            const dot = agentDotColor(persona.avatar?.color);
-            const zone = persona.scope === 'project' ? 'Проект' : 'Глобальный';
-            return (
-              <button
-                key={persona.id}
-                onClick={() => { onSelect(persona); setOpen(false); }}
-                onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = C.accentLight; }}
-                onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px',
-                  borderRadius: R.md, border: 'none', background: active ? C.accentLight : 'transparent',
-                  cursor: 'pointer', textAlign: 'left',
-                }}
-              >
-                <PersonaAvatar persona={persona} size={28} />
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {/* Группировка: команда проекта сверху, глобальные ниже. Заголовки групп —
+              только когда есть обе группы (иначе зона очевидна из контекста). */}
+          {(() => {
+            const projectAgents = personas.filter(p => p.scope === 'project');
+            const globalAgents = personas.filter(p => p.scope === 'global');
+            const showHeaders = projectAgents.length > 0 && globalAgents.length > 0;
+            const groupHeader = (text: string) => (
+              <div style={{
+                padding: '7px 10px 3px', fontSize: 10.5, fontWeight: 700, color: C.textMuted,
+                textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
+              }}>{text}</div>
+            );
+            const item = (persona: Persona) => {
+              const active = selectedPersona?.id === persona.id;
+              return (
+                <button
+                  key={persona.id}
+                  onClick={() => { onSelect(persona); setOpen(false); }}
+                  onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = C.accentLight; }}
+                  onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px',
+                    borderRadius: R.md, border: 'none', background: active ? C.accentLight : 'transparent',
+                    cursor: 'pointer', textAlign: 'left',
+                  }}
+                >
+                  <PersonaAvatar persona={persona} size={28} />
+                  <span style={{ flex: 1, minWidth: 0, display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {personaLabel(persona)}
                   </span>
-                  <span style={{ display: 'block', fontSize: 11, color: dot, marginTop: 1 }}>{zone}</span>
-                </span>
-                {active && (
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="3"
-                    strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                    <path d="M20 6L9 17l-5-5" />
-                  </svg>
-                )}
-              </button>
+                  {active && (
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="3"
+                      strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg>
+                  )}
+                </button>
+              );
+            };
+            return (
+              <>
+                {showHeaders && projectAgents.length > 0 && groupHeader('Команда проекта')}
+                {projectAgents.map(item)}
+                {showHeaders && globalAgents.length > 0 && groupHeader('Глобальные')}
+                {globalAgents.map(item)}
+              </>
             );
-          })}
+          })()}
         </div>
       )}
     </div>

@@ -159,7 +159,7 @@ export function AgentsPage({ auth, onLogout, onHubTab }: {
         onBack={isMobile ? clearSelection : undefined}
         isMobile={isMobile} />
     : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <EmptyState icon={<IconAgents />} title="Команда"
+        <EmptyState icon={<IconAgents />} title="Агенты"
           subtitle={personas.length ? 'Выбери агента слева, чтобы открыть его профиль и память' : 'Создай первого олицетворённого агента: имя, характер, аватар'}
           action={<button onClick={startCreate} style={newBtn}>Новый агент</button>} />
       </div>;

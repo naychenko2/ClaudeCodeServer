@@ -41,6 +41,18 @@ interface Props {
 type LeftTab = 'sessions' | 'files' | 'tasks' | 'agents';
 type FileSubTab = 'files' | 'knowledge';
 
+// Иконки вкладок проекта для мобильного компакт-режима (Feather-стиль, как HubTabs)
+const leftTabSvg = (children: React.ReactNode) => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
+);
+const LEFT_TAB_ICONS: Record<LeftTab, React.ReactNode> = {
+  sessions: leftTabSvg(<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />),
+  files: leftTabSvg(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />),
+  tasks: leftTabSvg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>),
+  agents: leftTabSvg(<><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" /></>),
+};
+
 function useWindowWidth() {
   const [width, setWidth] = useState(window.innerWidth);
   useEffect(() => {
@@ -318,6 +330,9 @@ const windowWidth = useWindowWidth();
     { value: 'tasks', label: 'Задачи' },
     ...(personasEnabled ? [{ value: 'agents' as LeftTab, label: 'Команда' }] : []),
   ];
+  // Мобильный компакт-режим переключателя: неактивные вкладки иконками,
+  // подпись только у активной (как HubTabs) — 4 вкладки помещаются без обрезания
+  const leftTabOptionsMobile = leftTabOptions.map(o => ({ ...o, icon: LEFT_TAB_ICONS[o.value] }));
 
   // Флаг мог выключиться — не оставляем недоступную вкладку активной
   useEffect(() => {
@@ -741,9 +756,10 @@ const windowWidth = useWindowWidth();
             </BackButton>
             <PillSwitch<LeftTab>
               value={leftTab}
-              options={leftTabOptions}
+              options={leftTabOptionsMobile}
               onChange={handleTabSwitch}
               isMobile
+              compact
             />
             <IconButton
               size="md"

@@ -95,11 +95,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [avatarHover, setAvatarHover] = useState(false);
 
   // AI-редактирование характера: активное действие (генерация/улучшение), ошибка,
-  // опциональная инструкция «что изменить» для режима улучшения (в поповере).
+  // общий поповер с необязательным уточняющим промптом для обоих режимов.
   const [aiAction, setAiAction] = useState<null | 'generate' | 'improve'>(null);
   const [aiError, setAiError] = useState<string | null>(null);
-  const [improveInstruction, setImproveInstruction] = useState('');
-  const [showImprove, setShowImprove] = useState(false);
+  const [aiInstruction, setAiInstruction] = useState('');
+  const [aiPopover, setAiPopover] = useState<null | 'generate' | 'improve'>(null);
 
   // Сводка долгой памяти (для summary-карточки) — считаем из записей по типу
   const [memoryEntries, setMemoryEntries] = useState<PersonaMemoryEntry[] | null>(null);
@@ -178,43 +178,27 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     });
   };
 
-  // AI-генерация характера с нуля по текущим полям (имя/роль/описание)
-  const generateCharacter = async () => {
+  // AI-характер: генерация с нуля (по роли/имени/описанию) или улучшение текущего.
+  // В обоих режимах поддерживается необязательный уточняющий промпт из поповера.
+  const runAiCharacter = async (mode: 'generate' | 'improve') => {
     if (aiAction) return;
-    setAiAction('generate');
+    setAiAction(mode);
     setAiError(null);
     try {
       const { character } = await api.personas.aiCharacter({
         name: name.trim() || undefined,
         role: role.trim() || undefined,
         description: description.trim() || undefined,
+        current: mode === 'improve' ? systemPrompt : undefined,
+        instruction: aiInstruction.trim() || undefined,
       });
       setSystemPrompt(character);
+      setAiInstruction('');
+      setAiPopover(null);
     } catch (e) {
-      setAiError(e instanceof Error ? e.message : 'Не удалось сгенерировать характер');
-    } finally {
-      setAiAction(null);
-    }
-  };
-
-  // AI-улучшение текущего характера (опц. с инструкцией «что изменить» из поповера)
-  const improveCharacter = async () => {
-    if (aiAction) return;
-    setAiAction('improve');
-    setAiError(null);
-    try {
-      const { character } = await api.personas.aiCharacter({
-        name: name.trim() || undefined,
-        role: role.trim() || undefined,
-        description: description.trim() || undefined,
-        current: systemPrompt,
-        instruction: improveInstruction.trim() || undefined,
-      });
-      setSystemPrompt(character);
-      setImproveInstruction('');
-      setShowImprove(false);
-    } catch (e) {
-      setAiError(e instanceof Error ? e.message : 'Не удалось улучшить характер');
+      setAiError(e instanceof Error
+        ? e.message
+        : mode === 'generate' ? 'Не удалось сгенерировать характер' : 'Не удалось улучшить характер');
     } finally {
       setAiAction(null);
     }
@@ -495,37 +479,44 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             </button>
           ))}
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-          <Button variant="ghostAccent" size="sm" loading={aiAction === 'generate'} disabled={!!aiAction} onClick={generateCharacter}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, position: 'relative' }}>
+          <Button variant="ghostAccent" size="sm" loading={aiAction === 'generate'} disabled={!!aiAction}
+            onClick={() => setAiPopover(v => v === 'generate' ? null : 'generate')}>
             {aiAction === 'generate' ? 'Генерирую…' : '✨ Сгенерировать'}
           </Button>
           {systemPrompt.trim().length > 0 && (
-            <div style={{ position: 'relative' }}>
-              <Button variant="ghostAccent" size="sm" disabled={!!aiAction} onClick={() => setShowImprove(v => !v)}>
-                ✨ Улучшить
-              </Button>
-              {showImprove && (
-                <>
-                  {/* Клик вне поповера — закрыть */}
-                  <div style={{ position: 'fixed', inset: 0, zIndex: 10 }} onClick={() => setShowImprove(false)} />
-                  <div style={{
-                    position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 11, width: 300, maxWidth: '80vw',
-                    background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, padding: 10,
-                    display: 'flex', flexDirection: 'column', gap: 8, boxShadow: SHADOW.dropdown,
-                  }}>
-                    <span style={{ fontSize: 12, color: C.textSecondary, fontFamily: FONT.sans }}>Что изменить?</span>
-                    <TextField value={improveInstruction} onChange={setImproveInstruction}
-                      placeholder="Например: добавить строгости"
-                      onEnter={() => void improveCharacter()} />
-                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                      <Button variant="primary" size="sm" loading={aiAction === 'improve'} disabled={!!aiAction} onClick={improveCharacter}>
-                        {aiAction === 'improve' ? 'Улучшаю…' : 'Улучшить'}
-                      </Button>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
+            <Button variant="ghostAccent" size="sm" loading={aiAction === 'improve'} disabled={!!aiAction}
+              onClick={() => setAiPopover(v => v === 'improve' ? null : 'improve')}>
+              {aiAction === 'improve' ? 'Улучшаю…' : '✨ Улучшить'}
+            </Button>
+          )}
+          {/* Общий поповер обоих режимов: необязательный уточняющий промпт + запуск */}
+          {aiPopover && (
+            <>
+              {/* Клик вне поповера — закрыть */}
+              <div style={{ position: 'fixed', inset: 0, zIndex: 10 }} onClick={() => setAiPopover(null)} />
+              <div style={{
+                position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 11, width: 300, maxWidth: '80vw',
+                background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, padding: 10,
+                display: 'flex', flexDirection: 'column', gap: 8, boxShadow: SHADOW.dropdown,
+              }}>
+                <span style={{ fontSize: 12, color: C.textSecondary, fontFamily: FONT.sans }}>
+                  {aiPopover === 'generate' ? 'Пожелание к характеру (необязательно)' : 'Что изменить? (необязательно)'}
+                </span>
+                <TextField value={aiInstruction} onChange={setAiInstruction}
+                  placeholder={aiPopover === 'generate'
+                    ? 'Например: ироничный наставник, любит метафоры'
+                    : 'Например: добавить строгости'}
+                  onEnter={() => void runAiCharacter(aiPopover)} />
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <Button variant="primary" size="sm" loading={!!aiAction} disabled={!!aiAction}
+                    onClick={() => runAiCharacter(aiPopover)}>
+                    {aiAction ? (aiPopover === 'generate' ? 'Генерирую…' : 'Улучшаю…')
+                      : (aiPopover === 'generate' ? 'Сгенерировать' : 'Улучшить')}
+                  </Button>
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>

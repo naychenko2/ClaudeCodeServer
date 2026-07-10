@@ -13,20 +13,6 @@ function IconPlus() {
   );
 }
 
-// Бейдж зоны контекста персоны
-function ScopeBadge({ persona }: { persona: Persona }) {
-  const isProject = persona.scope === 'project';
-  return (
-    <span style={{
-      flexShrink: 0, fontFamily: FONT.sans, fontSize: 10, fontWeight: 600,
-      color: C.textMuted, background: C.bgSelected, borderRadius: R.sm,
-      padding: '2px 6px', lineHeight: 1.4, whiteSpace: 'nowrap',
-    }}>
-      {isProject ? 'Проект' : 'Глобальный'}
-    </span>
-  );
-}
-
 // Сайдбар раздела «Агенты»: кнопка создания сверху, ниже — список персон.
 export function PersonaList({ personas, selectedId, onSelect, onNew }: {
   personas: Persona[];
@@ -88,7 +74,6 @@ export function PersonaList({ personas, selectedId, onSelect, onNew }: {
                     </span>
                   )}
                 </span>
-                <ScopeBadge persona={p} />
               </button>
             );
           })

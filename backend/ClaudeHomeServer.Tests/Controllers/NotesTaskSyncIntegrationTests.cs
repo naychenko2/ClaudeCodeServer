@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // читаем обратно через API — тест устойчив к трансформациям контента при создании.
 public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFactory>
 {
-    private readonly HttpClient _client;   // testuser — флаг notes-task-sync включён
+    private readonly HttpClient _client;   // testuser — флаг notes включён
     private readonly HttpClient _noFlag;   // seconduser — флаг выключен
 
     public NotesTaskSyncIntegrationTests(TestWebApplicationFactory factory)
@@ -20,8 +20,9 @@ public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFac
         _client = factory.CreateAuthenticatedClient();
         _noFlag = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        // Флаг notes-task-sync — только основному юзеру
-        _client.PutAsJsonAsync("/api/feature-flags/notes-task-sync", new { enabled = true })
+        // Синхронизация гейтится зонтичным флагом notes (бывший notes-task-sync
+        // влит в него рефакторингом 8b94482) — включаем только основному юзеру
+        _client.PutAsJsonAsync("/api/feature-flags/notes", new { enabled = true })
             .GetAwaiter().GetResult().EnsureSuccessStatusCode();
     }
 

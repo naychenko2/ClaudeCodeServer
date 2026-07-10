@@ -11,6 +11,7 @@ import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView } from './ToolUseView';
+import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { AskQuestionView } from './AskQuestionView';
 import { PlanReviewView } from './PlanReviewView';
 
@@ -356,6 +357,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // дочерних вызовов субагента (parentToolUseId) рисует renderItems — единой полосой.
       if (item.name === 'TodoWrite') return <TodoPlanView todos={parseTodoWriteInput(item.input)} />;
       if (taskPlan) return <TodoPlanView todos={taskPlan} />;
+      // Вопрос другой персоне (persona_ask) — фирменная карточка с идентичностью персоны
+      if (isPersonaAsk(item.name)) return <PersonaAskView item={item} />;
       return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
 
     case 'ask_question':

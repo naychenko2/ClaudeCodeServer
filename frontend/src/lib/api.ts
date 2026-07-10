@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -331,6 +331,15 @@ export const api = {
       if (token) params.set('access_token', token);
       return `/api/personas/${encodeURIComponent(id)}/avatar/candidate/${encodeURIComponent(file)}?${params}`;
     },
+    // Быстрое создание агента по свободному промпту: LLM заполняет роль/имя/описание/
+    // характер/приветствие/цвет, фото-аватар генерируется автоматически.
+    // Запрос долгий (LLM ~10-40с + fal ~10-40с, до ~90с) — таймаут расширен. 502 — можно повторить.
+    quickCreate: (body: { prompt: string; scope?: PersonaScope; projectId?: string }) =>
+      request<Persona>('/personas/ai/quick-create', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        timeoutMs: 150_000,
+      }),
     // AI-редактирование «характера» (system-промпта): без current — генерация с нуля
     // по имени/роли/описанию; с current (+ опц. instruction) — улучшение текущего текста.
     // Может занять до ~30с; 502 при ошибке.

@@ -8,6 +8,7 @@ import { PersonaList } from './PersonaList';
 import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './PersonaForm';
 import { PersonaToolbar } from './PersonaToolbar';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
+import { PersonaQuickCreate } from './PersonaQuickCreate';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -69,6 +70,11 @@ export function ProjectAgentPane({ project, personaId, creating, onOpenChat, onS
   const [view, setView] = useState<'profile' | 'memory'>('profile');
   useEffect(() => { setView('profile'); }, [personaId]);
 
+  // Создание: сначала экран быстрого создания по промпту, «Заполнить вручную» — пустая форма.
+  // Сбрасываем на быстрый экран при каждом новом входе в режим создания.
+  const [manualCreate, setManualCreate] = useState(false);
+  useEffect(() => { if (creating) setManualCreate(false); }, [creating]);
+
   const [talking, setTalking] = useState(false);
   const formRef = useRef<PersonaFormHandle>(null);
   const [status, setStatus] = useState<PersonaFormStatus>({ canSave: false, saving: false, dirty: false });
@@ -106,6 +112,22 @@ export function ProjectAgentPane({ project, personaId, creating, onOpenChat, onS
   };
 
   const accent = AGENT_COLORS[liveColor ?? persona?.avatar?.color ?? ''] ?? C.accent;
+
+  // Быстрое создание по промпту — свой экран целиком (тулбар внутри компонента).
+  // После успеха родитель выбирает созданного агента → откроется его редактор.
+  if (!persona && creating && !manualCreate) {
+    return (
+      <PersonaQuickCreate
+        scope="project"
+        projectId={project.id}
+        onCreated={p => onSelectAgent(p.id)}
+        onManual={() => setManualCreate(true)}
+        onCancel={onCleared}
+        onBack={onBack}
+        isMobile={isMobile}
+      />
+    );
+  }
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

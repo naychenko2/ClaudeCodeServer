@@ -12,6 +12,7 @@ import { PersonaList } from './PersonaList';
 import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './PersonaForm';
 import { PersonaToolbar } from './PersonaToolbar';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
+import { PersonaQuickCreate } from './PersonaQuickCreate';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -187,7 +188,9 @@ export function AgentsPage({ auth, onLogout, onHubTab }: {
   );
 }
 
-// Пане создания нового агента: тулбар (Отмена/Создать) + пустая PersonaForm в контентной зоне
+// Пане создания нового агента. Первый экран — быстрое создание по промпту
+// (ИИ придумывает роль/характер/аватар); «Заполнить вручную» переключает на
+// привычную пустую PersonaForm с тулбаром (Отмена/Создать).
 function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {
   projects: Project[];
   onSaved: (p: Persona) => void;
@@ -195,6 +198,8 @@ function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {
   onBack?: () => void;
 }) {
   const isMobile = useIsMobile();
+  // Ручной путь создания (пустая форма) — по кнопке «Заполнить вручную»
+  const [manual, setManual] = useState(false);
   const formRef = useRef<PersonaFormHandle>(null);
   const [status, setStatus] = useState<PersonaFormStatus>({ canSave: false, saving: false, dirty: false });
   const onStatus = useCallback((s: PersonaFormStatus) => {
@@ -203,6 +208,20 @@ function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {
   // Живой цвет из формы — для перекраски акцентной полосы тулбара при создании
   const [liveColor, setLiveColor] = useState<string>('orange');
   const accent = AGENT_COLORS[liveColor] ?? C.accent;
+
+  // Стартовый экран — быстрое создание по промпту (глобальная зона)
+  if (!manual) {
+    return (
+      <PersonaQuickCreate
+        scope="global"
+        onCreated={onSaved}
+        onManual={() => setManual(true)}
+        onCancel={onCancel}
+        onBack={onBack}
+        isMobile={isMobile}
+      />
+    );
+  }
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

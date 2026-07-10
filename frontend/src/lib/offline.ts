@@ -90,7 +90,7 @@ const FETCH_TIMEOUT_MS = 30_000;
 
 // --- Запрос ---
 
-export async function request<T>(url: string, options?: RequestInit): Promise<T> {
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const method = (options?.method ?? 'GET').toUpperCase();
   const isGet = method === 'GET';
 
@@ -104,13 +104,15 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
     : null;
 
   // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),
-  // мы не ждём браузерного TCP-таймаута (может быть минуты)
+  // мы не ждём браузерного TCP-таймаута (может быть минуты).
+  // timeoutMs — оверрайд для заведомо долгих запросов (AI-генерация и т.п.)
+  const { timeoutMs, ...fetchOptions } = options ?? {};
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs ?? FETCH_TIMEOUT_MS);
 
   try {
     const res = await fetch(BASE + url, {
-      ...options,
+      ...fetchOptions,
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',

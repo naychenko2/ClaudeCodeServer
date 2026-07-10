@@ -294,6 +294,121 @@ public class PersonasController : ControllerBase
         return sb.ToString();
     }
 
+    // Быстрое создание персоны по одному промпту: LLM заполняет роль/имя/описание/характер/
+    // приветствие/цвет, персона создаётся, фото-аватар генерируется автоматически (если настроен fal).
+    // Возвращает созданную персону — фронт открывает её в редакторе для доводки.
+    [HttpPost("ai/quick-create")]
+    public async Task<ActionResult<Persona>> AiQuickCreate([FromBody] AiQuickCreateRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Prompt))
+            return BadRequest(new { error = "Опишите, кто это и чем будет заниматься" });
+
+        var scope = req.Scope ?? PersonaScope.Global;
+        if (scope == PersonaScope.Project && !ValidProject(req.ProjectId))
+            return BadRequest(new { error = "Для проектной персоны нужен корректный projectId" });
+
+        // 1. Черновик всех полей одним one-shot вызовом (строгий JSON-объект)
+        var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
+        DraftRaw? draft;
+        try
+        {
+            var raw = await _oneShot.RunAsync(BuildDraftPrompt(req.Prompt), model,
+                TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
+            draft = ParseDraft(raw);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { error = $"Не удалось сгенерировать черновик: {ex.Message}" });
+        }
+        if (draft is null || string.IsNullOrWhiteSpace(draft.Name))
+            return StatusCode(502, new { error = "Модель не вернула корректный черновик — попробуйте ещё раз" });
+
+        // 2. Создаём персону с заполненными полями
+        var color = ValidColor(draft.Color) ? draft.Color : "orange";
+        var persona = _personas.Create(UserId, draft.Name!, draft.Role, draft.Description,
+            draft.Character, model: null, effort: null, scope, req.ProjectId,
+            color, draft.Greeting, memoryEnabled: true);
+
+        // 3. Фото-аватар — автоматически (не критично: при сбое остаются инициалы)
+        if (_falImage.Enabled)
+        {
+            try
+            {
+                var avatarPrompt = string.IsNullOrWhiteSpace(draft.AvatarPrompt)
+                    ? BuildAvatarPrompt(persona)
+                    : $"Photorealistic portrait photo. {draft.AvatarPrompt!.Trim()}";
+                var images = await _falImage.GenerateManyAsync(avatarPrompt, 1);
+                if (images.Count > 0)
+                {
+                    var dir = Path.Combine(_personas.AssetsDir, persona.Id);
+                    Directory.CreateDirectory(dir);
+                    var fileName = $"avatar-{Guid.NewGuid():N}{ExtFor(images[0].ContentType)}";
+                    await System.IO.File.WriteAllBytesAsync(Path.Combine(dir, fileName), images[0].Bytes);
+                    persona = _personas.SetAvatarImage(persona.Id, UserId, fileName);
+                }
+            }
+            catch { /* аватар не критичен для быстрого создания */ }
+        }
+
+        await Broadcast("created", persona.Id);
+        return Ok(persona);
+    }
+
+    private static string BuildDraftPrompt(string userPrompt)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Пользователь описывает ассистента-персону, которую хочет создать. " +
+                      "Придумай и верни ВСЕ поля профиля персоны.");
+        sb.AppendLine($"\nОписание пользователя: {userPrompt.Trim()}");
+        sb.AppendLine("\nВерни ТОЛЬКО JSON-объект (без пояснений и markdown) с полями:");
+        sb.AppendLine("  role — роль/профессия по-русски, 1-3 слова (напр. «Дизайнер», «Личный тренер»);");
+        sb.AppendLine("  name — русское имя-человека (одно слово, подходит персоне);");
+        sb.AppendLine("  description — краткое «кто это», 3-8 слов, по-русски;");
+        sb.AppendLine("  character — характер и стиль общения: обращение на «ты» («Ты …»), живо, 2-5 предложений, по-русски;");
+        sb.AppendLine("  greeting — первое приветственное сообщение персоны пользователю, 1-2 предложения, по-русски, в её характере;");
+        sb.AppendLine("  color — один из: yellow, orange, blue, green, purple, red, brown, cyan, pink (подходит образу);");
+        sb.AppendLine("  avatarPrompt — описание внешности для фотопортрета, по-английски, 5-15 слов (пол, возраст, стиль, настроение, фон).");
+        return sb.ToString();
+    }
+
+    // Парс JSON-объекта из ответа модели (устойчиво к преамбуле/markdown-fence)
+    private static DraftRaw? ParseDraft(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var start = raw.IndexOf('{');
+        if (start < 0) return null;
+        int depth = 0; bool inStr = false, esc = false;
+        for (var i = start; i < raw.Length; i++)
+        {
+            var c = raw[i];
+            if (inStr)
+            {
+                if (esc) esc = false;
+                else if (c == '\\') esc = true;
+                else if (c == '"') inStr = false;
+                continue;
+            }
+            if (c == '"') inStr = true;
+            else if (c == '{') depth++;
+            else if (c == '}' && --depth == 0)
+            {
+                try
+                {
+                    return System.Text.Json.JsonSerializer.Deserialize<DraftRaw>(raw[start..(i + 1)],
+                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                }
+                catch (System.Text.Json.JsonException) { return null; }
+            }
+        }
+        return null;
+    }
+
+    private static bool ValidColor(string? c) =>
+        c is "yellow" or "orange" or "blue" or "green" or "purple" or "red" or "brown" or "cyan" or "pink";
+
+    private sealed record DraftRaw(string? Role, string? Name, string? Description,
+        string? Character, string? Greeting, string? Color, string? AvatarPrompt);
+
     // --- Долгая память персоны (дёргается MCP memory-server и UI-панелью «что помнит агент») ---
 
     // Записи памяти (type — необязательный фильтр semantic|episodic|procedural)
@@ -380,5 +495,7 @@ public record RememberRequest(string Type, string Text, List<string>? Tags = nul
 public record GenerateAvatarRequest(string? Prompt = null, int? Count = null);
 
 public record AiCharacterRequest(string? Name, string? Role, string? Description, string? Current, string? Instruction);
+
+public record AiQuickCreateRequest(string Prompt, PersonaScope? Scope = null, string? ProjectId = null);
 
 public record SelectAvatarRequest(string File);

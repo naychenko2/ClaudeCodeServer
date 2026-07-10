@@ -189,25 +189,33 @@ WorkingDirectory = `project.RootPath`
 
 ## Агенты (олицетворённые агенты / персоны)
 
-Раздел «Агенты» (хаб-таб, фич-флаг `personas`): персоны с именем, аватаром, характером
-(system-промпт), отдельным чатом, долгой памятью и зоной контекста. Персона — **отдельная
-сущность** (JSON-стор, не .md-агент). Изоляция per-owner (как задачи/заметки).
+Концепция **«Агенты = контакты, Чаты = разговоры»** (фич-флаг `personas`): глобальный раздел
+«Агенты» (хаб-таб) и вкладка «Команда» внутри проекта — **только настройка** (профиль + память);
+разговор с агентом живёт среди обычных чатов и везде помечен его лицом (аватар/роль/цвет).
+Персона — **отдельная сущность** (JSON-стор, не .md-агент): роль (главная в отображении:
+«Роль (Имя)»), имя, характер, аватар, модель/усилие, зона, приветствие, долгая память.
+Изоляция per-owner (как задачи/заметки).
 
 - **Модель**: [Persona.cs](backend/ClaudeHomeServer/Models/Persona.cs) — `Persona`
-  (Name, Handle, Description, SystemPrompt, Model/Effort, Scope `Global|Project`, ProjectId,
+  (Name, Role, Handle, Description, SystemPrompt, Model/Effort, Scope `Global|Project`, ProjectId,
   Avatar `{Kind initials|image, Color, ImageFile}`, Greeting, MemoryEnabled) +
   `PersonaMemoryEntry` (Type `Semantic|Episodic|Procedural`, Text, Tags, Salience). Хранилище —
   `data/personas.json`, ассеты (аватары) — `data/personas/{id}/`.
 - **CRUD**: [PersonaManager.cs](backend/ClaudeHomeServer/Services/PersonaManager.cs) — per-owner
   (`Get(id, userId)` проверяет OwnerId), генерация уникального slug-`Handle`.
   [PersonasController.cs](backend/ClaudeHomeServer/Controllers/PersonasController.cs) —
-  `/api/personas/*` (CRUD, `{id}/chats`, `{id}/memory*`, `{id}/avatar*`); realtime —
-  `PersonasChangedMessage` (action created/updated/deleted/memory) в группу user_*.
+  `/api/personas/*` (CRUD с фильтрами `?scope=context|project|global&projectId=`, `{id}/chats`,
+  `{id}/memory*`, `{id}/avatar*`, `ai/character` — LLM-генерация/улучшение характера с
+  уточняющим промптом); realtime — `PersonasChangedMessage` (created/updated/deleted/memory).
 - **Чат с персоной**: `Session.PersonaId`; `SessionManager.CreatePersonaChatAsync` маршрутизирует
   по зоне — **глобальная** персона → чат вне проекта (scope = все данные владельца, `ProjectId=null`
   в tasks/notes MCP), **проектная** → сессия в её проекте (scope = только проект). Характер персоны
   инжектится в системный промпт как персональный слой ([ClaudeSession.cs](backend/ClaudeHomeServer/Services/Llm/Claude/ClaudeSession.cs),
-  приоритет над .md-агентом). Scope НЕ требует спец-логики — он предопределён типом сессии.
+  приоритет над .md-агентом); персона-слой (промпт+память) восстанавливается и после рестарта
+  (`BuildPersonaLayer` в `EnsureProcessAsync`). Назначение агента пустому чату —
+  `SessionManager.SetPersona` (`POST /chats/{id}/persona`, `POST .../sessions/{sid}/persona`;
+  400 после первого хода — смена агента = новый чат). Scope НЕ требует спец-логики — он
+  предопределён типом сессии.
 - **Долгая память** (типизация 2026 semantic/episodic/procedural):
   [PersonaMemoryService.cs](backend/ClaudeHomeServer/Services/PersonaMemoryService.cs) — записи в
   `data/persona-memory.json` (источник правды) + семантический слой в Dify-датасет
@@ -226,11 +234,23 @@ WorkingDirectory = `project.RootPath`
 - **Авто-память** (флаг `persona-memory-autolearn`): [PersonaMemoryAutolearnService.cs](backend/ClaudeHomeServer/Services/PersonaMemoryAutolearnService.cs) —
   IHostedService на `SessionManager.OnSessionMessage`; по завершении хода персонной сессии one-shot
   извлекает факты (semantic) и итог (episodic) из транскрипта и сохраняет в память (дедуп в `Remember`).
-- **Фронт**: [features/agents/](frontend/src/features/agents/) — AgentsPage (сайдбар персон | центр:
-  переключатель «Чат | Память», цветовая тема персоны из `avatar.color`, приветствие-бабл `greeting`
-  в пустом чате), PersonaList, PersonaEditor (имя/характер + пресеты тона/модель/зона/цвет/галерея
-  генерации аватара), PersonaChat (переиспользует `ChatPanel`), PersonaMemoryPanel, PersonaAvatar;
-  стор [lib/personas.ts](frontend/src/lib/personas.ts) (realtime personas_changed).
+- **Фронт**: [features/agents/](frontend/src/features/agents/) — AgentsPage (глобальный раздел,
+  только `scope=global`): сайдбар PersonaList | центр «Студия-профиль»; редактор
+  [PersonaForm.tsx](frontend/src/features/agents/PersonaForm.tsx) — одна колонка 680 в стиле
+  TaskEditForm: hero-аватар 80 (инлайн-генерация 4 кандидатов + цвет), безрамочная serif-«Роль»,
+  Характер во всю ширину (липкая панель пресетов + ✨Сгенерировать/✨Улучшить с уточняющим
+  промптом-поповером, autoGrow без скролла), Поведение (модель/усилие/зона/приветствие),
+  Память-summary (счётчики + «Открыть память»); действия — в [PersonaToolbar.tsx](frontend/src/features/agents/PersonaToolbar.tsx)
+  (общий Toolbar: Профиль|Память, Поговорить, ⋯-меню с Удалить, Сохранить + dirty-индикатор).
+  В проекте — вкладка «Команда» (`leftTab='agents'` WorkspacePage): список в сайдбаре
+  ([ProjectAgentsPanel.tsx](frontend/src/features/agents/ProjectAgentsPanel.tsx)), форма — в
+  контентной зоне. Идентификация в чатах: плашки ChatList/SessionList (аватар+«Роль (Имя)»+цвет),
+  агент в тулбаре чата (ChatHeaderBar: аватар+роль/имя+зона+полоса цвета), аватар у реплик
+  (PersonaContext→ChatItemView), приветствие (PersonaGreeting). Запуск чата: «Поговорить» из
+  студии, [PersonaSelector](frontend/src/components/PersonaSelector.tsx) в композере пустого чата
+  (группы «Команда проекта»/«Глобальные»), пилюли «Поговорить с…» в empty state (в проекте
+  команда сразу, глобальные за «+N ещё»). Стор [lib/personas.ts](frontend/src/lib/personas.ts)
+  (realtime personas_changed; `personaLabel`/`personaTitleLines` — единый формат «Роль (Имя)»).
 - **Флаги**: `personas` (раздел + чат + память + аватар), `persona-memory-autolearn` (авто-извлечение
   фактов из диалога).
 

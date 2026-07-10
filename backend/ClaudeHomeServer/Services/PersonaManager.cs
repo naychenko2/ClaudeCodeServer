@@ -45,6 +45,10 @@ public class PersonaManager
     public Persona? Get(string id, string userId) =>
         _personas.TryGetValue(id, out var p) && p.OwnerId == userId ? p : null;
 
+    // Персона по id без проверки владельца — ТОЛЬКО для внутренних сервисов (авто-память),
+    // где владелец берётся из самой персоны. Не использовать в обработчиках запросов.
+    public Persona? GetByIdInternal(string id) => _personas.GetValueOrDefault(id);
+
     public Persona Create(string userId, string name, string? description, string? systemPrompt,
         string? model, string? effort, PersonaScope scope, string? projectId,
         string? color, string? greeting, bool memoryEnabled)

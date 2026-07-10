@@ -76,17 +76,22 @@ public sealed class PersonaMemoryService
         var persona = _personas.Get(personaId, ownerId);
         if (persona is null || string.IsNullOrWhiteSpace(text)) return null;
 
+        var trimmed = text.Trim();
         var entry = new PersonaMemoryEntry
         {
             PersonaId = personaId,
             Type = type,
-            Text = text.Trim(),
+            Text = trimmed,
             Tags = tags is { Count: > 0 } ? tags : null,
             SourceSessionId = sourceSessionId,
         };
         var state = GetState(personaId);
         lock (_saveLock)
         {
+            // Дедуп: не плодим одинаковые записи (актуально для авто-памяти)
+            if (state.Entries.Any(e => e.Type == type
+                && string.Equals(e.Text, trimmed, StringComparison.OrdinalIgnoreCase)))
+                return null;
             state.Entries.Add(entry);
             JsonFileStore.Save(_storePath, _store, JsonOpts);
         }

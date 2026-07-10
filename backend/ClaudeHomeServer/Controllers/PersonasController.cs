@@ -129,9 +129,11 @@ public class PersonasController : ControllerBase
     [HttpGet("avatar/caps")]
     public ActionResult Caps() => Ok(new { generate = _falImage.Enabled });
 
-    // Сгенерировать аватар через fal по описанию. prompt пуст → строим из имени/описания персоны.
+    // Сгенерировать НЕСКОЛЬКО вариантов аватар-фото через fal по описанию (для выбора).
+    // Кандидаты сохраняются во временную папку, аватар персоны НЕ меняется до выбора.
+    // prompt пуст → строим фото-промпт из имени/описания персоны.
     [HttpPost("{id}/avatar/generate")]
-    public async Task<ActionResult<Persona>> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req)
+    public async Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req)
     {
         var persona = _personas.Get(id, UserId);
         if (persona is null) return NotFound();
@@ -139,27 +141,59 @@ public class PersonasController : ControllerBase
 
         var prompt = string.IsNullOrWhiteSpace(req.Prompt)
             ? BuildAvatarPrompt(persona)
-            : req.Prompt.Trim();
+            : $"Photorealistic portrait photo. {req.Prompt.Trim()}";
+        var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
 
-        var image = await _falImage.GenerateAsync(prompt);
-        if (image is null) return StatusCode(502, new { error = "Не удалось сгенерировать изображение" });
+        var images = await _falImage.GenerateManyAsync(prompt, count);
+        if (images.Count == 0) return StatusCode(502, new { error = "Не удалось сгенерировать изображение" });
 
-        var ext = image.ContentType switch
+        // Свежая папка кандидатов (перезатираем прошлую генерацию)
+        var candDir = Path.Combine(_personas.AssetsDir, id, "candidates");
+        try { if (Directory.Exists(candDir)) Directory.Delete(candDir, recursive: true); } catch { }
+        Directory.CreateDirectory(candDir);
+
+        var files = new List<string>();
+        foreach (var img in images)
         {
-            "image/jpeg" => ".jpg",
-            "image/webp" => ".webp",
-            _ => ".png",
-        };
-        var dir = Path.Combine(_personas.AssetsDir, id);
-        Directory.CreateDirectory(dir);
-        // Уникальное имя — cache-busting: браузер не покажет старый аватар из кэша
-        var fileName = $"avatar-{Guid.NewGuid():N}{ext}";
-        await System.IO.File.WriteAllBytesAsync(Path.Combine(dir, fileName), image.Bytes);
+            var ext = ExtFor(img.ContentType);
+            var name = $"cand-{Guid.NewGuid():N}{ext}";
+            await System.IO.File.WriteAllBytesAsync(Path.Combine(candDir, name), img.Bytes);
+            files.Add(name);
+        }
+        return Ok(new { candidates = files });
+    }
 
-        // Удаляем прежний файл аватара, если был
+    // Отдать кандидата аватара (превью в галерее выбора). access_token в query для <img>.
+    [HttpGet("{id}/avatar/candidate/{file}")]
+    public IActionResult AvatarCandidate(string id, string file)
+    {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+        var safe = Path.GetFileName(file);   // защита от path-traversal
+        var full = Path.Combine(_personas.AssetsDir, id, "candidates", safe);
+        if (!System.IO.File.Exists(full)) return NotFound();
+        return PhysicalFileByExt(full);
+    }
+
+    // Выбрать кандидата как аватар персоны: делаем основным, чистим остальных кандидатов.
+    [HttpPost("{id}/avatar/select")]
+    public async Task<ActionResult<Persona>> SelectAvatar(string id, [FromBody] SelectAvatarRequest req)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(req.File)) return BadRequest(new { error = "Не указан файл" });
+
+        var dir = Path.Combine(_personas.AssetsDir, id);
+        var candPath = Path.Combine(dir, "candidates", Path.GetFileName(req.File));
+        if (!System.IO.File.Exists(candPath)) return NotFound(new { error = "Кандидат не найден" });
+
+        var ext = Path.GetExtension(candPath);
+        var fileName = $"avatar-{Guid.NewGuid():N}{ext}";   // cache-busting
+        System.IO.File.Copy(candPath, Path.Combine(dir, fileName), overwrite: true);
+
+        // Удаляем прежний аватар и всю папку кандидатов
         if (!string.IsNullOrEmpty(persona.Avatar.ImageFile))
-            try { System.IO.File.Delete(Path.Combine(dir, persona.Avatar.ImageFile)); }
-            catch { /* не критично */ }
+            try { System.IO.File.Delete(Path.Combine(dir, persona.Avatar.ImageFile)); } catch { }
+        try { Directory.Delete(Path.Combine(dir, "candidates"), recursive: true); } catch { }
 
         var updated = _personas.SetAvatarImage(id, UserId, fileName);
         await Broadcast("updated", id);
@@ -176,21 +210,33 @@ public class PersonasController : ControllerBase
             return NotFound();
 
         var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.ImageFile);
-        if (!System.IO.File.Exists(full)) return NotFound();
+        return System.IO.File.Exists(full) ? PhysicalFileByExt(full) : NotFound();
+    }
+
+    private static string ExtFor(string contentType) => contentType switch
+    {
+        "image/jpeg" => ".jpg",
+        "image/webp" => ".webp",
+        _ => ".png",
+    };
+
+    private IActionResult PhysicalFileByExt(string full)
+    {
         var provider = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
         if (!provider.TryGetContentType(full, out var contentType))
             contentType = "application/octet-stream";
         return PhysicalFile(full, contentType);
     }
 
-    // Промпт аватара по умолчанию — из имени и описания персоны
+    // Фото-промпт аватара по умолчанию — из имени и описания персоны
     private static string BuildAvatarPrompt(Persona persona)
     {
         var who = string.IsNullOrWhiteSpace(persona.Description)
             ? persona.Name
             : $"{persona.Name}, {persona.Description}";
-        return $"Стилизованный портрет-аватар: {who}. Крупный план лица, чистый однотонный фон, " +
-               "мягкое освещение, дружелюбный характер, современная иллюстрация, квадратный кадр.";
+        return $"Photorealistic portrait photo of {who}. Head and shoulders, looking at camera, " +
+               "clean solid background, soft studio lighting, natural skin, friendly expression, " +
+               "high detail, sharp focus, square crop.";
     }
 
     // --- Долгая память персоны (дёргается MCP memory-server и UI-панелью «что помнит агент») ---
@@ -274,4 +320,6 @@ public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessi
 
 public record RememberRequest(string Type, string Text, List<string>? Tags = null, string? SourceSessionId = null);
 
-public record GenerateAvatarRequest(string? Prompt = null);
+public record GenerateAvatarRequest(string? Prompt = null, int? Count = null);
+
+public record SelectAvatarRequest(string File);

@@ -26,15 +26,24 @@ public class FalImageService
         _logger = logger;
     }
 
-    // Сгенерировать квадратное изображение по текстовому описанию.
-    // Возвращает байты картинки + content-type; null — если fal выключен/ошибка.
+    // Сгенерировать одно квадратное изображение (первый вариант).
     public async Task<GeneratedImage?> GenerateAsync(string prompt, CancellationToken ct = default)
     {
-        if (!Enabled || string.IsNullOrWhiteSpace(prompt)) return null;
+        var many = await GenerateManyAsync(prompt, 1, ct);
+        return many.Count > 0 ? many[0] : null;
+    }
+
+    // Сгенерировать несколько вариантов изображения по описанию (для выбора аватара).
+    // Возвращает пустой список, если fal выключен/ошибка.
+    public async Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+        string prompt, int count, CancellationToken ct = default)
+    {
+        if (!Enabled || string.IsNullOrWhiteSpace(prompt)) return [];
+        count = Math.Clamp(count, 1, 4);
         try
         {
             var client = _http.CreateClient();
-            client.Timeout = TimeSpan.FromSeconds(120);
+            client.Timeout = TimeSpan.FromSeconds(180);
 
             using var req = new HttpRequestMessage(HttpMethod.Post, $"https://fal.run/{_model}");
             req.Headers.Authorization = new AuthenticationHeaderValue("Key", _apiKey);
@@ -42,7 +51,7 @@ public class FalImageService
             {
                 prompt,
                 image_size = "square",
-                num_images = 1,
+                num_images = count,
             });
 
             using var resp = await client.SendAsync(req, ct);
@@ -50,24 +59,27 @@ public class FalImageService
             {
                 _logger.LogWarning("fal генерация вернула {Status}: {Body}",
                     resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
-                return null;
+                return [];
             }
 
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
-            if (!json.TryGetProperty("images", out var images) || images.ValueKind != JsonValueKind.Array
-                || images.GetArrayLength() == 0) return null;
-            var first = images[0];
-            var url = first.TryGetProperty("url", out var u) ? u.GetString() : null;
-            if (string.IsNullOrEmpty(url)) return null;
+            if (!json.TryGetProperty("images", out var images) || images.ValueKind != JsonValueKind.Array)
+                return [];
 
-            // fal может вернуть data-URI или обычную ссылку — качаем и то, и другое
-            var (bytes, contentType) = await DownloadAsync(client, url, ct);
-            return bytes is null ? null : new GeneratedImage(bytes, contentType);
+            var result = new List<GeneratedImage>();
+            foreach (var img in images.EnumerateArray())
+            {
+                var url = img.TryGetProperty("url", out var u) ? u.GetString() : null;
+                if (string.IsNullOrEmpty(url)) continue;
+                var (bytes, contentType) = await DownloadAsync(client, url, ct);
+                if (bytes is not null) result.Add(new GeneratedImage(bytes, contentType));
+            }
+            return result;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Ошибка генерации аватара через fal");
-            return null;
+            return [];
         }
     }
 

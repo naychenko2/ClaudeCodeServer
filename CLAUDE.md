@@ -217,17 +217,22 @@ WorkingDirectory = `project.RootPath`
 - **MCP**: [mcp/memory-server/index.js](mcp/memory-server/index.js) (без зависимостей) —
   memory_remember/search/list/forget; подключение как tasks/notes (env `MEMORY_API_URL/TOKEN/PERSONA_ID`
   в `BuildTurnMcpConfig` + подсказка в промпт). Явный write-path: персона сама решает, что запомнить.
-- **Аватар**: инициалы+цвет (палитра `AGENT_COLORS`) базой; AI-генерация через fal.ai —
+- **Аватар**: инициалы+цвет (палитра `AGENT_COLORS`) базой; фото-генерация через fal.ai —
   [FalImageService.cs](backend/ClaudeHomeServer/Services/FalImageService.cs) (`Fal:ApiKey`, модель
-  `Fal:ImageModel`, дефолт `fal-ai/flux/schnell`) → файл в `data/personas/{id}/`, отдача через
-  `GET {id}/avatar` (access_token в query для `<img>`).
+  `Fal:ImageModel`, дефолт `fal-ai/flux/schnell`; для фото-аватаров задают `flux/dev`). Генерация
+  возвращает 1-4 **кандидата** (`POST {id}/avatar/generate` {prompt?,count?} → candidates во временную
+  папку, аватар НЕ меняется), пользователь выбирает (`POST {id}/avatar/select`), отдача — `GET {id}/avatar`
+  (access_token в query для `<img>`).
+- **Авто-память** (флаг `persona-memory-autolearn`): [PersonaMemoryAutolearnService.cs](backend/ClaudeHomeServer/Services/PersonaMemoryAutolearnService.cs) —
+  IHostedService на `SessionManager.OnSessionMessage`; по завершении хода персонной сессии one-shot
+  извлекает факты (semantic) и итог (episodic) из транскрипта и сохраняет в память (дедуп в `Remember`).
 - **Фронт**: [features/agents/](frontend/src/features/agents/) — AgentsPage (сайдбар персон | центр:
-  переключатель «Чат | Память»), PersonaList, PersonaEditor (имя/характер/модель/зона/цвет/генерация
-  аватара), PersonaChat (переиспользует `ChatPanel`), PersonaMemoryPanel (записи по типам, ручное
-  добавление/удаление), PersonaAvatar (инициалы/картинка); стор
-  [lib/personas.ts](frontend/src/lib/personas.ts) (realtime personas_changed).
-- **Флаги**: `personas` (раздел + чат + память), `persona-memory-autolearn` (dev — авто-извлечение
-  фактов из диалога, задел на будущее).
+  переключатель «Чат | Память», цветовая тема персоны из `avatar.color`, приветствие-бабл `greeting`
+  в пустом чате), PersonaList, PersonaEditor (имя/характер + пресеты тона/модель/зона/цвет/галерея
+  генерации аватара), PersonaChat (переиспользует `ChatPanel`), PersonaMemoryPanel, PersonaAvatar;
+  стор [lib/personas.ts](frontend/src/lib/personas.ts) (realtime personas_changed).
+- **Флаги**: `personas` (раздел + чат + память + аватар), `persona-memory-autolearn` (авто-извлечение
+  фактов из диалога).
 
 ## REST API
 

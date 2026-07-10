@@ -21,10 +21,13 @@ public class PersonasController : ControllerBase
     private readonly SessionManager _sessions;
     private readonly PersonaMemoryService _memory;
     private readonly FalImageService _falImage;
+    private readonly Services.Llm.OneShotClaudeRunner _oneShot;
+    private readonly IConfiguration _config;
     private readonly IHubContext<SessionHub> _hub;
 
     public PersonasController(PersonaManager personas, ProjectManager projects,
         SessionManager sessions, PersonaMemoryService memory, FalImageService falImage,
+        Services.Llm.OneShotClaudeRunner oneShot, IConfiguration config,
         IHubContext<SessionHub> hub)
     {
         _personas = personas;
@@ -32,6 +35,8 @@ public class PersonasController : ControllerBase
         _sessions = sessions;
         _memory = memory;
         _falImage = falImage;
+        _oneShot = oneShot;
+        _config = config;
         _hub = hub;
     }
 
@@ -41,13 +46,21 @@ public class PersonasController : ControllerBase
         _hub.Clients.Group("user_" + UserId)
             .SendAsync("message", new PersonasChangedMessage(action, personaId));
 
-    // Список персон владельца. scope/projectId — необязательные фильтры контекста.
+    // Список персон владельца. scope: "context" — глобальные + этого проекта;
+    // "project" — только привязанные к projectId; "global" — только глобальные;
+    // иначе — все персоны владельца.
     [HttpGet]
     public ActionResult<IReadOnlyList<Persona>> List(
         [FromQuery] string? scope, [FromQuery] string? projectId)
     {
         if (string.Equals(scope, "context", StringComparison.OrdinalIgnoreCase))
             return Ok(_personas.GetForContext(UserId, projectId));
+        if (string.Equals(scope, "project", StringComparison.OrdinalIgnoreCase))
+            return Ok(_personas.GetByOwner(UserId)
+                .Where(p => p.Scope == PersonaScope.Project && p.ProjectId == projectId).ToList());
+        if (string.Equals(scope, "global", StringComparison.OrdinalIgnoreCase))
+            return Ok(_personas.GetByOwner(UserId)
+                .Where(p => p.Scope == PersonaScope.Global).ToList());
         return Ok(_personas.GetByOwner(UserId));
     }
 
@@ -239,6 +252,48 @@ public class PersonasController : ControllerBase
                "high detail, sharp focus, square crop.";
     }
 
+    // AI-помощь с характером агента: сгенерировать с нуля или улучшить/дополнить существующий
+    // (one-shot LLM). Возвращает готовый текст характера для подстановки в форму.
+    [HttpPost("ai/character")]
+    public async Task<ActionResult> AiCharacter([FromBody] AiCharacterRequest req)
+    {
+        var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
+        var prompt = BuildCharacterPrompt(req);
+        try
+        {
+            var text = await _oneShot.RunAsync(prompt, model, TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
+            var character = text.Trim();
+            if (string.IsNullOrWhiteSpace(character))
+                return StatusCode(502, new { error = "Пустой ответ модели" });
+            return Ok(new { character });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { error = $"Не удалось сгенерировать характер: {ex.Message}" });
+        }
+    }
+
+    private static string BuildCharacterPrompt(AiCharacterRequest req)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Ты помогаешь описать характер и стиль общения ассистента-агента. " +
+                      "Составь ТЕЛО системного промпта персоны — как она общается и действует.");
+        if (!string.IsNullOrWhiteSpace(req.Role)) sb.AppendLine($"Роль агента: {req.Role.Trim()}.");
+        if (!string.IsNullOrWhiteSpace(req.Name)) sb.AppendLine($"Имя агента: {req.Name.Trim()}.");
+        if (!string.IsNullOrWhiteSpace(req.Description)) sb.AppendLine($"Кратко: {req.Description.Trim()}.");
+        if (!string.IsNullOrWhiteSpace(req.Current))
+        {
+            sb.AppendLine($"\nТекущий характер (переработай/улучши его):\n{req.Current.Trim()}");
+        }
+        if (!string.IsNullOrWhiteSpace(req.Instruction))
+            sb.AppendLine($"\nПожелание пользователя: {req.Instruction.Trim()}");
+        sb.AppendLine("\nТребования к ответу:");
+        sb.AppendLine("- обращение на «ты» к агенту («Ты …»), описывай его манеру, ценности, стиль ответов;");
+        sb.AppendLine("- по-русски, живо и конкретно, 2–5 предложений;");
+        sb.AppendLine("- НЕ упоминай имя модели, не пиши преамбул и пояснений — только сам текст характера.");
+        return sb.ToString();
+    }
+
     // --- Долгая память персоны (дёргается MCP memory-server и UI-панелью «что помнит агент») ---
 
     // Записи памяти (type — необязательный фильтр semantic|episodic|procedural)
@@ -323,5 +378,7 @@ public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessi
 public record RememberRequest(string Type, string Text, List<string>? Tags = null, string? SourceSessionId = null);
 
 public record GenerateAvatarRequest(string? Prompt = null, int? Count = null);
+
+public record AiCharacterRequest(string? Name, string? Role, string? Description, string? Current, string? Instruction);
 
 public record SelectAvatarRequest(string File);

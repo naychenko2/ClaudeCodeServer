@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { Project, ProjectGroup, Session, AuthState } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
 import { C, R, FONT } from '../lib/design';
-import { useSidebarWidth } from '../lib/sidebarWidth';
+import { useSidebarDrag } from '../lib/sidebarWidth';
 import { Button, IconButton, Splitter } from '../components/ui';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
@@ -39,8 +38,10 @@ interface Props {
 
 const ACTIVE_STATUSES = new Set(['starting', 'working', 'active', 'waiting']);
 
-// Двухпанельный лейаут включается на широких экранах (планшет/десктоп)
-function useWide(bp = 900) {
+// Двухпанельный лейаут включается на широких экранах (планшет/десктоп).
+// Порог 768 — единый со всеми разделами (чаты/заметки/воркспейс), чтобы на
+// раскладных экранах (Galaxy Fold в развёрнутом виде) сайдбар не пропадал.
+function useWide(bp = 768) {
   const [wide, setWide] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia(`(min-width: ${bp}px)`).matches : true);
   useEffect(() => {
@@ -83,29 +84,10 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const [retryKey, setRetryKey] = useState(0);
 
   // Сайдбар: общая ширина + режим (закреплён / свёрнут / drawer), как в чатах и воркспейсе
-  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
+  const { width: sidebarWidth, dragging: draggingSplitter, startDrag: handleSidebarSplitterMouseDown } = useSidebarDrag();
   const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed' | 'open'>(() =>
     localStorage.getItem('cc_projects_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
   useEffect(() => { if (sidebarMode !== 'open') localStorage.setItem('cc_projects_sidebar_mode', sidebarMode); }, [sidebarMode]);
-  const [draggingSplitter, setDraggingSplitter] = useState(false);
-  const handleSidebarSplitterMouseDown = (e: ReactMouseEvent) => {
-    e.preventDefault();
-    setDraggingSplitter(true);
-    const startX = e.clientX;
-    const startW = sidebarWidth;
-    const onMove = (ev: MouseEvent) => setSidebarWidth(startW + (ev.clientX - startX));
-    const onUp = () => {
-      setDraggingSplitter(false);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  };
 
   useEffect(() => {
     setLoadState('loading');

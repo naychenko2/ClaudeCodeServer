@@ -19,7 +19,8 @@ import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
 import { EmptyState } from '../../components/EmptyState';
 import { Splitter } from '../../components/ui';
-import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot, usePanelWidth } from './shared';
+import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot } from './shared';
+import { useSidebarDrag } from '../../lib/sidebarWidth';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -53,8 +54,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const [graphSettings, setGraphSettings] = useGraphSettings('cc_graph_global');
   const [graphStats, setGraphStats] = useState<GraphStats | null>(null);
 
-  // Перетаскиваемая ширина сайдбара (персист, как в Workspace)
-  const [listWidth, listDragging, startListDrag] = usePanelWidth('cc_notes_list_width', 260, 210, 420);
+  // Ширина сайдбара — общая со всеми разделами (чаты/проекты/воркспейс)
+  const { width: listWidth, dragging: listDragging, startDrag: startListDrag } = useSidebarDrag();
 
   useEffect(() => { void ensureNotesLoaded(); }, []);
 

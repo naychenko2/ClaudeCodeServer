@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 
 // Единая ширина боковых панелей для всех областей (чаты, проекты, воркспейс).
 // Меняешь в одном месте — синхронно меняется везде (общий localStorage-ключ +
@@ -44,4 +45,33 @@ function getSnapshot() { return current; }
 export function useSidebarWidth(): [number, (n: number) => void] {
   const width = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return [width, setSidebarWidth];
+}
+
+// Единый ресайз левого сайдбара для всех разделов (чаты, проекты, заметки, воркспейс):
+// общая ширина + одинаковые клампы (SIDEBAR_MIN/MAX) + drag мышью. Возвращает то же,
+// что usePanelWidth из notes/shared — [width, dragging, startDrag].
+export function useSidebarDrag() {
+  const [width, setWidth] = useSidebarWidth();
+  const [dragging, setDragging] = useState(false);
+
+  const startDrag = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    setDragging(true);
+    const startX = e.clientX;
+    const startW = width;
+    const onMove = (ev: MouseEvent) => setWidth(startW + (ev.clientX - startX)); // стор клампит
+    const onUp = () => {
+      setDragging(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
+  return { width, setWidth, dragging, startDrag };
 }

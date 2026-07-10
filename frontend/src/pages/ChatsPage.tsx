@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { C, FONT } from '../lib/design';
-import { useSidebarWidth } from '../lib/sidebarWidth';
+import { useSidebarDrag } from '../lib/sidebarWidth';
 import { Button, IconButton, Splitter } from '../components/ui';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
@@ -62,25 +62,9 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (sidebarMode !== 'open') localStorage.setItem('cc_chats_sidebar_mode', sidebarMode);
   }, [sidebarMode]);
 
-  // Ширина сайдбара — общая для всех областей (перетаскиваемая, персистится)
-  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
-  const [draggingSplitter, setDraggingSplitter] = useState(false);
-
-  const handleSidebarSplitterMouseDown = (e: ReactMouseEvent) => {
-    e.preventDefault();
-    setDraggingSplitter(true);
-    const startX = e.clientX;
-    const startW = sidebarWidth;
-    const onMove = (ev: globalThis.MouseEvent) =>
-      setSidebarWidth(Math.max(220, Math.min(480, startW + (ev.clientX - startX))));
-    const onUp = () => {
-      setDraggingSplitter(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
+  // Ширина сайдбара — общая для всех разделов (единый хук: та же ширина и клампы,
+  // что в «Проектах», «Заметках», воркспейсе).
+  const { width: sidebarWidth, dragging: draggingSplitter, startDrag: handleSidebarSplitterMouseDown } = useSidebarDrag();
 
   // Панель «Артефакты сессии» (за фич-флагом): открыта/закрыта + ширина, персист в localStorage.
   // Ключи отдельные от проектов (cc_chat_artifacts_*), чтобы состояния не пересекались.

@@ -3,6 +3,7 @@ import type { Session } from '../../types';
 import { api } from '../../lib/api';
 import { useModels, useModelCaps, modelCaps, modelProvider, useModelLabel } from '../../lib/models';
 import { effortsForProvider, effortLabel } from '../../lib/effort';
+import { EXPIRY_PRESETS, expiryOptionLabel } from '../../lib/expiry';
 import { ModelPicker } from '../ModelPicker';
 import { SegmentedControl } from '../ui';
 import { C, R, FONT, SHADOW } from '../../lib/design';
@@ -12,7 +13,7 @@ import { C, R, FONT, SHADOW } from '../../lib/design';
 // сессию (провайдер ещё не «начат» — смена модели/провайдера разрешена). Инлайн-карточка
 // вместо плавающего поповера — надёжнее на мобильном, а в пустом чате места по вертикали хватает.
 
-type Panel = 'model' | 'effort' | null;
+type Panel = 'model' | 'effort' | 'expiry' | null;
 
 // Иконка «чип» (модель)
 const IconModel = (
@@ -26,6 +27,12 @@ const IconModel = (
 const IconEffort = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
     <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
+  </svg>
+);
+// Иконка «песочные часы» (время жизни временного чата)
+const IconExpiry = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <path d="M6 2h12M6 22h12M8 2v4l4 4 4-4V2M8 22v-4l4-4 4 4v4" />
   </svg>
 );
 
@@ -52,13 +59,15 @@ export function NewChatSetup({ session, onSessionUpdated, isMobile }: {
 
   // Update на бэке — полная замена (Name/Model/Effort перезаписываются целиком, отсутствующее → null),
   // поэтому шлём весь набор, подмешивая текущие значения сессии; иначе выбор усилия затёр бы модель/имя.
-  const persist = async (next: { model?: string | null; effort?: string | null }) => {
+  const persist = async (next: { model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null }) => {
     setSaving(true);
     try {
       const data = {
         name: session.name ?? null,
         model: next.model !== undefined ? next.model : (session.model ?? null),
         effort: next.effort !== undefined ? next.effort : (session.effort ?? null),
+        // Время жизни — sentinel-семантика на бэке: отсутствие поля = не менять
+        ...(next.expiresAfterMinutes !== undefined && { expiresAfterMinutes: next.expiresAfterMinutes }),
       };
       // Проектная сессия — через /projects/{id}/sessions, чат вне проекта — через /chats (как в EditSessionDialog)
       const updated = session.projectId
@@ -82,6 +91,11 @@ export function NewChatSetup({ session, onSessionUpdated, isMobile }: {
   };
   const pickEffort = (v: string) => {
     if (v !== (session.effort ?? '')) persist({ effort: v || null });
+    setPanel(null);
+  };
+  const pickExpiry = (v: string) => {
+    const minutes = v ? Number(v) : null;
+    if (minutes !== (session.expiresAfterMinutes ?? null)) persist({ expiresAfterMinutes: minutes });
     setPanel(null);
   };
 
@@ -123,6 +137,7 @@ export function NewChatSetup({ session, onSessionUpdated, isMobile }: {
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
         {pill('model', IconModel, 'Модель', modelName)}
         {caps.supportsEffort && pill('effort', IconEffort, 'Усилие', effortLabel(session.effort))}
+        {pill('expiry', IconExpiry, 'Время жизни', expiryOptionLabel(session.expiresAfterMinutes))}
       </div>
 
       {panel && (
@@ -134,7 +149,7 @@ export function NewChatSetup({ session, onSessionUpdated, isMobile }: {
         }}>
           {panel === 'model' ? (
             <ModelPicker value={session.model ?? ''} options={models} onChange={pickModel} collapsible={false} />
-          ) : (
+          ) : panel === 'effort' ? (
             <>
               <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
                 Выше — глубже размышляет, но дольше и дороже.
@@ -143,6 +158,18 @@ export function NewChatSetup({ session, onSessionUpdated, isMobile }: {
                 value={session.effort ?? ''}
                 options={effortsForProvider(modelProvider(session.model))}
                 onChange={pickEffort}
+                columns={3}
+              />
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
+                Временный чат удалится сам вместе с историей, если не будет активности выбранное время.
+              </div>
+              <SegmentedControl
+                value={session.expiresAfterMinutes ? String(session.expiresAfterMinutes) : ''}
+                options={[{ value: '', label: 'Бессрочно' }, ...EXPIRY_PRESETS.map(p => ({ value: String(p.minutes), label: p.label }))]}
+                onChange={pickExpiry}
                 columns={3}
               />
             </>

@@ -12,6 +12,12 @@ export const EXPIRY_PRESETS: { minutes: number; label: string }[] = [
 
 export const DEFAULT_EXPIRY = 1440;
 
+// Подпись выбранного срока жизни: «Бессрочно» / label пресета / «N мин» для нестандартного
+export function expiryOptionLabel(minutes?: number | null): string {
+  if (!minutes || minutes <= 0) return 'Бессрочно';
+  return EXPIRY_PRESETS.find(p => p.minutes === minutes)?.label ?? `${minutes} мин`;
+}
+
 // Момент авто-удаления; null — чат не временный
 export function expiresAt(session: Pick<Session, 'updatedAt' | 'expiresAfterMinutes'>): Date | null {
   if (!session.expiresAfterMinutes || session.expiresAfterMinutes <= 0) return null;

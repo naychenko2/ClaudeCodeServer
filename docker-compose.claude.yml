@@ -3,6 +3,10 @@
 #   docker compose -f docker-compose.claude.yml up -d --build
 #   docker exec -it claude-server claude login      # один раз: вход по подписке
 #
+# Логин по /login однажды ИСТЕКАЕТ (тихо: CLI до 2.1.203 даже не предупреждает), и тогда
+# отваливаются чат на моделях Claude и все ИИ-фичи. Надёжнее выдать долгоживущий токен на
+# хосте — `claude setup-token` — и положить его в .env как CLAUDE_CODE_OAUTH_TOKEN.
+#
 # Контейнер видит ТОЛЬКО проброшенные volume — хостовая ФС Claude недоступна.
 # Значения берутся из .env (CLAUDE_PROJECTS_DIR, CLAUDE_EGRESS_PROXY) — см. .env.example.
 # Dify (:8080) и OnlyOffice (:8090) — отдельные контейнеры, доступ через host.docker.internal.
@@ -39,6 +43,11 @@ services:
       # Остальной их конфиг (эндпоинты/модели) — в appsettings.json (секция LlmProviders).
       LlmProviders__deepseek__ApiKey: ${DEEPSEEK_API_KEY:-}
       LlmProviders__glm__ApiKey: ${GLM_API_KEY:-}
+      # Долгоживущий OAuth-токен подписки (`claude setup-token`, живёт ~год) — альтернатива
+      # интерактивному `claude login`. Пусто = берётся логин из volume claude-home; он
+      # однажды истечёт, и тогда чат на моделях Claude и все ИИ-фичи (сводки «Что нового»,
+      # ИИ-задачи и заметки, брифинг) отвалятся. Пустая переменная CLI игнорируется.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       # ServerUrl уходит В БРАУЗЕР (грузит api.js, создаёт iframe) → нужен адрес,
       # видимый с хоста, а не контейнерный host.docker.internal. Указываем на сам
       # бэкенд: YARP проксирует /web-apps/* и версионные пути в OnlyOffice DS.

@@ -7,16 +7,6 @@ import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { api } from '../lib/api';
-import { useFeature, FLAGS } from '../lib/featureFlags';
-import { openNoteById } from '../features/notes/saveToNote';
-import { GlobalSearch } from './GlobalSearch';
-
-// Локальная дата устройства в формате YYYY-MM-DD (для дневника брифа)
-function localDateStr(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
 
 interface Props {
   value: HubTab;
@@ -87,24 +77,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
 
   const openHistory = () => window.dispatchEvent(new Event(PRODUCT_HISTORY_EVENT));
 
-  // «Утренний бриф» (флаг daily-briefing): собрать план дня в дневник и открыть его
-  const briefingEnabled = useFeature(FLAGS.aiAssist);
-  const [briefingBusy, setBriefingBusy] = useState(false);
-  // Единый поиск (флаг unified-search)
-  const searchEnabled = useFeature(FLAGS.aiAssist);
-  const [showSearch, setShowSearch] = useState(false);
-  const runBriefing = async () => {
-    if (briefingBusy) return;
-    setBriefingBusy(true);
-    try {
-      const note = await api.briefing.today(localDateStr());
-      openNoteById(note.id);
-    } catch {
-      alert('Не удалось собрать бриф. Попробуйте ещё раз.');
-    } finally {
-      setBriefingBusy(false);
-    }
-  };
+  // «Утренний бриф» и «Единый поиск» убраны из шапки — доступны через AI-палитру (⌘/Ctrl+K).
 
   const logo = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
@@ -142,50 +115,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
 
       {/* Правая секция — меню аватара (управление пользователями — внутри меню, admin) */}
       <div style={{ flex: isMobile ? 'none' : 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
-        {/* Единый поиск (флаг unified-search) — заметки + задачи. Только десктоп. */}
-        {!isMobile && searchEnabled && (
-          <button
-            onClick={() => setShowSearch(true)}
-            aria-label="Поиск по пространству"
-            title="Поиск по заметкам и задачам"
-            style={{
-              width: 32, height: 32, borderRadius: 8, border: 'none', background: 'none',
-              color: C.textSecondary, cursor: 'pointer', display: 'flex', alignItems: 'center',
-              justifyContent: 'center', flexShrink: 0,
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
-          >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="7" />
-              <path d="m21 21-4.3-4.3" />
-            </svg>
-          </button>
-        )}
-        {/* «Утренний бриф» — план дня в дневник (флаг daily-briefing). Как и «Что нового»,
-            только на десктопе (на мобилке в шапке нет места). */}
-        {!isMobile && briefingEnabled && (
-          <button
-            onClick={runBriefing}
-            disabled={briefingBusy}
-            aria-label="Собрать утренний бриф"
-            title="Утренний бриф — план дня в дневник"
-            style={{
-              position: 'relative', width: 32, height: 32, borderRadius: 8, border: 'none',
-              background: 'none', color: C.textSecondary, cursor: briefingBusy ? 'default' : 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-              opacity: briefingBusy ? 0.6 : 1,
-            }}
-            onMouseEnter={e => { if (!briefingBusy) e.currentTarget.style.background = C.bgSelected; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
-          >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-              style={briefingBusy ? { animation: 'cc-spin 1s linear infinite' } : undefined}>
-              <circle cx="12" cy="12" r="4" />
-              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-            </svg>
-          </button>
-        )}
+        {/* «Единый поиск» и «Утренний бриф» убраны из шапки — теперь только через AI-палитру (⌘/Ctrl+K). */}
         {/* «Что нового» — продуктовая история по всем проектам (во всех разделах).
             На мобилке кнопка наезжала бы на контент — там она уезжает в меню аватара. */}
         {!isMobile && (
@@ -252,7 +182,6 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
         />
       </div>
 
-      {showSearch && <GlobalSearch onClose={() => setShowSearch(false)} />}
       {showUserMgmt && <UserManagementModal currentUserId={auth.id} onClose={() => setShowUserMgmt(false)} />}
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}

@@ -20,7 +20,7 @@ import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } fr
 import { showToast } from '../../lib/toast';
 import {
   SourceBadge, usePanelWidth,
-  IconChat, IconTrash, IconCalendarDay, IconLink, IconSparkle, IconFolder, IconFolderMove,
+  IconTrash, IconLink, IconSparkle, IconFolder, IconFolderMove,
 } from './shared';
 
 // Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
@@ -84,7 +84,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   // 'error' — ИИ недоступен (нет логина claude/таймаут): показываем явно, не молчим.
   const [aiLinks, setAiLinks] = useState<{ title: string; why: string }[] | 'loading' | 'error' | null>(null);
   const [aiTags, setAiTags] = useState<string[] | 'loading' | 'error' | null>(null);
-  const [aiBusy, setAiBusy] = useState(false);
+  const [, setAiBusy] = useState(false);
   // Ручное добавление тега (инлайн-инпут у чипов)
   const [addingTag, setAddingTag] = useState(false);
   const [newTag, setNewTag] = useState('');
@@ -282,13 +282,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             </>
           ) : (
             <>
-              {/* Серверные операции (перенос, AI, конспект) недоступны офлайн */}
-              {onAskClaude && <IconButton title="Спросить ассистента про это" onClick={() => onAskClaude(note)}><IconChat /></IconButton>}
+              {/* AI-действия (связи, теги, конспект дня, «спросить Claude») — только через AI-палитру (⌘/Ctrl+K) */}
               <IconButton title={online ? 'Переместить…' : 'Перенос недоступен офлайн'} onClick={openMove} disabled={!online}><IconFolderMove /></IconButton>
-              <IconButton title={online ? 'Предложить связи (AI)' : 'AI недоступен офлайн'} tone="accent" onClick={suggestLinks} disabled={!online}><IconSparkle /></IconButton>
-              {isDaily && (
-                <IconButton title={online ? 'Конспект дня (AI)' : 'AI недоступен офлайн'} tone="accent" onClick={makeDailySummary} disabled={aiBusy || !online}><IconCalendarDay /></IconButton>
-              )}
               <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>
               <button onClick={startEdit} style={{ ...tbBtnPrimary, marginLeft: 6 }}>Править</button>
             </>
@@ -337,10 +332,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                   + тег
                 </button>
               )}
-              <button onClick={suggestTags} title="Предложить теги (AI)"
-                style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: C.textMuted, background: 'none', border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 7px', cursor: 'pointer', fontFamily: FONT.sans }}>
-                <IconSparkle />{aiTags === 'loading' ? '…' : 'теги'}
-              </button>
+              {/* Кнопка «теги (AI)» убрана — предложение тегов только через AI-палитру */}
               {aiTags === 'error' && (
                 <span style={{ fontSize: 11, color: C.dangerText }}>ИИ недоступен (claude не залогинен на сервере)</span>
               )}

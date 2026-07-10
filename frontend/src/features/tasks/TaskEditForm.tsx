@@ -13,33 +13,6 @@ import { ClaudeBadge, MeBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
 import { MarkdownEditor } from './MarkdownEditor';
 
-// Кнопка-чип «сгенерировать с Claude» (описание/подзадачи)
-function AiButton({ label, loading, disabled, onClick }: {
-  label: string; loading: boolean; disabled?: boolean; onClick: () => void;
-}) {
-  const inactive = loading || disabled;
-  return (
-    <button
-      onClick={onClick}
-      disabled={inactive}
-      title={disabled ? 'Сначала заполните название и описание' : `${label} с помощью Claude`}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6,
-        padding: '4px 11px', cursor: inactive ? 'default' : 'pointer',
-        border: `1px solid ${C.accentMuted}`, borderRadius: 999,
-        background: C.accentLight, color: C.accent,
-        fontFamily: FONT.sans, fontSize: 12, fontWeight: 600,
-        opacity: disabled ? 0.5 : 1,
-      }}
-    >
-      {loading
-        ? <span className="tool-spinner" style={{ width: 11, height: 11, flexShrink: 0 }} />
-        : <ClaudeBadge size={14} />}
-      {loading ? 'Claude думает…' : label}
-    </button>
-  );
-}
-
 interface Props {
   task: Task;
   isMobile?: boolean;
@@ -479,12 +452,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
           {/* Описание */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 9 }}>
             <div style={{ ...fieldLabelStyle(), marginBottom: 0 }}>Описание</div>
-            <AiButton
-              label={description.trim() ? 'Переписать' : 'Создать описание'}
-              loading={aiDescLoading}
-              disabled={!title.trim()}
-              onClick={generateDescription}
-            />
+            {/* Генерация описания (AI) — через AI-палитру (⌘/Ctrl+K) */}
             <div style={{ flex: 1 }} />
             <button
               onClick={() => setDescEditing(v => !v)}
@@ -538,12 +506,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
           {/* Подзадачи */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 9 }}>
             <div style={{ ...fieldLabelStyle(), marginBottom: 0 }}>Подзадачи</div>
-            <AiButton
-              label="Предложить подзадачи"
-              loading={aiSubsLoading}
-              disabled={!title.trim() || !description.trim()}
-              onClick={generateSubtasks}
-            />
+            {/* Генерация подзадач (AI) — через AI-палитру (⌘/Ctrl+K) */}
           </div>
           <div style={{
             background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl,

@@ -14,7 +14,6 @@ import { bumpNotes } from '../../lib/notes';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { openNoteById } from '../../features/notes/saveToNote';
-import { IconNotes } from '../../features/notes/shared';
 import type { ExtractedTaskCandidate } from '../../types';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
@@ -653,61 +652,37 @@ interface ChatHeaderBarProps {
   onCompact: () => void;
 }
 
-// Кнопка «Итог сессии» — конспект сессии заметкой (флаги notes + notes-session-summary).
-// Повторный клик по галочке открывает созданную заметку; сервер обновляет ту же заметку.
-function SessionSummaryButton({ session, hasMessages, online, isMobile }: { session: Session; hasMessages: boolean; online: boolean; isMobile?: boolean }) {
+// «Итог сессии в заметку» — теперь запускается ТОЛЬКО через AI-палитру (действие
+// chat.summary). Компонент невидим, но остаётся смонтированным ради слушателя
+// cc-ai-run; при успехе открывает созданную заметку. Гейт — флаги notes + ai-assist.
+function SessionSummaryButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
   const notesOn = useFeature(FLAGS.notes);
   const summaryOn = useFeature(FLAGS.aiAssist);
   const [busy, setBusy] = useState(false);
-  const [savedId, setSavedId] = useState<string | null>(null);
-  const [error, setError] = useState(false);
-  // Смена чата — сброс локального состояния кнопки
-  useEffect(() => { setSavedId(null); setError(false); setBusy(false); }, [session.id]);
+  useEffect(() => { setBusy(false); }, [session.id]);
   const run = () => {
     if (busy) return;
-    if (savedId) { openNoteById(savedId); return; }
     setBusy(true);
-    setError(false);
     api.sessions.summary(session.id)
-      .then(n => { setSavedId(n.id); bumpNotes(); setTimeout(() => setSavedId(null), 8000); })
-      .catch(() => { setError(true); setTimeout(() => setError(false), 3000); })
+      .then(n => { bumpNotes(); openNoteById(n.id); })
+      .catch(() => showToast('Итог сессии', 'Не удалось составить итог (claude не залогинен?)', 'info'))
       .finally(() => setBusy(false));
   };
-  // AI-хаб: запуск «Итог сессии» из палитры/подсказки (тот же обработчик, что и кнопка)
   useEffect(() => {
     if (!notesOn || !summaryOn || !online || !hasMessages) return;
     const onRun = (e: Event) => { if ((e as CustomEvent<{ action?: string }>).detail?.action === 'chat.summary') run(); };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notesOn, summaryOn, online, session.id, hasMessages, busy, savedId]);
-  if (!notesOn || !summaryOn || !online || !hasMessages) return null;
-  return (
-    <ToolbarIconButton onClick={run} isMobile={isMobile}
-      title={busy ? 'Составляю итог…' : error ? 'Не удалось составить итог' : savedId ? 'Итог сохранён — открыть заметку' : 'Итог сессии в заметку'}>
-      {busy
-        ? <div className="tool-spinner" style={{ width: 13, height: 13 }} />
-        : savedId
-          ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-          : error
-            ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.dangerText} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
-            : <IconNotes size={15} />}
-    </ToolbarIconButton>
-  );
+  }, [notesOn, summaryOn, online, session.id, hasMessages, busy]);
+  return null;
 }
 
 // Иконка «задачи из чата» — документ с плюсом
-const IconTaskPlus = () => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="4" width="13" height="16" rx="2" />
-    <path d="M7 9h6M7 13h3" />
-    <path d="M18 14v6M15 17h6" />
-  </svg>
-);
-
-// Кнопка «Задачи из чата» (флаг chat-extract-tasks): Claude извлекает action items
-// из транскрипта, пользователь подтверждает выбор — задачи создаются в трекере.
-function ExtractTasksButton({ session, hasMessages, online, isMobile }: { session: Session; hasMessages: boolean; online: boolean; isMobile?: boolean }) {
+// «Задачи из чата» — запускаются ТОЛЬКО через AI-палитру (действие chat.extract).
+// Кнопка убрана; компонент остаётся смонтированным ради слушателя cc-ai-run и
+// показывает модалку выбора извлечённых кандидатов. Гейт — флаг ai-assist.
+function ExtractTasksButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
   const on = useFeature(FLAGS.aiAssist);
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -756,10 +731,6 @@ function ExtractTasksButton({ session, hasMessages, online, isMobile }: { sessio
 
   return (
     <>
-      <ToolbarIconButton onClick={run} isMobile={isMobile}
-        title={busy ? 'Ищу задачи…' : 'Задачи из чата'}>
-        {busy ? <div className="tool-spinner" style={{ width: 13, height: 13 }} /> : <IconTaskPlus />}
-      </ToolbarIconButton>
       {dialog && (
         <Modal width={460} title="Задачи из чата" subtitle="Отметьте, что добавить в трекер"
           onClose={() => setDialog(null)}
@@ -897,8 +868,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
 
   // На мобилке артефакты и настройки — плотная пара справа (gap 2 вместо TB.gap),
   // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
-  const summaryBtn = <SessionSummaryButton session={session} hasMessages={hasMessages} online={online} isMobile={isMobile} />;
-  const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} isMobile={isMobile} />;
+  const summaryBtn = <SessionSummaryButton session={session} hasMessages={hasMessages} online={online} />;
+  const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const actionBtns = isMobile
     ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>
     : <>{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</>;

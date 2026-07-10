@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
@@ -114,6 +114,19 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
 
   const [results, setResults] = useState<NoteSummary[] | null>(null);
   const [semanticHits, setSemanticHits] = useState<NoteSemanticHit[] | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // AI-хаб: «Поиск по смыслу» из палитры — переключаем режим и ставим фокус в поиск
+  useEffect(() => {
+    const onRun = (e: Event) => {
+      if ((e as CustomEvent<{ action?: string }>).detail?.action !== 'note.semantic') return;
+      setMode('notes');
+      if (semanticAvailable) setSearchMode('semantic');
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    };
+    window.addEventListener('cc-ai-run', onRun);
+    return () => window.removeEventListener('cc-ai-run', onRun);
+  }, [semanticAvailable]);
   useEffect(() => {
     const q = query.trim();
     if (!q) { setResults(null); setSemanticHits(null); return; }
@@ -198,6 +211,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, height: 30, padding: '0 8px', color: C.textMuted }}>
           <IconSearch />
           <input
+            ref={searchInputRef}
             value={query} onChange={e => setQuery(e.target.value)}
             placeholder="Поиск…"
             title="Операторы: tag:идея source:Личный"

@@ -663,7 +663,6 @@ function SessionSummaryButton({ session, hasMessages, online, isMobile }: { sess
   const [error, setError] = useState(false);
   // Смена чата — сброс локального состояния кнопки
   useEffect(() => { setSavedId(null); setError(false); setBusy(false); }, [session.id]);
-  if (!notesOn || !summaryOn || !online || !hasMessages) return null;
   const run = () => {
     if (busy) return;
     if (savedId) { openNoteById(savedId); return; }
@@ -674,6 +673,15 @@ function SessionSummaryButton({ session, hasMessages, online, isMobile }: { sess
       .catch(() => { setError(true); setTimeout(() => setError(false), 3000); })
       .finally(() => setBusy(false));
   };
+  // AI-хаб: запуск «Итог сессии» из палитры/подсказки (тот же обработчик, что и кнопка)
+  useEffect(() => {
+    if (!notesOn || !summaryOn || !online || !hasMessages) return;
+    const onRun = (e: Event) => { if ((e as CustomEvent<{ action?: string }>).detail?.action === 'chat.summary') run(); };
+    window.addEventListener('cc-ai-run', onRun);
+    return () => window.removeEventListener('cc-ai-run', onRun);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notesOn, summaryOn, online, session.id, hasMessages, busy, savedId]);
+  if (!notesOn || !summaryOn || !online || !hasMessages) return null;
   return (
     <ToolbarIconButton onClick={run} isMobile={isMobile}
       title={busy ? 'Составляю итог…' : error ? 'Не удалось составить итог' : savedId ? 'Итог сохранён — открыть заметку' : 'Итог сессии в заметку'}>
@@ -705,7 +713,6 @@ function ExtractTasksButton({ session, hasMessages, online, isMobile }: { sessio
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<{ projectId: string | null; items: (ExtractedTaskCandidate & { sel: boolean })[] } | null>(null);
   useEffect(() => { setDialog(null); setBusy(false); }, [session.id]);
-  if (!on || !online || !hasMessages) return null;
 
   const run = () => {
     if (busy) return;
@@ -721,6 +728,15 @@ function ExtractTasksButton({ session, hasMessages, online, isMobile }: { sessio
       .catch(() => showToast('Задачи из чата', 'Не удалось извлечь задачи из чата', 'info'))
       .finally(() => setBusy(false));
   };
+  // AI-хаб: запуск «Задачи из чата» из палитры/подсказки (тот же обработчик, что и кнопка)
+  useEffect(() => {
+    if (!on || !online || !hasMessages) return;
+    const onRun = (e: Event) => { if ((e as CustomEvent<{ action?: string }>).detail?.action === 'chat.extract') run(); };
+    window.addEventListener('cc-ai-run', onRun);
+    return () => window.removeEventListener('cc-ai-run', onRun);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [on, online, session.id, hasMessages, busy]);
+  if (!on || !online || !hasMessages) return null;
   const toggle = (i: number) =>
     setDialog(d => d && ({ ...d, items: d.items.map((t, idx) => idx === i ? { ...t, sel: !t.sel } : t) }));
   const create = async () => {

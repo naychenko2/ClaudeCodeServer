@@ -60,6 +60,8 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
   const [sessions, setSessions] = useState<Session[]>([]);
   const [executing, setExecuting] = useState(false);
   const [execError, setExecError] = useState<string | null>(null);
+  // AI-хаб: отложенное AI-действие, которое форма правки выполнит при монтировании
+  const [pendingAi, setPendingAi] = useState<'task.description' | 'task.subtasks' | null>(null);
 
   // Имя связанной сессии (только у проектных задач)
   useEffect(() => {
@@ -135,6 +137,23 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
 
   // Живая сессия по задаче уже идёт — не показываем кнопку повторного запуска
   const claudeRunning = !!task.claudeStartedAt && !task.claudeResult && task.status !== 'done';
+
+  // AI-хаб: контекстные действия задачи из палитры/подсказки. «Выполнить» — тот же
+  // обработчик, что и кнопка (со стейтом «Запуск…»); генерация — вход в правку + авто-запуск.
+  useEffect(() => {
+    const onRun = (e: Event) => {
+      const action = (e as CustomEvent<{ action?: string }>).detail?.action;
+      if (action === 'task.execute') {
+        if (task.assignee === 'claude' && task.status !== 'done' && !claudeRunning) void handleExecute();
+      } else if (action === 'task.description' || action === 'task.subtasks') {
+        setPendingAi(action);
+        setEditing(true);
+      }
+    };
+    window.addEventListener('cc-ai-run', onRun);
+    return () => window.removeEventListener('cc-ai-run', onRun);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id, task.assignee, task.status, claudeRunning, executing]);
   const executeButton = task.assignee === 'claude' && task.status !== 'done' && !claudeRunning && (
     <button
       onClick={handleExecute}
@@ -200,8 +219,10 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           task={task}
           isMobile={isMobile}
           onSave={handleSave}
-          onCancel={() => setEditing(false)}
+          onCancel={() => { setEditing(false); setPendingAi(null); }}
           onDelete={() => setConfirmDelete(true)}
+          pendingAi={pendingAi}
+          onPendingConsumed={() => setPendingAi(null)}
         />
         {deleteConfirmModal}
       </>

@@ -20,6 +20,7 @@ export const FLAGS = {
   taskBoard: 'task-board',
   tasksOffline: 'tasks-offline',
   notesOffline: 'notes-offline',
+  aiHub: 'ai-hub',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

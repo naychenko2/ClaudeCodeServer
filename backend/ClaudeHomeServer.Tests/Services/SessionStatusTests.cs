@@ -78,7 +78,9 @@ public class SessionStatusTests : IDisposable
         var notesSvc = new NotesService(_projectManager, _config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, _config,
             NullLogger<NotesKnowledgeService>.Instance);
-        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, NullLogger<SessionManager>.Instance);
+        var personas = new PersonaManager(_config);
+        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, _config, NullLogger<PersonaMemoryService>.Instance);
+        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, NullLogger<SessionManager>.Instance);
     }
 
     private void WriteSessions(IEnumerable<Session> sessions)

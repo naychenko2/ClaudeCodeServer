@@ -33,6 +33,8 @@ public static class FeatureFlagKeys
     public const string TaskBoard = "task-board";
     public const string TasksOffline = "tasks-offline";
     public const string NotesOffline = "notes-offline";
+    public const string Personas = "personas";
+    public const string PersonaMemoryAutolearn = "persona-memory-autolearn";
 }
 
 /// <summary>
@@ -150,6 +152,23 @@ public static class FeatureFlagCatalog
             Description: "Просматривайте, правьте и создавайте заметки без соединения — изменения сохраняются на устройстве и синхронизируются при возврате связи. Конфликты сохраняются копией.",
             Default: false,
             Stage: "beta"),
+
+        // Раздел «Агенты» — олицетворённые агенты (персоны): имя, аватар, характер, отдельный
+        // чат, долгая память и доступ к контексту (глобально или в рамках проекта).
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.Personas,
+            Title: "Агенты",
+            Description: "Олицетворённые агенты с именем, аватаром и характером: у каждого свой чат, долгая память и доступ ко всей информации в своей зоне контекста (глобально или по проекту).",
+            Default: false,
+            Stage: "beta"),
+
+        // Персона сама извлекает факты из диалога в долгую память (авто-обучение) после сессии.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PersonaMemoryAutolearn,
+            Title: "Авто-память агентов",
+            Description: "После разговора агент сам вычленяет из диалога факты и выводы и сохраняет их в свою долгую память — без явной команды «запомни».",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

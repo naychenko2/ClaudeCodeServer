@@ -112,6 +112,11 @@ public record TaskChangedMessage(string Action, Models.TaskItem Task)
 public record NotesChangedMessage(string Action, string? NoteId = null)
     : ServerMessage("notes_changed");
 
+// Изменение персон (олицетворённых агентов) — created/updated/deleted — в группу user_{userId},
+// чтобы все устройства обновили раздел «Агенты».
+public record PersonasChangedMessage(string Action, string? PersonaId = null)
+    : ServerMessage("personas_changed");
+
 // Пользовательское уведомление (напоминание о задаче, событие Claude-исполнителя и т.п.) —
 // в группу user_{userId}: открытое приложение показывает тост, клик ведёт по Url (hash-диплинк).
 // Kind — семантика для иконки/цвета: reminder | claude | info

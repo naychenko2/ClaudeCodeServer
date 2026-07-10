@@ -12,6 +12,10 @@ public record TasksMcpContext(string ApiUrl, string Token, string? ProjectId);
 // (задаёт источник по умолчанию для создания заметок; null — личный vault).
 public record NotesMcpContext(string ApiUrl, string Token, string? ProjectId);
 
+// Контекст MCP-сервера памяти персоны: адрес API, сервисный токен владельца и id персоны,
+// чья долгая память доступна инструментами mcp__memory__* в этой сессии.
+public record MemoryMcpContext(string ApiUrl, string Token, string PersonaId);
+
 // Per-session контекст, общий для всех адаптеров — то, что SessionManager передаёт
 // при создании сессии независимо от провайдера. Claude-специфичные зависимости
 // (MCP-конфиг, скиллы, disallowed tools) живут в фабрике адаптеров.
@@ -25,4 +29,12 @@ public sealed record LlmSessionContext(
     // Auto-recall заметок: по тексту хода возвращает готовый markdown-блок с
     // релевантными заметками для системного промпта (null — не подмешивать).
     // Провайдер-агностично; вычисляется каждый ход. Ошибки внутри — тихо в null.
-    Func<string, Task<string?>>? RecallProvider = null);
+    Func<string, Task<string?>>? RecallProvider = null,
+    // Системный промпт персоны («олицетворённого агента»): её имя, роль, характер.
+    // Инжектится как персональный слой поверх базового промпта (null — обычная сессия).
+    string? PersonaSystemPrompt = null,
+    // MCP-сервер долгой памяти персоны (null — сессия без памяти персоны).
+    MemoryMcpContext? MemoryMcp = null,
+    // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок
+    // релевантных записей памяти. Подмешивается независимо от заметок. Ошибки → null.
+    Func<string, Task<string?>>? PersonaRecallProvider = null);

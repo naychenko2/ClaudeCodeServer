@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import type { AgentInfo } from '../types';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 
-const AGENT_COLORS: Record<string, string> = {
+export const AGENT_COLORS: Record<string, string> = {
   yellow:  '#F39C12',
   orange:  '#D97757',
   blue:    '#3E7CA6',

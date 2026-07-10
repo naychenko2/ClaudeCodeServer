@@ -20,6 +20,8 @@ export const FLAGS = {
   taskBoard: 'task-board',
   tasksOffline: 'tasks-offline',
   notesOffline: 'notes-offline',
+  personas: 'personas',
+  personaMemoryAutolearn: 'persona-memory-autolearn',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

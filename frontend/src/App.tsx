@@ -23,6 +23,7 @@ import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
 import { NotesPage } from './features/notes/NotesPage'
+import { AgentsPage } from './features/agents/AgentsPage'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 const HUB_TAB_KEY = 'cc_hub_tab'
@@ -74,9 +75,10 @@ export default function App() {
     if (initialHash?.screen === 'calendar') return 'calendar'
     if (initialHash?.screen === 'chats') return 'chats'
     if (initialHash?.screen === 'notes') return 'notes'
+    if (initialHash?.screen === 'agents') return 'agents'
     if (initialHash?.screen === 'projects' || initialHash?.screen === 'project') return 'projects'
     const saved = localStorage.getItem(HUB_TAB_KEY)
-    return saved === 'projects' || saved === 'calendar' || saved === 'notes' ? saved : 'chats'
+    return saved === 'projects' || saved === 'calendar' || saved === 'notes' || saved === 'agents' ? saved : 'chats'
   })
   const effectiveHubTab: HubTab = hubTab
 
@@ -163,9 +165,11 @@ export default function App() {
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
-    const seed: NavSnapshot = { screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : 'projects' }
+    const seed: NavSnapshot = { screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'agents' ? 'agents' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
+    // Диплинк #/agents/{id}: сохраняем персону в снимок, иначе сид затрёт id в URL
+    if (seed.screen === 'agents' && initialHash?.screen === 'agents') seed.agent = initialHash.agentId ?? null
     // Диплинк #/calendar/board: сохраняем доску, чтобы URL пережил перезагрузку
     if (seed.screen === 'calendar' && initialHash?.screen === 'calendar' && initialHash.board) seed.board = true
     navReplace(seed)
@@ -204,6 +208,9 @@ export default function App() {
       } else if (s?.screen === 'notes') {
         // Раздел «Заметки» — проект «спит»
         if (hubTab !== 'notes') { localStorage.setItem(HUB_TAB_KEY, 'notes'); setHubTab('notes') }
+      } else if (s?.screen === 'agents') {
+        // Раздел «Агенты» — проект «спит»
+        if (hubTab !== 'agents') { localStorage.setItem(HUB_TAB_KEY, 'agents'); setHubTab('agents') }
       } else if (s?.screen === 'projects') {
         // Список проектов — явный выход из проекта
         if (project) { localStorage.removeItem(OPEN_PROJECT_KEY); setProject(null) }
@@ -297,12 +304,12 @@ export default function App() {
     }
     localStorage.setItem(HUB_TAB_KEY, t)
     setHubTab(t)
-    const dest: NavSnapshot = { screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : 'projects' }
-    // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача) — уходя,
+    const dest: NavSnapshot = { screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'agents' ? 'agents' : 'projects' }
+    // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/агент) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Иначе латеральное
     // переключение табов — replace (без разрастания истории).
     const cur = getNav()
-    if (cur && (cur.note || cur.file || cur.task)) navPush(dest)
+    if (cur && (cur.note || cur.file || cur.task || cur.agent)) navPush(dest)
     else navReplace(dest)
   }
   // Из календаря: открыть задачу во вкладке «Задачи» её проекта.
@@ -383,6 +390,8 @@ export default function App() {
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
             : effectiveHubTab === 'notes'
               ? <NotesPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+            : effectiveHubTab === 'agents'
+              ? <AgentsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : project
                 ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
                 : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />

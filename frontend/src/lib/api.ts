@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -232,6 +232,65 @@ export const api = {
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/tasks/set-due`, {
         method: 'POST', body: JSON.stringify({ line, due }),
       }),
+  },
+
+  // Агенты (олицетворённые агенты / персоны): CRUD персон владельца (флаг personas)
+  personas: {
+    list: () => request<Persona[]>('/personas'),
+    get: (id: string) => request<Persona>(`/personas/${encodeURIComponent(id)}`),
+    create: (dto: CreatePersonaDto) =>
+      request<Persona>('/personas', { method: 'POST', body: JSON.stringify(dto) }),
+    update: (id: string, dto: UpdatePersonaDto) =>
+      request<Persona>(`/personas/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dto) }),
+    remove: (id: string) =>
+      request<void>(`/personas/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    // Чаты, ведущиеся от лица персоны (этап 2): список + создание нового
+    chats: (id: string) => request<Session[]>(`/personas/${encodeURIComponent(id)}/chats`),
+    createChat: (id: string, body: { mode?: string; resumeSessionId?: string; name?: string }) =>
+      request<Session>(`/personas/${encodeURIComponent(id)}/chats`, { method: 'POST', body: JSON.stringify(body) }),
+
+    // Долгая память персоны (этап 3): список / поиск / ручное добавление / забывание.
+    // type — необязательный фильтр по категории.
+    memory: (id: string, type?: PersonaMemoryType) =>
+      request<PersonaMemoryEntry[]>(
+        `/personas/${encodeURIComponent(id)}/memory${type ? `?type=${encodeURIComponent(type)}` : ''}`,
+      ),
+    memorySearch: (id: string, q: string, topK?: number) =>
+      request<PersonaMemoryHit[]>(
+        `/personas/${encodeURIComponent(id)}/memory/search?q=${encodeURIComponent(q)}${topK ? `&topK=${topK}` : ''}`,
+      ),
+    remember: (id: string, body: { type: PersonaMemoryType; text: string; tags?: string[] }) =>
+      request<PersonaMemoryEntry>(`/personas/${encodeURIComponent(id)}/memory`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    forget: (id: string, entryId: string) =>
+      request<void>(`/personas/${encodeURIComponent(id)}/memory/${encodeURIComponent(entryId)}`, {
+        method: 'DELETE',
+      }),
+
+    // Аватар (этап 4): можно ли генерировать (настроен ли fal),
+    // генерация картинки и построение URL для <img>.
+    avatarCaps: () => request<{ generate: boolean }>('/personas/avatar/caps'),
+    generateAvatar: (id: string, prompt?: string) =>
+      request<Persona>(`/personas/${encodeURIComponent(id)}/avatar/generate`, {
+        method: 'POST',
+        body: JSON.stringify({ prompt: prompt?.trim() || undefined }),
+      }),
+    // URL картинки-аватара для браузерного <img>: токен уходит через ?access_token=
+    // (заголовок Authorization <img> не шлёт — как у notes attachment / files stream).
+    // Возвращает null, если у персоны нет картинки. cache-busting по imageFile —
+    // иначе после перегенерации браузер покажет старый кадр из кэша.
+    avatarUrl: (persona: Persona): string | null => {
+      if (persona.avatar?.kind !== 'image' || !persona.avatar.imageFile) return null;
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const params = new URLSearchParams();
+      if (token) params.set('access_token', token);
+      params.set('v', persona.avatar.imageFile);
+      return `/api/personas/${encodeURIComponent(persona.id)}/avatar?${params}`;
+    },
   },
 
   // Утренний бриф (флаг daily-briefing): собрать план дня в дневник

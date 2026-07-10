@@ -5,7 +5,7 @@ import type { Project } from '../types';
 // отражается в hash-части URL (#/calendar, #/project/{id}/task/{taskId}…) —
 // адрес можно копировать/обновлять, серверного роутинга под пути не нужно.
 export interface NavSnapshot {
-  screen: 'projects' | 'project' | 'chats' | 'calendar' | 'notes';
+  screen: 'projects' | 'project' | 'chats' | 'calendar' | 'notes' | 'agents';
   project?: Project;              // когда screen === 'project'
   chatId?: string;                // активный чат вне проекта (screen === 'chats')
   view?: 'sidebar' | 'chat';     // мобильный вид внутри проекта / чатов
@@ -13,6 +13,7 @@ export interface NavSnapshot {
   task?: string | null;          // открытая задача (id) или null
   board?: boolean;               // режим Kanban-доски проекта (screen === 'project')
   note?: string | null;          // открытая заметка (id) или null (screen === 'notes')
+  agent?: string | null;         // открытая персона (id) или null (screen === 'agents')
 }
 
 // Hash-представление снапшота для адресной строки
@@ -21,6 +22,7 @@ function toHash(s: NavSnapshot): string {
     case 'chats': return '#/chats';
     case 'calendar': return s.board ? '#/calendar/board' : '#/calendar';
     case 'notes': return s.note ? `#/notes/${encodeURIComponent(s.note)}` : '#/notes';
+    case 'agents': return s.agent ? `#/agents/${encodeURIComponent(s.agent)}` : '#/agents';
     case 'projects': return '#/projects';
     case 'project': {
       if (!s.project) return '#/projects';
@@ -35,12 +37,13 @@ function toHash(s: NavSnapshot): string {
 
 // Разбор hash при загрузке страницы (диплинк/обновление)
 export interface HashTarget {
-  screen: 'projects' | 'chats' | 'calendar' | 'project' | 'notes';
+  screen: 'projects' | 'chats' | 'calendar' | 'project' | 'notes' | 'agents';
   projectId?: string;
   taskId?: string;
   file?: string;
   board?: boolean;
   noteId?: string;
+  agentId?: string;
 }
 
 export function parseHash(hash: string = window.location.hash): HashTarget | null {
@@ -58,6 +61,11 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
     case 'notes': {
       const target: HashTarget = { screen: 'notes' };
       if (parts[1]) target.noteId = decodeURIComponent(parts[1]);
+      return target;
+    }
+    case 'agents': {
+      const target: HashTarget = { screen: 'agents' };
+      if (parts[1]) target.agentId = decodeURIComponent(parts[1]);
       return target;
     }
     case 'projects': return { screen: 'projects' };

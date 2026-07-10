@@ -23,17 +23,12 @@ public static class FeatureFlagKeys
 {
     public const string SessionArtifacts = "session-artifacts";
     public const string Notes = "notes";
-    public const string NotesSessionSummary = "notes-session-summary";
-    public const string NotesAutoRecall = "notes-auto-recall";
-    public const string DailyBriefing = "daily-briefing";
-    public const string NotesTaskSync = "notes-task-sync";
-    public const string TaskExecContext = "task-exec-context";
-    public const string ChatExtractTasks = "chat-extract-tasks";
-    public const string UnifiedSearch = "unified-search";
     public const string TaskBoard = "task-board";
-    public const string TasksOffline = "tasks-offline";
-    public const string NotesOffline = "notes-offline";
-    public const string AiHub = "ai-hub";
+    // Зонтичный флаг расширенного AI: хаб-палитра + подсказки + вся кросс-раздельная
+    // AI-синергия (бриф, единый поиск, задачи из чата, итог сессии, auto-recall, контекст исполнителя).
+    public const string AiAssist = "ai-assist";
+    // Единый офлайн-режим для заметок и задач.
+    public const string Offline = "offline";
 }
 
 /// <summary>
@@ -54,76 +49,13 @@ public static class FeatureFlagCatalog
             Stage: "beta"),
 
         // Раздел «Заметки» — Obsidian-совместимая база знаний: markdown-заметки с
-        // [[wikilinks]], backlinks и графом; Claude ведёт их через MCP notes-server.
+        // [[wikilinks]], backlinks и графом. Включает связь чекбоксов с задачами.
         new FeatureFlagDefinition(
             Key: FeatureFlagKeys.Notes,
             Title: "Заметки",
-            Description: "База знаний: markdown-заметки со связями [[…]], обратными ссылками и графом. Claude ведёт заметки, единый граф поверх личного vault и проектов.",
+            Description: "База знаний: markdown-заметки со связями [[…]], обратными ссылками и графом; единый граф поверх личного vault и проектов. Плюс чекбоксы `- [ ]` можно превращать в задачи с синхронизацией статуса.",
             Default: false,
             Stage: "beta"),
-
-        // «Итог сессии» — кнопка в шапке чата: конспект сессии one-shot вызовом LLM
-        // сохраняется заметкой (проект → notes/Сессии, чат → личный vault).
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.NotesSessionSummary,
-            Title: "Итог сессии в заметку",
-            Description: "Кнопка в шапке чата: Claude составляет конспект сессии (цель, решения, результат) и сохраняет его заметкой.",
-            Default: false,
-            Stage: "beta"),
-
-        // Auto-recall — перед каждым ходом семантический поиск по заметкам,
-        // топ релевантных подмешивается в системный промпт (нужен Dify).
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.NotesAutoRecall,
-            Title: "Заметки в контексте Claude",
-            Description: "Перед каждым ходом Claude автоматически получает выдержки из семантически близких заметок — база знаний работает как память.",
-            Default: false,
-            Stage: "dev"),
-
-        // Утренний бриф — агент собирает просроченные/сегодняшние задачи, изменённые
-        // заметки и git-активность за сутки, прогоняет через LLM и пишет план дня
-        // в дневниковую заметку (## Утренний бриф) + push. On-demand и по расписанию утром.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.DailyBriefing,
-            Title: "Утренний бриф",
-            Description: "Агент утром собирает задачи на день, свежие заметки и активность по проектам в короткий план дня — пишет его в дневник и присылает уведомление.",
-            Default: false,
-            Stage: "dev"),
-
-        // Связь чекбоксов заметок и задач: `- [ ] … 📅 дата` можно превратить в настоящую
-        // задачу (календарь, напоминания); завершение с любой стороны синхронизирует галочку.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.NotesTaskSync,
-            Title: "Задачи из заметок",
-            Description: "Чекбоксы `- [ ]` в заметках можно превратить в задачи с датой и повтором. Отметка выполнения в заметке и в календаре синхронизируется.",
-            Default: false,
-            Stage: "dev"),
-
-        // Claude-исполнитель задач получает в контекст семантически близкие заметки
-        // (нужен Dify): выполняет задачу, опираясь на базу знаний, а не вслепую.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.TaskExecContext,
-            Title: "Заметки в контексте исполнителя",
-            Description: "Когда Claude берёт задачу в работу, в постановку подмешиваются выдержки из семантически близких заметок — исполнение с опорой на базу знаний.",
-            Default: false,
-            Stage: "dev"),
-
-        // «Задачи из чата» — кнопка в шапке: Claude извлекает action items из транскрипта
-        // сессии, пользователь подтверждает — и они создаются задачами.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.ChatExtractTasks,
-            Title: "Задачи из чата",
-            Description: "Кнопка в шапке чата: Claude выделяет из диалога конкретные задачи-действия, вы отмечаете нужные — и они попадают в трекер.",
-            Default: false,
-            Stage: "dev"),
-
-        // Единый поиск: заметки (по смыслу) + задачи в одной выдаче.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.UnifiedSearch,
-            Title: "Единый поиск",
-            Description: "Поиск по всему рабочему пространству сразу — заметки (по смыслу) и задачи в одной выдаче. Кнопка-лупа в шапке.",
-            Default: false,
-            Stage: "dev"),
 
         // Вид «Доска» (Kanban) в разделе «Календарь»: колонки по статусу,
         // drag & drop, дорожки (swimlanes), фильтры и WIP-лимиты.
@@ -134,32 +66,23 @@ public static class FeatureFlagCatalog
             Default: false,
             Stage: "beta"),
 
-        // Офлайн-режим задач: создание/правка/удаление без соединения сохраняются
-        // локально (IndexedDB) и синхронизируются с сервером при восстановлении связи.
+        // Расширенный AI — зонтичный флаг: AI-хаб (палитра ⌘/Ctrl+K + проактивные
+        // подсказки) и вся кросс-раздельная AI-синергия одним тумблером.
         new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.TasksOffline,
-            Title: "Задачи офлайн",
-            Description: "Создавайте и редактируйте задачи без соединения — изменения сохраняются на устройстве и синхронизируются с сервером, как только связь вернётся.",
-            Default: false,
-            Stage: "beta"),
-
-        // Офлайн-режим заметок: просмотр/правка/создание без соединения сохраняются
-        // локально; при возврате связи — синхронизация, конфликты — копией (стиль Obsidian).
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.NotesOffline,
-            Title: "Заметки офлайн",
-            Description: "Просматривайте, правьте и создавайте заметки без соединения — изменения сохраняются на устройстве и синхронизируются при возврате связи. Конфликты сохраняются копией.",
-            Default: false,
-            Stage: "beta"),
-
-        // AI-хаб — единая точка входа во все AI-возможности продукта: плавающая кнопка
-        // и палитра (⌘/Ctrl+K) с действиями, ранжированными под текущий раздел.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.AiHub,
-            Title: "AI-хаб",
-            Description: "Единая точка входа во все AI-возможности: плавающая кнопка и палитра (⌘/Ctrl+K), которая поднимает наверх действия под текущий раздел — заметку, задачу, чат.",
+            Key: FeatureFlagKeys.AiAssist,
+            Title: "Расширенный AI",
+            Description: "Единый AI-хаб (палитра ⌘/Ctrl+K + проактивные подсказки) и AI-синергия: утренний бриф, единый поиск по смыслу, задачи из чата, итог сессии в заметку, заметки как память Claude в чате и в контексте исполнителя.",
             Default: false,
             Stage: "dev"),
+
+        // Единый офлайн-режим для заметок и задач: правки без соединения сохраняются
+        // локально (IndexedDB) и синхронизируются при возврате связи.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.Offline,
+            Title: "Офлайн-режим",
+            Description: "Заметки и задачи работают без соединения — просмотр, правка и создание сохраняются на устройстве и синхронизируются с сервером, как только связь вернётся. Конфликты сохраняются копией.",
+            Default: false,
+            Stage: "beta"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

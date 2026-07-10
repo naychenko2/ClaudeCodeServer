@@ -77,7 +77,7 @@ public sealed class DailyBriefingService
     // обеспечивается меткой ДО запуска (одна попытка в день, переживает рестарт).
     public Task MaybeRunScheduledAsync(User user, TimeZoneInfo tz, DateTime nowUtc, CancellationToken ct = default)
     {
-        if (!_flags.IsEnabled(user.Id, FeatureFlagKeys.DailyBriefing)) return Task.CompletedTask;
+        if (!_flags.IsEnabled(user.Id, FeatureFlagKeys.AiAssist)) return Task.CompletedTask;
 
         var local = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
         var hour = _config.GetValue("Briefing:Hour", 8);

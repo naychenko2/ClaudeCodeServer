@@ -69,7 +69,7 @@ public class TaskExecutionService
 
         var prompt = BuildPrompt(updated);
         // Обогащение контекста семантически близкими заметками (флаг task-exec-context)
-        if (_flags.IsEnabled(updated.OwnerId!, FeatureFlagKeys.TaskExecContext))
+        if (_flags.IsEnabled(updated.OwnerId!, FeatureFlagKeys.AiAssist))
             prompt += await BuildNotesContextAsync(updated);
         await _sessions.SendMessageAsync(session.Id, prompt, []);
 

@@ -32,7 +32,7 @@ function joinUserGroup() {
 }
 
 let _fileChangeTimer: number | null = null;
-const offlineEnabled = () => getFlag(FLAGS.notesOffline);
+const offlineEnabled = () => getFlag(FLAGS.offline);
 
 // Во время дренажа очереди подавляем перечитку списка от realtime (иначе она сбросит
 // оптимистичные записи середины синхронизации); одна перечитка — в конце дренажа.

@@ -18,7 +18,7 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
 }) {
   const notes = useNotes();
   const noteFolders = useNoteFolders();
-  const offlineEnabled = useFeature(FLAGS.notesOffline);
+  const offlineEnabled = useFeature(FLAGS.offline);
   const [title, setTitle] = useState('');
   const [source, setSource] = useState(defaults?.source ?? 'personal');
   const [folder, setFolder] = useState(defaults?.folder ?? '');

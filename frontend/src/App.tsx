@@ -102,7 +102,7 @@ export default function App() {
   }, [])
 
   // AI-хаб (флаг ai-hub): единый лаунчер AI-действий поверх любого раздела.
-  const aiHubEnabled = useFeature(FLAGS.aiHub)
+  const aiAssistEnabled = useFeature(FLAGS.aiAssist)
   // Единый поиск, открытый из AI-палитры (App-уровневый оверлей, независимый от шапки)
   const [aiSearchOpen, setAiSearchOpen] = useState(false)
   useEffect(() => {
@@ -403,7 +403,7 @@ export default function App() {
       {auth && historyOpen && (
         <ProductHistory isMobile={isMobileView} onClose={() => setHistoryOpen(false)} />
       )}
-      {auth && !authChecking && aiHubEnabled && <AiLauncher />}
+      {auth && !authChecking && aiAssistEnabled && <AiLauncher />}
       {auth && aiSearchOpen && <GlobalSearch onClose={() => setAiSearchOpen(false)} />}
     </>
   )

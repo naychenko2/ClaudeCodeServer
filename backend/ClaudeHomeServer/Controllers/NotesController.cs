@@ -211,7 +211,7 @@ public class NotesController : ControllerBase
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
-    private bool NotesTaskSyncEnabled => _flags.IsEnabled(UserId, FeatureFlagKeys.NotesTaskSync);
+    private bool NotesTaskSyncEnabled => _flags.IsEnabled(UserId, FeatureFlagKeys.Notes);
 
     // Переименование/перенос папки целиком: newPath — полный новый путь папки.
     [HttpPost("folder/move")]

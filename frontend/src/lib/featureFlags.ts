@@ -10,17 +10,9 @@ import { useSyncExternalStore } from 'react';
 export const FLAGS = {
   sessionArtifacts: 'session-artifacts',
   notes: 'notes',
-  notesSessionSummary: 'notes-session-summary',
-  notesAutoRecall: 'notes-auto-recall',
-  dailyBriefing: 'daily-briefing',
-  notesTaskSync: 'notes-task-sync',
-  taskExecContext: 'task-exec-context',
-  chatExtractTasks: 'chat-extract-tasks',
-  unifiedSearch: 'unified-search',
   taskBoard: 'task-board',
-  tasksOffline: 'tasks-offline',
-  notesOffline: 'notes-offline',
-  aiHub: 'ai-hub',
+  aiAssist: 'ai-assist',
+  offline: 'offline',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

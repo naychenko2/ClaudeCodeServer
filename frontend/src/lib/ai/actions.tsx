@@ -123,13 +123,13 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'chat.extract', title: 'Извлечь задачи из чата', hint: 'action items из диалога',
     section: 'chat', sectionLabel: 'Чат', icon: IcPlus,
-    when: c => chatOpen(c) && c.flag('chat-extract-tasks') && c.online, contextual: chatOpen,
+    when: c => chatOpen(c) && c.flag('ai-assist') && c.online, contextual: chatOpen,
     run: () => dispatchAiRun('chat.extract'),
   },
   {
     id: 'chat.summary', title: 'Итог сессии в заметку', hint: 'конспект чата заметкой',
     section: 'chat', sectionLabel: 'Чат', icon: IcDoc,
-    when: c => chatOpen(c) && c.flag('notes') && c.flag('notes-session-summary') && c.online, contextual: chatOpen,
+    when: c => chatOpen(c) && c.flag('notes') && c.flag('ai-assist') && c.online, contextual: chatOpen,
     run: () => dispatchAiRun('chat.summary'),
   },
 
@@ -137,7 +137,7 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'global.briefing', title: 'Утренний бриф', hint: 'собрать план дня в дневник',
     section: 'global', sectionLabel: 'Глобально', icon: IcSun,
-    when: c => c.flag('daily-briefing') && c.online,
+    when: c => c.flag('ai-assist') && c.online,
     run: () => {
       showToast('Собираю бриф', 'Claude готовит план дня…', 'claude');
       api.briefing.today(localDate())
@@ -148,7 +148,7 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'global.search', title: 'Единый поиск', hint: 'по заметкам и задачам сразу',
     section: 'global', sectionLabel: 'Глобально', icon: IcSearch,
-    when: c => c.flag('unified-search'),
+    when: c => c.flag('ai-assist'),
     run: () => window.dispatchEvent(new Event(OPEN_GLOBAL_SEARCH_EVENT)),
   },
   {

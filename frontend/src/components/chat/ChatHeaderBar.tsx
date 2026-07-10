@@ -657,7 +657,7 @@ interface ChatHeaderBarProps {
 // Повторный клик по галочке открывает созданную заметку; сервер обновляет ту же заметку.
 function SessionSummaryButton({ session, hasMessages, online, isMobile }: { session: Session; hasMessages: boolean; online: boolean; isMobile?: boolean }) {
   const notesOn = useFeature(FLAGS.notes);
-  const summaryOn = useFeature(FLAGS.notesSessionSummary);
+  const summaryOn = useFeature(FLAGS.aiAssist);
   const [busy, setBusy] = useState(false);
   const [savedId, setSavedId] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -708,7 +708,7 @@ const IconTaskPlus = () => (
 // Кнопка «Задачи из чата» (флаг chat-extract-tasks): Claude извлекает action items
 // из транскрипта, пользователь подтверждает выбор — задачи создаются в трекере.
 function ExtractTasksButton({ session, hasMessages, online, isMobile }: { session: Session; hasMessages: boolean; online: boolean; isMobile?: boolean }) {
-  const on = useFeature(FLAGS.chatExtractTasks);
+  const on = useFeature(FLAGS.aiAssist);
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<{ projectId: string | null; items: (ExtractedTaskCandidate & { sel: boolean })[] } | null>(null);

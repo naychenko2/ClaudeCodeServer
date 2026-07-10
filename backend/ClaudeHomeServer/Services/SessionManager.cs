@@ -148,7 +148,7 @@ public class SessionManager
         return async text =>
         {
             if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.Notes) ||
-                !_flags.IsEnabled(ownerId, FeatureFlagKeys.NotesAutoRecall)) return null;
+                !_flags.IsEnabled(ownerId, FeatureFlagKeys.AiAssist)) return null;
             if (!_notesKb.Available || !_notesKb.HasIndex(ownerId)) return null;
 
             var query = text.Trim();

@@ -20,7 +20,7 @@ public class BriefingController(DailyBriefingService briefing, FeatureFlagServic
     [HttpPost("today")]
     public async Task<ActionResult<NoteDetail>> Today([FromBody] DailyNoteRequest? req, CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.DailyBriefing))
+        if (!flags.IsEnabled(UserId, FeatureFlagKeys.AiAssist))
             return StatusCode(403, "Функция «Утренний бриф» выключена");
         var note = await briefing.GenerateAsync(UserId, req?.Date, ct);
         return Ok(note);

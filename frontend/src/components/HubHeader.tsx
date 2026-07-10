@@ -88,10 +88,10 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
   const openHistory = () => window.dispatchEvent(new Event(PRODUCT_HISTORY_EVENT));
 
   // «Утренний бриф» (флаг daily-briefing): собрать план дня в дневник и открыть его
-  const briefingEnabled = useFeature(FLAGS.dailyBriefing);
+  const briefingEnabled = useFeature(FLAGS.aiAssist);
   const [briefingBusy, setBriefingBusy] = useState(false);
   // Единый поиск (флаг unified-search)
-  const searchEnabled = useFeature(FLAGS.unifiedSearch);
+  const searchEnabled = useFeature(FLAGS.aiAssist);
   const [showSearch, setShowSearch] = useState(false);
   const runBriefing = async () => {
     if (briefingBusy) return;

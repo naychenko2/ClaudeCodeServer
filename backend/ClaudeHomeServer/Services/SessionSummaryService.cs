@@ -39,7 +39,7 @@ public class SessionSummaryService(
             : session.OwnerId;
         if (ownerId is null || ownerId != userId)
             throw new UnauthorizedAccessException("Сессия принадлежит другому пользователю");
-        if (!flags.IsEnabled(userId, FeatureFlagKeys.NotesSessionSummary))
+        if (!flags.IsEnabled(userId, FeatureFlagKeys.AiAssist))
             throw new InvalidOperationException("Фича «Итог сессии» выключена");
 
         if (!_inFlight.TryAdd(sessionId, 0))

@@ -49,7 +49,7 @@ export async function computeSuggestion(ctx: AiActionCtx): Promise<Suggestion | 
   }
 
   // Обзорные экраны + включён бриф — предложить собрать план дня (раз в день)
-  if ((nav.screen === 'chats' || nav.screen === 'projects') && ctx.flag('daily-briefing') && ctx.online)
+  if ((nav.screen === 'chats' || nav.screen === 'projects') && ctx.flag('ai-assist') && ctx.online)
     return { key: `briefing:${todayKey()}`, actionId: 'global.briefing', text: 'Собрать план дня — задачи, заметки, активность?' };
 
   return null;

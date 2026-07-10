@@ -42,7 +42,7 @@ describe('rankedActions — доступность и ранжирование',
 
     const r = rankedActions(ctx({
       nav: { screen: 'chats', chatId: 'c1' },
-      flag: allFlags(['chat-extract-tasks', 'notes', 'notes-session-summary', 'daily-briefing']),
+      flag: allFlags(['ai-assist', 'notes']),
     }));
     const ids = r.map(x => x.action.id);
     expect(ids).toContain('chat.extract');

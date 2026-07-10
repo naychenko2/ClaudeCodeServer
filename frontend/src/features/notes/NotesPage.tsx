@@ -41,7 +41,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
 }) {
   const isMobile = useIsMobile();
   const notes = useNotes();
-  const offlineEnabled = useFeature(FLAGS.notesOffline);
+  const offlineEnabled = useFeature(FLAGS.offline);
   const online = useOnline();
   const [mode, setMode] = useState<Mode>('notes');
   const [selectedId, setSelectedId] = useState<string | null>(null);

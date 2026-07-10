@@ -40,8 +40,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   extraToolbar?: React.ReactNode;
 }) {
   const version = useNotesVersion();
-  const taskSyncEnabled = useFeature(FLAGS.notesTaskSync);
-  const offlineEnabled = useFeature(FLAGS.notesOffline);
+  const taskSyncEnabled = useFeature(FLAGS.notes);
+  const offlineEnabled = useFeature(FLAGS.offline);
   const online = useOnline();
   // Перетаскиваемая ширина сайдбара связей (справа: тянем влево — растёт)
   const [connWidth, connDragging, startConnDrag] = usePanelWidth('cc_notes_conn_width', 280, 230, 460, true);

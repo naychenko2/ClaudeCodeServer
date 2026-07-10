@@ -328,7 +328,7 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
 
     // Прогрев заметок (флаг notes-offline): список + folders/graph в GET-кэш, контент
     // изменившихся — в редактируемый локальный слой (с mtime-диффом; не затираем черновики).
-    if (getFlag(FLAGS.notesOffline)) await warmNotes();
+    if (getFlag(FLAGS.offline)) await warmNotes();
 
     notifyMarks();
   } catch {

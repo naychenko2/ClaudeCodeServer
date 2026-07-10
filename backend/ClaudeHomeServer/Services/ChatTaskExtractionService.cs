@@ -26,7 +26,7 @@ public sealed class ChatTaskExtractionService(
             : session.OwnerId;
         if (ownerId is null || ownerId != userId)
             throw new UnauthorizedAccessException("Сессия принадлежит другому пользователю");
-        if (!flags.IsEnabled(userId, FeatureFlagKeys.ChatExtractTasks))
+        if (!flags.IsEnabled(userId, FeatureFlagKeys.AiAssist))
             throw new InvalidOperationException("Функция «Задачи из чата» выключена");
 
         var history = await sessions.GetHistoryAsync(sessionId);

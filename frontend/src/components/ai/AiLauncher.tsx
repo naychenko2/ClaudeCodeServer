@@ -44,7 +44,9 @@ export function AiLauncher() {
   );
 
   useEffect(() => { setIdx(0); }, [q, open]);
-  useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 40); }, [open]);
+  // На мобиле НЕ автофокусим поле — иначе сразу выскакивает клавиатура и перекрывает
+  // список действий. Фокус (и клавиатура) — только по явному тапу пользователя.
+  useEffect(() => { if (open && !isMobile) setTimeout(() => inputRef.current?.focus(), 40); }, [open, isMobile]);
 
   // Глобальный хоткей ⌘/Ctrl+K и внешнее открытие
   useEffect(() => {

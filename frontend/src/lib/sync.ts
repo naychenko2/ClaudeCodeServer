@@ -251,8 +251,11 @@ async function downloadSyncedContent(projectId: string, entry: { path: string; i
 // сработал бы только если открыт их раздел, где подписка на online заводится при монтировании).
 export async function drainOfflineQueues(): Promise<void> {
   if (!isOnline()) return;
-  if (getFlag(FLAGS.tasksOffline)) await drainTaskOutbox().catch(() => {});
-  if (getFlag(FLAGS.notesOffline)) await drainNotesOutbox().catch(() => {});
+  // Без гейта по флагам: если в очереди есть накопленные офлайн-правки, их всегда
+  // корректно проиграть (гейт создавал бы гонку с асинхронной загрузкой флагов из
+  // /api/auth/me — эффект online мог сработать раньше и молча пропустить дренаж).
+  await drainTaskOutbox().catch(() => {});
+  await drainNotesOutbox().catch(() => {});
 }
 
 let _snapshotRunning = false;

@@ -10,7 +10,7 @@ import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
 import { getPersonaById, usePersonas, usePersonasVersion, personaLabel } from '../lib/personas';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
-import { PersonaSelector } from './PersonaSelector';
+import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
 import { agentDotColor } from './AgentSelector';
 
 // Время создания сессии: сегодня — часы:минуты, иначе — дата
@@ -30,18 +30,31 @@ interface Props {
   onSessionsChanged?: (count: number) => void;
   isMobile?: boolean;
   workflowRunningFor?: string;
+  // .md-агенты проекта — для единого селектора собеседника
+  agents?: AgentInfo[];
+  // Запомненный .md-агент проекта (localStorage в WorkspacePage) — начальный выбор
   selectedAgent?: AgentInfo | null;
+  // Персист выбора .md-агента (WorkspacePage кладёт в localStorage)
+  onAgentChange?: (agent: AgentInfo | null) => void;
 }
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor, selectedAgent }: Props) {
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor, agents = [], selectedAgent, onAgentChange }: Props) {
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий персон)
   usePersonasVersion();
   const personas = usePersonas();
   // Доступные в контексте проекта персоны: проектные (этого проекта) + глобальные
   const ctxPersonas = personas.filter(p => p.scope === 'global' || (p.scope === 'project' && p.projectId === project.id));
-  // Выбранная персона для нового чата (локально): создаём чат от её лица
-  const [selectedPersona, setSelectedPersona] = useState<Persona | null>(null);
+  // Выбранный собеседник нового чата (локально): персона ИЛИ .md-агент.
+  // Агент инициализируется из запомненного выбора проекта (localStorage в WorkspacePage).
+  const [companion, setCompanion] = useState<{ persona: Persona | null; agent: AgentInfo | null }>(
+    () => ({ persona: null, agent: selectedAgent ?? null })
+  );
+  const handleCompanionSelect = (sel: CompanionSelection) => {
+    const next = { persona: sel.persona ?? null, agent: sel.agent ?? null };
+    setCompanion(next);
+    onAgentChange?.(next.agent); // персист .md-агента (персона в localStorage не запоминается)
+  };
   const [sessions, setSessions] = useState<Session[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [editTarget, setEditTarget] = useState<Session | null>(null);
@@ -51,10 +64,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
   const createNew = async (): Promise<Session> => {
     // Выбрана персона → чат от её лица (проектная — сессия в этом проекте);
-    // иначе обычная сессия (с опциональным .md-агентом)
-    const s = selectedPersona
-      ? await api.personas.createChat(selectedPersona.id, { mode: 'auto' })
-      : await api.sessions.create(project.id, 'auto', undefined, undefined, undefined, selectedAgent?.fileName);
+    // выбран .md-агент → обычная сессия с агентом; никто → обычная сессия
+    const s = companion.persona
+      ? await api.personas.createChat(companion.persona.id, { mode: 'auto' })
+      : await api.sessions.create(project.id, 'auto', undefined, undefined, undefined, companion.agent?.fileName);
     // Чужую (глобальную) сессию в список этого проекта не добавляем — поллинг сам синхронит
     if (s.projectId === project.id) setSessions(prev => [s, ...prev]);
     onSelect(s);
@@ -178,14 +191,20 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                 </svg>
               }
             >
-              {selectedPersona ? `Чат с «${personaLabel(selectedPersona)}»` : 'Новый чат'}
+              {companion.persona
+                ? `Чат с «${personaLabel(companion.persona)}»`
+                : companion.agent
+                ? `Чат с «${companion.agent.name}»`
+                : 'Новый чат'}
             </Button>
           </div>
-          {/* Выбор персоны для нового чата (проектные + глобальные) */}
-          <PersonaSelector
+          {/* Выбор собеседника нового чата: персоны (проектные + глобальные) и .md-агенты */}
+          <CompanionSelector
             personas={ctxPersonas}
-            selectedPersona={selectedPersona}
-            onSelect={setSelectedPersona}
+            agents={agents}
+            selectedPersona={companion.persona}
+            selectedAgentName={companion.agent?.fileName ?? null}
+            onSelect={handleCompanionSelect}
             isMobile={isMobile}
             dropUp={false}
           />

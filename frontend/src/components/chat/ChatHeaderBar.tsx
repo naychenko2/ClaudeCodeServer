@@ -5,7 +5,7 @@ import { modelLabel, modelProvider, assistantName, useModelLabel } from '../../l
 import { effortLabel } from '../../lib/effort';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { personaTitleLines } from '../../lib/personas';
-import { AGENT_COLORS } from '../AgentSelector';
+import { AGENT_COLORS, agentDotColor } from '../AgentSelector';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from '../../lib/rateLimit';
 import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
@@ -655,6 +655,8 @@ interface ChatHeaderBarProps {
   // Персона чата — идентификация встроена прямо в тулбар
   persona?: Persona | null;
   personaZoneName?: string | null;         // имя проекта для бейджа зоны проектной персоны
+  // .md-агент чата (когда персоны нет) — компактная точка + имя в подзаголовке
+  agent?: { name: string; color?: string } | null;
 }
 
 // Кнопка «Итог сессии» — конспект сессии заметкой (флаги notes + notes-session-summary).
@@ -775,7 +777,7 @@ function ExtractTasksButton({ session, online, isMobile }: { session: Session; o
   );
 }
 
-export function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent }: ChatHeaderBarProps) {
   const sessionModelLabel = useModelLabel(session.model);
   const asstName = assistantName(session.model);
   const providerKey = modelProvider(session.model);
@@ -839,6 +841,14 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
         {session.name ?? 'Новый чат'}
       </div>
       <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {/* .md-агент чата — лёгкая пометка: цветная точка + имя (не персона-блок) */}
+        {agent && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 4, verticalAlign: 'baseline' }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: agentDotColor(agent.color), display: 'inline-block', flexShrink: 0 }} />
+            <span style={{ fontFamily: FONT.sans, fontWeight: 600, color: C.textSecondary }}>{agent.name}</span>
+            <span> ·</span>
+          </span>
+        )}
         {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
         {!isMobile && <span>{project ? project.name : 'без проекта'} · </span>}{sessionModelLabel}
         {session.effort && <span> · {effortLabel(session.effort)}</span>}

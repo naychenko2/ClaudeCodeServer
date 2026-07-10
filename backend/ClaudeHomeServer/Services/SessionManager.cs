@@ -432,15 +432,16 @@ public class SessionManager
         return (prompt, null, null);
     }
 
-    // Назначить/сменить персону чату ДО первого хода (для селектора персоны в пустом чате).
-    // Если ходов ещё не было — адаптер пересоздаётся с персона-контекстом при первом сообщении.
-    // Модель/усилие подтягиваются из персоны. Начатую сессию не трогаем (клиент делает форк).
-    public Session? SetPersona(string sessionId, string ownerId, string? personaId)
+    // Назначить/сменить собеседника чату ДО первого хода (единый селектор в пустом чате):
+    // персону (personaId) ИЛИ стандартного .md-агента Claude (agentName) — взаимоисключающе.
+    // Оба пустые = снять собеседника. Модель/усилие подтягиваются из персоны.
+    // Начатую сессию не трогаем (клиент делает форк).
+    public Session? SetPersona(string sessionId, string ownerId, string? personaId, string? agentName = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (SessionOwner(entry.Info) != ownerId) return null;
         if (entry.Info.ClaudeSessionId is not null)
-            throw new InvalidOperationException("Нельзя сменить персону у начатой сессии — создайте новый чат");
+            throw new InvalidOperationException("Нельзя сменить собеседника у начатой сессии — создайте новый чат");
 
         Persona? persona = null;
         if (!string.IsNullOrEmpty(personaId))
@@ -450,6 +451,10 @@ public class SessionManager
         }
 
         entry.Info.PersonaId = persona?.Id;
+        // .md-агент и персона взаимоисключающие: назначение одного сбрасывает другого
+        entry.Info.AgentName = persona is null && !string.IsNullOrWhiteSpace(agentName)
+            ? agentName.Trim()
+            : null;
         if (persona is not null)
         {
             entry.Info.Model = persona.Model;
@@ -457,12 +462,12 @@ public class SessionManager
         }
         entry.Info.UpdatedAt = DateTime.UtcNow;
 
-        // Ходов не было — пересоздаём адаптер с новым персона-контекстом при следующем сообщении
+        // Ходов не было — пересоздаём адаптер с новым контекстом при следующем сообщении
         if (entry.Process is { } old)
         {
             entry.Process = null;
             FireAndForget(old.DisposeAsync().AsTask(),
-                $"остановка адаптера при смене персоны ({sessionId})");
+                $"остановка адаптера при смене собеседника ({sessionId})");
         }
         SaveSessions();
         return entry.Info;

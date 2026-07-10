@@ -256,17 +256,18 @@ export const api = {
     createChat: (id: string, body: { mode?: string; resumeSessionId?: string; name?: string }) =>
       request<Session>(`/personas/${encodeURIComponent(id)}/chats`, { method: 'POST', body: JSON.stringify(body) }),
 
-    // Назначить/снять персону чату вне проекта (personaId=null снимает). 400, если чат уже начат.
-    assignPersonaToChat: (chatId: string, personaId: string | null) =>
+    // Назначить/снять собеседника чату вне проекта: персона (personaId) либо .md-агент
+    // (agentName) — взаимоисключающе, оба null = снять. 400, если чат уже начат.
+    assignPersonaToChat: (chatId: string, personaId: string | null, agentName: string | null = null) =>
       request<Session>(`/chats/${encodeURIComponent(chatId)}/persona`, {
         method: 'POST',
-        body: JSON.stringify({ personaId }),
+        body: JSON.stringify({ personaId, agentName }),
       }),
     // То же для проектной сессии
-    assignPersonaToSession: (projectId: string, sessionId: string, personaId: string | null) =>
+    assignPersonaToSession: (projectId: string, sessionId: string, personaId: string | null, agentName: string | null = null) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}/persona`, {
         method: 'POST',
-        body: JSON.stringify({ personaId }),
+        body: JSON.stringify({ personaId, agentName }),
       }),
 
     // Долгая память персоны (этап 3): список / поиск / ручное добавление / забывание.

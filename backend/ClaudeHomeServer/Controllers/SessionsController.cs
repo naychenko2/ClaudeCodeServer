@@ -43,7 +43,7 @@ public class SessionsController(SessionManager sessions) : ControllerBase
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
-    // Назначить/снять агента (персону) у проектной сессии ДО первого хода
+    // Назначить/снять собеседника (персону или .md-агента) у проектной сессии ДО первого хода
     [HttpPost("{sessionId}/persona")]
     public IActionResult SetPersona(string projectId, string sessionId, [FromBody] SetPersonaRequest req)
     {
@@ -51,7 +51,7 @@ public class SessionsController(SessionManager sessions) : ControllerBase
         if (session == null || session.ProjectId != projectId) return NotFound();
         try
         {
-            var updated = sessions.SetPersona(sessionId, UserId, req.PersonaId);
+            var updated = sessions.SetPersona(sessionId, UserId, req.PersonaId, req.AgentName);
             return updated == null ? NotFound() : Ok(updated);
         }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }

@@ -41,9 +41,8 @@ interface Props {
   onWorkflowRunning?: (active: boolean, sessionId: string) => void;
   onOpenSidebar?: () => void;
   skills?: SkillInfo[];
+  // .md-агенты Claude проекта — для единого селектора собеседника и индикации в шапке
   agents?: AgentInfo[];
-  selectedAgent?: AgentInfo | null;
-  onAgentChange?: (agent: AgentInfo | null) => void;
   attachedFiles: string[];
   onAttachedFilesChange: (files: string[]) => void;
   onResume?: (message?: string) => void;
@@ -94,7 +93,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
   return null;
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking } = useSession(session.id, project?.id);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
@@ -135,17 +134,36 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return () => { alive = false; };
   }, [online, chatEmpty, persona, project?.id]);
 
-  // Назначить/снять персону пустому чату (проектная сессия ↔ чат вне проекта — разные эндпоинты)
-  const handlePersonaChange = useCallback(async (p: Persona | null) => {
+  // Назначить/снять собеседника пустому чату: персона либо .md-агент — взаимоисключающе
+  // (проектная сессия ↔ чат вне проекта — разные эндпоинты)
+  const handleCompanionChange = useCallback(async (sel: { persona?: Persona | null; agent?: AgentInfo | null }) => {
+    const personaId = sel.persona?.id ?? null;
+    const agentName = sel.agent?.fileName ?? null;
     try {
       const updated = project
-        ? await api.personas.assignPersonaToSession(project.id, session.id, p?.id ?? null)
-        : await api.personas.assignPersonaToChat(session.id, p?.id ?? null);
+        ? await api.personas.assignPersonaToSession(project.id, session.id, personaId, agentName)
+        : await api.personas.assignPersonaToChat(session.id, personaId, agentName);
       onSessionUpdated?.(updated);
     } catch (e) {
-      showToast('Персона', e instanceof Error ? e.message : 'Не удалось сменить персону', 'info');
+      showToast('Собеседник', e instanceof Error ? e.message : 'Не удалось сменить собеседника', 'info');
     }
   }, [project, session.id, onSessionUpdated]);
+
+  // Обратная совместимость для пилюль «Поговорить с…» пустого состояния (выбор только персоны)
+  const handlePersonaChange = useCallback(
+    (p: Persona | null) => handleCompanionChange({ persona: p, agent: null }),
+    [handleCompanionChange]
+  );
+
+  // Выбранный .md-агент чата (Session.agentName) — для селектора и индикации в шапке.
+  // Если агента нет в списке (файл удалили/вне проекта) — показываем имя как есть.
+  const chatAgent = useMemo(
+    () => session.agentName
+      ? agents?.find(a => a.fileName === session.agentName)
+        ?? { name: session.agentName, color: undefined as string | undefined }
+      : null,
+    [session.agentName, agents]
+  );
 
   // Приветственный пузырь персоны для пустого чата (если у персоны задан greeting).
   // Явный greetingBubble-проп имеет приоритет.
@@ -698,6 +716,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         onCompact={compact}
         persona={persona}
         personaZoneName={project?.name ?? null}
+        agent={persona ? null : chatAgent}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
@@ -827,13 +846,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onAttachImages={project ? handleAttachImages : handleChatUpload}
             isMobile={isMobile}
             skills={skills}
-            agents={agents}
-            selectedAgent={selectedAgent}
-            onAgentChange={onAgentChange}
             personas={ctxPersonas}
+            agents={agents ?? []}
             selectedPersona={persona}
-            onPersonaChange={handlePersonaChange}
-            canPickPersona={online}
+            selectedAgentName={session.agentName ?? null}
+            onCompanionChange={handleCompanionChange}
+            canPickCompanion={online}
             hasMessages={items.length > 0}
           />
           </div>

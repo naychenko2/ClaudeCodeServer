@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { SkillsDropdown } from './SkillsDropdown';
-import { AgentSelector } from './AgentSelector';
-import { PersonaSelector } from './PersonaSelector';
+import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
@@ -29,15 +28,14 @@ export interface ComposerProps {
   // иначе теряется набранный черновик при кратком пропадании сети
   offline?: boolean;
   skills?: SkillInfo[];
-  agents?: AgentInfo[];
-  selectedAgent?: AgentInfo | null;
-  onAgentChange?: (agent: AgentInfo | null) => void;
-  // Персоны — селектор «с кем разговор». Показывается только
-  // у пустого чата (hasMessages=false): назначить персону можно, пока не пошли ходы.
+  // Единый селектор «собеседника» (персона или .md-агент Claude). Показывается только
+  // у пустого чата (hasMessages=false): назначить собеседника можно, пока не пошли ходы.
   personas?: Persona[];
+  agents?: AgentInfo[];
   selectedPersona?: Persona | null;
-  onPersonaChange?: (persona: Persona | null) => void;
-  canPickPersona?: boolean;
+  selectedAgentName?: string | null;
+  onCompanionChange?: (sel: CompanionSelection) => void;
+  canPickCompanion?: boolean;
   hasMessages?: boolean;
 }
 
@@ -128,13 +126,12 @@ export function Composer({
   isMobile,
   offline,
   skills = [],
-  agents = [],
-  selectedAgent = null,
-  onAgentChange,
   personas = [],
+  agents = [],
   selectedPersona = null,
-  onPersonaChange,
-  canPickPersona,
+  selectedAgentName = null,
+  onCompanionChange,
+  canPickCompanion,
   hasMessages,
 }: ComposerProps) {
   const asstName = useAssistantName();
@@ -660,23 +657,15 @@ export function Composer({
     );
   }
 
-  // AgentSelector кнопка — переиспользуется в обоих раскладках
-  const agentSelector = agents.length > 0 ? (
-    <AgentSelector
-      agents={agents}
-      selectedAgent={selectedAgent ?? null}
-      onSelect={onAgentChange ?? (() => {})}
-      isMobile={isMobile}
-    />
-  ) : null;
-
-  // PersonaSelector — «с кем разговор». Только у пустого чата: назначить/сменить
-  // персону можно, пока не пошли ходы (после первого сообщения бэкенд отклонит смену).
-  const personaSelector = canPickPersona && !hasMessages && personas.length > 0 && onPersonaChange ? (
-    <PersonaSelector
+  // Единый селектор собеседника (персона или .md-агент). Только у пустого чата:
+  // назначить/сменить можно, пока не пошли ходы (после первого сообщения бэкенд отклонит смену).
+  const companionSelector = canPickCompanion && !hasMessages && (personas.length > 0 || agents.length > 0) && onCompanionChange ? (
+    <CompanionSelector
       personas={personas}
+      agents={agents}
       selectedPersona={selectedPersona ?? null}
-      onSelect={onPersonaChange}
+      selectedAgentName={selectedAgentName ?? null}
+      onSelect={onCompanionChange}
       isMobile={isMobile}
     />
   ) : null;
@@ -757,8 +746,7 @@ export function Composer({
             {attachButton}
             {slashButton}
             {modeButton}
-            {agentSelector}
-            {personaSelector}
+            {companionSelector}
             <div style={{ flex: 1 }} />
             {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
           </div>
@@ -770,8 +758,7 @@ export function Composer({
           {attachButton}
           {slashButton}
           {inputArea}
-          {agentSelector}
-          {personaSelector}
+          {companionSelector}
           {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <><div style={{ width: 12, flexShrink: 0 }} />{micButton}{sendButton}</>}
         </div>
       )}

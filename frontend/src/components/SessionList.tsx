@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import type { Project, Session, AgentInfo } from '../types';
+import type { Project, Session, AgentInfo, Persona } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
@@ -8,6 +8,10 @@ import { StatusBadge } from './StatusBadge';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
+import { getPersonaById, usePersonas, usePersonasVersion, personaLabel } from '../lib/personas';
+import { PersonaAvatar } from '../features/agents/PersonaAvatar';
+import { PersonaSelector } from './PersonaSelector';
+import { agentDotColor } from './AgentSelector';
 
 // Время создания сессии: сегодня — часы:минуты, иначе — дата
 function sessTime(iso: string): string {
@@ -31,6 +35,13 @@ interface Props {
 
 export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor, selectedAgent }: Props) {
   const online = useOnline();
+  // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий агентов)
+  usePersonasVersion();
+  const personas = usePersonas();
+  // Доступные в контексте проекта персоны: проектные (этого проекта) + глобальные
+  const ctxPersonas = personas.filter(p => p.scope === 'global' || (p.scope === 'project' && p.projectId === project.id));
+  // Выбранная персона для нового чата (локально): создаём чат от её лица
+  const [selectedPersona, setSelectedPersona] = useState<Persona | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [editTarget, setEditTarget] = useState<Session | null>(null);
@@ -39,8 +50,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { onSessionsChanged?.(sessions.length); }, [sessions.length, onSessionsChanged]);
 
   const createNew = async (): Promise<Session> => {
-    const s = await api.sessions.create(project.id, 'auto', undefined, undefined, undefined, selectedAgent?.fileName);
-    setSessions(prev => [s, ...prev]);
+    // Выбрана персона → чат от её лица (проектная — сессия в этом проекте);
+    // иначе обычная сессия (с опциональным .md-агентом)
+    const s = selectedPersona
+      ? await api.personas.createChat(selectedPersona.id, { mode: 'auto' })
+      : await api.sessions.create(project.id, 'auto', undefined, undefined, undefined, selectedAgent?.fileName);
+    // Чужую (глобальную) сессию в список этого проекта не добавляем — поллинг сам синхронит
+    if (s.projectId === project.id) setSessions(prev => [s, ...prev]);
     onSelect(s);
     return s;
   };
@@ -153,22 +169,35 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {online && (
-        <div style={{ padding: '10px 12px', borderBottom: `1px solid ${C.divider}` }}>
-          <Button variant="dashed" size="md" fullWidth onClick={createNew}
-            leftIcon={
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-            }
-          >
-            Новый чат
-          </Button>
+        <div style={{ padding: '10px 12px', borderBottom: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <Button variant="dashed" size="md" fullWidth onClick={createNew}
+              leftIcon={
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              }
+            >
+              {selectedPersona ? `Чат с «${personaLabel(selectedPersona)}»` : 'Новый чат'}
+            </Button>
+          </div>
+          {/* Выбор олицетворённого агента для нового чата (проектные + глобальные) */}
+          <PersonaSelector
+            personas={ctxPersonas}
+            selectedPersona={selectedPersona}
+            onSelect={setSelectedPersona}
+            isMobile={isMobile}
+            dropUp={false}
+          />
         </div>
       )}
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
         {sessions.map((s, index) => {
           const isActive = activeSession?.id === s.id;
+          // Сессия от лица персоны: слева мини-аватар, имя агента и акцент её цвета
+          const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
+          const accent = persona ? agentDotColor(persona.avatar?.color) : C.accent;
           return (
           <div
             key={s.id}
@@ -186,18 +215,22 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               cursor: 'pointer',
               overflow: 'hidden',
               background: isActive ? C.accentLight : C.bgWhite,
-              border: '1px solid ' + (isActive ? C.accent : C.borderLight),
+              border: '1px solid ' + (isActive ? accent : C.borderLight),
               boxShadow: isActive
                 ? SHADOW.button
                 : SHADOW.card,
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'flex-start',
+              gap: persona ? 9 : 0,
             }}
           >
-            {/* Акцентная полоса слева — явный маркер текущего чата */}
+            {/* Акцентная полоса слева — явный маркер текущего чата (у сессий агента — цветом персоны) */}
             {isActive && (
-              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: C.accent }} />
+              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: accent }} />
+            )}
+            {persona && (
+              <div style={{ flexShrink: 0, marginTop: 1 }}><PersonaAvatar persona={persona} size={28} /></div>
             )}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -225,6 +258,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                   </div>
                 )}
               </div>
+              {persona && (
+                <div style={{ fontSize: 11.5, fontWeight: 600, color: accent, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {personaLabel(persona)}
+                </div>
+              )}
               {s.lastMessage && (
                 <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {s.lastMessage}

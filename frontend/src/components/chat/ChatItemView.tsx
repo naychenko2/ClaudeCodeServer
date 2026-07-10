@@ -4,7 +4,8 @@ import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
-import { ChatProjectContext, useAssistantName } from './contexts';
+import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
+import { PersonaAvatar } from '../../features/agents/PersonaAvatar';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
@@ -221,6 +222,7 @@ interface ItemProps {
 // (useCallback в ChatPanel) — при дописывании ленты старые элементы не перерендериваются.
 export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan }: ItemProps) {
   const project = useContext(ChatProjectContext);
+  const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
   switch (item.kind) {
     case 'user_message':
@@ -251,8 +253,19 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // Старт чата не показываем — тех-инфа (модель/режим/cwd/MCP) дублирует шапку и раздувает чат
       return null;
 
-    case 'text':
-      return <TextMessageView text={item.text} online={online} onRetry={onRetry} streaming={streaming} />;
+    case 'text': {
+      const msg = <TextMessageView text={item.text} online={online} onRetry={onRetry} streaming={streaming} />;
+      // В персон-чате слева от реплики ассистента — её аватар (главный сигнал «говорит она»)
+      if (persona) {
+        return (
+          <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+            <div style={{ flexShrink: 0, marginTop: 1 }}><PersonaAvatar persona={persona} size={28} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>{msg}</div>
+          </div>
+        );
+      }
+      return msg;
+    }
 
     case 'thinking': {
       const hasText = item.text.trim().length > 0;

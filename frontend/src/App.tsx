@@ -108,6 +108,37 @@ export default function App() {
     window.addEventListener('cc-open-note', open)
     return () => window.removeEventListener('cc-open-note', open)
   }, [])
+
+  // Форк чата от лица другого агента (кнопка «Сменить агента» в чате) для глобальной
+  // персоны: переключаемся в раздел «Чаты», где ChatsPage откроет новый чат по id.
+  useEffect(() => {
+    const open = (e: Event) => {
+      const chatId = (e as CustomEvent<{ chatId?: string }>).detail?.chatId
+      if (chatId) localStorage.setItem('cc_open_chat', chatId)
+      localStorage.setItem(HUB_TAB_KEY, 'chats')
+      setHubTab('chats')
+      navReplace({ screen: 'chats', chatId })
+    }
+    window.addEventListener('cc-open-chat', open)
+    return () => window.removeEventListener('cc-open-chat', open)
+  }, [])
+
+  // Переход к чату проектной персоны из раздела «Агенты»: открываем её проект.
+  // Стартовую сессию AgentsPage кладёт в sessionStorage (cc_pending_session) — её
+  // подхватывает WorkspacePage при монтировании.
+  useEffect(() => {
+    const open = (e: Event) => {
+      const p = (e as CustomEvent<{ project?: Project }>).detail?.project
+      if (!p) return
+      localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
+      localStorage.setItem(HUB_TAB_KEY, 'projects')
+      navPush({ screen: 'project', project: p, view: 'sidebar', file: null })
+      setProject(p)
+      setHubTab('projects')
+    }
+    window.addEventListener('cc-open-session', open)
+    return () => window.removeEventListener('cc-open-session', open)
+  }, [])
   const isMobileView = typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
 
   const online = useOnline()

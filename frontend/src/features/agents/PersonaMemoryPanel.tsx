@@ -3,6 +3,7 @@ import type { Persona, PersonaMemoryEntry, PersonaMemoryType, ServerMessage } fr
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
+import { personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from './PersonaAvatar';
 
 // Панель долгой памяти персоны (этап 3). Показывает записи, сгруппированные по
@@ -139,7 +140,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
           <PersonaAvatar persona={persona} size={30} />
           <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
             <div style={{ fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              Память · {persona.name}
+              Память · {personaLabel(persona)}
             </div>
             <div style={{ fontSize: 11.5, color: C.textMuted }}>
               {loading ? 'загрузка…' : `${entries.length} ${plural(entries.length)}`}

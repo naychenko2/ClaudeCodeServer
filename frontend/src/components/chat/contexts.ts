@@ -1,7 +1,13 @@
 import { createContext, useContext } from 'react';
+import type { Persona } from '../../types';
 
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
 export const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
+
+// Персона (олицетворённый агент) текущего чата, если он ведётся от её лица.
+// Провайдится в ChatPanel — лента показывает её аватар у реплик ассистента,
+// не таща persona-проп через все вложенные компоненты.
+export const PersonaContext = createContext<Persona | null>(null);
 
 // Имя ассистента сессии (Claude | DeepSeek | GLM | …) — для строк в UI, чтобы не тащить проп
 // через все вложенные компоненты ленты. Провайдится в ChatPanel по session.model.

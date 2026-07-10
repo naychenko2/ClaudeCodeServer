@@ -13,6 +13,7 @@ import { ChatList } from '../components/ChatList';
 import { ChatPanel } from '../components/ChatPanel';
 import { ArtifactsPanel } from '../components/ArtifactsPanel';
 import { useFeature, FLAGS } from '../lib/featureFlags';
+import { ensurePersonasLoaded } from '../lib/personas';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
@@ -49,6 +50,9 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   useEffect(() => {
     api.skills.listGlobal().then(setSkills).catch(() => {});
   }, []);
+
+  // Стор персон — чтобы ChatList показал аватар/имя агента у его чатов
+  useEffect(() => { void ensurePersonasLoaded(); }, []);
 
   // Вложения относятся к конкретному чату — сбрасываем при смене активного
   useEffect(() => { setAttachedFiles([]); }, [activeId]);
@@ -144,6 +148,22 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  // Форк «Сменить агента» из открытого чата: App переключает сюда, а мы открываем
+  // новый чат по id (список перечитываем, чтобы плашка нового чата появилась сразу).
+  useEffect(() => {
+    const open = (e: Event) => {
+      const chatId = (e as CustomEvent<{ chatId?: string }>).detail?.chatId;
+      if (!chatId) return;
+      setActiveId(chatId);
+      localStorage.setItem(OPEN_CHAT_KEY, chatId);
+      navPush({ screen: 'chats', chatId });
+      refresh();
+    };
+    window.addEventListener('cc-open-chat', open);
+    return () => window.removeEventListener('cc-open-chat', open);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const selectChat = (chat: Session) => {

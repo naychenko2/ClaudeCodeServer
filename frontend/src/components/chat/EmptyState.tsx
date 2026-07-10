@@ -1,7 +1,9 @@
-import type { Session } from '../../types';
-import { C } from '../../lib/design';
+import type { Session, Persona } from '../../types';
+import { C, R, FONT } from '../../lib/design';
 import { NewChatSetup } from './NewChatSetup';
 import { useAssistantName } from './contexts';
+import { personaLabel, personaTitleLines } from '../../lib/personas';
+import { PersonaAvatar } from '../../features/agents/PersonaAvatar';
 
 // Чипы-подсказки для empty state проектного чата
 const HINTS = ['Объясни структуру проекта', 'Найди и почини падающие тесты'];
@@ -11,13 +13,17 @@ const CHAT_HINTS = ['Найди информацию в интернете', 'Н
 
 // Empty state пустого чата: приветствие/чипы-подсказки; для проекта без CLAUDE.md — CTA /init.
 // Внизу — настройка будущего чата (модель + усилие рассуждения), пока не отправлено первое сообщение.
-export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSessionUpdated, isMobile }: {
+export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSessionUpdated, isMobile, personas, selectedPersonaId, onPickPersona }: {
   hasProject: boolean;
   hasCLAUDEmd: boolean | null;
   onHint: (hint: string) => void;
   session?: Session;
   onSessionUpdated?: (s: Session) => void;
   isMobile?: boolean;
+  // Доступные персоны (олицетворённые агенты) — ряд «Поговорить с…» для пустого чата
+  personas?: Persona[];
+  selectedPersonaId?: string;
+  onPickPersona?: (p: Persona) => void;
 }) {
   const asstName = useAssistantName();
   return (
@@ -129,6 +135,53 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
                   ))}
                 </div>
               </>
+            )}
+
+            {/* Ряд агентов «Поговорить с…» — назначить персону текущему пустому чату */}
+            {personas && personas.length > 0 && onPickPersona && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                <div style={{ fontSize: 11.5, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                  Поговорить с…
+                </div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 360 }}>
+                  {personas.slice(0, 5).map(p => {
+                    const active = p.id === selectedPersonaId;
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => onPickPersona(p)}
+                        title={`Поговорить с «${personaLabel(p)}»`}
+                        style={{
+                          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                          border: 'none', background: 'none', cursor: 'pointer', padding: 2, width: 64,
+                        }}
+                      >
+                        <span style={{
+                          borderRadius: R.full, padding: 2,
+                          border: `2px solid ${active ? C.accent : 'transparent'}`,
+                        }}>
+                          <PersonaAvatar persona={p} size={44} />
+                        </span>
+                        {/* Роль — главная строка, имя под ней (мельче, приглушённо) */}
+                        <span style={{
+                          fontFamily: FONT.sans, fontSize: 11.5, color: C.textSecondary,
+                          maxWidth: 64, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {personaTitleLines(p).primary}
+                        </span>
+                        {personaTitleLines(p).secondary && (
+                          <span style={{
+                            fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted,
+                            maxWidth: 64, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}>
+                            {personaTitleLines(p).secondary}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             )}
 
             {/* Настройка чата — модель и усилие рассуждения (до первого сообщения) */}

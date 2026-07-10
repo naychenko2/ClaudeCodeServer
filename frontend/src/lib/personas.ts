@@ -71,5 +71,25 @@ export function usePersonasVersion(): number {
 // Снимок списка вне React — для колбэков
 export function getPersonasSnapshot(): Persona[] { return _personas; }
 
+// Найти персону по id в текущем снимке (списки чатов, шапка чата и пр.).
+// Не реактивен сам по себе — для авто-перерисовки подписывайся на usePersonas/usePersonasVersion.
+export function getPersonaById(id: string): Persona | undefined {
+  return _personas.find(p => p.id === id);
+}
+
 // Локально применить изменения после собственных мутаций (realtime продублирует)
 export function bumpPersonas(): void { void reloadPersonas(); }
+
+// Единый источник форматирования подписи агента: роль — главная, имя в скобках.
+// «Роль (Имя)», например «Дизайнер (Светлана)». Если роль пустая — просто имя.
+// Для узких инлайн-мест (плашки чатов, дропдаун выбора).
+export function personaLabel(p: { role?: string; name: string }): string {
+  return p.role && p.role.trim() ? `${p.role.trim()} (${p.name})` : p.name;
+}
+
+// Две строки подписи для мест с аватаром: роль сверху (главная), имя под ней.
+// Если роль пустая — одна строка (primary = имя, secondary отсутствует).
+export function personaTitleLines(p: { role?: string; name: string }): { primary: string; secondary?: string } {
+  const role = p.role?.trim();
+  return role ? { primary: role, secondary: p.name } : { primary: p.name };
+}

@@ -551,6 +551,7 @@ export interface Persona {
   id: string;
   ownerId: string;
   name: string;
+  role?: string;              // роль агента (главная подпись: «Роль (Имя)»)
   handle: string;             // машинное имя (@handle) — уникально у владельца
   description?: string;
   systemPrompt?: string;      // «характер» — системный промпт персоны
@@ -568,6 +569,7 @@ export interface Persona {
 // Тело создания персоны (POST /api/personas). Большинство полей опциональны.
 export interface CreatePersonaDto {
   name: string;
+  role?: string;
   description?: string;
   systemPrompt?: string;
   model?: string;

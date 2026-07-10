@@ -1,5 +1,6 @@
 import type { Persona } from '../../types';
 import { C, FONT, R } from '../../lib/design';
+import { personaTitleLines } from '../../lib/personas';
 import { PersonaAvatar } from './PersonaAvatar';
 
 // Иконка «плюс» для кнопки создания
@@ -63,12 +64,21 @@ export function PersonaList({ personas, selectedId, onSelect, onNew }: {
               >
                 <PersonaAvatar persona={p} size={32} />
                 <span style={{ flex: 1, minWidth: 0 }}>
+                  {/* Роль — главная строка, имя под ней (мельче, приглушённо) */}
                   <span style={{
                     display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading,
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                   }}>
-                    {p.name}
+                    {personaTitleLines(p).primary}
                   </span>
+                  {personaTitleLines(p).secondary && (
+                    <span style={{
+                      display: 'block', fontSize: 11.5, color: C.textMuted, marginTop: 1,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {personaTitleLines(p).secondary}
+                    </span>
+                  )}
                   {p.description && (
                     <span style={{
                       display: 'block', fontSize: 11.5, color: C.textMuted, marginTop: 1,

@@ -1,16 +1,15 @@
 import { useEffect, useState } from 'react';
-import type { AuthState, Persona, Project, Session, SkillInfo } from '../../types';
+import type { AuthState, Persona, Project } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
 import { EmptyState } from '../../components/EmptyState';
-import { ChatPanel } from '../../components/ChatPanel';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
-import { usePersonas, ensurePersonasLoaded, bumpPersonas } from '../../lib/personas';
-import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
+import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel, personaTitleLines } from '../../lib/personas';
+import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { PersonaList } from './PersonaList';
-import { PersonaEditor } from './PersonaEditor';
+import { PersonaForm } from './PersonaForm';
 import { PersonaAvatar } from './PersonaAvatar';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 
@@ -45,16 +44,15 @@ export function AgentsPage({ auth, onLogout, onHubTab }: {
   const personas = usePersonas();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<'list' | 'card'>('list');
-  // Редактор: null — закрыт; { persona } — правка; {} — создание
-  const [editor, setEditor] = useState<{ persona?: Persona } | null>(null);
-  // Проекты — чтобы показать имя/зону проектной персоны и отдать project в ChatPanel
+  // Режим создания нового агента: пустая форма прямо в контентной зоне
+  const [creating, setCreating] = useState(false);
+  // Проекты — чтобы показать имя/зону проектной персоны и открыть её проект в «Поговорить»
   const [projects, setProjects] = useState<Project[]>([]);
-  // Глобальные скиллы для композера (чат от лица персоны — как чат вне проекта)
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  // Идёт создание чата по кнопке «Поговорить»
+  const [talking, setTalking] = useState(false);
 
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   useEffect(() => { api.projects.list().then(setProjects).catch(() => {}); }, []);
-  useEffect(() => { api.skills.listGlobal().then(setSkills).catch(() => {}); }, []);
 
   // Диплинк #/agents/{id}
   useEffect(() => {
@@ -78,16 +76,23 @@ export function AgentsPage({ auth, onLogout, onHubTab }: {
   const selected = personas.find(p => p.id === selectedId) ?? null;
 
   const selectPersona = (id: string) => {
+    setCreating(false);
     setSelectedId(id); setMobileView('card');
     navPush({ screen: 'agents', agent: id });
   };
   const clearSelection = () => {
+    setCreating(false);
     setSelectedId(null); setMobileView('list');
+    if (getNav()?.agent) navReplace({ screen: 'agents' });
+  };
+  // Кнопка «Новый агент» — пустая форма создания в контентной зоне
+  const startCreate = () => {
+    setSelectedId(null); setCreating(true); setMobileView('card');
     if (getNav()?.agent) navReplace({ screen: 'agents' });
   };
 
   const onDelete = async (p: Persona) => {
-    if (!window.confirm(`Удалить агента «${p.name}»?`)) return;
+    if (!window.confirm(`Удалить агента «${personaLabel(p)}»?`)) return;
     try {
       await api.personas.remove(p.id);
       bumpPersonas();
@@ -97,30 +102,64 @@ export function AgentsPage({ auth, onLogout, onHubTab }: {
     }
   };
 
+  // «Поговорить»: создаём чат от лица персоны и уводим пользователя в раздел разговоров.
+  // Глобальная персона → чат вне проекта (таб «Чаты»). Проектная → её проект и стартовая сессия.
+  const talk = async (p: Persona) => {
+    if (talking) return;
+    setTalking(true);
+    try {
+      const session = await api.personas.createChat(p.id, { mode: 'auto' });
+      if (session.projectId) {
+        const proj = projects.find(x => x.id === session.projectId);
+        if (!proj) { alert('Проект агента недоступен.'); return; }
+        // Стартовую сессию отдаём проекту через sessionStorage — её подхватит WorkspacePage
+        sessionStorage.setItem('cc_pending_session', JSON.stringify(session));
+        window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project: proj } }));
+      } else {
+        // Глобальная персона: её чат живёт среди обычных чатов. Активный чат ChatsPage
+        // читает из localStorage (ключ cc_open_chat) при монтировании.
+        localStorage.setItem('cc_open_chat', session.id);
+        onHubTab('chats');
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Не удалось создать чат');
+    } finally {
+      setTalking(false);
+    }
+  };
+
   const sidebar = (
-    <PersonaList personas={personas} selectedId={selectedId} onSelect={selectPersona} onNew={() => setEditor({})} />
+    <PersonaList personas={personas} selectedId={selectedId} onSelect={selectPersona} onNew={startCreate} />
   );
 
-  const centerPane = selected
-    ? <PersonaChat
+  const centerPane = creating
+    ? <PersonaCreatePane
+        projects={projects}
+        onSaved={p => selectPersona(p.id)}
+        onCancel={clearSelection}
+        onBack={isMobile ? clearSelection : undefined} />
+    : selected
+    ? <PersonaStudio
         key={selected.id}
         persona={selected}
         projects={projects}
-        skills={skills}
-        onEdit={() => setEditor({ persona: selected })}
+        talking={talking}
         onDelete={() => onDelete(selected)}
+        onTalk={() => talk(selected)}
         onBack={isMobile ? clearSelection : undefined}
         isMobile={isMobile} />
     : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <EmptyState icon={<IconAgents />} title="Агенты"
-          subtitle={personas.length ? 'Выбери агента слева, чтобы начать разговор' : 'Создай первого олицетворённого агента: имя, характер, аватар'}
-          action={<button onClick={() => setEditor({})} style={newBtn}>Новый агент</button>} />
+          subtitle={personas.length ? 'Выбери агента слева, чтобы открыть его профиль и память' : 'Создай первого олицетворённого агента: имя, характер, аватар'}
+          action={<button onClick={startCreate} style={newBtn}>Новый агент</button>} />
       </div>;
 
+  const hasContent = creating || !!selected;
+
   const body = isMobile ? (
-    (mobileView === 'list' || !selected)
-      ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
-      : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
+    (mobileView === 'card' && hasContent)
+      ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
+      : <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
   ) : (
     <div style={{ height: '100%', display: 'flex' }}>
       <div style={{ width: 280, flex: 'none', background: C.bgPanel, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column' }}>
@@ -134,79 +173,54 @@ export function AgentsPage({ auth, onLogout, onHubTab }: {
     <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <HubHeader value="agents" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>{body}</div>
-      {editor && (
-        <PersonaEditor
-          persona={editor.persona}
-          onClose={() => setEditor(null)}
-          onSaved={p => { setEditor(null); selectPersona(p.id); }}
-        />
-      )}
     </div>
   );
 }
 
-// Читаемое имя чата персоны для списка/дропдауна
-function chatTitle(s: Session): string {
-  if (s.name && s.name.trim()) return s.name;
-  const d = new Date(s.updatedAt || s.createdAt);
-  return `Разговор от ${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}`;
+// Пане создания нового агента: лёгкая шапка + пустая PersonaForm в контентной зоне
+function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {
+  projects: Project[];
+  onSaved: (p: Persona) => void;
+  onCancel: () => void;
+  onBack?: () => void;
+}) {
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{
+        flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+        borderBottom: `1px solid ${C.border}`, borderLeft: `3px solid ${C.accent}`, background: C.bgPanel,
+      }}>
+        {onBack && (
+          <button onClick={onBack} aria-label="Назад" style={iconBtn}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          </button>
+        )}
+        <div style={{ fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
+          Новый агент
+        </div>
+      </div>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <PersonaForm persona={null} projects={projects} onSaved={onSaved} onCancel={onCancel} />
+      </div>
+    </div>
+  );
 }
 
-// Центральная область выбранной персоны: чат от её лица (переиспользует ChatPanel).
-// Слева/сверху — стрип персоны (аватар, имя, зона), список её чатов и действия.
-function PersonaChat({ persona, projects, skills, onEdit, onDelete, onBack, isMobile }: {
+// Студия персоны: центральная область = инлайн-форма профиля ИЛИ долгая память.
+// Чата здесь нет — разговор живёт среди обычных чатов (кнопка «Поговорить»).
+function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onBack, isMobile }: {
   persona: Persona;
   projects: Project[];
-  skills: SkillInfo[];
-  onEdit: () => void;
+  talking: boolean;
   onDelete: () => void;
+  onTalk: () => void;
   onBack?: () => void;
   isMobile: boolean;
 }) {
-  const [chats, setChats] = useState<Session[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
-  // Активный вид центральной области: разговор или долгая память персоны
-  const [view, setView] = useState<'chat' | 'memory'>('chat');
-
-  // Загрузка чатов персоны при её выборе — открываем самый свежий
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    api.personas.chats(persona.id)
-      .then(list => {
-        if (!alive) return;
-        const sorted = [...list].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
-        setChats(sorted);
-        setActiveId(sorted[0]?.id ?? null);
-      })
-      .catch(() => { if (alive) { setChats([]); setActiveId(null); } })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [persona.id]);
-
-  // Вложения относятся к конкретному чату — сбрасываем при переключении
-  useEffect(() => { setAttachedFiles([]); }, [activeId]);
-
-  const startChat = async () => {
-    if (creating) return;
-    setCreating(true);
-    try {
-      const chat = await api.personas.createChat(persona.id, { mode: 'auto' });
-      setChats(prev => [chat, ...prev]);
-      setActiveId(chat.id);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : 'Не удалось создать чат');
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const activeChat = chats.find(c => c.id === activeId) ?? null;
-  const activeProject = activeChat?.projectId ? projects.find(p => p.id === activeChat.projectId) : undefined;
+  // Активный вид: профиль (форма настройки) или долгая память персоны
+  const [view, setView] = useState<'profile' | 'memory'>('profile');
 
   const isProjectScope = persona.scope === 'project';
   const zoneName = isProjectScope
@@ -216,24 +230,7 @@ function PersonaChat({ persona, projects, skills, onEdit, onDelete, onBack, isMo
   // Цветовая тема персоны: акцент из палитры аватара; пусто → дефолтный accent продукта
   const accent = AGENT_COLORS[persona.avatar?.color ?? ''] ?? C.accent;
 
-  const onSessionUpdated = (updated: Session) =>
-    setChats(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
-
-  // Приветственный бабл: показывается в пустом чате как первое сообщение от лица персоны
-  // (визуально, в бэкенд не уходит). Пропадает, как только появляются реальные сообщения.
-  const greetingBubble = persona.greeting?.trim() ? (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', maxWidth: 620, marginTop: 8 }}>
-      <PersonaAvatar persona={persona} size={30} />
-      <div style={{
-        background: C.bgWhite, border: `1px solid ${accent}33`, borderLeft: `3px solid ${accent}`,
-        borderRadius: R.xl, padding: '11px 15px', fontSize: 14, lineHeight: 1.55, color: C.textPrimary,
-      }}>
-        {persona.greeting}
-      </div>
-    </div>
-  ) : undefined;
-
-  // Стрип персоны над чатом (левая полоса — акцент персоны)
+  // Стрип персоны над содержимым (левая полоса — акцент персоны)
   const strip = (
     <div style={{
       flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
@@ -248,155 +245,51 @@ function PersonaChat({ persona, projects, skills, onEdit, onDelete, onBack, isMo
       )}
       <PersonaAvatar persona={persona} size={34} />
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {/* Роль — главная строка (serif, цвет персоны), имя под ней (мельче, приглушённо) */}
         <div style={{ fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: accent, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {persona.name}
+          {personaTitleLines(persona).primary}
         </div>
+        {personaTitleLines(persona).secondary && (
+          <div style={{ fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {personaTitleLines(persona).secondary}
+          </div>
+        )}
         <span style={zoneBadge(isProjectScope, accent)}>{isProjectScope ? `Проект · ${zoneName}` : 'Глобальный'}</span>
       </div>
 
-      {/* Переключатель Чат | Память */}
+      {/* Переключатель Профиль | Память */}
       <div style={{ marginLeft: 6, display: 'flex', gap: 2, padding: 2, background: C.bgInset, borderRadius: R.pill }}>
-        <button onClick={() => setView('chat')} style={segBtn(view === 'chat')}>Чат</button>
+        <button onClick={() => setView('profile')} style={segBtn(view === 'profile')}>Профиль</button>
         <button onClick={() => setView('memory')} style={segBtn(view === 'memory')}>Память</button>
       </div>
 
       <div style={{ flex: 1 }} />
 
-      {/* Чат-специфичные контролы — только в режиме разговора */}
-      {view === 'chat' && chats.length > 0 && (
-        <ChatSwitcher chats={chats} activeId={activeId} onSelect={id => setActiveId(id)} />
-      )}
-      {view === 'chat' && (
-        <button onClick={startChat} disabled={creating} style={btnGhost} title="Новый чат с агентом">
-          + Новый чат
-        </button>
-      )}
-      {/* Меню действий с персоной */}
-      <div style={{ position: 'relative' }}>
-        <button onClick={() => setMenuOpen(o => !o)} aria-label="Действия" style={iconBtn}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" />
-          </svg>
-        </button>
-        {menuOpen && (
-          <>
-            <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-            <div style={{
-              position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 41, minWidth: 160,
-              background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, boxShadow: SHADOW.dropdown, padding: 4,
-            }}>
-              <button onClick={() => { setMenuOpen(false); onEdit(); }} style={menuItem}>Редактировать</button>
-              <button onClick={() => { setMenuOpen(false); onDelete(); }} style={{ ...menuItem, color: C.dangerText }}>Удалить</button>
-            </div>
-          </>
-        )}
-      </div>
+      {/* «Поговорить» — создать чат от лица персоны */}
+      <button onClick={onTalk} disabled={talking}
+        style={{ ...talkBtn(accent), padding: '7px 14px', fontSize: 13, opacity: talking ? 0.6 : 1, cursor: talking ? 'default' : 'pointer' }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 11.5a8.5 8.5 0 0 1-12 7.7L3 21l1.8-6A8.5 8.5 0 1 1 21 11.5z" />
+        </svg>
+        {talking ? 'Создаём…' : 'Поговорить'}
+      </button>
     </div>
   );
 
-  let content: React.ReactNode;
-  if (view === 'memory') {
-    content = (
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded />
-      </div>
-    );
-  } else if (loading) {
-    content = (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, fontSize: 13 }}>
-        Загрузка…
-      </div>
-    );
-  } else if (activeChat) {
-    content = (
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <ChatPanel
-          key={activeChat.id}
-          session={activeChat}
-          project={activeProject}
-          skills={skills}
-          attachedFiles={attachedFiles}
-          onAttachedFilesChange={setAttachedFiles}
-          onSessionUpdated={onSessionUpdated}
-          isMobile={isMobile}
-          greetingBubble={greetingBubble}
-        />
-      </div>
-    );
-  } else {
-    // Нет ни одного чата — приглашение начать разговор
-    content = (
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-        <div style={{ maxWidth: 440, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 14 }}>
-          <PersonaAvatar persona={persona} size={72} />
-          <div style={{ fontFamily: FONT.serif, fontSize: 24, fontWeight: 500, color: C.textHeading, letterSpacing: '-0.01em' }}>
-            {persona.name}
-          </div>
-          {persona.description && (
-            <div style={{ fontSize: 14, color: C.textSecondary, lineHeight: 1.5 }}>{persona.description}</div>
-          )}
-          {persona.greeting && (
-            <div style={{
-              fontSize: 14, color: C.textPrimary, lineHeight: 1.55, fontStyle: 'italic',
-              background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, padding: '12px 16px',
-            }}>
-              «{persona.greeting}»
-            </div>
-          )}
-          <button onClick={startChat} disabled={creating} style={{ ...newBtn, marginTop: 4, opacity: creating ? 0.6 : 1 }}>
-            {creating ? 'Создаём…' : 'Начать разговор'}
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const content = view === 'memory'
+    // Память — под стрипом, свой заголовок не нужен (идентичность уже в стрипе)
+    ? <div style={{ flex: 1, minHeight: 0 }}><PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded /></div>
+    // Профиль — инлайн-форма настройки прямо в контентной зоне (удаление — из формы)
+    : <div style={{ flex: 1, minHeight: 0 }}>
+        <PersonaForm persona={persona} projects={projects} onSaved={() => {}} onDelete={() => onDelete()} />
+      </div>;
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {strip}
-      {/* Тонкая акцентная полоса персоны над лентой */}
+      {/* Тонкая акцентная полоса персоны */}
       <div style={{ flex: 'none', height: 2, background: `${accent}55` }} />
       {content}
-    </div>
-  );
-}
-
-// Дропдаун выбора чата персоны
-function ChatSwitcher({ chats, activeId, onSelect }: {
-  chats: Session[];
-  activeId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const active = chats.find(c => c.id === activeId) ?? null;
-  if (chats.length <= 1) return null;
-  return (
-    <div style={{ position: 'relative' }}>
-      <button onClick={() => setOpen(o => !o)} style={{ ...btnGhost, display: 'flex', alignItems: 'center', gap: 6, maxWidth: 200 }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {active ? chatTitle(active) : 'Чаты'}
-        </span>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M6 9l6 6 6-6" />
-        </svg>
-      </button>
-      {open && (
-        <>
-          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-          <div style={{
-            position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 41, minWidth: 220, maxWidth: 300,
-            maxHeight: 320, overflowY: 'auto', background: C.bgWhite, border: `1px solid ${C.border}`,
-            borderRadius: R.lg, boxShadow: SHADOW.dropdown, padding: 4,
-          }}>
-            {chats.map(c => (
-              <button key={c.id} onClick={() => { onSelect(c.id); setOpen(false); }}
-                style={{ ...menuItem, background: c.id === activeId ? C.bgSelected : 'transparent', display: 'block', width: '100%' }}>
-                <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chatTitle(c)}</span>
-              </button>
-            ))}
-          </div>
-        </>
-      )}
     </div>
   );
 }
@@ -416,19 +309,19 @@ const iconBtn: React.CSSProperties = {
   width: 32, height: 32, borderRadius: R.md, border: 'none', background: 'transparent',
   color: C.textSecondary, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
 };
-const btnGhost: React.CSSProperties = {
-  background: 'transparent', border: `1px solid ${C.border}`, borderRadius: R.lg,
-  padding: '6px 12px', fontSize: 13, cursor: 'pointer', fontFamily: FONT.sans, color: C.textSecondary, flexShrink: 0,
-};
-const menuItem: React.CSSProperties = {
-  background: 'transparent', border: 'none', borderRadius: R.md, width: '100%', textAlign: 'left',
-  padding: '8px 10px', fontSize: 13, cursor: 'pointer', fontFamily: FONT.sans, color: C.textPrimary,
-};
 const newBtn: React.CSSProperties = {
   background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.md,
   padding: '9px 16px', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: FONT.sans,
 };
-// Сегмент переключателя Чат | Память
+// Кнопка «Поговорить» — залита акцентом персоны
+function talkBtn(accent: string): React.CSSProperties {
+  return {
+    display: 'inline-flex', alignItems: 'center', gap: 7,
+    background: accent, color: '#fff', border: 'none', borderRadius: R.lg,
+    padding: '9px 18px', fontSize: 13.5, fontWeight: 600, fontFamily: FONT.sans,
+  };
+}
+// Сегмент переключателя Профиль | Память
 function segBtn(active: boolean): React.CSSProperties {
   return {
     border: 'none', borderRadius: R.pill, padding: '5px 12px', fontSize: 12.5, fontWeight: 600,

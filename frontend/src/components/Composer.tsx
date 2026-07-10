@@ -2,11 +2,12 @@ import { useState, useRef, useEffect, useCallback, type CSSProperties } from 're
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { SkillsDropdown } from './SkillsDropdown';
 import { AgentSelector } from './AgentSelector';
+import { PersonaSelector } from './PersonaSelector';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
-import type { SkillInfo, AgentInfo } from '../types';
+import type { SkillInfo, AgentInfo, Persona } from '../types';
 
 export interface ComposerProps {
   // Ключ чата — под него хранится черновик недовведённого текста
@@ -31,6 +32,13 @@ export interface ComposerProps {
   agents?: AgentInfo[];
   selectedAgent?: AgentInfo | null;
   onAgentChange?: (agent: AgentInfo | null) => void;
+  // Олицетворённые агенты (персоны) — селектор «с кем разговор». Показывается только
+  // у пустого чата (hasMessages=false): назначить персону можно, пока не пошли ходы.
+  personas?: Persona[];
+  selectedPersona?: Persona | null;
+  onPersonaChange?: (persona: Persona | null) => void;
+  canPickPersona?: boolean;
+  hasMessages?: boolean;
 }
 
 // Получить имя файла из пути
@@ -123,6 +131,11 @@ export function Composer({
   agents = [],
   selectedAgent = null,
   onAgentChange,
+  personas = [],
+  selectedPersona = null,
+  onPersonaChange,
+  canPickPersona,
+  hasMessages,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
@@ -657,6 +670,17 @@ export function Composer({
     />
   ) : null;
 
+  // PersonaSelector — «с кем разговор». Только у пустого чата: назначить/сменить
+  // персону можно, пока не пошли ходы (после первого сообщения бэкенд отклонит смену).
+  const personaSelector = canPickPersona && !hasMessages && personas.length > 0 && onPersonaChange ? (
+    <PersonaSelector
+      personas={personas}
+      selectedPersona={selectedPersona ?? null}
+      onSelect={onPersonaChange}
+      isMobile={isMobile}
+    />
+  ) : null;
+
   return (
     <div style={containerStyle} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={() => setDragOver(false)}>
       {/* Dropdown скиллов (показывается над полем ввода при /query) */}
@@ -734,6 +758,7 @@ export function Composer({
             {slashButton}
             {modeButton}
             {agentSelector}
+            {personaSelector}
             <div style={{ flex: 1 }} />
             {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
           </div>
@@ -746,6 +771,7 @@ export function Composer({
           {slashButton}
           {inputArea}
           {agentSelector}
+          {personaSelector}
           {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <><div style={{ width: 12, flexShrink: 0 }} />{micButton}{sendButton}</>}
         </div>
       )}

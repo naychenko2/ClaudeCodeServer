@@ -7,6 +7,9 @@ import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
 import { groupChats } from '../lib/chatGroups';
+import { getPersonaById, usePersonasVersion, personaLabel } from '../lib/personas';
+import { PersonaAvatar } from '../features/agents/PersonaAvatar';
+import { agentDotColor } from './AgentSelector';
 
 // Время создания чата: сегодня — часы:минуты, иначе — дата (группы и так разбиты по дням)
 function chatTime(iso: string): string {
@@ -32,6 +35,8 @@ interface Props {
 
 export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, isMobile = false }: Props) {
   const online = useOnline();
+  // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары чатов агентов)
+  usePersonasVersion();
   const [editTarget, setEditTarget] = useState<Session | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
 
@@ -84,6 +89,9 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
             </div>
             {g.items.map(chat => {
               const isActive = chat.id === activeId;
+              // Чат от лица персоны: слева мини-аватар, имя агента и акцент её цвета
+              const persona = chat.personaId ? getPersonaById(chat.personaId) : undefined;
+              const accent = persona ? agentDotColor(persona.avatar?.color) : C.accent;
               return (
                 <div
                   key={chat.id}
@@ -99,16 +107,20 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                     cursor: 'pointer',
                     overflow: 'hidden',
                     background: isActive ? C.accentLight : C.bgWhite,
-                    border: '1px solid ' + (isActive ? C.accent : C.borderLight),
+                    border: '1px solid ' + (isActive ? accent : C.borderLight),
                     boxShadow: isActive ? SHADOW.button : SHADOW.card,
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'flex-start',
+                    gap: persona ? 9 : 0,
                   }}
                 >
-                  {/* Акцентная полоса слева — маркер текущего чата */}
+                  {/* Акцентная полоса слева — маркер текущего чата (у чатов агента — цветом персоны) */}
                   {isActive && (
-                    <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: C.accent }} />
+                    <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: accent }} />
+                  )}
+                  {persona && (
+                    <div style={{ flexShrink: 0, marginTop: 1 }}><PersonaAvatar persona={persona} size={28} /></div>
                   )}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -125,6 +137,11 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                         <StatusBadge status={chat.status} />
                       )}
                     </div>
+                    {persona && (
+                      <div style={{ fontSize: 11.5, fontWeight: 600, color: accent, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {personaLabel(persona)}
+                      </div>
+                    )}
                     {chat.lastMessage && (
                       <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {chat.lastMessage}

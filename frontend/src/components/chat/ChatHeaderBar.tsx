@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
-import type { Project, Session, ClaudeBilling } from '../../types';
+import type { Project, Session, ClaudeBilling, Persona } from '../../types';
 import { api } from '../../lib/api';
 import { modelLabel, modelProvider, assistantName, useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
+import { PersonaAvatar } from '../../features/agents/PersonaAvatar';
+import { personaLabel, personaTitleLines } from '../../lib/personas';
+import { AGENT_COLORS, agentDotColor } from '../AgentSelector';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from '../../lib/rateLimit';
 import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
@@ -649,6 +652,68 @@ interface ChatHeaderBarProps {
   canCompact: boolean;
   compactNote?: string;
   onCompact: () => void;
+  // Олицетворённый агент (персона) чата — идентификация встроена прямо в тулбар
+  persona?: Persona | null;
+  personaZoneName?: string | null;         // имя проекта для бейджа зоны проектной персоны
+  forkPersonas?: Persona[];                 // другие персоны контекста — для форка «Сменить агента»
+  onForkPersona?: (p: Persona) => void;     // создать новый чат от лица другой персоны
+}
+
+// Кнопка «Сменить агента» в тулбаре: иконка + дропдаун со списком других персон.
+// Форк создаёт новый чат от лица выбранной персоны (текущий чат не трогаем).
+// Логика меню перенесена из PersonaChatStrip в единый тулбар.
+function ForkAgentButton({ persona, forkPersonas, onFork, isMobile }: {
+  persona: Persona; forkPersonas: Persona[]; onFork: (p: Persona) => void; isMobile?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  // Другие персоны (кроме текущей) — цель форка
+  const others = forkPersonas.filter(p => p.id !== persona.id);
+  if (others.length === 0) return null;
+  return (
+    <div style={{ position: 'relative', flexShrink: 0 }}>
+      <ToolbarIconButton onClick={() => setOpen(o => !o)} title="Сменить агента — продолжить с другим" isMobile={isMobile} active={open}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 7h11l-3-3M20 17H9l3 3" />
+        </svg>
+      </ToolbarIconButton>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{
+            position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 41,
+            minWidth: 260, maxWidth: 'calc(100vw - 24px)', maxHeight: 'min(60vh, 420px)', overflowY: 'auto',
+            background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, boxShadow: SHADOW.dropdown, padding: 4,
+          }}>
+            <div style={{ padding: '6px 10px 4px', fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.3 }}>
+              Продолжить с другим агентом
+            </div>
+            {others.map(p => {
+              const dot = agentDotColor(p.avatar?.color);
+              const zone = p.scope === 'project' ? 'Проект' : 'Глобальный';
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => { setOpen(false); onFork(p); }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.accentLight; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px',
+                    borderRadius: R.md, border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
+                  }}
+                >
+                  <PersonaAvatar persona={p} size={28} />
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{personaLabel(p)}</span>
+                    <span style={{ display: 'block', fontSize: 11, color: dot, marginTop: 1 }}>{zone}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 // Кнопка «Итог сессии» — конспект сессии заметкой (флаги notes + notes-session-summary).
@@ -769,7 +834,7 @@ function ExtractTasksButton({ session, online, isMobile }: { session: Session; o
   );
 }
 
-export function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, forkPersonas, onForkPersona }: ChatHeaderBarProps) {
   const sessionModelLabel = useModelLabel(session.model);
   const asstName = assistantName(session.model);
   const providerKey = modelProvider(session.model);
@@ -788,8 +853,46 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
       .catch(() => { /* баланс — необязательная информация */ });
     return () => { alive = false; };
   }, [session.model, providerKey, isCliProvider]);
+  // Цвет персоны (акцент бренда агента) — тонирует заголовок, пилюлю зоны и левую границу тулбара.
+  const personaAccent = persona ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? C.accent) : null;
+  const personaIsProject = persona?.scope === 'project';
+  const personaZoneText = personaIsProject
+    ? (personaZoneName ? `Проект · ${personaZoneName}` : 'Проект')
+    : 'Глобальный';
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
-  const titleBlock = (
+  // При наличии персоны — идентификация агента доминирует: аватар + роль (serif, цвет персоны)
+  // и вторая строка «имя · зона · модель». session.name уходит в тултип, чтобы не потеряться.
+  const titleBlock = persona && personaAccent ? (
+    <div title={session.name ?? undefined} style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 9 }}>
+      <PersonaAvatar persona={persona} size={28} />
+      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        {/* Роль — заголовок (serif, цвет персоны) */}
+        <span style={{ fontFamily: FONT.serif, fontSize: 16, fontWeight: 600, color: personaAccent, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {personaTitleLines(persona).primary}
+        </span>
+        {/* Строка 2: имя персоны + пилюля зоны + модель/effort (компактно) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: 1 }}>
+          {personaTitleLines(persona).secondary && (
+            <span style={{ flexShrink: 0, fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {personaTitleLines(persona).secondary}
+            </span>
+          )}
+          <span style={{
+            flexShrink: 0, fontSize: 10, fontWeight: 600, letterSpacing: '0.02em',
+            padding: '1px 7px', borderRadius: R.pill,
+            background: `${personaAccent}${personaIsProject ? '2E' : '17'}`, color: personaAccent,
+          }}>
+            {personaZoneText}
+          </span>
+          {!isMobile && (
+            <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+              {sessionModelLabel}{session.effort && ` · ${effortLabel(session.effort)}`}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  ) : (
     <div style={{ minWidth: 0, flex: 1 }}>
       <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {session.name ?? 'Новый чат'}
@@ -881,12 +984,16 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
   // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
   const summaryBtn = <SessionSummaryButton session={session} online={online} isMobile={isMobile} />;
   const extractBtn = <ExtractTasksButton session={session} online={online} isMobile={isMobile} />;
+  // Форк «Сменить агента» — только у чата с персоной и при наличии других персон
+  const forkBtn = persona && onForkPersona && forkPersonas && forkPersonas.length > 0
+    ? <ForkAgentButton persona={persona} forkPersonas={forkPersonas} onFork={onForkPersona} isMobile={isMobile} />
+    : null;
   const actionBtns = isMobile
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>
-    : <>{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</>;
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{forkBtn}{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>
+    : <>{forkBtn}{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</>;
 
   return (
-    <Toolbar isMobile={isMobile}>
+    <Toolbar isMobile={isMobile} style={personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : undefined}>
       {openBtn}{titleEl}{workflowBadge}{costBadges}{actionBtns}
     </Toolbar>
   );

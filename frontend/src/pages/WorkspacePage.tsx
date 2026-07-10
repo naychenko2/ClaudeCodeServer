@@ -26,6 +26,8 @@ import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
 import { resolveColumns, taskColumnKey } from '../lib/tasks';
 import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
+import { ensurePersonasLoaded } from '../lib/personas';
+import { ProjectAgentsPanel } from '../features/agents/ProjectAgentsPanel';
 
 interface Props {
   project: Project;
@@ -36,7 +38,7 @@ interface Props {
   onLogout: () => void;
 }
 
-type LeftTab = 'sessions' | 'files' | 'tasks';
+type LeftTab = 'sessions' | 'files' | 'tasks' | 'agents';
 type FileSubTab = 'files' | 'knowledge';
 
 function useWindowWidth() {
@@ -71,13 +73,28 @@ function useViewportHeight() {
 }
 
 export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
+  // Вкладка «Агенты» — за фич-флагом personas (проектные персоны + чат с агентом)
+  const personasEnabled = useFeature(FLAGS.personas);
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
     const saved = loadWorkspaceState(project.id)?.leftTab;
-    return saved === 'sessions' || saved === 'files' || saved === 'tasks' ? saved : 'sessions';
+    const ok = saved === 'sessions' || saved === 'files' || saved === 'tasks'
+      || (saved === 'agents' && personasEnabled);
+    return ok ? saved! : 'sessions';
   });
   const [fileSubTab, setFileSubTab] = useState<FileSubTab>(() => loadWorkspaceState(project.id)?.fileSubTab ?? 'files');
-  const [activeSession, setActiveSession] = useState<Session | null>(() => loadWorkspaceState(project.id)?.activeSession ?? null);
+  const [activeSession, setActiveSession] = useState<Session | null>(() => {
+    // Стартовая сессия от «Поговорить» проектной персоны (раздел «Агенты»): проект уже
+    // открыт App-ом, сессию выбираем здесь — SessionList не перебьёт её авто-выбором list[0].
+    try {
+      const raw = sessionStorage.getItem('cc_pending_session');
+      if (raw) {
+        const s = JSON.parse(raw) as Session;
+        if (s.projectId === project.id) { sessionStorage.removeItem('cc_pending_session'); return s; }
+      }
+    } catch { /* битый json — игнорируем */ }
+    return loadWorkspaceState(project.id)?.activeSession ?? null;
+  });
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
   const [openFile, setOpenFile] = useState<string | null>(() => loadWorkspaceState(project.id)?.openFile ?? null);
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
@@ -94,6 +111,9 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const [projectForEdit, setProjectForEdit] = useState(project);
   const activeSessionRef = useRef<Session | null>(null);
   activeSessionRef.current = activeSession;
+
+  // Стор персон — чтобы SessionList показал аватар/имя агента у его сессий
+  useEffect(() => { void ensurePersonasLoaded(); }, []);
 
   const handleWorkflowRunning = useCallback((active: boolean, sessionId: string) => {
     setWorkflowRunningFor(prev => {
@@ -267,7 +287,20 @@ const windowWidth = useWindowWidth();
     { value: 'sessions', label: 'Чаты' },
     { value: 'files', label: 'Файлы' },
     { value: 'tasks', label: 'Задачи' },
+    ...(personasEnabled ? [{ value: 'agents' as LeftTab, label: 'Агенты' }] : []),
   ];
+
+  // Флаг мог выключиться — не оставляем недоступную вкладку активной
+  useEffect(() => {
+    if (leftTab === 'agents' && !personasEnabled) setLeftTab('sessions');
+  }, [leftTab, personasEnabled]);
+
+  // «Поговорить» из проектной вкладки «Агенты»: сессия персоны создаётся в этом
+  // проекте — открываем её на месте (переключаемся на «Чаты» и выбираем).
+  const handleOpenAgentChat = (session: Session) => {
+    setLeftTab('sessions');
+    handleSelectSession(session);
+  };
 
   // Диплинк файла: App положил «projectId|путь» в sessionStorage.
   // Значение чужого проекта не трогаем — его заберёт WorkspacePage нужного проекта.
@@ -653,6 +686,8 @@ const windowWidth = useWindowWidth();
           <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
         ) : leftTab === 'tasks' ? (
           <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
+        ) : leftTab === 'agents' ? (
+          <ProjectAgentsPanel project={project} onOpenChat={handleOpenAgentChat} />
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
@@ -699,6 +734,8 @@ const windowWidth = useWindowWidth();
               ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
+              : leftTab === 'agents'
+              ? <ProjectAgentsPanel project={project} onOpenChat={handleOpenAgentChat} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'

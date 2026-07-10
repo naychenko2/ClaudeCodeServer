@@ -236,7 +236,14 @@ export const api = {
 
   // Агенты (олицетворённые агенты / персоны): CRUD персон владельца (флаг personas)
   personas: {
-    list: () => request<Persona[]>('/personas'),
+    // scope=context&projectId= — только доступные в контексте (глобальные + этого проекта)
+    list: (opts?: { scope?: string; projectId?: string }) => {
+      const qs = new URLSearchParams();
+      if (opts?.scope) qs.set('scope', opts.scope);
+      if (opts?.projectId) qs.set('projectId', opts.projectId);
+      const s = qs.toString();
+      return request<Persona[]>(`/personas${s ? `?${s}` : ''}`);
+    },
     get: (id: string) => request<Persona>(`/personas/${encodeURIComponent(id)}`),
     create: (dto: CreatePersonaDto) =>
       request<Persona>('/personas', { method: 'POST', body: JSON.stringify(dto) }),
@@ -248,6 +255,19 @@ export const api = {
     chats: (id: string) => request<Session[]>(`/personas/${encodeURIComponent(id)}/chats`),
     createChat: (id: string, body: { mode?: string; resumeSessionId?: string; name?: string }) =>
       request<Session>(`/personas/${encodeURIComponent(id)}/chats`, { method: 'POST', body: JSON.stringify(body) }),
+
+    // Назначить/снять персону чату вне проекта (personaId=null снимает). 400, если чат уже начат.
+    assignPersonaToChat: (chatId: string, personaId: string | null) =>
+      request<Session>(`/chats/${encodeURIComponent(chatId)}/persona`, {
+        method: 'POST',
+        body: JSON.stringify({ personaId }),
+      }),
+    // То же для проектной сессии
+    assignPersonaToSession: (projectId: string, sessionId: string, personaId: string | null) =>
+      request<Session>(`/projects/${projectId}/sessions/${sessionId}/persona`, {
+        method: 'POST',
+        body: JSON.stringify({ personaId }),
+      }),
 
     // Долгая память персоны (этап 3): список / поиск / ручное добавление / забывание.
     // type — необязательный фильтр по категории.

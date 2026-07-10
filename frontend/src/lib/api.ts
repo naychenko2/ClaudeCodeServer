@@ -272,10 +272,21 @@ export const api = {
     // Аватар (этап 4): можно ли генерировать (настроен ли fal),
     // генерация картинки и построение URL для <img>.
     avatarCaps: () => request<{ generate: boolean }>('/personas/avatar/caps'),
-    generateAvatar: (id: string, prompt?: string) =>
-      request<Persona>(`/personas/${encodeURIComponent(id)}/avatar/generate`, {
+    // Генерация галереи кандидатов: возвращает имена файлов (аватар персоны НЕ меняется
+    // до явного выбора). count — сколько вариантов (1..4).
+    generateAvatar: (id: string, opts?: { prompt?: string; count?: number }) =>
+      request<{ candidates: string[] }>(`/personas/${encodeURIComponent(id)}/avatar/generate`, {
         method: 'POST',
-        body: JSON.stringify({ prompt: prompt?.trim() || undefined }),
+        body: JSON.stringify({
+          prompt: opts?.prompt?.trim() || undefined,
+          count: opts?.count,
+        }),
+      }),
+    // Выбор кандидата — он становится аватаром персоны, возвращается обновлённая персона
+    selectAvatar: (id: string, file: string) =>
+      request<Persona>(`/personas/${encodeURIComponent(id)}/avatar/select`, {
+        method: 'POST',
+        body: JSON.stringify({ file }),
       }),
     // URL картинки-аватара для браузерного <img>: токен уходит через ?access_token=
     // (заголовок Authorization <img> не шлёт — как у notes attachment / files stream).
@@ -290,6 +301,15 @@ export const api = {
       if (token) params.set('access_token', token);
       params.set('v', persona.avatar.imageFile);
       return `/api/personas/${encodeURIComponent(persona.id)}/avatar?${params}`;
+    },
+    // URL картинки-кандидата (галерея генерации) для <img>: токен через ?access_token=
+    avatarCandidateUrl: (id: string, file: string): string => {
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const params = new URLSearchParams();
+      if (token) params.set('access_token', token);
+      return `/api/personas/${encodeURIComponent(id)}/avatar/candidate/${encodeURIComponent(file)}?${params}`;
     },
   },
 

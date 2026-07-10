@@ -5,6 +5,7 @@ import { HubHeader } from '../../components/HubHeader';
 import { EmptyState } from '../../components/EmptyState';
 import { ChatPanel } from '../../components/ChatPanel';
 import { C, FONT, R, SHADOW } from '../../lib/design';
+import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas } from '../../lib/personas';
 import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
@@ -212,14 +213,31 @@ function PersonaChat({ persona, projects, skills, onEdit, onDelete, onBack, isMo
     ? (projects.find(p => p.id === persona.projectId)?.name ?? persona.projectId ?? 'Проект')
     : null;
 
+  // Цветовая тема персоны: акцент из палитры аватара; пусто → дефолтный accent продукта
+  const accent = AGENT_COLORS[persona.avatar?.color ?? ''] ?? C.accent;
+
   const onSessionUpdated = (updated: Session) =>
     setChats(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
 
-  // Стрип персоны над чатом
+  // Приветственный бабл: показывается в пустом чате как первое сообщение от лица персоны
+  // (визуально, в бэкенд не уходит). Пропадает, как только появляются реальные сообщения.
+  const greetingBubble = persona.greeting?.trim() ? (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', maxWidth: 620, marginTop: 8 }}>
+      <PersonaAvatar persona={persona} size={30} />
+      <div style={{
+        background: C.bgWhite, border: `1px solid ${accent}33`, borderLeft: `3px solid ${accent}`,
+        borderRadius: R.xl, padding: '11px 15px', fontSize: 14, lineHeight: 1.55, color: C.textPrimary,
+      }}>
+        {persona.greeting}
+      </div>
+    </div>
+  ) : undefined;
+
+  // Стрип персоны над чатом (левая полоса — акцент персоны)
   const strip = (
     <div style={{
       flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-      borderBottom: `1px solid ${C.border}`, background: C.bgPanel, position: 'relative',
+      borderBottom: `1px solid ${C.border}`, borderLeft: `3px solid ${accent}`, background: C.bgPanel, position: 'relative',
     }}>
       {onBack && (
         <button onClick={onBack} aria-label="Назад" style={iconBtn}>
@@ -230,10 +248,10 @@ function PersonaChat({ persona, projects, skills, onEdit, onDelete, onBack, isMo
       )}
       <PersonaAvatar persona={persona} size={34} />
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-        <div style={{ fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: accent, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {persona.name}
         </div>
-        <span style={zoneBadge(isProjectScope)}>{isProjectScope ? `Проект · ${zoneName}` : 'Глобальный'}</span>
+        <span style={zoneBadge(isProjectScope, accent)}>{isProjectScope ? `Проект · ${zoneName}` : 'Глобальный'}</span>
       </div>
 
       {/* Переключатель Чат | Память */}
@@ -301,6 +319,7 @@ function PersonaChat({ persona, projects, skills, onEdit, onDelete, onBack, isMo
           onAttachedFilesChange={setAttachedFiles}
           onSessionUpdated={onSessionUpdated}
           isMobile={isMobile}
+          greetingBubble={greetingBubble}
         />
       </div>
     );
@@ -335,6 +354,8 @@ function PersonaChat({ persona, projects, skills, onEdit, onDelete, onBack, isMo
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {strip}
+      {/* Тонкая акцентная полоса персоны над лентой */}
+      <div style={{ flex: 'none', height: 2, background: `${accent}55` }} />
       {content}
     </div>
   );
@@ -380,13 +401,14 @@ function ChatSwitcher({ chats, activeId, onSelect }: {
   );
 }
 
-// Бейдж зоны персоны (проект/глобальный)
-function zoneBadge(isProject: boolean): React.CSSProperties {
+// Бейдж зоны персоны (проект/глобальный) — тонирован акцентом персоны
+// (проектная зона — чуть плотнее заливка, чтобы отличать от глобальной)
+function zoneBadge(isProject: boolean, accent: string): React.CSSProperties {
   return {
     display: 'inline-block', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.02em',
     padding: '1px 7px', borderRadius: R.pill, width: 'fit-content',
-    background: isProject ? C.accentSoft : C.bgInset,
-    color: isProject ? C.accent : C.textMuted,
+    background: `${accent}${isProject ? '2E' : '17'}`,
+    color: accent,
   };
 }
 

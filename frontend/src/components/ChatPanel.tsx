@@ -47,6 +47,9 @@ interface Props {
   // Тумблер панели «Артефакты сессии» в шапке (приходит только при включённом фич-флаге)
   artifactsOpen?: boolean;
   onToggleArtifacts?: () => void;
+  // Приветственный бабл персоны: показывается в пустом чате вместо обычного empty state
+  // (чисто визуально, в бэкенд не отправляется). Как только пойдут реальные сообщения — исчезает.
+  greetingBubble?: React.ReactNode;
 }
 
 // Фаза работы режима «План» — выводится из ленты, mode и isWaiting (сервер фазу не присылает)
@@ -88,7 +91,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
   return null;
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, selectedAgent, onAgentChange, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking } = useSession(session.id, project?.id);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
@@ -660,10 +663,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           </div>
         )}
 
-        {/* Empty state */}
+        {/* Empty state: для персоны с приветствием — её бабл, иначе обычный empty state */}
         {items.length === 0 && !isHistoryLoading && online && (
-          <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}
-            session={session} onSessionUpdated={onSessionUpdated} isMobile={isMobile} />
+          greetingBubble ?? (
+            <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}
+              session={session} onSessionUpdated={onSessionUpdated} isMobile={isMobile} />
+          )
         )}
 
         <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}>{renderedItems}</ChatProjectContext.Provider></FalCostContext.Provider>

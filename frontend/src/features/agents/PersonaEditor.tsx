@@ -31,7 +31,7 @@ export function PersonaEditor({ persona, onClose, onSaved }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Аватар (этап 4): текущее состояние аватара (обновляется после генерации),
+  // Аватар (этап 4): текущее состояние аватара (обновляется после выбора кандидата),
   // возможность генерации (настроен ли fal), поле промпта и статус генерации.
   const [avatar, setAvatar] = useState<Persona['avatar']>(persona?.avatar ?? { kind: 'initials', color: 'orange' });
   const [canGenerate, setCanGenerate] = useState(false);
@@ -39,6 +39,9 @@ export function PersonaEditor({ persona, onClose, onSaved }: {
   const [avatarPrompt, setAvatarPrompt] = useState('');
   const [generating, setGenerating] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  // Галерея сгенерированных кандидатов (имена файлов) — выбор перекладывает картинку в аватар
+  const [candidates, setCandidates] = useState<string[]>([]);
+  const [selecting, setSelecting] = useState<string | null>(null);
 
   const [projects, setProjects] = useState<Project[]>([]);
   useEffect(() => { api.projects.list().then(setProjects).catch(() => {}); }, []);
@@ -57,21 +60,48 @@ export function PersonaEditor({ persona, onClose, onSaved }: {
     avatar: avatar.kind === 'image' ? { ...avatar, color } : { kind: 'initials', color },
   };
 
+  // Генерация 4 вариантов аватара — показываем сеткой, аватар не меняем до выбора
   const generateAvatar = async () => {
     if (!persona || generating) return;
     setGenerating(true);
     setAvatarError(null);
+    setCandidates([]);
     try {
-      const updated = await api.personas.generateAvatar(persona.id, avatarPrompt);
-      setAvatar(updated.avatar);
-      bumpPersonas();
+      const { candidates: files } = await api.personas.generateAvatar(persona.id, { prompt: avatarPrompt, count: 4 });
+      setCandidates(files);
       setShowPrompt(false);
-      setAvatarPrompt('');
     } catch (e) {
       setAvatarError(e instanceof Error ? e.message : 'Не удалось сгенерировать аватар');
     } finally {
       setGenerating(false);
     }
+  };
+
+  // Выбор кандидата из галереи → становится аватаром персоны
+  const chooseCandidate = async (file: string) => {
+    if (!persona || selecting) return;
+    setSelecting(file);
+    setAvatarError(null);
+    try {
+      const updated = await api.personas.selectAvatar(persona.id, file);
+      setAvatar(updated.avatar);
+      bumpPersonas();
+      setCandidates([]);
+      setAvatarPrompt('');
+    } catch (e) {
+      setAvatarError(e instanceof Error ? e.message : 'Не удалось выбрать аватар');
+    } finally {
+      setSelecting(null);
+    }
+  };
+
+  // Дополнение системного промпта заготовкой тона (не дублируем уже добавленную)
+  const appendTone = (text: string) => {
+    setSystemPrompt(prev => {
+      const cur = prev.trimEnd();
+      if (cur.includes(text)) return prev;
+      return cur ? `${cur}\n${text}` : text;
+    });
   };
 
   // При выборе зоны «Проект» без выбранного проекта — подставим первый доступный
@@ -132,6 +162,22 @@ export function PersonaEditor({ persona, onClose, onSaved }: {
         <Field label="Характер" hint="Системный промпт: тон, роль, правила поведения">
           <TextArea value={systemPrompt} onChange={setSystemPrompt} minHeight={90}
             placeholder="Ты — внимательный ассистент. Отвечай кратко и по делу…" />
+          {/* Пресеты тона: клик дополняет промпт заготовкой (пользователь может править текст свободно) */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+            {TONE_PRESETS.map(p => (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => appendTone(p.text)}
+                title={p.text}
+                style={presetChip}
+                onMouseEnter={e => { e.currentTarget.style.background = C.accentLight; e.currentTarget.style.borderColor = C.accent; }}
+                onMouseLeave={e => { e.currentTarget.style.background = C.bgWhite; e.currentTarget.style.borderColor = C.border; }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </Field>
 
         <Field label="Модель">
@@ -176,7 +222,7 @@ export function PersonaEditor({ persona, onClose, onSaved }: {
                     loading={generating}
                     onClick={() => (showPrompt ? generateAvatar() : setShowPrompt(true))}
                   >
-                    {generating ? 'Генерирую…' : showPrompt ? '✨ Сгенерировать' : '✨ Сгенерировать аватар'}
+                    {generating ? 'Генерирую 4 варианта…' : showPrompt ? '✨ Сгенерировать 4 варианта' : '✨ Сгенерировать аватар'}
                   </Button>
                 ) : (
                   <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans }}>
@@ -196,6 +242,54 @@ export function PersonaEditor({ persona, onClose, onSaved }: {
                 onChange={setAvatarPrompt}
                 placeholder="Опишите внешность (необязательно): например, рыжий кот в очках"
               />
+            </div>
+          )}
+          {/* Индикатор генерации галереи */}
+          {generating && (
+            <div style={{ marginTop: 10, fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans }}>
+              Генерирую 4 варианта…
+            </div>
+          )}
+          {/* Сетка кандидатов 2×2 — клик выбирает аватар */}
+          {candidates.length > 0 && !generating && persona && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, marginBottom: 8 }}>
+                Выберите вариант:
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, maxWidth: 220 }}>
+                {candidates.map(file => {
+                  const busy = selecting === file;
+                  return (
+                    <button
+                      key={file}
+                      type="button"
+                      onClick={() => chooseCandidate(file)}
+                      disabled={!!selecting}
+                      title="Выбрать этот аватар"
+                      style={{
+                        position: 'relative', padding: 0, border: `2px solid ${C.border}`, background: C.bgWhite,
+                        borderRadius: R.full, cursor: selecting ? 'default' : 'pointer', aspectRatio: '1 / 1',
+                        overflow: 'hidden', opacity: selecting && !busy ? 0.5 : 1,
+                        transition: 'border-color 0.15s, transform 0.1s',
+                      }}
+                      onMouseEnter={e => { if (!selecting) e.currentTarget.style.borderColor = C.accent; }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; }}
+                    >
+                      <img
+                        src={api.personas.avatarCandidateUrl(persona.id, file)}
+                        alt="Вариант аватара"
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                      {busy && (
+                        <span style={{
+                          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          background: 'rgba(0,0,0,0.35)', color: '#fff', fontSize: 11, fontFamily: FONT.sans,
+                        }}>Применяю…</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
         </Field>
@@ -239,6 +333,21 @@ export function PersonaEditor({ persona, onClose, onSaved }: {
     </Modal>
   );
 }
+
+// Пресеты тона характера — клик добавляет заготовку в системный промпт
+const TONE_PRESETS: { label: string; text: string }[] = [
+  { label: 'Дружелюбный', text: 'Общайся тепло и дружелюбно, на равных.' },
+  { label: 'Деловой', text: 'Держи деловой, профессиональный тон. Формулируй чётко и по существу.' },
+  { label: 'Краткий', text: 'Отвечай кратко и по делу, без воды.' },
+  { label: 'Ментор', text: 'Выступай как наставник: объясняй причины, задавай наводящие вопросы, помогай разобраться.' },
+  { label: 'С юмором', text: 'Добавляй лёгкий уместный юмор, но не в ущерб пользе ответа.' },
+];
+
+const presetChip: React.CSSProperties = {
+  background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.pill,
+  padding: '4px 11px', fontSize: 12, cursor: 'pointer', fontFamily: FONT.sans,
+  color: C.textSecondary, whiteSpace: 'nowrap', transition: 'background 0.12s, border-color 0.12s',
+};
 
 const selectStyle: React.CSSProperties = {
   width: '100%', boxSizing: 'border-box', background: C.bgWhite, border: `1px solid ${C.border}`,

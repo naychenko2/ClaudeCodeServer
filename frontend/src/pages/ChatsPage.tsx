@@ -6,6 +6,7 @@ import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { C, FONT } from '../lib/design';
 import { useSidebarDrag } from '../lib/sidebarWidth';
+import { useIsMobile } from '../lib/breakpoints';
 import { Button, IconButton, Splitter } from '../components/ui';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
@@ -15,17 +16,6 @@ import { ArtifactsPanel } from '../components/ArtifactsPanel';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
-
-function useWindowWidth() {
-  const [width, setWidth] = useState(window.innerWidth);
-  useEffect(() => {
-    const handler = () => setWidth(window.innerWidth);
-    window.addEventListener('resize', handler);
-    return () => window.removeEventListener('resize', handler);
-  }, []);
-  return width;
-}
-
 
 interface Props {
   auth: AuthState;
@@ -41,7 +31,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   });
   const [creating, setCreating] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
-  const isMobile = useWindowWidth() < 768;
+  const isMobile = useIsMobile();
 
   // Глобальные скиллы для кнопки «/» в композере. Чаты здесь вне проекта,
   // поэтому берём глобальные скиллы (~/.claude/skills), без агентов (они per-project).

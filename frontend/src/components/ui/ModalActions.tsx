@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Button } from './Button';
 import type { ButtonVariant } from './Button';
+import { MOBILE_MAX } from '../../lib/breakpoints';
 
-const MOBILE_BP = 768;
+const MOBILE_BP = MOBILE_MAX + 1; // единый порог с раскладкой (см. lib/breakpoints)
 
-// Брейкпоинт мобилы для диалогов (тот же, что в Modal): <768 → шторка/вертикальные действия.
+// Брейкпоинт мобилы для диалогов (тот же, что в Modal): узкий экран → шторка/вертикальные действия.
 // Экспортируется для кастомных футеров (напр. диалог с тремя исходами).
 export function useIsMobileModal() {
   const [mobile, setMobile] = useState(() =>

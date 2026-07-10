@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode, CSSProperties } from 'react';
 import { C, R, FONT, SHADOW, Z } from '../../lib/design';
+import { MOBILE_MAX } from '../../lib/breakpoints';
 
 interface ModalProps {
   width?: number;
@@ -14,7 +15,7 @@ interface ModalProps {
   cardStyle?: CSSProperties;
 }
 
-const MOBILE_BP = 768;
+const MOBILE_BP = MOBILE_MAX + 1; // единый порог с раскладкой (см. lib/breakpoints)
 
 // Брейкпоинт мобилы определяется внутри Modal — потребители получают
 // bottom-sheet автоматически, без прокидывания пропсов.

@@ -11,6 +11,7 @@ import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { addDaysIso, DEFAULT_BOARD_COLUMNS, ensureTasksLoaded, expandRecurringTasks, todayIso, toIsoDate, useTasks } from '../../lib/tasks';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { useIsMobile } from '../../lib/breakpoints';
 import { AgendaIcon, BoardIcon, IconViewSwitcher, MonthIcon, WeekIcon } from './bits';
 import { TaskDetailsModal } from './TaskDetailsModal';
 import { CalendarMonth } from './CalendarMonth';
@@ -50,17 +51,6 @@ function visibleRange(view: CalView, navDate: string): { from: string; to: strin
   const first = new Date(y, m, 1);
   const start = toIsoDate(new Date(y, m, 1 - ((first.getDay() + 6) % 7)));
   return { from: start, to: addDaysIso(start, 41) };
-}
-
-function useIsMobile() {
-  const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
-  return mobile;
 }
 
 // Иконки видов — общие для мобильного и десктопного переключателей (bits.tsx)

@@ -23,6 +23,7 @@ import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags, useFeature, FLAGS } from './lib/featureFlags'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
+import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
 import { NotesPage } from './features/notes/NotesPage'
@@ -119,7 +120,7 @@ export default function App() {
     window.addEventListener('cc-open-note', open)
     return () => window.removeEventListener('cc-open-note', open)
   }, [])
-  const isMobileView = typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
+  const isMobileView = useIsMobile()
 
   const online = useOnline()
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)

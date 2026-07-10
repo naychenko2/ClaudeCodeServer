@@ -5,6 +5,7 @@ import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
 import { C, R, FONT } from '../lib/design';
 import { useSidebarDrag } from '../lib/sidebarWidth';
+import { MOBILE_MAX } from '../lib/breakpoints';
 import { Button, IconButton, Splitter } from '../components/ui';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
@@ -39,9 +40,9 @@ interface Props {
 const ACTIVE_STATUSES = new Set(['starting', 'working', 'active', 'waiting']);
 
 // Двухпанельный лейаут включается на широких экранах (планшет/десктоп).
-// Порог 768 — единый со всеми разделами (чаты/заметки/воркспейс), чтобы на
-// раскладных экранах (Galaxy Fold в развёрнутом виде) сайдбар не пропадал.
-function useWide(bp = 768) {
+// Порог единый со всеми разделами (см. MOBILE_MAX): двухпанель с MOBILE_MAX+1,
+// чтобы на раскладных экранах (Galaxy Fold в развёрнутом виде) сайдбар не пропадал.
+function useWide(bp = MOBILE_MAX + 1) {
   const [wide, setWide] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia(`(min-width: ${bp}px)`).matches : true);
   useEffect(() => {

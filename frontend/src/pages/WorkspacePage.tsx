@@ -12,6 +12,7 @@ import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
 import { api } from '../lib/api';
 import { C, FONT } from '../lib/design';
 import { useSidebarWidth } from '../lib/sidebarWidth';
+import { MOBILE_MAX, MOBILE_QUERY } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
@@ -146,8 +147,8 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
 
 const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
-  const isMobile = windowWidth < 768;
-  const isTablet = windowWidth >= 768 && windowWidth < 1200;
+  const isMobile = windowWidth <= MOBILE_MAX;
+  const isTablet = windowWidth > MOBILE_MAX && windowWidth < 1200;
 
   // Задачи (за фич-флагом): вкладка «Задачи» в сайдбаре + карточка задачи в центре.
   // Открытая задача ведёт себя как открытый файл: переключение вкладок сайдбара
@@ -303,7 +304,7 @@ const windowWidth = useWindowWidth();
       // Открытый файл уступает место карточке задачи
       setOpenFile(null);
       // Пишем запись истории с задачей — hash-URL сохраняет /task/… и после перезагрузки
-      if (window.matchMedia('(max-width: 767px)').matches) {
+      if (window.matchMedia(MOBILE_QUERY).matches) {
         setMobileView('chat');
         navPush({ screen: 'project', project, view: 'chat', file: null, task: pending });
       } else {

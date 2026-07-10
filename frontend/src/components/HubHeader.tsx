@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { AuthState } from '../types';
 import { C, FONT, TB, SHADOW } from '../lib/design';
+import { useIsMobile } from '../lib/breakpoints';
 import { HubTabs, type HubTab } from './HubTabs';
 import { AvatarMenu } from '../features/projects/AvatarMenu';
 import { UserManagementModal } from './UserManagementModal';
@@ -23,21 +24,6 @@ export const PRODUCT_HISTORY_EVENT = 'open-product-history';
 const PRODUCT_HISTORY_SEEN_BASE = 'cc_product_history_seen';
 export const productHistorySeenKey = (userId?: string | null) =>
   userId ? `${PRODUCT_HISTORY_SEEN_BASE}_${userId}` : PRODUCT_HISTORY_SEEN_BASE;
-
-// Мобильный брейкпоинт (совпадает с остальными раскладками)
-function useIsMobile() {
-  const [mobile, setMobile] = useState(() =>
-    typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false
-  );
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
-    setMobile(mq.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
-  return mobile;
-}
 
 // Верхняя шапка-хаб главной страницы: логотип слева, переключатель «Чаты | Проекты» по центру,
 // аватар/меню справа. На мобилке логотип и URL-бейдж скрыты (не помещаются).

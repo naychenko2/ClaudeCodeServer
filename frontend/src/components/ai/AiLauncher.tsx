@@ -7,6 +7,7 @@ import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
 import { rankedActions, runActionById, type AiAction, type AiActionCtx } from '../../lib/ai/actions';
 import { getChatContext } from '../../lib/ai/chatContext';
+import { useIsMobile } from '../../lib/breakpoints';
 import {
   computeSuggestion, canShow, markShown, markDismissed,
   isProactiveEnabled, setProactiveEnabled, type Suggestion,
@@ -29,14 +30,8 @@ export function AiLauncher() {
   // Доступность семантики (Dify) — для действия «Поиск по смыслу»
   const [semanticCaps, setSemanticCaps] = useState(false);
   // Мобильный вид — палитра становится нижней шторкой
-  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
+  const isMobile = useIsMobile();
   useEffect(() => { api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {}); }, []);
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const h = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener('change', h);
-    return () => mq.removeEventListener('change', h);
-  }, []);
 
   // Контекст собираем на момент открытия (getNav синхронен вне React)
   const buildCtx = (): AiActionCtx => ({ nav: getNav(), online, flag: getFlag, caps: { semantic: semanticCaps }, chat: getChatContext() });

@@ -50,9 +50,11 @@ COPY --from=backend /app/publish ./
 COPY --from=mcp /src/mcp-dify/dist        ./mcp-dify/dist
 COPY --from=mcp /src/mcp-dify/node_modules ./mcp-dify/node_modules
 COPY --from=mcp /src/mcp-dify/package.json ./mcp-dify/package.json
-# MCP-серверы задач и заметок: чистый Node без зависимостей — сборка не нужна
+# MCP-серверы задач, заметок, памяти и персон: чистый Node без зависимостей — сборка не нужна
 COPY mcp/tasks-server ./mcp/tasks-server
 COPY mcp/notes-server ./mcp/notes-server
+COPY mcp/memory-server ./mcp/memory-server
+COPY mcp/personas-server ./mcp/personas-server
 
 # Каталоги под volume (проекты, данные, креды claude)
 RUN mkdir -p /projects /data /home/app/.claude \

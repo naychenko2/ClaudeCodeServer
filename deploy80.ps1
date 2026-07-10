@@ -55,11 +55,13 @@ if (Test-Path $wwwroot) { Remove-Item "$wwwroot\*" -Recurse -Force -ErrorAction 
 else { New-Item -ItemType Directory -Force $wwwroot -ErrorAction Stop | Out-Null }
 Copy-Item (Join-Path $frontendDir 'dist\*') $wwwroot -Recurse -Force -ErrorAction Stop
 
-# --- 4. MCP-сервер задач (чистый Node, сборка не нужна) ---
-Write-Host '[4/5] Копирование MCP tasks-server...' -ForegroundColor Yellow
-$mcpDst = Join-Path $PublishDir 'mcp\tasks-server'
-New-Item -ItemType Directory -Force $mcpDst -ErrorAction Stop | Out-Null
-Copy-Item (Join-Path $repo 'mcp\tasks-server\*') $mcpDst -Recurse -Force -ErrorAction Stop
+# --- 4. MCP-серверы (чистый Node, сборка не нужна) ---
+Write-Host '[4/5] Копирование MCP-серверов...' -ForegroundColor Yellow
+foreach ($srv in 'tasks-server', 'notes-server', 'memory-server', 'personas-server') {
+    $mcpDst = Join-Path $PublishDir "mcp\$srv"
+    New-Item -ItemType Directory -Force $mcpDst -ErrorAction Stop | Out-Null
+    Copy-Item (Join-Path $repo "mcp\$srv\*") $mcpDst -Recurse -Force -ErrorAction Stop
+}
 
 # --- 5. Перезапуск ---
 if ($NoRestart) {

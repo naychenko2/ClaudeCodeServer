@@ -39,8 +39,19 @@ public class TaskManager
 
     public TaskItem Create(string? projectId, string ownerId, CreateTaskRequest req)
     {
+        // Клиентский id (офлайн-создание) с идемпотентностью: повтор POST с тем же id
+        // при потерянном ack возвращает существующую задачу — без дубля. Если id занят
+        // другим владельцем — игнорируем присланный, генерируем новый.
+        var id = string.IsNullOrEmpty(req.Id) ? Guid.NewGuid().ToString() : req.Id;
+        if (_tasks.TryGetValue(id, out var dup))
+        {
+            if (dup.OwnerId == ownerId) return dup;
+            id = Guid.NewGuid().ToString();
+        }
+
         var task = new TaskItem
         {
+            Id = id,
             ProjectId = projectId,
             OwnerId = ownerId,
             Title = req.Title,
@@ -245,6 +256,8 @@ public class TaskManager
 
 public record CreateTaskRequest(
     string Title,
+    // Клиентский id для офлайн-создания (идемпотентный replay). null/пусто → сервер генерит Guid.
+    string? Id = null,
     string? Description = null,
     TaskItemStatus? Status = null,
     string? ColumnId = null,

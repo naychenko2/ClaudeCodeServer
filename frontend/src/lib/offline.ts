@@ -133,7 +133,11 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error ?? res.statusText);
+      // Статус прикрепляем к ошибке — потребители (offline-очередь) отличают 404/4xx
+      // (перманентно) от 5xx/сетевых (стоит повторить)
+      const httpErr = new Error(err.error ?? res.statusText) as Error & { status?: number };
+      httpErr.status = res.status;
+      throw httpErr;
     }
 
     // Тело может быть пустым (Ok() без контента у мутаций) — не парсим пустую строку как JSON

@@ -54,6 +54,36 @@ public class TaskManagerTests : IDisposable
     }
 
     [Fact]
+    public void Create_СКлиентскимId_ИспользуетЕго()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t", Id: "client-uuid-1"));
+        task.Id.Should().Be("client-uuid-1");
+        _sut.GetById("client-uuid-1").Should().BeSameAs(task);
+    }
+
+    [Fact]
+    public void Create_ПовторСТемЖеId_ВозвращаетСуществующуюБезДубля()
+    {
+        var first = _sut.Create(null, "u", new CreateTaskRequest("t", Id: "client-uuid-2"));
+        // Повтор POST при потерянном ack — тот же id, тот же владелец
+        var second = _sut.Create(null, "u", new CreateTaskRequest("t-изменённое", Id: "client-uuid-2"));
+
+        second.Should().BeSameAs(first);
+        _sut.GetByOwner("u").Should().ContainSingle(t => t.Id == "client-uuid-2");
+    }
+
+    [Fact]
+    public void Create_ЧужойЗанятыйId_ГенерируетНовый()
+    {
+        var mine = _sut.Create(null, "user-1", new CreateTaskRequest("моя", Id: "shared-id"));
+        var other = _sut.Create(null, "user-2", new CreateTaskRequest("чужая", Id: "shared-id"));
+
+        other.Id.Should().NotBe("shared-id");
+        mine.Id.Should().Be("shared-id");
+        _sut.GetById("shared-id").Should().BeSameAs(mine);
+    }
+
+    [Fact]
     public void Create_СПовторением_СтавитSeriesIdРавнымId()
     {
         var task = _sut.Create(null, "u", new CreateTaskRequest("t",

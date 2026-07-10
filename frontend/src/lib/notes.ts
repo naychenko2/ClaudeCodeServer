@@ -8,6 +8,9 @@ import type { NoteSummary, NoteFolder } from '../types';
 import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { clearResolveCache } from '../components/MarkdownViewer';
+import { isOnline, OfflineError, subscribeOnline } from './offline';
+import { getFlag, FLAGS } from './featureFlags';
+import { drainNotesOutbox, overlayNotesList } from './notesOffline';
 
 let _notes: NoteSummary[] = [];
 let _folders: NoteFolder[] = [];
@@ -29,11 +32,25 @@ function joinUserGroup() {
 }
 
 let _fileChangeTimer: number | null = null;
+const offlineEnabled = () => getFlag(FLAGS.notesOffline);
+
+// Во время дренажа очереди подавляем перечитку списка от realtime (иначе она сбросит
+// оптимистичные записи середины синхронизации); одна перечитка — в конце дренажа.
+let _syncing = false;
+
+async function syncNotes(): Promise<void> {
+  if (!offlineEnabled()) { void reloadNotes(); return; }
+  _syncing = true;
+  try { await drainNotesOutbox(); }
+  finally { _syncing = false; }
+  await reloadNotes();
+}
 
 function wireRealtime() {
   if (_realtimeWired) return;
   _realtimeWired = true;
   onMessage(msg => {
+    if (_syncing) return;   // идёт дренаж — не дёргаем перечитку
     if (msg.type === 'notes_changed') { void reloadNotes(); return; }
     // Правки файлов vault мимо notes-API (Claude в ходе сессии и т.п.) — дебаунс-перечитка
     if (msg.type === 'file_changed' && /(^|[\\/])notes[\\/]/i.test(msg.path)) {
@@ -41,16 +58,27 @@ function wireRealtime() {
       _fileChangeTimer = window.setTimeout(() => { _fileChangeTimer = null; void reloadNotes(); }, 800);
     }
   });
-  onReconnected(() => { joinUserGroup(); void reloadNotes(); });
+  // После реконнекта — сперва проиграть офлайн-очередь, затем перечитать список
+  onReconnected(() => { joinUserGroup(); void syncNotes(); });
+  // Связь может подняться через probe (без WS-reconnected) — тоже дренажим
+  if (offlineEnabled()) subscribeOnline(() => { if (isOnline()) void syncNotes(); });
 }
 
 export async function reloadNotes(): Promise<void> {
-  // Папки грузим параллельно; их сбой не должен ронять список заметок
-  const [list, folders] = await Promise.all([
-    api.notes.list(),
-    api.notes.folders().catch(() => [] as NoteFolder[]),
-  ]);
-  _notes = list;
+  let list: NoteSummary[];
+  let folders: NoteFolder[];
+  try {
+    // Папки грузим параллельно; их сбой не должен ронять список заметок
+    [list, folders] = await Promise.all([
+      api.notes.list(),                                   // офлайн вернёт из GET-кэша
+      api.notes.folders().catch(() => [] as NoteFolder[]),
+    ]);
+  } catch (e) {
+    if (offlineEnabled() && e instanceof OfflineError) { list = []; folders = _folders; }
+    else throw e;
+  }
+  // Поверх серверного списка — офлайн-создания/удаления
+  _notes = offlineEnabled() ? await overlayNotesList(list) : list;
   _folders = folders;
   _loaded = true;
   emit();
@@ -59,6 +87,7 @@ export async function reloadNotes(): Promise<void> {
 export function ensureNotesLoaded(): Promise<void> {
   wireRealtime();
   joinUserGroup();
+  if (offlineEnabled() && isOnline()) void syncNotes();   // подхватить незасинканное с прошлого офлайна
   if (_loaded) return Promise.resolve();
   if (!_loading) _loading = reloadNotes().finally(() => { _loading = null; });
   return _loading;

@@ -138,6 +138,8 @@ export interface NoteTask {
 }
 
 export interface CreateTaskDto {
+  // Клиентский id для офлайн-создания (идемпотентный replay на сервере). Обычно не задаётся.
+  id?: string;
   title: string;
   description?: string;
   status?: TaskStatus;

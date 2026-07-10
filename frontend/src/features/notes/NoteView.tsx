@@ -14,6 +14,9 @@ import type { NoteSource } from '../../types';
 import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { useOnline } from '../../hooks/useOnline';
+import { OfflineError } from '../../lib/offline';
+import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } from '../../lib/notesOffline';
 import {
   SourceBadge, usePanelWidth,
   IconChat, IconTrash, IconCalendarDay, IconLink, IconSparkle, IconFolder, IconFolderMove,
@@ -37,6 +40,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 }) {
   const version = useNotesVersion();
   const taskSyncEnabled = useFeature(FLAGS.notesTaskSync);
+  const offlineEnabled = useFeature(FLAGS.notesOffline);
+  const online = useOnline();
   // Перетаскиваемая ширина сайдбара связей (справа: тянем влево — растёт)
   const [connWidth, connDragging, startConnDrag] = usePanelWidth('cc_notes_conn_width', 280, 230, 460, true);
   const [note, setNote] = useState<NoteDetail | null>(null);
@@ -51,13 +56,14 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    api.notes.get(noteId)
+    // При флаге офлайна читаем через слой (черновик/кэш офлайн, сеть онлайн)
+    (offlineEnabled ? getNoteForView(noteId) : api.notes.get(noteId))
       .then(n => { if (alive) { setNote(n); if (!editingRef.current) { setDraftTitle(n.title); setDraftBody(n.content); } } })
       .catch(() => { if (alive) setNote(null); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
     // Перечитываем при смене заметки и при realtime-изменении (version)
-  }, [noteId, version]);
+  }, [noteId, version, offlineEnabled]);
 
   const startEdit = () => { if (note) { setDraftTitle(note.title); setDraftBody(note.content); setEditing(true); } };
 
@@ -66,7 +72,11 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     try {
       const r = await api.notes.resolve(name, anchor);
       return { title: r.note.title, content: r.fragment ?? r.note.content };
-    } catch { return null; }
+    } catch {
+      // Офлайн — резолвим по кэшированному контенту (title-match)
+      if (offlineEnabled) return offlineResolve(name, anchor);
+      return null;
+    }
   };
 
   // ✨ AI-помощь: предложение связей, тегов, конспект дня.
@@ -130,6 +140,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     setSaving(true);
     try {
       const updated = await api.notes.update(note.id, {
+        // Переименование — только онлайн (офлайн title не меняем)
         title: draftTitle !== note.title ? draftTitle : undefined,
         content: draftBody,
       });
@@ -138,6 +149,13 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       // id мог смениться при переименовании — переключаемся на новый
       if (updated.id !== note.id) onSelectNote(updated.id);
       else setNote(updated);
+    } catch (e) {
+      if (offlineEnabled && e instanceof OfflineError) {
+        await saveNoteOffline(note.id, { content: draftBody });
+        setEditing(false);
+        setNote({ ...note, content: draftBody });
+        bumpNotes();
+      } else throw e;
     } finally {
       setSaving(false);
     }
@@ -146,7 +164,12 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const del = async () => {
     if (!note) return;
     if (!window.confirm(`Удалить заметку «${note.title}»?`)) return;
-    await api.notes.delete(note.id);
+    try {
+      await api.notes.delete(note.id);
+    } catch (e) {
+      if (offlineEnabled && e instanceof OfflineError) await deleteNoteOffline(note.id);
+      else throw e;
+    }
     bumpNotes();
     onDeleted();
   };
@@ -211,9 +234,13 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           ? <input
               value={draftTitle}
               onChange={e => setDraftTitle(e.target.value)}
+              // Переименование меняет id файла и каскадно правит [[ссылки]] — только онлайн
+              readOnly={offlineEnabled && !online}
+              title={offlineEnabled && !online ? 'Переименование недоступно офлайн' : undefined}
               style={{
                 flex: 1, minWidth: 120, fontFamily: FONT.serif, fontSize: 16, fontWeight: 700,
-                color: C.textHeading, background: C.bgWhite, border: `1px solid ${C.border}`,
+                color: offlineEnabled && !online ? C.textMuted : C.textHeading,
+                background: C.bgWhite, border: `1px solid ${C.border}`,
                 borderRadius: R.md, padding: '5px 10px',
               }}
             />
@@ -235,11 +262,12 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             </>
           ) : (
             <>
+              {/* Серверные операции (перенос, AI, конспект) недоступны офлайн */}
               {onAskClaude && <IconButton title="Спросить ассистента про это" onClick={() => onAskClaude(note)}><IconChat /></IconButton>}
-              <IconButton title="Переместить…" onClick={openMove}><IconFolderMove /></IconButton>
-              <IconButton title="Предложить связи (AI)" tone="accent" onClick={suggestLinks}><IconSparkle /></IconButton>
+              <IconButton title={online ? 'Переместить…' : 'Перенос недоступен офлайн'} onClick={openMove} disabled={!online}><IconFolderMove /></IconButton>
+              <IconButton title={online ? 'Предложить связи (AI)' : 'AI недоступен офлайн'} tone="accent" onClick={suggestLinks} disabled={!online}><IconSparkle /></IconButton>
               {isDaily && (
-                <IconButton title="Конспект дня (AI)" tone="accent" onClick={makeDailySummary} disabled={aiBusy}><IconCalendarDay /></IconButton>
+                <IconButton title={online ? 'Конспект дня (AI)' : 'AI недоступен офлайн'} tone="accent" onClick={makeDailySummary} disabled={aiBusy || !online}><IconCalendarDay /></IconButton>
               )}
               <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>
               <button onClick={startEdit} style={{ ...tbBtnPrimary, marginLeft: 6 }}>Править</button>

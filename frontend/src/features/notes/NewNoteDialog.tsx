@@ -4,6 +4,9 @@ import { api } from '../../lib/api';
 import { useNotes, useNoteFolders } from '../../lib/notes';
 import { Modal } from '../../components/ui';
 import { C, FONT, R } from '../../lib/design';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { OfflineError } from '../../lib/offline';
+import { createNoteOffline } from '../../lib/notesOffline';
 
 // Диалог создания заметки: заголовок, источник, папка (с автодополнением по
 // существующим — включая пустые физические папки), опционально шаблон.
@@ -15,6 +18,7 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
 }) {
   const notes = useNotes();
   const noteFolders = useNoteFolders();
+  const offlineEnabled = useFeature(FLAGS.notesOffline);
   const [title, setTitle] = useState('');
   const [source, setSource] = useState(defaults?.source ?? 'personal');
   const [folder, setFolder] = useState(defaults?.folder ?? '');
@@ -52,6 +56,12 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
         folder: folder.trim() || undefined,
       });
       onCreated(note.id);
+    } catch (e) {
+      // Офлайн — создаём локально (шаблоны серверные, офлайн игнорируются)
+      if (offlineEnabled && e instanceof OfflineError) {
+        const localKey = await createNoteOffline({ title: title.trim(), source, folder: folder.trim() || undefined });
+        onCreated(localKey);
+      } else throw e;
     } finally { setBusy(false); }
   };
 

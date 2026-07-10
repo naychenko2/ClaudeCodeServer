@@ -16,6 +16,7 @@ import {
   taskColumnKey, updateTask, upsertTaskLocal, type BoardGroupBy,
 } from '../../../lib/tasks';
 import { useBoardControls, setGroupBy } from '../../../lib/boardControls';
+import { OfflineError } from '../../../lib/offline';
 import { TaskCard } from '../TaskCard';
 import { BoardCell, ColumnHeader } from './BoardColumn';
 import { BoardToolbar } from './BoardToolbar';
@@ -142,7 +143,9 @@ export function TaskBoard({
     if (dto.assignee) optimistic.assignee = dto.assignee;
     upsertTaskLocal(optimistic);
 
-    void updateTask(activeTask.id, dto).catch(() => { void reloadTasks(); });
+    // Откат drag только на реальной ошибке. При офлайне (OfflineError / выключенный
+    // флаг) не откатываем — иначе карточка отлетает назад; офлайн-путь уже сохранил её.
+    void updateTask(activeTask.id, dto).catch(e => { if (!(e instanceof OfflineError)) void reloadTasks(); });
   };
 
   const grouped = groupBy !== 'none';

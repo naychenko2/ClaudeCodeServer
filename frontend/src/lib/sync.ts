@@ -10,6 +10,8 @@ import type { FileEntry, SyncMark } from '../types';
 import { api } from './api';
 import { isOnline } from './offline';
 import { idbGet, idbSet, idbKeys, idbDelete } from './idb';
+import { getFlag, FLAGS } from './featureFlags';
+import { warmNote } from './notesOffline';
 
 function parentDir(path: string): string {
   const i = path.lastIndexOf('/');
@@ -252,6 +254,9 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
   setProgress({ active: true, done: 0, total: 0 });
 
   try {
+    // Прогрев задач: GET /tasks оседает в IDB-кэш (offline.request), чтобы после
+    // снапшота первый офлайн-заход имел данные ещё до гидрации стора.
+    await api.tasks.listAll().catch(() => {});
     const projects = await api.projects.list();
     // Начинаем с текущего проекта, остальные — следом
     const ordered = priorityProjectId
@@ -306,12 +311,46 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
       }
       await saveMtimes(p.id, mtimes);
     }
+
+    // Прогрев заметок (флаг notes-offline): список + folders/graph в GET-кэш, контент
+    // изменившихся — в редактируемый локальный слой (с mtime-диффом; не затираем черновики).
+    if (getFlag(FLAGS.notesOffline)) await warmNotes();
+
     notifyMarks();
   } catch {
     /* офлайн или сбой — снапшот частичный, не критично */
   } finally {
     _snapshotRunning = false;
     setProgress({ active: false });
+  }
+}
+
+// --- Прогрев заметок для офлайна ---
+
+const NOTES_MTIMES_KEY = 'notes-mtimes';
+const NOTES_WARM_CAP = 500;   // потолок по свежести — vault может быть большим
+
+async function loadNoteMtimes(): Promise<Record<string, string>> {
+  const e = await idbGet<Record<string, string>>(NOTES_MTIMES_KEY).catch(() => undefined);
+  return e?.data ?? {};
+}
+
+async function warmNotes(): Promise<void> {
+  try {
+    const list = await api.notes.list();               // заполнит GET-кэш /notes
+    await api.notes.folders().catch(() => {});
+    await api.notes.graph().catch(() => {});
+    const known = await loadNoteMtimes();
+    // Самые свежие первыми, ограничиваем объём
+    const recent = [...list].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, NOTES_WARM_CAP);
+    const stale = recent.filter(n => known[n.id] !== n.updatedAt);
+    await mapLimit(stale, 4, async n => {
+      try { const d = await api.notes.get(n.id); await warmNote(d); known[n.id] = n.updatedAt; }
+      catch { /* сбойную заметку пропускаем */ }
+    });
+    await idbSet(NOTES_MTIMES_KEY, { data: known, savedAt: Date.now() }).catch(() => {});
+  } catch {
+    /* офлайн/сбой — частичный прогрев */
   }
 }
 

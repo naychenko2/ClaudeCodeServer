@@ -31,6 +31,8 @@ public static class FeatureFlagKeys
     public const string ChatExtractTasks = "chat-extract-tasks";
     public const string UnifiedSearch = "unified-search";
     public const string TaskBoard = "task-board";
+    public const string TasksOffline = "tasks-offline";
+    public const string NotesOffline = "notes-offline";
 }
 
 /// <summary>
@@ -128,6 +130,24 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.TaskBoard,
             Title: "Доска задач (Kanban)",
             Description: "Вид «Доска» в разделе «Календарь»: колонки по статусу, drag & drop карточек, группировка по дорожкам, фильтры и WIP-лимиты.",
+            Default: false,
+            Stage: "beta"),
+
+        // Офлайн-режим задач: создание/правка/удаление без соединения сохраняются
+        // локально (IndexedDB) и синхронизируются с сервером при восстановлении связи.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.TasksOffline,
+            Title: "Задачи офлайн",
+            Description: "Создавайте и редактируйте задачи без соединения — изменения сохраняются на устройстве и синхронизируются с сервером, как только связь вернётся.",
+            Default: false,
+            Stage: "beta"),
+
+        // Офлайн-режим заметок: просмотр/правка/создание без соединения сохраняются
+        // локально; при возврате связи — синхронизация, конфликты — копией (стиль Obsidian).
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.NotesOffline,
+            Title: "Заметки офлайн",
+            Description: "Просматривайте, правьте и создавайте заметки без соединения — изменения сохраняются на устройстве и синхронизируются при возврате связи. Конфликты сохраняются копией.",
             Default: false,
             Stage: "beta"),
     ];

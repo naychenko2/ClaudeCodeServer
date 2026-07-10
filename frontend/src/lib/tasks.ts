@@ -8,6 +8,13 @@ import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { C } from './design';
 import { getEffectiveTheme } from './themeMode';
+import { isOnline, OfflineError, subscribeOnline } from './offline';
+import { idbGet, idbSet } from './idb';
+import { getFlag, FLAGS } from './featureFlags';
+import {
+  applyUpdateLocally, buildLocalTask, configureOutbox, drainTaskOutbox,
+  enqueue, mergePending, outboxHasPending,
+} from './taskOutbox';
 
 // === Стор ===
 
@@ -16,9 +23,25 @@ let _loaded = false;
 let _loading: Promise<void> | null = null;
 const _listeners = new Set<() => void>();
 let _realtimeWired = false;
+let _hydrated = false;
+
+// Локальный снапшот стора в IndexedDB (переживает перезагрузку, виден офлайн).
+// Ключ отдельный от пассивного GET-кэша /tasks: здесь состояние С наложенными
+// офлайн-правками, там — сырой ответ сервера.
+const TASKS_SNAPSHOT_KEY = 'tasks:all';
+let _persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function persistTasks() {
+  if (_persistTimer) return;
+  _persistTimer = setTimeout(() => {
+    _persistTimer = null;
+    idbSet(TASKS_SNAPSHOT_KEY, { data: _tasks, savedAt: Date.now() }).catch(() => {});
+  }, 300);
+}
 
 function emit() {
   _listeners.forEach(fn => fn());
+  persistTasks();
 }
 
 function upsert(task: Task) {
@@ -49,18 +72,39 @@ function wireRealtime() {
   _realtimeWired = true;
   onMessage(msg => {
     if (msg.type !== 'task_changed') return;
+    // Не затираем задачу, по которой есть несинхронизированная локальная правка:
+    // pending (наш офлайн) новее входящего события (в т.ч. запоздалого/с др. устройства).
+    if (outboxHasPending(msg.task.id)) return;
     if (msg.action === 'deleted') remove(msg.task.id);
     else upsert(msg.task);
   });
-  // После разрыва соединения могли потеряться события — перечитываем целиком
-  onReconnected(() => { joinUserGroup(); void reloadTasks(); });
+  // После разрыва соединения сначала проигрываем офлайн-очередь (reload внутри дренажа
+  // канонизирует состояние, когда очередь опустеет — иначе он затрёт pending-правки).
+  onReconnected(() => { joinUserGroup(); void drainTaskOutbox(); });
+  // Связь может подняться и через probe в offline.ts (без WS-reconnected) — тоже дренажим.
+  subscribeOnline(() => { if (isOnline()) void drainTaskOutbox(); });
 }
 
 export async function reloadTasks(): Promise<void> {
   const list = await api.tasks.listAll();
-  _tasks = list;
+  // Поверх серверного списка накатываем ещё не синхронизированные офлайн-правки
+  // (защита от reload при непустой очереди — напр. online-эффект опередил дренаж).
+  _tasks = getFlag(FLAGS.tasksOffline) ? await mergePending(list, _tasks) : list;
   _loaded = true;
   emit();
+}
+
+// Регистрируем store-хуки очереди один раз — до любого дренажа.
+configureOutbox({ upsert, remove, reload: reloadTasks });
+
+// Подхватить локальный снапшот стора из IndexedDB (мгновенно, до сети): офлайн-правки
+// и последний известный список видны сразу и переживают перезагрузку страницы.
+async function hydrateFromCache(): Promise<void> {
+  if (_hydrated) return;
+  _hydrated = true;
+  if (_loaded) return;   // сеть уже успела наполнить стор
+  const cached = await idbGet<Task[]>(TASKS_SNAPSHOT_KEY).catch(() => undefined);
+  if (cached?.data && !_loaded) { _tasks = cached.data; emit(); }
 }
 
 // Первая загрузка (идемпотентно). Вызывается из компонентов задач при монтировании.
@@ -69,6 +113,7 @@ export function ensureTasksLoaded(): Promise<void> {
   // Членство в группе подтверждаем на каждый заход (идемпотентно): если какая-то
   // страница ранее вышла из user_{id}, страница задач переподпишется.
   joinUserGroup();
+  if (getFlag(FLAGS.tasksOffline)) { void hydrateFromCache(); void drainTaskOutbox(); }
   if (_loaded) return Promise.resolve();
   if (!_loading)
     _loading = reloadTasks().finally(() => { _loading = null; });
@@ -84,22 +129,71 @@ export function useTasks(): Task[] {
 }
 
 // === Мутации (обновляют стор сразу из ответа; broadcast продублирует — upsert идемпотентен) ===
+// При флаге tasks-offline и отсутствии связи (или сетевом сбое) мутация уходит в
+// outbox + оптимистично применяется локально; синхронизация — при возврате связи.
+
+const offlineEnabled = () => getFlag(FLAGS.tasksOffline);
+
+// Order для новой локальной задачи — в конец глобального порядка (как NextOrder на бэке)
+function localNextOrder(): number {
+  return _tasks.reduce((m, t) => Math.max(m, t.order ?? 0), 0) + 1000;
+}
+
+// Офлайн-создание: клиентский id (uuid) → нет remap, идемпотентный replay на сервере
+function createTaskOffline(projectId: string | null, dto: CreateTaskDto): Task {
+  const id = dto.id ?? crypto.randomUUID();
+  const task = buildLocalTask(id, projectId, dto, localNextOrder());
+  upsert(task);
+  void enqueue(id, 'create', dto, { projectId });
+  return task;
+}
 
 export async function createTask(projectId: string | null, dto: CreateTaskDto): Promise<Task> {
-  const task = await api.tasks.create(projectId, dto);
-  upsert(task);
-  return task;
+  if (offlineEnabled() && !isOnline()) return createTaskOffline(projectId, dto);
+  try {
+    const task = await api.tasks.create(projectId, dto);
+    upsert(task);
+    return task;
+  } catch (e) {
+    if (offlineEnabled() && e instanceof OfflineError) return createTaskOffline(projectId, dto);
+    throw e;
+  }
+}
+
+function updateTaskOffline(taskId: string, dto: UpdateTaskDto): Task {
+  const cur = _tasks.find(t => t.id === taskId);
+  const next = cur ? applyUpdateLocally(cur, dto) : undefined;
+  if (next) upsert(next);
+  void enqueue(taskId, 'update', dto, { baseUpdatedAt: cur?.updatedAt });
+  return next ?? (cur as Task);
 }
 
 export async function updateTask(taskId: string, dto: UpdateTaskDto): Promise<Task> {
-  const task = await api.tasks.update(taskId, dto);
-  upsert(task);
-  return task;
+  if (offlineEnabled() && !isOnline()) return updateTaskOffline(taskId, dto);
+  try {
+    const task = await api.tasks.update(taskId, dto);
+    upsert(task);
+    return task;
+  } catch (e) {
+    if (offlineEnabled() && e instanceof OfflineError) return updateTaskOffline(taskId, dto);
+    throw e;
+  }
+}
+
+function deleteTaskOffline(taskId: string): void {
+  remove(taskId);
+  void enqueue(taskId, 'delete', {});
 }
 
 export async function deleteTask(taskId: string): Promise<void> {
-  await api.tasks.delete(taskId);
-  remove(taskId);
+  if (offlineEnabled() && !isOnline()) { deleteTaskOffline(taskId); return; }
+  try {
+    await api.tasks.delete(taskId);
+    remove(taskId);
+  } catch (e) {
+    if (offlineEnabled() && e instanceof OfflineError) { deleteTaskOffline(taskId); return; }
+    throw e;
+  }
 }
 
 // Оптимистичное локальное обновление задачи (без запроса) — для мгновенного

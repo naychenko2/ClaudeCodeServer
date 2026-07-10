@@ -7,6 +7,10 @@ import { NewNoteDialog } from './NewNoteDialog';
 import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes } from '../../lib/notes';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { useOnline } from '../../hooks/useOnline';
+import { OfflineError } from '../../lib/offline';
+import { createNoteOffline } from '../../lib/notesOffline';
 import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
 import { NotesList } from './NotesList';
 import { NoteView } from './NoteView';
@@ -37,6 +41,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
 }) {
   const isMobile = useIsMobile();
   const notes = useNotes();
+  const offlineEnabled = useFeature(FLAGS.notesOffline);
+  const online = useOnline();
   const [mode, setMode] = useState<Mode>('notes');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -88,6 +94,17 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     return () => window.removeEventListener('cc-open-note', consume);
   }, [notes]);
 
+  // Синхронизация офлайн-заметки сменила её id (localKey/старый serverId → серверный):
+  // если открыта эта заметка — переключаемся на новый id.
+  useEffect(() => {
+    const onRemap = (e: Event) => {
+      const { from, to } = (e as CustomEvent<{ from: string[]; to: string }>).detail;
+      setSelectedId(cur => (cur && from.includes(cur) ? to : cur));
+    };
+    window.addEventListener('cc-note-remapped', onRemap);
+    return () => window.removeEventListener('cc-note-remapped', onRemap);
+  }, []);
+
   const existingTitles = useMemo(() => existingTitleSet(notes), [notes]);
 
   // Поиск: точный (по заголовку/тексту/тегам, серверный) или «по смыслу» (Dify RAG).
@@ -100,6 +117,13 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   useEffect(() => {
     const q = query.trim();
     if (!q) { setResults(null); setSemanticHits(null); return; }
+    // Офлайн — фильтруем кэшированный список локально (серверный поиск/семантика недоступны)
+    if (offlineEnabled && !online) {
+      const ql = q.toLowerCase();
+      setResults(notes.filter(n => n.title.toLowerCase().includes(ql) || n.tags.some(t => t.toLowerCase().includes(ql))));
+      setSemanticHits(null);
+      return;
+    }
     const t = setTimeout(() => {
       if (searchMode === 'semantic' && semanticAvailable)
         api.notes.semantic(q).then(r => setSemanticHits(r.results)).catch(() => setSemanticHits([]));
@@ -107,7 +131,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         api.notes.list(undefined, q).then(setResults).catch(() => {});
     }, searchMode === 'semantic' ? 450 : 250);
     return () => clearTimeout(t);
-  }, [query, searchMode, semanticAvailable]);
+  }, [query, searchMode, semanticAvailable, offlineEnabled, online, notes]);
   const listed = results ?? notes;
   const showSemantic = searchMode === 'semantic' && query.trim().length > 0;
 
@@ -135,9 +159,16 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     const found = notes.find(n => n.title.trim().toLowerCase() === name);
     if (found) { selectNote(found.id); return; }
     if (window.confirm(`Заметки «${target}» ещё нет. Создать?`)) {
+      const title = target.split('/').pop()!.split('#')[0].trim();
       const source = selectedId ? notes.find(n => n.id === selectedId)?.source ?? 'personal' : 'personal';
-      void api.notes.create({ title: target.split('/').pop()!.split('#')[0].trim(), source })
-        .then(n => { bumpNotes(); selectNote(n.id); });
+      void api.notes.create({ title, source })
+        .then(n => { bumpNotes(); selectNote(n.id); })
+        .catch(async e => {
+          if (offlineEnabled && e instanceof OfflineError) {
+            const localKey = await createNoteOffline({ title, source });
+            bumpNotes(); selectNote(localKey);
+          }
+        });
     }
   };
 

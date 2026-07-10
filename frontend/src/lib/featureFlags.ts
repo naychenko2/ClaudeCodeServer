@@ -18,6 +18,8 @@ export const FLAGS = {
   chatExtractTasks: 'chat-extract-tasks',
   unifiedSearch: 'unified-search',
   taskBoard: 'task-board',
+  tasksOffline: 'tasks-offline',
+  notesOffline: 'notes-offline',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

@@ -80,7 +80,7 @@ public sealed class ChatTaskExtractionService(
     }
 
     // JSON-массив из ответа модели; невалидные записи отбрасываются
-    private static IReadOnlyList<ExtractedTask> ParseTasks(string raw)
+    internal static IReadOnlyList<ExtractedTask> ParseTasks(string raw)
     {
         var json = ExtractJsonArray(raw);
         if (json is null) return [];
@@ -106,7 +106,7 @@ public sealed class ChatTaskExtractionService(
     // Вырезает первый сбалансированный JSON-массив из ответа модели: устойчиво к
     // markdown-fence (```json), русской преамбуле/послесловию haiku и скобкам внутри строк
     // (в отличие от прежней жадной пары IndexOf('[')…LastIndexOf(']')).
-    private static string? ExtractJsonArray(string raw)
+    internal static string? ExtractJsonArray(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
         var start = raw.IndexOf('[');

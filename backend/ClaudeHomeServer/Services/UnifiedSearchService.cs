@@ -45,10 +45,13 @@ public sealed class UnifiedSearchService(
         return hits;
     }
 
-    // Задачи владельца, где запрос встречается в названии/описании/метках.
-    // Незавершённые — выше; затем по свежести.
     private IEnumerable<TaskItem> MatchTasks(string userId, string query) =>
-        tasks.GetByOwner(userId)
+        MatchTasks(tasks.GetByOwner(userId), query);
+
+    // Задачи, где запрос встречается в названии/описании/метках.
+    // Незавершённые — выше; затем по свежести.
+    internal static IEnumerable<TaskItem> MatchTasks(IEnumerable<TaskItem> ownerTasks, string query) =>
+        ownerTasks
             .Where(t =>
                 t.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 t.Description.Contains(query, StringComparison.OrdinalIgnoreCase) ||
@@ -64,7 +67,7 @@ public sealed class UnifiedSearchService(
             : $"#/project/{t.ProjectId}/task/{t.Id}";
 
     // Сниппет вокруг совпадения (для контекста в выдаче)
-    private static string Snippet(string text, string query)
+    internal static string Snippet(string text, string query)
     {
         if (string.IsNullOrWhiteSpace(text)) return "";
         var flat = text.ReplaceLineEndings(" ").Trim();

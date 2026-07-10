@@ -151,8 +151,8 @@ function assignDefined(base: NotePayload, patch: NotePayload): NotePayload {
   return out;
 }
 
-type NoteMerge = { kind: NoteOpKind; payload: NotePayload } | 'drop';
-function mergeNoteOps(last: NotesOutboxOp, kind: NoteOpKind, payload: NotePayload): NoteMerge {
+export type NoteMerge = { kind: NoteOpKind; payload: NotePayload } | 'drop';
+export function mergeNoteOps(last: NotesOutboxOp, kind: NoteOpKind, payload: NotePayload): NoteMerge {
   if (last.kind === 'delete') return { kind: 'delete', payload: {} };
   if (last.kind === 'create') {
     if (kind === 'delete') return 'drop';                 // создано и удалено офлайн → 0 сети
@@ -389,7 +389,7 @@ export async function overlayNotesList(serverList: NoteSummary[]): Promise<NoteS
 
 // === Офлайн-резолв вики-ссылки (hover-preview / embed ![[…]]) ===
 
-function sliceFragment(content: string, anchor: string): string {
+export function sliceFragment(content: string, anchor: string): string {
   const norm = anchor.trim().toLowerCase();
   const lines = content.split('\n');
   const start = lines.findIndex(l => /^#{1,6}\s+/.test(l) && l.replace(/^#{1,6}\s+/, '').trim().toLowerCase() === norm);

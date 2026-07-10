@@ -49,7 +49,7 @@ public class PersonaManager
     // где владелец берётся из самой персоны. Не использовать в обработчиках запросов.
     public Persona? GetByIdInternal(string id) => _personas.GetValueOrDefault(id);
 
-    public Persona Create(string userId, string name, string? description, string? systemPrompt,
+    public Persona Create(string userId, string name, string? role, string? description, string? systemPrompt,
         string? model, string? effort, PersonaScope scope, string? projectId,
         string? color, string? greeting, bool memoryEnabled)
     {
@@ -57,6 +57,7 @@ public class PersonaManager
         {
             OwnerId = userId,
             Name = string.IsNullOrWhiteSpace(name) ? "Агент" : name.Trim(),
+            Role = string.IsNullOrWhiteSpace(role) ? null : role.Trim(),
             Description = description,
             SystemPrompt = systemPrompt,
             Model = model,
@@ -73,7 +74,7 @@ public class PersonaManager
         return persona;
     }
 
-    public Persona Update(string id, string userId, string? name, string? description,
+    public Persona Update(string id, string userId, string? name, string? role, string? description,
         string? systemPrompt, string? model, string? effort, PersonaScope? scope, string? projectId,
         string? color, string? greeting, bool? memoryEnabled)
     {
@@ -81,6 +82,7 @@ public class PersonaManager
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
 
         if (name is not null) persona.Name = string.IsNullOrWhiteSpace(name) ? persona.Name : name.Trim();
+        if (role is not null) persona.Role = role.Length == 0 ? null : role.Trim();
         if (description is not null) persona.Description = description;
         if (systemPrompt is not null) persona.SystemPrompt = systemPrompt;
         if (model is not null) persona.Model = model.Length == 0 ? null : model;

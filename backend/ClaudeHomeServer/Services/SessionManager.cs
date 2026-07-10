@@ -472,7 +472,11 @@ public class SessionManager
     private static string BuildPersonaPrompt(Persona persona)
     {
         var sb = new System.Text.StringBuilder();
-        sb.Append($"Ты — {persona.Name}");
+        // Роль — главная («Ты — Дизайнер по имени Светлана»); без роли — просто имя
+        if (!string.IsNullOrWhiteSpace(persona.Role))
+            sb.Append($"Ты — {persona.Role.Trim()} по имени {persona.Name}");
+        else
+            sb.Append($"Ты — {persona.Name}");
         if (!string.IsNullOrWhiteSpace(persona.Description))
             sb.Append($", {persona.Description.Trim()}");
         sb.Append(". Отвечай и действуй от своего лица, в своём характере, оставаясь собой на протяжении всего разговора.");

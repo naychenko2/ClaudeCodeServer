@@ -28,6 +28,8 @@ public class Persona
     public string Id { get; init; } = Guid.NewGuid().ToString();
     public string OwnerId { get; set; } = "";
     public string Name { get; set; } = "";
+    // Роль агента (главная в отображении: «Роль (Имя)»), напр. «Дизайнер», «PM». Опционально.
+    public string? Role { get; set; }
     // Короткий slug (латиница/цифры/дефис) — для Dify-датасета памяти и будущих @упоминаний
     public string Handle { get; set; } = "";
     // Краткое «кто это» — для карточки в списке

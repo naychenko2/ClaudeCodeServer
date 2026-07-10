@@ -68,7 +68,7 @@ public class PersonasController : ControllerBase
         if (scope == PersonaScope.Project && !ValidProject(req.ProjectId))
             return BadRequest("Для проектной персоны нужен корректный projectId");
 
-        var persona = _personas.Create(UserId, req.Name, req.Description, req.SystemPrompt,
+        var persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
             req.MemoryEnabled ?? true);
         await Broadcast("created", persona.Id);
@@ -85,7 +85,7 @@ public class PersonasController : ControllerBase
         if (!string.IsNullOrEmpty(req.ProjectId) && !ValidProject(req.ProjectId))
             return BadRequest("Проект не найден или недоступен");
 
-        var persona = _personas.Update(id, UserId, req.Name, req.Description, req.SystemPrompt,
+        var persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
             req.MemoryEnabled);
         await Broadcast("updated", id);
@@ -294,6 +294,7 @@ public class PersonasController : ControllerBase
 
 public record CreatePersonaRequest(
     string Name,
+    string? Role,
     string? Description,
     string? SystemPrompt,
     string? Model,
@@ -306,6 +307,7 @@ public record CreatePersonaRequest(
 
 public record UpdatePersonaRequest(
     string? Name,
+    string? Role,
     string? Description,
     string? SystemPrompt,
     string? Model,

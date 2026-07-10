@@ -21,6 +21,21 @@ var builder = WebApplication.CreateBuilder(args);
 // дефолты из git (важно, чтобы у брата ничего не отъехало).
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
 
+// Токен подписки claude CLI (`claude setup-token`) можно держать в appsettings.Local.json —
+// удобнее, чем переменная окружения: IDE наследует окружение от родителя (explorer/Toolbox),
+// и свежий setx там не виден, пока не перезайдёшь в систему. Кладём его в env процесса, откуда
+// его унаследуют все запуски claude.exe (ClaudeSession, OneShotClaudeRunner, ModelCatalogService).
+// Явная переменная окружения имеет приоритет — конфиг её не перетирает (важно для docker).
+const string OAuthTokenVar = "CLAUDE_CODE_OAUTH_TOKEN";
+if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(OAuthTokenVar))
+    && builder.Configuration["Claude:OAuthToken"] is { Length: > 0 } oauthToken
+    && !string.IsNullOrWhiteSpace(oauthToken))
+{
+    Environment.SetEnvironmentVariable(OAuthTokenVar, oauthToken);
+    // Значение — секрет, печатаем только факт (иначе токен утечёт в логи IDE/CI)
+    Console.WriteLine($"[Claude] Токен подписки взят из конфига Claude:OAuthToken ({oauthToken.Length} симв.)");
+}
+
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
         o.JsonSerializerOptions.Converters.Add(

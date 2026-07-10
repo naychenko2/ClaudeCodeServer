@@ -417,6 +417,57 @@ public class SessionManager
     private string? SessionOwner(Session s) =>
         s.ProjectId is not null ? _projects.GetById(s.ProjectId)?.OwnerId : s.OwnerId;
 
+    // Персона-слой сессии (промпт характера + контекст памяти + auto-recall). Строится
+    // одинаково при первом старте и при восстановлении процесса. Пусто, если персоны нет.
+    private (string? Prompt, MemoryMcpContext? Memory, Func<string, Task<string?>>? Recall)
+        BuildPersonaLayer(Session session, string? ownerId)
+    {
+        if (session.PersonaId is null || ownerId is null) return (null, null, null);
+        var persona = _personas.Get(session.PersonaId, ownerId);
+        if (persona is null) return (null, null, null);
+        var prompt = BuildPersonaPrompt(persona);
+        // Долгая память — только если включена у персоны и владелец имеет доступ к фиче
+        if (persona.MemoryEnabled && _flags.IsEnabled(ownerId, FeatureFlagKeys.Personas))
+            return (prompt, BuildMemoryContext(ownerId, persona.Id), BuildPersonaRecallProvider(ownerId, persona.Id));
+        return (prompt, null, null);
+    }
+
+    // Назначить/сменить персону чату ДО первого хода (для селектора агента в пустом чате).
+    // Если ходов ещё не было — адаптер пересоздаётся с персона-контекстом при первом сообщении.
+    // Модель/усилие подтягиваются из персоны. Начатую сессию не трогаем (клиент делает форк).
+    public Session? SetPersona(string sessionId, string ownerId, string? personaId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        if (SessionOwner(entry.Info) != ownerId) return null;
+        if (entry.Info.ClaudeSessionId is not null)
+            throw new InvalidOperationException("Нельзя сменить агента у начатой сессии — создайте новый чат");
+
+        Persona? persona = null;
+        if (!string.IsNullOrEmpty(personaId))
+        {
+            persona = _personas.Get(personaId, ownerId)
+                ?? throw new KeyNotFoundException("Персона не найдена");
+        }
+
+        entry.Info.PersonaId = persona?.Id;
+        if (persona is not null)
+        {
+            entry.Info.Model = persona.Model;
+            entry.Info.Effort = persona.Effort;
+        }
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+
+        // Ходов не было — пересоздаём адаптер с новым персона-контекстом при следующем сообщении
+        if (entry.Process is { } old)
+        {
+            entry.Process = null;
+            FireAndForget(old.DisposeAsync().AsTask(),
+                $"остановка адаптера при смене персоны ({sessionId})");
+        }
+        SaveSessions();
+        return entry.Info;
+    }
+
     // Системный промпт персоны: имя + роль/описание + характер (тело systemPrompt).
     private static string BuildPersonaPrompt(Persona persona)
     {
@@ -450,23 +501,7 @@ public class SessionManager
         // Персона («олицетворённый агент»): её характер инжектится в системный промпт.
         // Scope контекста уже задан типом сессии (глобальная персона → чат без проекта →
         // доступ ко всем данным владельца; проектная → сессия проекта → только он).
-        string? personaPrompt = null;
-        MemoryMcpContext? memoryMcp = null;
-        Func<string, Task<string?>>? personaRecall = null;
-        if (session.PersonaId is not null && ownerId is not null)
-        {
-            var persona = _personas.Get(session.PersonaId, ownerId);
-            if (persona is not null)
-            {
-                personaPrompt = BuildPersonaPrompt(persona);
-                // Долгая память — только если включена у персоны и владелец имеет доступ к фиче
-                if (persona.MemoryEnabled && _flags.IsEnabled(ownerId, FeatureFlagKeys.Personas))
-                {
-                    memoryMcp = BuildMemoryContext(ownerId, persona.Id);
-                    personaRecall = BuildPersonaRecallProvider(ownerId, persona.Id);
-                }
-            }
-        }
+        var persona = BuildPersonaLayer(session, ownerId);
 
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
@@ -474,9 +509,9 @@ public class SessionManager
             BuildTasksContext(ownerId, session.ProjectId),
             BuildNotesContext(ownerId, session.ProjectId),
             BuildRecallProvider(ownerId),
-            personaPrompt,
-            memoryMcp,
-            personaRecall));
+            persona.Prompt,
+            persona.Memory,
+            persona.Recall));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -550,29 +585,35 @@ public class SessionManager
 
         // Чат вне проекта — рабочая папка Chats, без проектного промпта и правил;
         // проектная сессия — RootPath/SystemPrompt/PermissionRules из проекта.
+        // Персона-слой восстанавливаем так же, как при первом старте (иначе после рестарта
+        // сервера персонная сессия теряла бы характер и долгую память).
         LlmSessionContext context;
         if (entry.Info.ProjectId is null)
         {
             var rootPath = ResolveChatRoot(entry.Info.OwnerId
                 ?? throw new InvalidOperationException("У чата не задан владелец"));
+            var persona = BuildPersonaLayer(entry.Info, entry.Info.OwnerId);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 RawSystemPrompt: null, PermissionRules: null,
                 BuildTasksContext(entry.Info.OwnerId, null),
                 BuildNotesContext(entry.Info.OwnerId, null),
-                BuildRecallProvider(entry.Info.OwnerId));
+                BuildRecallProvider(entry.Info.OwnerId),
+                persona.Prompt, persona.Memory, persona.Recall);
         }
         else
         {
             var project = _projects.GetById(entry.Info.ProjectId)
                 ?? throw new InvalidOperationException("Проект не найден");
+            var persona = BuildPersonaLayer(entry.Info, project.OwnerId);
             context = new LlmSessionContext(project.RootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
                 BuildTasksContext(project.OwnerId, project.Id),
                 BuildNotesContext(project.OwnerId, project.Id),
-                BuildRecallProvider(project.OwnerId));
+                BuildRecallProvider(project.OwnerId),
+                persona.Prompt, persona.Memory, persona.Recall);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

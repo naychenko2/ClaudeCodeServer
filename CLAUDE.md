@@ -225,6 +225,12 @@ WorkingDirectory = `project.RootPath`
 - **MCP**: [mcp/memory-server/index.js](mcp/memory-server/index.js) (без зависимостей) —
   memory_remember/search/list/forget; подключение как tasks/notes (env `MEMORY_API_URL/TOKEN/PERSONA_ID`
   в `BuildTurnMcpConfig` + подсказка в промпт). Явный write-path: персона сама решает, что запомнить.
+- **MCP персон**: [mcp/personas-server/index.js](mcp/personas-server/index.js) (без зависимостей) —
+  personas_list/get/create/update/delete/generate_avatar (CRUD персон из любого чата; создание
+  глобальных и проектных — дефолтный projectId из сессии). Подключение как tasks/notes
+  (env `PERSONAS_API_URL/TOKEN/PROJECT_ID` в `BuildTurnMcpConfig` + подсказка в промпт), но только
+  при включённом у владельца флаге `personas` (`SessionManager.BuildPersonasContext`).
+  generate_avatar = avatar/generate `{count:1}` + select первого кандидата.
 - **Аватар**: инициалы+цвет (палитра `AGENT_COLORS`) базой; фото-генерация через fal.ai —
   [FalImageService.cs](backend/ClaudeHomeServer/Services/FalImageService.cs) (`Fal:ApiKey`, модель
   `Fal:ImageModel`, дефолт `fal-ai/flux/schnell`; для фото-аватаров задают `flux/dev`). Генерация

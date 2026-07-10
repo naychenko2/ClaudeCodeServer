@@ -70,6 +70,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // MCP-сервер долгой памяти персоны + auto-recall её памяти
     private readonly MemoryMcpContext? _memoryMcp;
     private readonly Func<string, Task<string?>>? _personaRecallProvider;
+    // MCP-сервер персон: CRUD персон из чата
+    private readonly PersonasMcpContext? _personasMcp;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -94,6 +96,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _personaPrompt = context.PersonaSystemPrompt;
         _memoryMcp = context.MemoryMcp;
         _personaRecallProvider = context.PersonaRecallProvider;
+        _personasMcp = context.PersonasMcp;
         _disallowedTools = disallowedTools ?? [];
         _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage);
     }
@@ -110,9 +113,11 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasNotes = notesServerPath is not null;
         var memoryServerPath = _memoryMcp is not null ? MemoryServerLocator.FindMemoryServerPath() : null;
         var hasMemory = memoryServerPath is not null;
+        var personasServerPath = _personasMcp is not null ? PersonasServerLocator.FindPersonasServerPath() : null;
+        var hasPersonas = personasServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var userServers = LoadUserScopeMcpServers();
-        if (!hasTasks && !hasNotes && !hasMemory && !hasDataset && userServers is null) return null;
+        if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasDataset && userServers is null) return null;
 
         try
         {
@@ -186,6 +191,21 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["MEMORY_API_URL"] = _memoryMcp!.ApiUrl,
                         ["MEMORY_API_TOKEN"] = _memoryMcp.Token,
                         ["MEMORY_PERSONA_ID"] = _memoryMcp.PersonaId,
+                    },
+                };
+            }
+
+            if (hasPersonas)
+            {
+                servers["personas"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["command"] = "node",
+                    ["args"] = new System.Text.Json.Nodes.JsonArray { personasServerPath! },
+                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["PERSONAS_API_URL"] = _personasMcp!.ApiUrl,
+                        ["PERSONAS_API_TOKEN"] = _personasMcp.Token,
+                        ["PERSONAS_PROJECT_ID"] = _personasMcp.ProjectId ?? "",
                     },
                 };
             }
@@ -585,6 +605,24 @@ public class ClaudeSession : ILlmSessionAdapter
                     basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                         ? recall
                         : basePrompt + "\n\n" + recall;
+            }
+
+            // Подсказка про раздел «Персоны» — только когда personas-server подключён
+            if (_personasMcp is not null)
+            {
+                var scope = _personasMcp.ProjectId is not null
+                    ? "Текущий контекст — проект: создавая проектную персону (scope \"project\"), projectId можно не указывать."
+                    : "Текущий чат вне проекта: по умолчанию создаются глобальные персоны, для проектной укажи projectId.";
+                var personasHint =
+                    "У пользователя есть раздел «Персоны» — AI-собеседники с именем, ролью, характером и аватаром, " +
+                    "глобальные или привязанные к проекту. Управляй ими через MCP-инструменты mcp__personas__* " +
+                    "(personas_list, personas_get, personas_create, personas_update, personas_delete, personas_generate_avatar). " +
+                    scope + " Когда пользователь просит создать/изменить/удалить персону или сгенерировать ей аватар — " +
+                    "используй эти инструменты. Характер персоны пиши в systemPrompt на «ты» («Ты — …»), " +
+                    "приветствие — в greeting от её лица.";
+                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                    ? personasHint
+                    : basePrompt + "\n\n" + personasHint;
             }
 
             // Подсказка про долгую память — только когда memory-server подключён (персонная сессия)

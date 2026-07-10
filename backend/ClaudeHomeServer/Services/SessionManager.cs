@@ -149,6 +149,18 @@ public class SessionManager
         return new MemoryMcpContext(ResolveTasksApiUrl(), entry.Token, personaId);
     }
 
+    // Контекст MCP-сервера персон; null — нет владельца или фича personas выключена
+    private PersonasMcpContext? BuildPersonasContext(string? ownerId, string? projectId)
+    {
+        if (ownerId is null || !_flags.IsEnabled(ownerId, FeatureFlagKeys.Personas)) return null;
+        var entry = _notesTokens.AddOrUpdate(ownerId,
+            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
+            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
+                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
+                : old);
+        return new PersonasMcpContext(ResolveTasksApiUrl(), entry.Token, projectId);
+    }
+
     // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок релевантных
     // записей (relevance × recency × typeWeight). Failsafe-таймаут; ошибки → null (ход без recall).
     private Func<string, Task<string?>> BuildPersonaRecallProvider(string ownerId, string personaId)
@@ -535,7 +547,8 @@ public class SessionManager
             BuildRecallProvider(ownerId),
             persona.Prompt,
             persona.Memory,
-            persona.Recall));
+            persona.Recall,
+            BuildPersonasContext(ownerId, session.ProjectId)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -623,7 +636,8 @@ public class SessionManager
                 BuildTasksContext(entry.Info.OwnerId, null),
                 BuildNotesContext(entry.Info.OwnerId, null),
                 BuildRecallProvider(entry.Info.OwnerId),
-                persona.Prompt, persona.Memory, persona.Recall);
+                persona.Prompt, persona.Memory, persona.Recall,
+                BuildPersonasContext(entry.Info.OwnerId, null));
         }
         else
         {
@@ -637,7 +651,8 @@ public class SessionManager
                 BuildTasksContext(project.OwnerId, project.Id),
                 BuildNotesContext(project.OwnerId, project.Id),
                 BuildRecallProvider(project.OwnerId),
-                persona.Prompt, persona.Memory, persona.Recall);
+                persona.Prompt, persona.Memory, persona.Recall,
+                BuildPersonasContext(project.OwnerId, project.Id));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

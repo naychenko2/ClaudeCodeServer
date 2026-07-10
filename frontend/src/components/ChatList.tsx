@@ -8,7 +8,7 @@ import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
 import { groupChats } from '../lib/chatGroups';
 import { getPersonaById, usePersonasVersion, personaLabel } from '../lib/personas';
-import { PersonaAvatar } from '../features/agents/PersonaAvatar';
+import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { agentDotColor } from './AgentSelector';
 
 // Время создания чата: сегодня — часы:минуты, иначе — дата (группы и так разбиты по дням)
@@ -35,7 +35,7 @@ interface Props {
 
 export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, isMobile = false }: Props) {
   const online = useOnline();
-  // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары чатов агентов)
+  // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары чатов персон)
   usePersonasVersion();
   const [editTarget, setEditTarget] = useState<Session | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
@@ -89,7 +89,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
             </div>
             {g.items.map(chat => {
               const isActive = chat.id === activeId;
-              // Чат от лица персоны: слева мини-аватар, имя агента и акцент её цвета
+              // Чат от лица персоны: слева мини-аватар, имя персоны и акцент её цвета
               const persona = chat.personaId ? getPersonaById(chat.personaId) : undefined;
               const accent = persona ? agentDotColor(persona.avatar?.color) : C.accent;
               return (
@@ -115,7 +115,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                     gap: persona ? 9 : 0,
                   }}
                 >
-                  {/* Акцентная полоса слева — маркер текущего чата (у чатов агента — цветом персоны) */}
+                  {/* Акцентная полоса слева — маркер текущего чата (у чатов персоны — её цветом) */}
                   {isActive && (
                     <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: accent }} />
                   )}

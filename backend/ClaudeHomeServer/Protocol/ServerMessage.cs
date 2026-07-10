@@ -112,8 +112,8 @@ public record TaskChangedMessage(string Action, Models.TaskItem Task)
 public record NotesChangedMessage(string Action, string? NoteId = null)
     : ServerMessage("notes_changed");
 
-// Изменение персон (олицетворённых агентов) — created/updated/deleted — в группу user_{userId},
-// чтобы все устройства обновили раздел «Агенты».
+// Изменение персон — created/updated/deleted — в группу user_{userId},
+// чтобы все устройства обновили раздел «Персоны».
 public record PersonasChangedMessage(string Action, string? PersonaId = null)
     : ServerMessage("personas_changed");
 

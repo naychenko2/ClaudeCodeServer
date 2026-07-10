@@ -47,8 +47,8 @@ interface PersonaFormProps {
   onColorChange?: (color: string) => void;
   // Клик по «Открыть память →» в summary-карточке памяти — родитель переключит вид на «Память»
   onOpenMemory?: () => void;
-  // Дефолты зоны при создании (persona=null): для проектной панели агентов —
-  // сразу «Проект» + id текущего проекта, чтобы агент создавался проектным.
+  // Дефолты зоны при создании (persona=null): для проектной панели персон —
+  // сразу «Проект» + id текущего проекта, чтобы персона создавалась проектной.
   defaultScope?: PersonaScope;
   defaultProjectId?: string;
 }
@@ -131,7 +131,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       id: '', ownerId: '', handle: '', scope, memoryEnabled,
       createdAt: '', updatedAt: '',
     } as Persona)),
-    name: name.trim() || 'Агент',
+    name: name.trim() || 'Персона',
     avatar: avatar.kind === 'image' ? { ...avatar, color } : { kind: 'initials', color },
   };
 
@@ -260,7 +260,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       bumpPersonas();
       onSaved(saved);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось сохранить агента');
+      setError(e instanceof Error ? e.message : 'Не удалось сохранить персону');
     } finally {
       setBusy(false);
     }
@@ -343,7 +343,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <Field label="Описание" hint="Короткая подпись под именем в списке">
-                <TextField value={description} onChange={setDescription} placeholder="Чем занимается агент" />
+                <TextField value={description} onChange={setDescription} placeholder="Чем занимается персона" />
               </Field>
             </div>
           </div>
@@ -361,7 +361,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             <FieldLabel>Фото-аватар</FieldLabel>
             {!isEdit ? (
               <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
-                Генерация появится после сохранения агента. Пока можно выбрать цвет инициалов.
+                Генерация появится после сохранения персоны. Пока можно выбрать цвет инициалов.
               </span>
             ) : !canGenerate ? (
               <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
@@ -582,7 +582,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           </div>
         </Field>
 
-        <Field label="Приветствие" hint="С чего агент начинает разговор">
+        <Field label="Приветствие" hint="С чего персона начинает разговор">
           <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" />
         </Field>
       </div>
@@ -596,7 +596,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         <div>
           <SectionLabel style={{ marginBottom: 10 }}>Долгая память</SectionLabel>
           <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans }}>
-            {memoryEnabled ? 'Агент запоминает факты между разговорами' : 'Память выключена'}
+            {memoryEnabled ? 'Персона запоминает факты между разговорами' : 'Память выключена'}
           </span>
         </div>
         <Toggle checked={memoryEnabled} onChange={setMemoryEnabled} />
@@ -634,7 +634,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         </div>
       ) : (
         <div style={{ marginTop: 12, fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans }}>
-          Память доступна после сохранения агента.
+          Память доступна после сохранения персоны.
         </div>
       )}
     </div>

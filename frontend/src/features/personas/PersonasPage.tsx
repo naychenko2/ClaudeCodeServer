@@ -25,8 +25,8 @@ function useIsMobile(): boolean {
   return m;
 }
 
-// Иконка раздела для пустого состояния (персона/агент)
-function IconAgents() {
+// Иконка раздела для пустого состояния (персона)
+function IconPersonas() {
   return (
     <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -36,18 +36,18 @@ function IconAgents() {
   );
 }
 
-export function AgentsPage({ auth, onLogout, onHubTab }: {
+export function PersonasPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
   onLogout: () => void;
   onHubTab: (t: HubTab) => void;
 }) {
   const isMobile = useIsMobile();
-  // Глобальный раздел показывает только глобальных агентов — проектные живут в своих проектах
+  // Глобальный раздел показывает только глобальные персоны — проектные живут в своих проектах
   const allPersonas = usePersonas();
   const personas = useMemo(() => allPersonas.filter(p => p.scope === 'global'), [allPersonas]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<'list' | 'card'>('list');
-  // Режим создания нового агента: пустая форма прямо в контентной зоне
+  // Режим создания новой персоны: пустая форма прямо в контентной зоне
   const [creating, setCreating] = useState(false);
   // Проекты — чтобы показать имя/зону проектной персоны и открыть её проект в «Поговорить»
   const [projects, setProjects] = useState<Project[]>([]);
@@ -57,19 +57,19 @@ export function AgentsPage({ auth, onLogout, onHubTab }: {
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   useEffect(() => { api.projects.list().then(setProjects).catch(() => {}); }, []);
 
-  // Диплинк #/agents/{id}
+  // Диплинк #/personas/{id} (старый #/agents/{id} парсится как алиас)
   useEffect(() => {
     const t = parseHash();
-    if (t?.screen === 'agents' && t.agentId) { setSelectedId(t.agentId); setMobileView('card'); }
+    if (t?.screen === 'personas' && t.personaId) { setSelectedId(t.personaId); setMobileView('card'); }
   }, []);
 
-  // Back/forward браузера внутри раздела «Агенты»
+  // Back/forward браузера внутри раздела «Персоны»
   useEffect(() => {
     const onPop = (e: PopStateEvent) => {
       const s = e.state as NavSnapshot | null;
-      if (s?.screen === 'agents') {
-        setSelectedId(s.agent ?? null);
-        setMobileView(s.agent ? 'card' : 'list');
+      if (s?.screen === 'personas') {
+        setSelectedId(s.persona ?? null);
+        setMobileView(s.persona ? 'card' : 'list');
       }
     };
     window.addEventListener('popstate', onPop);
@@ -82,34 +82,34 @@ export function AgentsPage({ auth, onLogout, onHubTab }: {
   useEffect(() => {
     if (selectedId && allPersonas.some(p => p.id === selectedId) && !personas.some(p => p.id === selectedId)) {
       setSelectedId(null); setMobileView('list');
-      if (getNav()?.agent) navReplace({ screen: 'agents' });
+      if (getNav()?.persona) navReplace({ screen: 'personas' });
     }
   }, [selectedId, allPersonas, personas]);
 
   const selectPersona = (id: string) => {
     setCreating(false);
     setSelectedId(id); setMobileView('card');
-    navPush({ screen: 'agents', agent: id });
+    navPush({ screen: 'personas', persona: id });
   };
   const clearSelection = () => {
     setCreating(false);
     setSelectedId(null); setMobileView('list');
-    if (getNav()?.agent) navReplace({ screen: 'agents' });
+    if (getNav()?.persona) navReplace({ screen: 'personas' });
   };
-  // Кнопка «Новый агент» — пустая форма создания в контентной зоне
+  // Кнопка «Новая персона» — пустая форма создания в контентной зоне
   const startCreate = () => {
     setSelectedId(null); setCreating(true); setMobileView('card');
-    if (getNav()?.agent) navReplace({ screen: 'agents' });
+    if (getNav()?.persona) navReplace({ screen: 'personas' });
   };
 
   const onDelete = async (p: Persona) => {
-    if (!window.confirm(`Удалить агента «${personaLabel(p)}»?`)) return;
+    if (!window.confirm(`Удалить персону «${personaLabel(p)}»?`)) return;
     try {
       await api.personas.remove(p.id);
       bumpPersonas();
       clearSelection();
     } catch {
-      alert('Не удалось удалить агента.');
+      alert('Не удалось удалить персону.');
     }
   };
 
@@ -122,7 +122,7 @@ export function AgentsPage({ auth, onLogout, onHubTab }: {
       const session = await api.personas.createChat(p.id, { mode: 'auto' });
       if (session.projectId) {
         const proj = projects.find(x => x.id === session.projectId);
-        if (!proj) { alert('Проект агента недоступен.'); return; }
+        if (!proj) { alert('Проект персоны недоступен.'); return; }
         // Стартовую сессию отдаём проекту через sessionStorage — её подхватит WorkspacePage
         sessionStorage.setItem('cc_pending_session', JSON.stringify(session));
         window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project: proj } }));
@@ -160,9 +160,9 @@ export function AgentsPage({ auth, onLogout, onHubTab }: {
         onBack={isMobile ? clearSelection : undefined}
         isMobile={isMobile} />
     : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <EmptyState icon={<IconAgents />} title="Агенты"
-          subtitle={personas.length ? 'Выбери агента слева, чтобы открыть его профиль и память' : 'Создай первого олицетворённого агента: имя, характер, аватар'}
-          action={<button onClick={startCreate} style={newBtn}>Новый агент</button>} />
+        <EmptyState icon={<IconPersonas />} title="Персоны"
+          subtitle={personas.length ? 'Выбери персону слева, чтобы открыть её профиль и память' : 'Создай первую персону: имя, характер, аватар'}
+          action={<button onClick={startCreate} style={newBtn}>Новая персона</button>} />
       </div>;
 
   const hasContent = creating || !!selected;
@@ -182,13 +182,13 @@ export function AgentsPage({ auth, onLogout, onHubTab }: {
 
   return (
     <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <HubHeader value="agents" onTab={onHubTab} auth={auth} onLogout={onLogout} />
+      <HubHeader value="personas" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>{body}</div>
     </div>
   );
 }
 
-// Пане создания нового агента. Первый экран — быстрое создание по промпту
+// Пане создания новой персоны. Первый экран — быстрое создание по промпту
 // (ИИ придумывает роль/характер/аватар); «Заполнить вручную» переключает на
 // привычную пустую PersonaForm с тулбаром (Отмена/Создать).
 function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {

@@ -3,7 +3,7 @@ import type { Project, Session, ClaudeBilling, Persona } from '../../types';
 import { api } from '../../lib/api';
 import { modelLabel, modelProvider, assistantName, useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
-import { PersonaAvatar } from '../../features/agents/PersonaAvatar';
+import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { personaTitleLines } from '../../lib/personas';
 import { AGENT_COLORS } from '../AgentSelector';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from '../../lib/rateLimit';
@@ -652,7 +652,7 @@ interface ChatHeaderBarProps {
   canCompact: boolean;
   compactNote?: string;
   onCompact: () => void;
-  // Олицетворённый агент (персона) чата — идентификация встроена прямо в тулбар
+  // Персона чата — идентификация встроена прямо в тулбар
   persona?: Persona | null;
   personaZoneName?: string | null;         // имя проекта для бейджа зоны проектной персоны
 }
@@ -794,14 +794,14 @@ export function ChatHeaderBar({ session, project, online, cost, falCost, billing
       .catch(() => { /* баланс — необязательная информация */ });
     return () => { alive = false; };
   }, [session.model, providerKey, isCliProvider]);
-  // Цвет персоны (акцент бренда агента) — тонирует заголовок, пилюлю зоны и левую границу тулбара.
+  // Цвет персоны (её акцент бренда) — тонирует заголовок, пилюлю зоны и левую границу тулбара.
   const personaAccent = persona ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? C.accent) : null;
   const personaIsProject = persona?.scope === 'project';
   const personaZoneText = personaIsProject
     ? (personaZoneName ? `Проект · ${personaZoneName}` : 'Проект')
     : 'Глобальный';
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
-  // При наличии персоны — идентификация агента доминирует: аватар + роль (serif, цвет персоны)
+  // При наличии персоны — её идентификация доминирует: аватар + роль (serif, цвет персоны)
   // и вторая строка «имя · зона · модель». session.name уходит в тултип, чтобы не потеряться.
   const titleBlock = persona && personaAccent ? (
     <div title={session.name ?? undefined} style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 9 }}>

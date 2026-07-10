@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import type { Persona } from '../types';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { personaLabel } from '../lib/personas';
-import { PersonaAvatar } from '../features/agents/PersonaAvatar';
+import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 
 interface Props {
   personas: Persona[];
@@ -14,9 +14,9 @@ interface Props {
   dropUp?: boolean;
 }
 
-// Селектор олицетворённого агента для композера пустого чата — «с кем ведём разговор».
+// Селектор персоны для композера пустого чата — «с кем ведём разговор».
 // По образцу AgentSelector: кнопка-триггер (аватар + имя выбранной персоны либо
-// компактная иконка), выпадающий список персон + пункт «Без агента». Раскрывается
+// компактная иконка), выпадающий список персон + пункт «Без персоны». Раскрывается
 // вверх (composer прижат к низу). Показывается родителем только для пустого чата.
 export function PersonaSelector({ personas, selectedPersona, onSelect, isMobile, dropUp = true }: Props) {
   const [open, setOpen] = useState(false);
@@ -62,10 +62,10 @@ export function PersonaSelector({ personas, selectedPersona, onSelect, isMobile,
   return (
     <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, minWidth: 0 }}>
       {selectedPersona ? (
-        // Агент выбран — плашка с мини-аватаром и именем
+        // Персона выбрана — плашка с мини-аватаром и именем
         <button
           onClick={() => setOpen(o => !o)}
-          title="Выбрать агента для чата"
+          title="Выбрать персону для чата"
           style={{
             height: isMobile ? 32 : 28, padding: '0 8px 0 4px', borderRadius: R.md, border: 'none',
             background: open ? C.bgSelected : C.accentLight, color: C.textSecondary,
@@ -84,10 +84,10 @@ export function PersonaSelector({ personas, selectedPersona, onSelect, isMobile,
           </svg>
         </button>
       ) : (
-        // Агент не выбран — компактная иконка «собеседник»
+        // Персона не выбрана — компактная иконка «собеседник»
         <button
           onClick={() => setOpen(o => !o)}
-          title="Выбрать агента для чата"
+          title="Выбрать персону для чата"
           style={{
             width: isMobile ? 32 : 28, height: isMobile ? 32 : 28, borderRadius: R.md, border: 'none',
             background: open ? C.bgSelected : 'transparent', color: C.textMuted, cursor: 'pointer',
@@ -115,16 +115,16 @@ export function PersonaSelector({ personas, selectedPersona, onSelect, isMobile,
               }}
             >
               <span style={{ width: 20, height: 20, borderRadius: R.full, border: `1.5px dashed ${C.border}`, flexShrink: 0 }} />
-              Без агента
+              Без персоны
             </button>
           )}
 
           {/* Группировка: команда проекта сверху, глобальные ниже. Заголовки групп —
               только когда есть обе группы (иначе зона очевидна из контекста). */}
           {(() => {
-            const projectAgents = personas.filter(p => p.scope === 'project');
-            const globalAgents = personas.filter(p => p.scope === 'global');
-            const showHeaders = projectAgents.length > 0 && globalAgents.length > 0;
+            const projectPersonas = personas.filter(p => p.scope === 'project');
+            const globalPersonas = personas.filter(p => p.scope === 'global');
+            const showHeaders = projectPersonas.length > 0 && globalPersonas.length > 0;
             const groupHeader = (text: string) => (
               <div style={{
                 padding: '7px 10px 3px', fontSize: 10.5, fontWeight: 700, color: C.textMuted,
@@ -160,10 +160,10 @@ export function PersonaSelector({ personas, selectedPersona, onSelect, isMobile,
             };
             return (
               <>
-                {showHeaders && projectAgents.length > 0 && groupHeader('Команда проекта')}
-                {projectAgents.map(item)}
-                {showHeaders && globalAgents.length > 0 && groupHeader('Глобальные')}
-                {globalAgents.map(item)}
+                {showHeaders && projectPersonas.length > 0 && groupHeader('Команда проекта')}
+                {projectPersonas.map(item)}
+                {showHeaders && globalPersonas.length > 0 && groupHeader('Глобальные')}
+                {globalPersonas.map(item)}
               </>
             );
           })()}

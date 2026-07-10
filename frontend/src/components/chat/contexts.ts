@@ -4,7 +4,7 @@ import type { Persona } from '../../types';
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
 export const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
 
-// Персона (олицетворённый агент) текущего чата, если он ведётся от её лица.
+// Персона текущего чата, если он ведётся от её лица.
 // Провайдится в ChatPanel — лента показывает её аватар у реплик ассистента,
 // не таща persona-проп через все вложенные компоненты.
 export const PersonaContext = createContext<Persona | null>(null);

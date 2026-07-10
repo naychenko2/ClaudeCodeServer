@@ -5,7 +5,7 @@ import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
-import { PersonaAvatar } from '../../features/agents/PersonaAvatar';
+import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { FLAGS, useFeature } from '../../lib/featureFlags';

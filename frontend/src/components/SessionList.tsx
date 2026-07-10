@@ -9,7 +9,7 @@ import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
 import { getPersonaById, usePersonas, usePersonasVersion, personaLabel } from '../lib/personas';
-import { PersonaAvatar } from '../features/agents/PersonaAvatar';
+import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { PersonaSelector } from './PersonaSelector';
 import { agentDotColor } from './AgentSelector';
 
@@ -35,7 +35,7 @@ interface Props {
 
 export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor, selectedAgent }: Props) {
   const online = useOnline();
-  // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий агентов)
+  // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий персон)
   usePersonasVersion();
   const personas = usePersonas();
   // Доступные в контексте проекта персоны: проектные (этого проекта) + глобальные
@@ -181,7 +181,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               {selectedPersona ? `Чат с «${personaLabel(selectedPersona)}»` : 'Новый чат'}
             </Button>
           </div>
-          {/* Выбор олицетворённого агента для нового чата (проектные + глобальные) */}
+          {/* Выбор персоны для нового чата (проектные + глобальные) */}
           <PersonaSelector
             personas={ctxPersonas}
             selectedPersona={selectedPersona}
@@ -195,7 +195,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
         {sessions.map((s, index) => {
           const isActive = activeSession?.id === s.id;
-          // Сессия от лица персоны: слева мини-аватар, имя агента и акцент её цвета
+          // Сессия от лица персоны: слева мини-аватар, имя персоны и акцент её цвета
           const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
           const accent = persona ? agentDotColor(persona.avatar?.color) : C.accent;
           return (
@@ -225,7 +225,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               gap: persona ? 9 : 0,
             }}
           >
-            {/* Акцентная полоса слева — явный маркер текущего чата (у сессий агента — цветом персоны) */}
+            {/* Акцентная полоса слева — явный маркер текущего чата (у сессий персоны — её цветом) */}
             {isActive && (
               <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: accent }} />
             )}

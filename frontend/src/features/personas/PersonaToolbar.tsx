@@ -7,11 +7,11 @@ import { PersonaAvatar } from './PersonaAvatar';
 import { personaTitleLines } from '../../lib/personas';
 import type { PersonaFormStatus } from './PersonaForm';
 
-// Единый тулбар студии персоны — общий для глобальной студии (AgentsPage) и
-// проектной панели (ProjectAgentPane). Состав в режиме редактирования:
+// Единый тулбар студии персоны — общий для глобальной студии (PersonasPage) и
+// проектной панели (ProjectPersonaPane). Состав в режиме редактирования:
 // [полоса цвета] аватар + Роль(Имя) + бейдж зоны | сегмент Профиль|Память |
 // Поговорить | ⋯-меню (Удалить внутри) | Сохранить (+точка dirty).
-// В режиме создания: «Новый агент» + [Отмена] [Создать].
+// В режиме создания: «Новая персона» + [Отмена] [Создать].
 
 export type PersonaView = 'profile' | 'memory';
 
@@ -85,7 +85,7 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
       <Toolbar isMobile={isMobile} style={rowOverride}>
         {backBtn}
         <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
-          Новый агент
+          Новая персона
         </div>
         <button onClick={props.onCancel} style={tbBtnGhost}>Отмена</button>
         {saveArea}
@@ -146,7 +146,7 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
                 <MenuItem
                   danger
                   icon={<><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></>}
-                  label="Удалить агента"
+                  label="Удалить персону"
                   onClick={() => { setMenuOpen(false); onDelete(); }}
                 />
               </Menu>

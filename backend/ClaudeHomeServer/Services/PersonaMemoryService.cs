@@ -7,7 +7,7 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
-// Долгая память персоны («олицетворённого агента»). Типизированные записи
+// Долгая память персоны. Типизированные записи
 // (semantic/episodic/procedural) — источник правды в data/persona-memory.json;
 // семантический слой дублируется в Dify-датасет per-persona для векторного retrieve.
 // Скоринг recall — relevance × recency × typeWeight (подход 2026). Без Dify —
@@ -99,7 +99,7 @@ public sealed class PersonaMemoryService
         return entry;
     }
 
-    // Все записи памяти персоны (для панели «что помнит агент»); type — необязательный фильтр
+    // Все записи памяти персоны (для панели «что помнит персона»); type — необязательный фильтр
     public IReadOnlyList<PersonaMemoryEntry> List(string ownerId, string personaId, PersonaMemoryType? type)
     {
         if (_personas.Get(personaId, ownerId) is null) return [];

@@ -187,10 +187,10 @@ WorkingDirectory = `project.RootPath`
   (живая/призрачная/внешняя), embeds `![[…]]`, hover-preview; стор
   [lib/notes.ts](frontend/src/lib/notes.ts) (realtime notes_changed).
 
-## Агенты (олицетворённые агенты / персоны)
+## Персоны
 
-Концепция **«Агенты = контакты, Чаты = разговоры»** (фич-флаг `personas`): глобальный раздел
-«Агенты» (хаб-таб) и вкладка «Команда» внутри проекта — **только настройка** (профиль + память);
+Концепция **«Персоны = контакты, Чаты = разговоры»** (фич-флаг `personas`): глобальный раздел
+«Персоны» (хаб-таб) и вкладка «Команда» внутри проекта — **только настройка** (профиль + память);
 разговор с агентом живёт среди обычных чатов и везде помечен его лицом (аватар/роль/цвет).
 Персона — **отдельная сущность** (JSON-стор, не .md-агент): роль (главная в отображении:
 «Роль (Имя)»), имя, характер, аватар, модель/усилие, зона, приветствие, долгая память.
@@ -234,16 +234,16 @@ WorkingDirectory = `project.RootPath`
 - **Авто-память** (флаг `persona-memory-autolearn`): [PersonaMemoryAutolearnService.cs](backend/ClaudeHomeServer/Services/PersonaMemoryAutolearnService.cs) —
   IHostedService на `SessionManager.OnSessionMessage`; по завершении хода персонной сессии one-shot
   извлекает факты (semantic) и итог (episodic) из транскрипта и сохраняет в память (дедуп в `Remember`).
-- **Фронт**: [features/agents/](frontend/src/features/agents/) — AgentsPage (глобальный раздел,
+- **Фронт**: [features/personas/](frontend/src/features/personas/) — PersonasPage (глобальный раздел,
   только `scope=global`): сайдбар PersonaList | центр «Студия-профиль»; редактор
-  [PersonaForm.tsx](frontend/src/features/agents/PersonaForm.tsx) — одна колонка 680 в стиле
+  [PersonaForm.tsx](frontend/src/features/personas/PersonaForm.tsx) — одна колонка 680 в стиле
   TaskEditForm: hero-аватар 80 (инлайн-генерация 4 кандидатов + цвет), безрамочная serif-«Роль»,
   Характер во всю ширину (липкая панель пресетов + ✨Сгенерировать/✨Улучшить с уточняющим
   промптом-поповером, autoGrow без скролла), Поведение (модель/усилие/зона/приветствие),
-  Память-summary (счётчики + «Открыть память»); действия — в [PersonaToolbar.tsx](frontend/src/features/agents/PersonaToolbar.tsx)
+  Память-summary (счётчики + «Открыть память»); действия — в [PersonaToolbar.tsx](frontend/src/features/personas/PersonaToolbar.tsx)
   (общий Toolbar: Профиль|Память, Поговорить, ⋯-меню с Удалить, Сохранить + dirty-индикатор).
   В проекте — вкладка «Команда» (`leftTab='agents'` WorkspacePage): список в сайдбаре
-  ([ProjectAgentsPanel.tsx](frontend/src/features/agents/ProjectAgentsPanel.tsx)), форма — в
+  ([ProjectPersonasPanel.tsx](frontend/src/features/personas/ProjectPersonasPanel.tsx)), форма — в
   контентной зоне. Идентификация в чатах: плашки ChatList/SessionList (аватар+«Роль (Имя)»+цвет),
   агент в тулбаре чата (ChatHeaderBar: аватар+роль/имя+зона+полоса цвета), аватар у реплик
   (PersonaContext→ChatItemView), приветствие (PersonaGreeting). Запуск чата: «Поговорить» из

@@ -22,13 +22,14 @@ public class PersonaAvatar
     public string? ImageFile { get; set; }
 }
 
-// «Олицетворённый агент» — сущность с именем, внешностью, характером, своей памятью и зоной контекста.
+// Персона — сущность с именем, внешностью, характером, своей памятью и зоной контекста.
+// Не путать с .md-агентами Claude Code (.claude/agents) — те подключаются через Session.AgentName.
 public class Persona
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
     public string OwnerId { get; set; } = "";
     public string Name { get; set; } = "";
-    // Роль агента (главная в отображении: «Роль (Имя)»), напр. «Дизайнер», «PM». Опционально.
+    // Роль персоны (главная в отображении: «Роль (Имя)»), напр. «Дизайнер», «PM». Опционально.
     public string? Role { get; set; }
     // Короткий slug (латиница/цифры/дефис) — для Dify-датасета памяти и будущих @упоминаний
     public string Handle { get; set; } = "";

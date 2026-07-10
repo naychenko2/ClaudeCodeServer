@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Controllers;
 
-// «Олицетворённые агенты» (персоны), per-owner (изоляция как у задач/заметок — по claim sub).
+// Персоны, per-owner (изоляция как у задач/заметок — по claim sub).
 [ApiController]
 [Authorize]
 [Route("api/personas")]
@@ -254,7 +254,7 @@ public class PersonasController : ControllerBase
                "high detail, sharp focus, square crop.";
     }
 
-    // AI-помощь с характером агента: сгенерировать с нуля или улучшить/дополнить существующий
+    // AI-помощь с характером персоны: сгенерировать с нуля или улучшить/дополнить существующий
     // (one-shot LLM). Возвращает готовый текст характера для подстановки в форму.
     [HttpPost("ai/character")]
     public async Task<ActionResult> AiCharacter([FromBody] AiCharacterRequest req)
@@ -278,10 +278,10 @@ public class PersonasController : ControllerBase
     private static string BuildCharacterPrompt(AiCharacterRequest req)
     {
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Ты помогаешь описать характер и стиль общения ассистента-агента. " +
+        sb.AppendLine("Ты помогаешь описать характер и стиль общения персоны-ассистента. " +
                       "Составь ТЕЛО системного промпта персоны — как она общается и действует.");
-        if (!string.IsNullOrWhiteSpace(req.Role)) sb.AppendLine($"Роль агента: {req.Role.Trim()}.");
-        if (!string.IsNullOrWhiteSpace(req.Name)) sb.AppendLine($"Имя агента: {req.Name.Trim()}.");
+        if (!string.IsNullOrWhiteSpace(req.Role)) sb.AppendLine($"Роль персоны: {req.Role.Trim()}.");
+        if (!string.IsNullOrWhiteSpace(req.Name)) sb.AppendLine($"Имя персоны: {req.Name.Trim()}.");
         if (!string.IsNullOrWhiteSpace(req.Description)) sb.AppendLine($"Кратко: {req.Description.Trim()}.");
         if (!string.IsNullOrWhiteSpace(req.Current))
         {
@@ -290,7 +290,7 @@ public class PersonasController : ControllerBase
         if (!string.IsNullOrWhiteSpace(req.Instruction))
             sb.AppendLine($"\nПожелание пользователя: {req.Instruction.Trim()}");
         sb.AppendLine("\nТребования к ответу:");
-        sb.AppendLine("- обращение на «ты» к агенту («Ты …»), описывай его манеру, ценности, стиль ответов;");
+        sb.AppendLine("- обращение на «ты» к персоне («Ты …»), описывай её манеру, ценности, стиль ответов;");
         sb.AppendLine("- по-русски, живо и конкретно, 2–5 предложений;");
         sb.AppendLine("- НЕ упоминай имя модели, не пиши преамбул и пояснений — только сам текст характера.");
         return sb.ToString();
@@ -425,7 +425,7 @@ public class PersonasController : ControllerBase
     private sealed record DraftRaw(string? Role, string? Name, string? Description,
         string? Character, string? Greeting, string? Color, string? AvatarPrompt);
 
-    // --- Долгая память персоны (дёргается MCP memory-server и UI-панелью «что помнит агент») ---
+    // --- Долгая память персоны (дёргается MCP memory-server и UI-панелью «что помнит персона») ---
 
     // Записи памяти (type — необязательный фильтр semantic|episodic|procedural)
     [HttpGet("{id}/memory")]

@@ -198,7 +198,7 @@ export interface Session {
   id: string;
   // Отсутствует у чатов вне проекта (project-less)
   projectId?: string;
-  // Привязка чата к персоне (олицетворённому агенту), если он ведётся от её лица
+  // Привязка чата к персоне, если он ведётся от её лица
   personaId?: string;
   // Владелец чата вне проекта
   ownerId?: string;
@@ -534,7 +534,7 @@ export interface UpdateNoteDto {
   content?: string;
 }
 
-// ===== Агенты (олицетворённые агенты / персоны) =====
+// ===== Персоны (олицетворённые ИИ-собеседники) =====
 
 // Зона контекста персоны: глобально (личное пространство) или в рамках проекта
 export type PersonaScope = 'global' | 'project';
@@ -551,7 +551,7 @@ export interface Persona {
   id: string;
   ownerId: string;
   name: string;
-  role?: string;              // роль агента (главная подпись: «Роль (Имя)»)
+  role?: string;              // роль персоны (главная подпись: «Роль (Имя)»)
   handle: string;             // машинное имя (@handle) — уникально у владельца
   description?: string;
   systemPrompt?: string;      // «характер» — системный промпт персоны

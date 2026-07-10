@@ -7,11 +7,11 @@ import { Toolbar, tbBtnGhost } from '../../components/Toolbar';
 import { IconButton } from '../../components/ui';
 import { SectionLabel } from '../tasks/bits';
 
-// Экран быстрого создания агента по свободному промпту — первый шаг флоу «Новый агент».
+// Экран быстрого создания персоны по свободному промпту — первый шаг флоу «Новая персона».
 // Пользователь описывает, кто это и чем будет заниматься, LLM придумывает роль/имя/
 // характер/приветствие/цвет и генерирует фото-аватар. «Заполнить вручную» — запасной
-// путь к пустой PersonaForm. Используется и в глобальной студии (AgentsPage),
-// и в проектной вкладке «Команда» (ProjectAgentPane).
+// путь к пустой PersonaForm. Используется и в глобальной студии (PersonasPage),
+// и в проектной вкладке «Команда» (ProjectPersonaPane).
 export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onCancel, onBack, isMobile }: {
   scope: PersonaScope;
   projectId?: string;
@@ -38,9 +38,9 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onCa
       const created = await api.personas.quickCreate({ prompt: prompt.trim(), scope, projectId });
       bumpPersonas();
       onCreated(created);
-      // busy не сбрасываем: родитель уводит на редактор созданного агента
+      // busy не сбрасываем: родитель уводит на редактор созданной персоны
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось создать агента. Попробуйте ещё раз.');
+      setError(e instanceof Error ? e.message : 'Не удалось создать персону. Попробуйте ещё раз.');
       setBusy(false);
     }
   };
@@ -56,7 +56,7 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onCa
           </IconButton>
         )}
         <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
-          Новый агент
+          Новая персона
         </div>
         {onCancel && <button onClick={onCancel} style={tbBtnGhost}>Отмена</button>}
       </Toolbar>
@@ -72,7 +72,7 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onCa
           {/* Заголовок и подводка: что произойдёт после нажатия «Создать» */}
           <div>
             <div style={{ fontFamily: FONT.serif, fontSize: isMobile ? 21 : 24, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
-              Опишите агента
+              Опишите персону
             </div>
             <div style={{ marginTop: 6, fontSize: 13.5, color: C.textMuted, lineHeight: 1.5 }}>
               Кто это и чем будет заниматься — остальное придумает ИИ: роль, имя, характер, приветствие и аватар.
@@ -129,7 +129,7 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onCa
                 cursor: canSubmit ? 'pointer' : 'default', opacity: canSubmit ? 1 : 0.55,
                 display: 'inline-flex', alignItems: 'center', gap: 7,
               }}>
-              {busy ? 'Создаю агента…' : '✨ Создать'}
+              {busy ? 'Создаю персону…' : '✨ Создать'}
             </button>
             <button
               onClick={onManual}

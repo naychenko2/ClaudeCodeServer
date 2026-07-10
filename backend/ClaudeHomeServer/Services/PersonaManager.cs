@@ -6,7 +6,7 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
-// CRUD «олицетворённых агентов» (персон) с изоляцией per-owner. Хранилище — data/personas.json
+// CRUD персон с изоляцией per-owner. Хранилище — data/personas.json
 // (образец: ProjectManager + JsonFileStore). Все запросы фильтруются по OwnerId.
 public class PersonaManager
 {
@@ -56,7 +56,7 @@ public class PersonaManager
         var persona = new Persona
         {
             OwnerId = userId,
-            Name = string.IsNullOrWhiteSpace(name) ? "Агент" : name.Trim(),
+            Name = string.IsNullOrWhiteSpace(name) ? "Персона" : name.Trim(),
             Role = string.IsNullOrWhiteSpace(role) ? null : role.Trim(),
             Description = description,
             SystemPrompt = systemPrompt,

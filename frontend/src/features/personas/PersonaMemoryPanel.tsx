@@ -71,7 +71,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
     void load();
   }, [load]);
 
-  // Realtime: память текущей персоны изменилась (агент запомнил/забыл) — перечитать.
+  // Realtime: память текущей персоны изменилась (персона запомнила/забыла) — перечитать.
   // joinUser уже сделан стором personas; здесь только слушаем сообщения.
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -165,7 +165,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
             <div style={{ fontSize: 30, opacity: 0.5 }}>🧠</div>
             <div style={{ fontFamily: FONT.serif, fontSize: 17, color: C.textHeading }}>Память пуста</div>
             <div style={{ fontSize: 13, color: C.textSecondary, maxWidth: 320, lineHeight: 1.5 }}>
-              Агент пока ничего не запомнил. Память пополняется во время разговоров.
+              Персона пока ничего не запомнила. Память пополняется во время разговоров.
             </div>
           </div>
         )}
@@ -213,7 +213,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
             value={addText}
             onChange={e => setAddText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
-            placeholder="Добавить факт, который агент должен помнить…"
+            placeholder="Добавить факт, который персона должна помнить…"
             style={{ ...inputStyle, flex: 1, minWidth: isMobile ? '100%' : 180 }}
           />
           <button

@@ -65,7 +65,7 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly NotesMcpContext? _notesMcp;
     // Auto-recall заметок: по тексту хода возвращает markdown-блок для системного промпта
     private readonly Func<string, Task<string?>>? _recallProvider;
-    // Системный промпт персоны («олицетворённого агента»): её имя/роль/характер
+    // Системный промпт персоны: её имя/роль/характер
     private readonly string? _personaPrompt;
     // MCP-сервер долгой памяти персоны + auto-recall её памяти
     private readonly MemoryMcpContext? _memoryMcp;
@@ -614,7 +614,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         : basePrompt + "\n\n" + memRecall;
             }
 
-            // Персональный слой: промпт персоны («олицетворённого агента») имеет приоритет
+            // Персональный слой: промпт персоны имеет приоритет
             // над .md-агентом — чат ведётся от её лица, характер задаёт именно персона.
             string? agentPrompt = _personaPrompt;
             if (agentPrompt is null && !string.IsNullOrEmpty(Info.AgentName) && _skills is not null)

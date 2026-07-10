@@ -21,10 +21,10 @@ function useIsMobile(): boolean {
   return m;
 }
 
-// Проектная вкладка «Агенты»: САЙДБАРНЫЙ СПИСОК персон этого проекта.
-// Форма редактирования/создания живёт отдельно — в центральной зоне (ProjectAgentPane).
+// Проектная вкладка «Команда»: САЙДБАРНЫЙ СПИСОК персон этого проекта.
+// Форма редактирования/создания живёт отдельно — в центральной зоне (ProjectPersonaPane).
 // Выбор синхронизируется через контролируемые props (состояние поднято в WorkspacePage).
-export function ProjectAgentsPanel({ project, selectedId, onSelect, onNew }: {
+export function ProjectPersonasPanel({ project, selectedId, onSelect, onNew }: {
   project: Project;
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -33,7 +33,7 @@ export function ProjectAgentsPanel({ project, selectedId, onSelect, onNew }: {
   const personas = usePersonas();
   useEffect(() => { void ensurePersonasLoaded(); }, []);
 
-  // Только персоны этого проекта (глобальные живут в хабе «Агенты»)
+  // Только персоны этого проекта (глобальные живут в хабе «Персоны»)
   const projectPersonas = personas.filter(p => p.scope === 'project' && p.projectId === project.id);
 
   return (
@@ -48,16 +48,16 @@ export function ProjectAgentsPanel({ project, selectedId, onSelect, onNew }: {
   );
 }
 
-// Центральная зона проектных агентов: тулбар (аватар + подпись + Удалить/Поговорить/Сохранить)
+// Центральная зона проектных персон: тулбар (аватар + подпись + Удалить/Поговорить/Сохранить)
 // над широкой двухколоночной формой профиля. personaId=null — создание.
-export function ProjectAgentPane({ project, personaId, creating, onOpenChat, onSelectAgent, onCleared, onBack }: {
+export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, onSelectPersona, onCleared, onBack }: {
   project: Project;
   personaId: string | null;
   creating: boolean;
   // Открыть созданный «Поговорить» чат на месте (переключить на «Чаты» и выбрать сессию)
   onOpenChat: (session: Session) => void;
-  // Родитель выбирает агента (после создания переключаемся с «создания» на «редактирование»)
-  onSelectAgent: (id: string) => void;
+  // Родитель выбирает персону (после создания переключаемся с «создания» на «редактирование»)
+  onSelectPersona: (id: string) => void;
   // Сброс выбора/создания (после удаления или «Отмена»)
   onCleared: () => void;
   onBack?: () => void;
@@ -86,13 +86,13 @@ export function ProjectAgentPane({ project, personaId, creating, onOpenChat, onS
   const [liveColor, setLiveColor] = useState<string | undefined>(undefined);
 
   const onDelete = async (p: Persona) => {
-    if (!window.confirm(`Удалить агента «${personaTitleLines(p).primary}»?`)) return;
+    if (!window.confirm(`Удалить персону «${personaTitleLines(p).primary}»?`)) return;
     try {
       await api.personas.remove(p.id);
       bumpPersonas();
       onCleared();
     } catch {
-      alert('Не удалось удалить агента.');
+      alert('Не удалось удалить персону.');
     }
   };
 
@@ -114,13 +114,13 @@ export function ProjectAgentPane({ project, personaId, creating, onOpenChat, onS
   const accent = AGENT_COLORS[liveColor ?? persona?.avatar?.color ?? ''] ?? C.accent;
 
   // Быстрое создание по промпту — свой экран целиком (тулбар внутри компонента).
-  // После успеха родитель выбирает созданного агента → откроется его редактор.
+  // После успеха родитель выбирает созданную персону → откроется её редактор.
   if (!persona && creating && !manualCreate) {
     return (
       <PersonaQuickCreate
         scope="project"
         projectId={project.id}
-        onCreated={p => onSelectAgent(p.id)}
+        onCreated={p => onSelectPersona(p.id)}
         onManual={() => setManualCreate(true)}
         onCancel={onCleared}
         onBack={onBack}
@@ -186,7 +186,7 @@ export function ProjectAgentPane({ project, personaId, creating, onOpenChat, onS
             defaultProjectId={project.id}
             onStatus={onStatus}
             onColorChange={setLiveColor}
-            onSaved={p => onSelectAgent(p.id)}
+            onSaved={p => onSelectPersona(p.id)}
           />
         ) : null}
       </div>
@@ -194,14 +194,14 @@ export function ProjectAgentPane({ project, personaId, creating, onOpenChat, onS
   );
 }
 
-// Пустое состояние центральной зоны, когда агент не выбран
-export function ProjectAgentEmpty({ hasAgents, onNew }: { hasAgents: boolean; onNew: () => void }) {
+// Пустое состояние центральной зоны, когда персона не выбрана
+export function ProjectPersonaEmpty({ hasPersonas, onNew }: { hasPersonas: boolean; onNew: () => void }) {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 24, textAlign: 'center' }}>
       <div style={{ color: C.textMuted, fontSize: 14, fontFamily: FONT.sans, maxWidth: 320, lineHeight: 1.5 }}>
-        {hasAgents ? 'Выберите агента слева или создайте нового' : 'В этом проекте пока нет агентов. Создайте первого — задайте роль, характер и аватар.'}
+        {hasPersonas ? 'Выберите персону слева или создайте новую' : 'В этом проекте пока нет персон. Создайте первую — задайте роль, характер и аватар.'}
       </div>
-      <button onClick={onNew} style={btnPrimary}>Новый агент</button>
+      <button onClick={onNew} style={btnPrimary}>Новая персона</button>
     </div>
   );
 }

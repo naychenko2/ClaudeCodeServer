@@ -51,7 +51,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     api.skills.listGlobal().then(setSkills).catch(() => {});
   }, []);
 
-  // Стор персон — чтобы ChatList показал аватар/имя агента у его чатов
+  // Стор персон — чтобы ChatList показал аватар/имя персоны у её чатов
   useEffect(() => { void ensurePersonasLoaded(); }, []);
 
   // Вложения относятся к конкретному чату — сбрасываем при смене активного
@@ -150,7 +150,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  // Форк «Сменить агента» из открытого чата: App переключает сюда, а мы открываем
+  // Форк «Сменить персону» из открытого чата: App переключает сюда, а мы открываем
   // новый чат по id (список перечитываем, чтобы плашка нового чата появилась сразу).
   useEffect(() => {
     const open = (e: Event) => {

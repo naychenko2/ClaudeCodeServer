@@ -234,7 +234,7 @@ export const api = {
       }),
   },
 
-  // Агенты (олицетворённые агенты / персоны): CRUD персон владельца (флаг personas)
+  // Персоны (олицетворённые ИИ-собеседники): CRUD персон владельца (флаг personas)
   personas: {
     // scope=context&projectId= — только доступные в контексте (глобальные + этого проекта)
     list: (opts?: { scope?: string; projectId?: string }) => {
@@ -331,7 +331,7 @@ export const api = {
       if (token) params.set('access_token', token);
       return `/api/personas/${encodeURIComponent(id)}/avatar/candidate/${encodeURIComponent(file)}?${params}`;
     },
-    // Быстрое создание агента по свободному промпту: LLM заполняет роль/имя/описание/
+    // Быстрое создание персоны по свободному промпту: LLM заполняет роль/имя/описание/
     // характер/приветствие/цвет, фото-аватар генерируется автоматически.
     // Запрос долгий (LLM ~10-40с + fal ~10-40с, до ~90с) — таймаут расширен. 502 — можно повторить.
     quickCreate: (body: { prompt: string; scope?: PersonaScope; projectId?: string }) =>

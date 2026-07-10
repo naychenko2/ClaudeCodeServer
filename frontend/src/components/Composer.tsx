@@ -32,7 +32,7 @@ export interface ComposerProps {
   agents?: AgentInfo[];
   selectedAgent?: AgentInfo | null;
   onAgentChange?: (agent: AgentInfo | null) => void;
-  // Олицетворённые агенты (персоны) — селектор «с кем разговор». Показывается только
+  // Персоны — селектор «с кем разговор». Показывается только
   // у пустого чата (hasMessages=false): назначить персону можно, пока не пошли ходы.
   personas?: Persona[];
   selectedPersona?: Persona | null;

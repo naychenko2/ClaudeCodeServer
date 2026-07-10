@@ -27,7 +27,7 @@ import { resolveColumns, taskColumnKey } from '../lib/tasks';
 import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
 import { ensurePersonasLoaded, usePersonas } from '../lib/personas';
-import { ProjectAgentsPanel, ProjectAgentPane, ProjectAgentEmpty } from '../features/agents/ProjectAgentsPanel';
+import { ProjectPersonasPanel, ProjectPersonaPane, ProjectPersonaEmpty } from '../features/personas/ProjectPersonasPanel';
 
 interface Props {
   project: Project;
@@ -38,7 +38,7 @@ interface Props {
   onLogout: () => void;
 }
 
-type LeftTab = 'sessions' | 'files' | 'tasks' | 'agents';
+type LeftTab = 'sessions' | 'files' | 'tasks' | 'personas';
 type FileSubTab = 'files' | 'knowledge';
 
 // Иконки вкладок проекта для мобильного компакт-режима (Feather-стиль, как HubTabs)
@@ -50,7 +50,7 @@ const LEFT_TAB_ICONS: Record<LeftTab, React.ReactNode> = {
   sessions: leftTabSvg(<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />),
   files: leftTabSvg(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />),
   tasks: leftTabSvg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>),
-  agents: leftTabSvg(<><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" /></>),
+  personas: leftTabSvg(<><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" /></>),
 };
 
 function useWindowWidth() {
@@ -85,18 +85,20 @@ function useViewportHeight() {
 }
 
 export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
-  // Вкладка «Агенты» — за фич-флагом personas (проектные персоны + чат с агентом)
+  // Вкладка «Команда» — за фич-флагом personas (проектные персоны + чат с персоной)
   const personasEnabled = useFeature(FLAGS.personas);
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
-    const saved = loadWorkspaceState(project.id)?.leftTab;
+    const savedRaw = loadWorkspaceState(project.id)?.leftTab;
+    // Сохранённое 'agents' — ключ до переименования вкладки персон
+    const saved = (savedRaw as string) === 'agents' ? 'personas' : savedRaw;
     const ok = saved === 'sessions' || saved === 'files' || saved === 'tasks'
-      || (saved === 'agents' && personasEnabled);
+      || (saved === 'personas' && personasEnabled);
     return ok ? saved! : 'sessions';
   });
   const [fileSubTab, setFileSubTab] = useState<FileSubTab>(() => loadWorkspaceState(project.id)?.fileSubTab ?? 'files');
   const [activeSession, setActiveSession] = useState<Session | null>(() => {
-    // Стартовая сессия от «Поговорить» проектной персоны (раздел «Агенты»): проект уже
+    // Стартовая сессия от «Поговорить» проектной персоны (раздел «Персоны»): проект уже
     // открыт App-ом, сессию выбираем здесь — SessionList не перебьёт её авто-выбором list[0].
     try {
       const raw = sessionStorage.getItem('cc_pending_session');
@@ -124,36 +126,36 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const activeSessionRef = useRef<Session | null>(null);
   activeSessionRef.current = activeSession;
 
-  // Стор персон — чтобы SessionList показал аватар/имя агента у его сессий,
-  // а вкладка «Агенты» знала, есть ли агенты у проекта (для пустого стейта)
+  // Стор персон — чтобы SessionList показал аватар/имя персоны у её сессий,
+  // а вкладка «Команда» знала, есть ли персоны у проекта (для пустого стейта)
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const personas = usePersonas();
-  const projectHasAgents = personas.some(p => p.scope === 'project' && p.projectId === project.id);
+  const projectHasPersonas = personas.some(p => p.scope === 'project' && p.projectId === project.id);
 
-  // Вкладка «Агенты»: список — в сайдбаре, форма — в центральной зоне.
+  // Вкладка «Команда»: список персон — в сайдбаре, форма — в центральной зоне.
   // Состояние выбора поднято сюда, чтобы синхронизировать список ↔ форму.
-  const agentsMode = leftTab === 'agents';
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [agentCreating, setAgentCreating] = useState(false);
-  const handleAgentSelect = (id: string) => {
-    setSelectedAgentId(id);
-    setAgentCreating(false);
+  const personasMode = leftTab === 'personas';
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
+  const [personaCreating, setPersonaCreating] = useState(false);
+  const handlePersonaSelect = (id: string) => {
+    setSelectedPersonaId(id);
+    setPersonaCreating(false);
     if (isMobile) setMobileView('chat');
   };
-  const handleAgentNew = () => {
-    setSelectedAgentId(null);
-    setAgentCreating(true);
+  const handlePersonaNew = () => {
+    setSelectedPersonaId(null);
+    setPersonaCreating(true);
     if (isMobile) setMobileView('chat');
   };
-  const handleAgentCleared = () => {
-    setSelectedAgentId(null);
-    setAgentCreating(false);
+  const handlePersonaCleared = () => {
+    setSelectedPersonaId(null);
+    setPersonaCreating(false);
     if (isMobile) setMobileView('sidebar');
   };
-  // После создания нового агента переключаемся с «создания» на его редактирование
-  const handleAgentSelectAfterCreate = (id: string) => {
-    setSelectedAgentId(id);
-    setAgentCreating(false);
+  // После создания новой персоны переключаемся с «создания» на её редактирование
+  const handlePersonaSelectAfterCreate = (id: string) => {
+    setSelectedPersonaId(id);
+    setPersonaCreating(false);
   };
 
   const handleWorkflowRunning = useCallback((active: boolean, sessionId: string) => {
@@ -328,7 +330,7 @@ const windowWidth = useWindowWidth();
     { value: 'sessions', label: 'Чаты' },
     { value: 'files', label: 'Файлы' },
     { value: 'tasks', label: 'Задачи' },
-    ...(personasEnabled ? [{ value: 'agents' as LeftTab, label: 'Команда' }] : []),
+    ...(personasEnabled ? [{ value: 'personas' as LeftTab, label: 'Команда' }] : []),
   ];
   // Мобильный компакт-режим переключателя: неактивные вкладки иконками,
   // подпись только у активной (как HubTabs) — 4 вкладки помещаются без обрезания
@@ -336,12 +338,12 @@ const windowWidth = useWindowWidth();
 
   // Флаг мог выключиться — не оставляем недоступную вкладку активной
   useEffect(() => {
-    if (leftTab === 'agents' && !personasEnabled) setLeftTab('sessions');
+    if (leftTab === 'personas' && !personasEnabled) setLeftTab('sessions');
   }, [leftTab, personasEnabled]);
 
-  // «Поговорить» из проектной вкладки «Агенты»: сессия персоны создаётся в этом
+  // «Поговорить» из проектной вкладки «Команда»: сессия персоны создаётся в этом
   // проекте — открываем её на месте (переключаемся на «Чаты» и выбираем).
-  const handleOpenAgentChat = (session: Session) => {
+  const handleOpenPersonaChat = (session: Session) => {
     setLeftTab('sessions');
     handleSelectSession(session);
   };
@@ -730,8 +732,8 @@ const windowWidth = useWindowWidth();
           <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
         ) : leftTab === 'tasks' ? (
           <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
-        ) : leftTab === 'agents' ? (
-          <ProjectAgentsPanel project={project} selectedId={agentCreating ? null : selectedAgentId} onSelect={handleAgentSelect} onNew={handleAgentNew} />
+        ) : leftTab === 'personas' ? (
+          <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} />
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
@@ -779,8 +781,8 @@ const windowWidth = useWindowWidth();
               ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} selectedAgent={selectedAgent} />
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
-              : leftTab === 'agents'
-              ? <ProjectAgentsPanel project={project} selectedId={agentCreating ? null : selectedAgentId} onSelect={handleAgentSelect} onNew={handleAgentNew} />
+              : leftTab === 'personas'
+              ? <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'
@@ -794,10 +796,10 @@ const windowWidth = useWindowWidth();
         </div>
         {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
-          {agentsMode
-            ? ((selectedAgentId || agentCreating)
-                ? <ProjectAgentPane project={project} personaId={agentCreating ? null : selectedAgentId} creating={agentCreating} onOpenChat={handleOpenAgentChat} onSelectAgent={handleAgentSelectAfterCreate} onCleared={handleAgentCleared} onBack={handleAgentCleared} />
-                : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите агента</div>)
+          {personasMode
+            ? ((selectedPersonaId || personaCreating)
+                ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />
+                : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите персону</div>)
             : tasksMode
             ? (selectedTask
                 ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={() => window.history.back()} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
@@ -816,7 +818,7 @@ const windowWidth = useWindowWidth();
           </div>
         )}
         {/* Панель «Артефакты сессии» — мобайл: drawer поверх чата */}
-        {artifactsEnabled && artifactsOpen && activeSession && !openFile && !agentsMode && (
+        {artifactsEnabled && artifactsOpen && activeSession && !openFile && !personasMode && (
           <>
             <div onClick={() => setArtifactsOpen(false)}
               style={{ position: 'absolute', inset: 0, zIndex: 900, background: C.overlay }} />
@@ -910,9 +912,9 @@ const windowWidth = useWindowWidth();
           </div>
         );
 
-        // Вкладка «Агенты»: центральная зона = широкая форма профиля (тулбар сверху)
-        // либо пустой стейт. Сайдбар держит только список.
-        if (agentsMode) {
+        // Вкладка «Команда»: центральная зона = широкая форма профиля персоны (тулбар
+        // сверху) либо пустой стейт. Сайдбар держит только список.
+        if (personasMode) {
           const collapsedBar = sidebarMode === 'collapsed' && (
             <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
               <IconButton size="md" variant="soft" onClick={() => setSidebarMode('open')} title="Открыть панель">
@@ -926,9 +928,9 @@ const windowWidth = useWindowWidth();
             <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               {collapsedBar}
               <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-                {(selectedAgentId || agentCreating)
-                  ? <ProjectAgentPane project={project} personaId={agentCreating ? null : selectedAgentId} creating={agentCreating} onOpenChat={handleOpenAgentChat} onSelectAgent={handleAgentSelectAfterCreate} onCleared={handleAgentCleared} />
-                  : <ProjectAgentEmpty hasAgents={projectHasAgents} onNew={handleAgentNew} />}
+                {(selectedPersonaId || personaCreating)
+                  ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} />
+                  : <ProjectPersonaEmpty hasPersonas={projectHasPersonas} onNew={handlePersonaNew} />}
               </div>
             </div>
           );
@@ -981,7 +983,7 @@ const windowWidth = useWindowWidth();
       })()}
 
       {/* Панель «Артефакты сессии» — десктоп: боковая колонка в потоке (никогда поверх) */}
-      {artifactsEnabled && artifactsOpen && activeSession && !isTablet && !agentsMode && (
+      {artifactsEnabled && artifactsOpen && activeSession && !isTablet && !personasMode && (
         <>
           <Splitter orientation="v" active={draggingSplitter === 'artifacts'}
             onMouseDown={e => { setDraggingSplitter('artifacts'); handleArtifactsSplitterMouseDown(e); }} />
@@ -993,7 +995,7 @@ const windowWidth = useWindowWidth();
       )}
 
       {/* Панель «Артефакты сессии» — планшет: drawer поверх контента (узкий экран) */}
-      {artifactsEnabled && artifactsOpen && activeSession && isTablet && !agentsMode && (
+      {artifactsEnabled && artifactsOpen && activeSession && isTablet && !personasMode && (
         <>
           <div onClick={() => setArtifactsOpen(false)}
             style={{ position: 'absolute', inset: 0, zIndex: 19, background: C.overlay }} />

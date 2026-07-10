@@ -13,7 +13,7 @@ function IconPlus() {
   );
 }
 
-// Сайдбар раздела «Агенты»: кнопка создания сверху, ниже — список персон.
+// Сайдбар раздела «Персоны»: кнопка создания сверху, ниже — список персон.
 export function PersonaList({ personas, selectedId, onSelect, onNew }: {
   personas: Persona[];
   selectedId: string | null;
@@ -24,13 +24,13 @@ export function PersonaList({ personas, selectedId, onSelect, onNew }: {
     <>
       <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
         <button onClick={onNew} style={newBtn}>
-          <IconPlus />Новый агент
+          <IconPlus />Новая персона
         </button>
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 6 }}>
         {personas.length === 0 ? (
           <div style={{ padding: '20px 12px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans, lineHeight: 1.5 }}>
-            Пока нет агентов. Создай первого — задай ему имя, характер и аватар.
+            Пока нет персон. Создай первую — задай ей имя, характер и аватар.
           </div>
         ) : (
           personas.map(p => {

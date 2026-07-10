@@ -3,7 +3,7 @@ import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, P
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, ensurePersonasLoaded } from '../lib/personas';
 import { showToast } from '../lib/toast';
-import { PersonaGreeting } from '../features/agents/PersonaGreeting';
+import { PersonaGreeting } from '../features/personas/PersonaGreeting';
 import { countFiles, computeTodos } from '../hooks/useSessionArtifacts';
 import { useChatScroll } from '../hooks/useChatScroll';
 import { useOnline } from '../hooks/useOnline';
@@ -112,7 +112,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     [items, caps.supportsCompact]);
   const online = useOnline();
 
-  // === Олицетворённый агент (персона) чата ===
+  // === Персона чата ===
   // Резолвим персону сессии из стора (реактивно — при обновлении списка перечитываем).
   const personasVersion = usePersonasVersion();
   const persona = useMemo(
@@ -143,7 +143,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         : await api.personas.assignPersonaToChat(session.id, p?.id ?? null);
       onSessionUpdated?.(updated);
     } catch (e) {
-      showToast('Агент', e instanceof Error ? e.message : 'Не удалось сменить агента', 'info');
+      showToast('Персона', e instanceof Error ? e.message : 'Не удалось сменить персону', 'info');
     }
   }, [project, session.id, onSessionUpdated]);
 
@@ -713,7 +713,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         )}
 
         {/* Empty state: для персоны с приветствием — её бабл, иначе обычный empty state
-            (с рядом агентов «Поговорить с…») */}
+            (с рядом персон «Поговорить с…») */}
         {items.length === 0 && !isHistoryLoading && online && (
           effectiveGreeting ?? (
             <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}

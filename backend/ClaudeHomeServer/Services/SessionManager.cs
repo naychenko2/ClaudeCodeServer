@@ -360,7 +360,7 @@ public class SessionManager
         return session;
     }
 
-    // Создание чата от лица персоны («олицетворённого агента»). Маршрутизация по зоне:
+    // Создание чата от лица персоны. Маршрутизация по зоне:
     // проектная персона → сессия в её проекте (scope = проект); глобальная (или проект
     // недоступен) → чат вне проекта (scope = все данные владельца). Модель по умолчанию — из персоны.
     public async Task<Session> CreatePersonaChatAsync(string ownerId, string personaId,
@@ -405,7 +405,7 @@ public class SessionManager
         return session;
     }
 
-    // Чаты владельца, ведущиеся от лица конкретной персоны (для раздела «Агенты»)
+    // Чаты владельца, ведущиеся от лица конкретной персоны (для раздела «Персоны»)
     public IReadOnlyList<Session> GetPersonaChats(string ownerId, string personaId) =>
         _sessions.Values
             .Select(e => e.Info)
@@ -432,7 +432,7 @@ public class SessionManager
         return (prompt, null, null);
     }
 
-    // Назначить/сменить персону чату ДО первого хода (для селектора агента в пустом чате).
+    // Назначить/сменить персону чату ДО первого хода (для селектора персоны в пустом чате).
     // Если ходов ещё не было — адаптер пересоздаётся с персона-контекстом при первом сообщении.
     // Модель/усилие подтягиваются из персоны. Начатую сессию не трогаем (клиент делает форк).
     public Session? SetPersona(string sessionId, string ownerId, string? personaId)
@@ -440,7 +440,7 @@ public class SessionManager
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (SessionOwner(entry.Info) != ownerId) return null;
         if (entry.Info.ClaudeSessionId is not null)
-            throw new InvalidOperationException("Нельзя сменить агента у начатой сессии — создайте новый чат");
+            throw new InvalidOperationException("Нельзя сменить персону у начатой сессии — создайте новый чат");
 
         Persona? persona = null;
         if (!string.IsNullOrEmpty(personaId))
@@ -502,7 +502,7 @@ public class SessionManager
             ? _projects.GetById(session.ProjectId)?.OwnerId
             : session.OwnerId;
 
-        // Персона («олицетворённый агент»): её характер инжектится в системный промпт.
+        // Персона: её характер инжектится в системный промпт.
         // Scope контекста уже задан типом сессии (глобальная персона → чат без проекта →
         // доступ ко всем данным владельца; проектная → сессия проекта → только он).
         var persona = BuildPersonaLayer(session, ownerId);

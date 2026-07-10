@@ -4,7 +4,7 @@ import { C, R, FONT } from '../../lib/design';
 import { NewChatSetup } from './NewChatSetup';
 import { useAssistantName } from './contexts';
 import { personaLabel, personaTitleLines } from '../../lib/personas';
-import { PersonaAvatar } from '../../features/agents/PersonaAvatar';
+import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 
 // Чипы-подсказки для empty state проектного чата
 const HINTS = ['Объясни структуру проекта', 'Найди и почини падающие тесты'];
@@ -21,7 +21,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
   session?: Session;
   onSessionUpdated?: (s: Session) => void;
   isMobile?: boolean;
-  // Доступные персоны (олицетворённые агенты) — ряд «Поговорить с…» для пустого чата
+  // Доступные персоны — ряд «Поговорить с…» для пустого чата
   personas?: Persona[];
   selectedPersonaId?: string;
   onPickPersona?: (p: Persona) => void;
@@ -138,9 +138,9 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
               </>
             )}
 
-            {/* Ряд агентов «Поговорить с…» — назначить персону текущему пустому чату.
+            {/* Ряд персон «Поговорить с…» — назначить персону текущему пустому чату.
                 В проекте команда проекта видна сразу, глобальные свёрнуты за кнопкой;
-                если проектных агентов нет — глобальные показываются сразу. */}
+                если проектных персон нет — глобальные показываются сразу. */}
             {personas && personas.length > 0 && onPickPersona && (
               <PersonaPills
                 personas={personas}
@@ -158,7 +158,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
   );
 }
 
-// Одна пилюля-аватар агента (роль над именем)
+// Одна пилюля-аватар персоны (роль над именем)
 function PersonaPill({ p, active, onPick }: { p: Persona; active: boolean; onPick: (p: Persona) => void }) {
   return (
     <button
@@ -191,7 +191,7 @@ function PersonaPill({ p, active, onPick }: { p: Persona; active: boolean; onPic
 }
 
 // Ряд «Поговорить с…»: в проекте команда видна сразу, глобальные — за кнопкой-раскрывашкой.
-// Без проектных агентов (или вне проекта) глобальные показываются сразу.
+// Без проектных персон (или вне проекта) глобальные показываются сразу.
 function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
   personas: Persona[];
   hasProject: boolean;
@@ -199,11 +199,11 @@ function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
   onPick: (p: Persona) => void;
 }) {
   const [showGlobals, setShowGlobals] = useState(false);
-  const projectAgents = personas.filter(p => p.scope === 'project');
-  const globalAgents = personas.filter(p => p.scope === 'global');
-  // Скрываем глобальных только в проекте и только когда есть своя команда
-  const collapseGlobals = hasProject && projectAgents.length > 0 && !showGlobals;
-  const visible = collapseGlobals ? projectAgents : [...projectAgents, ...globalAgents];
+  const projectPersonas = personas.filter(p => p.scope === 'project');
+  const globalPersonas = personas.filter(p => p.scope === 'global');
+  // Скрываем глобальные персоны только в проекте и только когда есть своя команда
+  const collapseGlobals = hasProject && projectPersonas.length > 0 && !showGlobals;
+  const visible = collapseGlobals ? projectPersonas : [...projectPersonas, ...globalPersonas];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 6 }}>
@@ -214,10 +214,10 @@ function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
         {visible.map(p => (
           <PersonaPill key={p.id} p={p} active={p.id === selectedPersonaId} onPick={onPick} />
         ))}
-        {collapseGlobals && globalAgents.length > 0 && (
+        {collapseGlobals && globalPersonas.length > 0 && (
           <button
             onClick={() => setShowGlobals(true)}
-            title="Показать глобальных агентов"
+            title="Показать глобальные персоны"
             style={{
               display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
               border: 'none', background: 'none', cursor: 'pointer', padding: 2, width: 64,
@@ -229,7 +229,7 @@ function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
               background: C.bgWhite, border: `1px dashed ${C.border}`,
               fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textMuted,
             }}>
-              +{globalAgents.length}
+              +{globalPersonas.length}
             </span>
             <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted }}>ещё</span>
           </button>

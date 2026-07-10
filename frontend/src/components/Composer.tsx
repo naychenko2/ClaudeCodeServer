@@ -5,9 +5,12 @@ import { AgentSelector } from './AgentSelector';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
+import { getDraft, setDraft } from '../lib/drafts';
 import type { SkillInfo, AgentInfo } from '../types';
 
 export interface ComposerProps {
+  // Ключ чата — под него хранится черновик недовведённого текста
+  sessionId: string;
   onSend: (text: string, attachments: string[]) => void;
   onStop: () => void;
   onAttach: () => void;
@@ -103,6 +106,7 @@ function fmtRecTime(s: number): string {
 }
 
 export function Composer({
+  sessionId,
   onSend,
   onStop,
   onAttach,
@@ -121,7 +125,20 @@ export function Composer({
   onAgentChange,
 }: ComposerProps) {
   const asstName = useAssistantName();
-  const [text, setText] = useState('');
+  // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
+  const [text, setText] = useState(() => getDraft(sessionId));
+  const draftSessionRef = useRef(sessionId);
+  useEffect(() => {
+    if (draftSessionRef.current !== sessionId) {
+      // Смена чата (Composer переиспользуется без размонтирования): сохраняем черновик
+      // уходящего чата и подгружаем черновик открытого
+      setDraft(draftSessionRef.current, text);
+      draftSessionRef.current = sessionId;
+      setText(getDraft(sessionId));
+    } else {
+      setDraft(sessionId, text);
+    }
+  }, [sessionId, text]);
   // Преднастройка из раздела «Заметки»: «Спросить Claude про это» кладёт контекст
   // заметки в sessionStorage — забираем при появлении композера и по событию
   // (на случай, если чат уже открыт и композер смонтирован).

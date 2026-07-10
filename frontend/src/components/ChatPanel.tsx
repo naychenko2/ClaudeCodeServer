@@ -756,6 +756,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) handleChatUpload(fs); }}
           />
           <Composer
+            sessionId={session.id}
             offline={!online}
             onSend={handleSend}
             onStop={interrupt}

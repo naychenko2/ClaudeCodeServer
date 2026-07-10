@@ -404,6 +404,8 @@ export interface ChangelogItem {
 export interface ChangelogDay {
   date: string; // yyyy-MM-dd
   items: ChangelogItem[];
+  degraded?: boolean;       // сводку собрать не удалось — пункты сырые (subject'ы коммитов)
+  degradedReason?: string;  // что сломалось и как это починить
 }
 
 // Заглушка дня для мгновенного списка (без LLM)

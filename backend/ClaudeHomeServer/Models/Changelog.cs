@@ -47,9 +47,13 @@ public record ChangelogItem(
 /// <summary>Продуктовая сводка изменений за один день (по всем проектам).</summary>
 /// <param name="Date">День в формате yyyy-MM-dd (локальная дата коммитов).</param>
 /// <param name="Items">Пункты сводки (сгенерированы Claude, закешированы).</param>
+/// <param name="Degraded">Сводку собрать не удалось — пункты сырые (subject'ы коммитов), а не осмысленная сводка.</param>
+/// <param name="DegradedReason">Человеческое объяснение, что сломалось и как чинить (null, если всё хорошо).</param>
 public record ChangelogDay(
     string Date,
-    List<ChangelogItem> Items);
+    List<ChangelogItem> Items,
+    bool Degraded = false,
+    string? DegradedReason = null);
 
 /// <summary>
 /// Заглушка дня для мгновенного списка (без LLM): дата, сколько коммитов,

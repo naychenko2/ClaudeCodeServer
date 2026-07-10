@@ -51,7 +51,10 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
 
     private const string CacheFile = "product";
 
-    private sealed record CachedDay(string ShasHash, List<ChangelogItem> Items);
+    // Degraded/DegradedReason — опциональные: старые записи кеша (без этих полей)
+    // читаются как «сводка нормальная», формат обратно совместим
+    private sealed record CachedDay(string ShasHash, List<ChangelogItem> Items,
+        bool Degraded = false, string? DegradedReason = null);
 
     // ===== Публичное API =====
 
@@ -82,7 +85,7 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
         var hash = ShasHash(dayCommits);
         var cache = LoadCache();
         if (cache.TryGetValue(date, out var cached) && cached.ShasHash == hash)
-            return new ChangelogDay(date, cached.Items);
+            return new ChangelogDay(date, cached.Items, cached.Degraded, cached.DegradedReason);
 
         await _generateLock.WaitAsync();
         try
@@ -90,12 +93,18 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
             // Перепроверка под замком: пока ждали, другой запрос мог сгенерировать
             cache = LoadCache();
             if (cache.TryGetValue(date, out cached) && cached.ShasHash == hash)
-                return new ChangelogDay(date, cached.Items);
+                return new ChangelogDay(date, cached.Items, cached.Degraded, cached.DegradedReason);
 
-            var items = await SummarizeDay(dayCommits) ?? FallbackItems(dayCommits);
-            cache[date] = new CachedDay(hash, items);
+            var (items, error) = await SummarizeDay(dayCommits);
+            // Сводки нет — показываем сырые коммиты, но ЧЕСТНО помечаем это, а не выдаём
+            // их за настоящую сводку (иначе поломка выглядит как «плохо сгенерилось»)
+            var degraded = items is null;
+            var reason = degraded ? DescribeFailure(error) : null;
+            items ??= FallbackItems(dayCommits);
+
+            cache[date] = new CachedDay(hash, items, degraded, reason);
             SaveCache(cache);
-            return new ChangelogDay(date, items);
+            return new ChangelogDay(date, items, degraded, reason);
         }
         finally { _generateLock.Release(); }
     }
@@ -192,11 +201,39 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
     /// один вызов — 141 с / 13 пунктов, три чанка — 182 с / 29 пунктов.
     /// От переполнения таймаута страхует Changelog:TimeoutMs, а не батчинг.
     /// </summary>
-    private async Task<List<ChangelogItem>?> SummarizeDay(List<GitCommitRaw> commits, CancellationToken ct = default)
+    /// <returns>Пункты сводки, либо null + причина сбоя (для честной пометки дня).</returns>
+    private async Task<(List<ChangelogItem>? Items, string? Error)> SummarizeDay(
+        List<GitCommitRaw> commits, CancellationToken ct = default)
     {
         var knownAreas = KnownAreas();
-        var items = ParseAndClean(await TryRunClaude(BuildPrompt(commits, knownAreas), ct));
-        return items is null ? null : NormalizeAreas(items);
+        var (json, error) = await TryRunClaude(BuildPrompt(commits, knownAreas), ct);
+        if (json is null) return (null, error);
+
+        var items = ParseAndClean(json);
+        return items is null
+            ? (null, "модель вернула ответ, который не удалось разобрать")
+            : (NormalizeAreas(items), null);
+    }
+
+    // Техническую ошибку переводим в человеческое «что случилось и что делать».
+    // Самый частый и самый коварный случай — истёкший логин CLI: он выглядит как
+    // «сводка плохо сгенерилась», хотя claude вообще не отвечал.
+    internal static string DescribeFailure(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+            return "Не удалось собрать сводку: claude не ответил.";
+
+        if (error.Contains("Not logged in", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("/login", StringComparison.OrdinalIgnoreCase))
+            return "Claude CLI не залогинен, поэтому сводка не собрана — показаны сырые коммиты. "
+                 + "Выполните «claude auth login» либо задайте переменную CLAUDE_CODE_OAUTH_TOKEN "
+                 + "(claude setup-token) в окружении сервера.";
+
+        if (error.Contains("не ответил за отведённое время", StringComparison.OrdinalIgnoreCase))
+            return "Claude не уложился в отведённое время — показаны сырые коммиты. "
+                 + "Попробуйте обновить сводку или увеличьте Changelog:TimeoutMs.";
+
+        return $"Не удалось собрать сводку — показаны сырые коммиты. Причина: {error}";
     }
 
     // Частые области из уже собранных дней — подсказка модели, чтобы области не разъезжались
@@ -346,19 +383,21 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
     /// (таймаут / ненулевой exit code со stderr) — гасим его в null, на котором стоит фолбэк.
     /// NormalizeModel обязателен: на выключенном провайдере BuildCliEnv внутри раннера кидает,
     /// а так модель мягко откатывается на дефолтный Claude.</summary>
-    private async Task<string?> TryRunClaude(string prompt, CancellationToken ct)
+    private async Task<(string? Json, string? Error)> TryRunClaude(string prompt, CancellationToken ct)
     {
         try
         {
             var output = await claude.RunAsync(prompt, claude.NormalizeModel(_model),
                 TimeSpan.FromMilliseconds(_claudeTimeoutMs), ct);
-            return string.IsNullOrWhiteSpace(output) ? null : output;
+            return string.IsNullOrWhiteSpace(output)
+                ? (null, "claude вернул пустой ответ")
+                : (output, null);
         }
         catch (Exception ex)
         {
-            // ex.Message различает «не ответил за отведённое время» и «завершился с кодом N: stderr»
+            // ex.Message различает «не ответил за отведённое время» и «завершился с кодом N: <детали>»
             logger.LogWarning("Генерация changelog: {Error}", ex.Message);
-            return null;
+            return (null, ex.Message);
         }
     }
 

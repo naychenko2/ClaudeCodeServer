@@ -320,6 +320,11 @@ export function ProductHistory({ isMobile, onClose }: {
                 {selLoading ? 'Claude готовит сводку дня…' : 'В очереди на сводку…'}
               </div>
             )}
+            {/* Сводка не собралась — честно говорим об этом и как чинить, вместо того
+                чтобы выдавать сырые subject'ы коммитов за настоящую сводку */}
+            {selSum?.degraded && (
+              <DegradedNotice reason={selSum.degradedReason} onRetry={() => askRegenerate(selDay.date)} />
+            )}
             {selSum && selItems.length === 0 && (
               <div style={{ padding: '10px 4px', color: C.textMuted, fontSize: 13 }}>
                 {authorFilter ? `Нет изменений (${authorFilter})` : 'Заметных изменений нет'}
@@ -441,6 +446,37 @@ function GroupTimeline({ list }: { list: ChangelogItem[] }) {
       {list.map((item, i) => (
         <TimelineNode key={i} item={item} last={i === list.length - 1} />
       ))}
+    </div>
+  );
+}
+
+// Плашка «сводка не собралась»: показывает причину и как починить. Без неё продукт
+// молча выдаёт сырые коммиты за сводку — на этом легко потерять вечер, ища баг не там.
+function DegradedNotice({ reason, onRetry }: { reason?: string; onRetry: () => void }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16,
+      padding: '11px 14px', borderRadius: R.xl,
+      background: C.warningBg, border: `1px solid ${C.warning}`,
+    }}>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={C.warning}
+        strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+        <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.warningText, marginBottom: 2 }}>
+          Сводка не собрана
+        </div>
+        <div style={{ fontSize: 12.5, lineHeight: 1.45, color: C.textSecondary }}>
+          {reason || 'Показаны сырые коммиты вместо продуктовой сводки.'}
+        </div>
+      </div>
+      <button onClick={onRetry} style={{
+        flexShrink: 0, fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
+        padding: '5px 12px', borderRadius: 8, border: `1px solid ${C.accent}`,
+        background: C.accentLight, color: C.accent,
+      }}>Обновить</button>
     </div>
   );
 }

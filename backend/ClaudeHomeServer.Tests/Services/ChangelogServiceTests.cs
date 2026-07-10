@@ -187,6 +187,66 @@ public class ChangelogServiceTests : IDisposable
         normalized.Select(i => i.Area).Should().Equal("Чат", "Файлы", "Чат");
     }
 
+    // ─── Человеческое объяснение сбоя генерации ─────────────────────────────
+
+    [Theory]
+    // Самый коварный случай: CLI пишет это в stdout при пустом stderr
+    [InlineData("claude завершился с кодом 1: Not logged in · Please run /login")]
+    [InlineData("claude завершился с кодом 1: NOT LOGGED IN")]
+    public void DescribeFailure_НеЗалогинен_ОбъясняетКакПочинить(string error)
+    {
+        var text = ChangelogService.DescribeFailure(error);
+
+        text.Should().Contain("не залогинен");
+        text.Should().Contain("claude auth login");
+        text.Should().Contain("CLAUDE_CODE_OAUTH_TOKEN");
+    }
+
+    [Fact]
+    public void DescribeFailure_Таймаут_ПредлагаетУвеличитьЛимит()
+    {
+        var text = ChangelogService.DescribeFailure("Claude не ответил за отведённое время");
+
+        text.Should().Contain("не уложился");
+        text.Should().Contain("Changelog:TimeoutMs");
+    }
+
+    [Fact]
+    public void DescribeFailure_НеизвестнаяОшибка_ПоказываетПричину()
+    {
+        var text = ChangelogService.DescribeFailure("claude завершился с кодом 137: OOM");
+
+        text.Should().Contain("сырые коммиты");
+        text.Should().Contain("OOM");
+    }
+
+    [Fact]
+    public void DescribeFailure_ПричиныНет_НеПадает()
+    {
+        ChangelogService.DescribeFailure(null).Should().NotBeEmpty();
+        ChangelogService.DescribeFailure("").Should().NotBeEmpty();
+    }
+
+    // ─── Обратная совместимость кеша ────────────────────────────────────────
+
+    [Fact]
+    public void LoadCache_СтарыйФорматБезDegraded_ЧитаетсяКакНормальныйДень()
+    {
+        Directory.CreateDirectory(_cacheDir);
+        var cacheFile = Path.Combine(_cacheDir, "product.json");
+        // Записи, созданные до появления полей Degraded/DegradedReason
+        File.WriteAllText(cacheFile, """
+            {"2026-07-01":{"ShasHash":"aaa","Items":[]},"2026-07-02":{"ShasHash":"bbb","Items":[]}}
+            """);
+
+        // Если десериализация сломается, LoadCache вернёт пустой словарь и день не удалится
+        _sut.InvalidateDay("2026-07-01");
+
+        var json = File.ReadAllText(cacheFile);
+        json.Should().NotContain("2026-07-01");
+        json.Should().Contain("2026-07-02");
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);

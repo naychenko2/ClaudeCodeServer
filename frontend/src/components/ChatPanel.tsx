@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from 'react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona } from '../types';
 import { useSession } from '../hooks/useSession';
-import { usePersonasVersion, getPersonaById, ensurePersonasLoaded } from '../lib/personas';
+import { usePersonasVersion, getPersonaById, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { showToast } from '../lib/toast';
 import { PersonaGreeting } from '../features/personas/PersonaGreeting';
 import { countFiles, computeTodos } from '../hooks/useSessionArtifacts';
@@ -96,7 +96,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking } = useSession(session.id, project?.id);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch } = useSession(session.id, project?.id);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
   const worstRate = useMemo(() => worstWindow(rateWindows), [rateWindows]);
@@ -136,8 +136,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return () => { alive = false; };
   }, [online, chatEmpty, persona, project?.id]);
 
-  // Назначить/снять собеседника пустому чату: персона либо .md-агент — взаимоисключающе
-  // (проектная сессия ↔ чат вне проекта — разные эндпоинты)
+  // Назначить/сменить/снять собеседника чата: персона либо .md-агент — взаимоисключающе
+  // (проектная сессия ↔ чат вне проекта — разные эндпоинты). Разрешено и по ходу
+  // разговора — тогда в ленту добавляется локальный разделитель «Теперь отвечает: …».
   const handleCompanionChange = useCallback(async (sel: { persona?: Persona | null; agent?: AgentInfo | null }) => {
     const personaId = sel.persona?.id ?? null;
     const agentName = sel.agent?.fileName ?? null;
@@ -146,10 +147,16 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         ? await api.personas.assignPersonaToSession(project.id, session.id, personaId, agentName)
         : await api.personas.assignPersonaToChat(session.id, personaId, agentName);
       onSessionUpdated?.(updated);
+      if (items.length > 0) {
+        const label = sel.persona ? personaLabel(sel.persona)
+          : sel.agent ? sel.agent.name
+          : 'обычный ассистент';
+        noteCompanionSwitch(label);
+      }
     } catch (e) {
       showToast('Собеседник', e instanceof Error ? e.message : 'Не удалось сменить собеседника', 'info');
     }
-  }, [project, session.id, onSessionUpdated]);
+  }, [project, session.id, onSessionUpdated, items.length, noteCompanionSwitch]);
 
   // Обратная совместимость для пилюль «Поговорить с…» пустого состояния (выбор только персоны)
   const handlePersonaChange = useCallback(

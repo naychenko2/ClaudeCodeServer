@@ -678,6 +678,22 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // Разделитель «продолжение чата» убран — декоративный, без полезной нагрузки
       return null;
 
+    case 'companion_switched':
+      // Локальный разделитель смены собеседника по ходу разговора
+      return (
+        <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+          <span style={{
+            fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+            textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+            background: C.bgSelected, border: `1px solid ${C.border}`,
+          }}>
+            Теперь отвечает: {item.label}
+          </span>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+        </div>
+      );
+
     case 'interrupted':
       return (
         <div style={{

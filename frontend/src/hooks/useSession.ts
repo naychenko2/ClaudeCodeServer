@@ -212,6 +212,16 @@ export function useSession(sessionId: string | null, projectId?: string) {
     }
   }, [sessionId]);
 
+  // Локальный разделитель «Теперь отвечает: …» при смене собеседника по ходу разговора.
+  // Client-side сахар: не с сервера, не переживает перезагрузку истории.
+  const noteCompanionSwitch = useCallback((label: string) => {
+    if (!sessionId) return;
+    setState(sessionId, prev => ({
+      ...prev,
+      items: [...prev.items, { kind: 'companion_switched', label }],
+    }));
+  }, [sessionId]);
+
   const allowPermission = useCallback(async (requestId: string) => {
     if (!sessionId) return;
     setState(sessionId, prev => ({
@@ -329,5 +339,5 @@ export function useSession(sessionId: string | null, projectId?: string) {
     ));
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch };
 }

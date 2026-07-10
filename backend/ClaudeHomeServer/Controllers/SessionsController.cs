@@ -43,7 +43,7 @@ public class SessionsController(SessionManager sessions) : ControllerBase
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
-    // Назначить/снять собеседника (персону или .md-агента) у проектной сессии ДО первого хода
+    // Назначить/сменить/снять собеседника (персону или .md-агента) у проектной сессии — в т.ч. по ходу разговора
     [HttpPost("{sessionId}/persona")]
     public IActionResult SetPersona(string projectId, string sessionId, [FromBody] SetPersonaRequest req)
     {

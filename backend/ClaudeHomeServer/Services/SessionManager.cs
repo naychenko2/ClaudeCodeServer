@@ -425,7 +425,7 @@ public class SessionManager
         if (session.PersonaId is null || ownerId is null) return (null, null, null, null);
         var persona = _personas.Get(session.PersonaId, ownerId);
         if (persona is null) return (null, null, null, null);
-        var prompt = BuildPersonaPrompt(persona);
+        var prompt = BuildPersonaPrompt(persona, session.PersonaSwitched);
         // Долгая память — только если включена у персоны и владелец имеет доступ к фиче
         if (persona.MemoryEnabled && _flags.IsEnabled(ownerId, FeatureFlagKeys.Personas))
             return (prompt, BuildMemoryContext(ownerId, persona.Id), BuildPersonaRecallProvider(ownerId, persona.Id), persona.Tools);
@@ -479,16 +479,16 @@ public class SessionManager
             ? new[] { "WebSearch", "WebFetch" }
             : null;
 
-    // Назначить/сменить собеседника чату ДО первого хода (единый селектор в пустом чате):
-    // персону (personaId) ИЛИ стандартного .md-агента Claude (agentName) — взаимоисключающе.
-    // Оба пустые = снять собеседника. Модель/усилие подтягиваются из персоны.
-    // Начатую сессию не трогаем (клиент делает форк).
+    // Назначить/сменить собеседника чату (единый селектор): персону (personaId) ИЛИ
+    // стандартного .md-агента Claude (agentName) — взаимоисключающе. Оба пустые = снять.
+    // Разрешено и ПО ХОДУ разговора: персона-слой строится на каждый ход, транскрипт
+    // продолжается через --resume с новым системным слоем. Модель/усилие подтягиваются
+    // из персоны; у начатой сессии — только при том же провайдере (guard «смена
+    // провайдера у начатой сессии — 400» нерушим: транскрипт живёт у эндпоинта).
     public Session? SetPersona(string sessionId, string ownerId, string? personaId, string? agentName = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (SessionOwner(entry.Info) != ownerId) return null;
-        if (entry.Info.ClaudeSessionId is not null)
-            throw new InvalidOperationException("Нельзя сменить собеседника у начатой сессии — создайте новый чат");
 
         Persona? persona = null;
         if (!string.IsNullOrEmpty(personaId))
@@ -497,6 +497,10 @@ public class SessionManager
                 ?? throw new KeyNotFoundException("Персона не найдена");
         }
 
+        var started = entry.Info.ClaudeSessionId is not null;
+        var switching = started &&
+            (entry.Info.PersonaId != persona?.Id || entry.Info.AgentName is not null || persona is not null);
+
         entry.Info.PersonaId = persona?.Id;
         // .md-агент и персона взаимоисключающие: назначение одного сбрасывает другого
         entry.Info.AgentName = persona is null && !string.IsNullOrWhiteSpace(agentName)
@@ -504,9 +508,20 @@ public class SessionManager
             : null;
         if (persona is not null)
         {
-            entry.Info.Model = persona.Model;
-            entry.Info.Effort = persona.Effort;
+            if (!started)
+            {
+                entry.Info.Model = persona.Model;
+                entry.Info.Effort = persona.Effort;
+            }
+            else if (_llmProviders.ProviderKey(persona.Model) == _llmProviders.ProviderKey(entry.Info.Model))
+            {
+                // Тот же провайдер — модель персоны применяется со следующего хода;
+                // другой провайдер — оставляем модель сессии (характер всё равно её)
+                entry.Info.Model = persona.Model ?? entry.Info.Model;
+                entry.Info.Effort = persona.Effort ?? entry.Info.Effort;
+            }
         }
+        if (switching) entry.Info.PersonaSwitched = true;
         entry.Info.UpdatedAt = DateTime.UtcNow;
 
         // Ходов не было — пересоздаём адаптер с новым контекстом при следующем сообщении
@@ -522,7 +537,8 @@ public class SessionManager
 
     // Системный промпт персоны: имя + роль/описание + характер (тело systemPrompt).
     // Public static: переиспользуется PersonasController при one-shot ответе persona_ask.
-    public static string BuildPersonaPrompt(Persona persona)
+    // switched — собеседника меняли по ходу разговора (в транскрипте есть чужие ответы).
+    public static string BuildPersonaPrompt(Persona persona, bool switched = false)
     {
         var sb = new System.Text.StringBuilder();
         // Роль — главная («Ты — Дизайнер по имени Светлана»); без роли — просто имя
@@ -533,6 +549,8 @@ public class SessionManager
         if (!string.IsNullOrWhiteSpace(persona.Description))
             sb.Append($", {persona.Description.Trim()}");
         sb.Append(". Отвечай и действуй от своего лица, в своём характере, оставаясь собой на протяжении всего разговора.");
+        if (switched)
+            sb.Append(" Ранее в этом разговоре мог отвечать другой собеседник — продолжай диалог от своего лица, не переписывай и не комментируй прошлые ответы.");
         if (!string.IsNullOrWhiteSpace(persona.SystemPrompt))
             sb.Append("\n\n").Append(persona.SystemPrompt.Trim());
         return sb.ToString();

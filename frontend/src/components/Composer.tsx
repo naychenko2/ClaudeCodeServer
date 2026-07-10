@@ -31,8 +31,8 @@ export interface ComposerProps {
   // иначе теряется набранный черновик при кратком пропадании сети
   offline?: boolean;
   skills?: SkillInfo[];
-  // Единый селектор «собеседника» (персона или .md-агент Claude). Показывается только
-  // у пустого чата (hasMessages=false): назначить собеседника можно, пока не пошли ходы.
+  // Единый селектор «собеседника» (персона или .md-агент Claude); смена доступна
+  // и по ходу разговора. hasMessages оставлен в пропсах для совместимости.
   personas?: Persona[];
   agents?: AgentInfo[];
   selectedPersona?: Persona | null;
@@ -135,7 +135,6 @@ export function Composer({
   selectedAgentName = null,
   onCompanionChange,
   canPickCompanion,
-  hasMessages,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
@@ -717,9 +716,9 @@ export function Composer({
     );
   }
 
-  // Единый селектор собеседника (персона или .md-агент). Только у пустого чата:
-  // назначить/сменить можно, пока не пошли ходы (после первого сообщения бэкенд отклонит смену).
-  const companionSelector = canPickCompanion && !hasMessages && (personas.length > 0 || agents.length > 0) && onCompanionChange ? (
+  // Единый селектор собеседника (персона или .md-агент). Доступен и в начатом чате:
+  // смена по ходу разговора разрешена (персона-слой пересобирается каждый ход).
+  const companionSelector = canPickCompanion && (personas.length > 0 || agents.length > 0) && onCompanionChange ? (
     <CompanionSelector
       personas={personas}
       agents={agents}

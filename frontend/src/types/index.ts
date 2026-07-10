@@ -351,6 +351,8 @@ export type ChatItem =
   | { kind: 'interrupted' }
   | { kind: 'resumed' }
   | { kind: 'session_ended' }
+  // Локальный разделитель «сменился собеседник» (client-side, не с сервера; не переживает перезагрузку)
+  | { kind: 'companion_switched'; label: string }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 // Скиллы и агенты

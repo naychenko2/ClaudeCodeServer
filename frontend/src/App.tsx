@@ -8,6 +8,9 @@ import type { HubTab } from './components/HubTabs'
 import { UpdatePrompt } from './components/UpdatePrompt'
 import { NotificationToasts } from './components/NotificationToasts'
 import { ProductHistory } from './components/ProductHistory'
+import { GlobalSearch } from './components/GlobalSearch'
+import { AiLauncher } from './components/ai/AiLauncher'
+import { OPEN_GLOBAL_SEARCH_EVENT } from './lib/ai/actions'
 import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
 import { initConnectivity } from './lib/offline'
 import { C } from './lib/design'
@@ -18,7 +21,7 @@ import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
-import { setAllFlags } from './lib/featureFlags'
+import { setAllFlags, useFeature, FLAGS } from './lib/featureFlags'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
@@ -96,6 +99,16 @@ export default function App() {
     }
     window.addEventListener(PRODUCT_HISTORY_EVENT, open)
     return () => window.removeEventListener(PRODUCT_HISTORY_EVENT, open)
+  }, [])
+
+  // AI-хаб (флаг ai-hub): единый лаунчер AI-действий поверх любого раздела.
+  const aiHubEnabled = useFeature(FLAGS.aiHub)
+  // Единый поиск, открытый из AI-палитры (App-уровневый оверлей, независимый от шапки)
+  const [aiSearchOpen, setAiSearchOpen] = useState(false)
+  useEffect(() => {
+    const open = () => setAiSearchOpen(true)
+    window.addEventListener(OPEN_GLOBAL_SEARCH_EVENT, open)
+    return () => window.removeEventListener(OPEN_GLOBAL_SEARCH_EVENT, open)
   }, [])
 
   // Переход в раздел «Заметки» по клику на [[wikilink]] из файлов/чата.
@@ -390,6 +403,8 @@ export default function App() {
       {auth && historyOpen && (
         <ProductHistory isMobile={isMobileView} onClose={() => setHistoryOpen(false)} />
       )}
+      {auth && !authChecking && aiHubEnabled && <AiLauncher />}
+      {auth && aiSearchOpen && <GlobalSearch onClose={() => setAiSearchOpen(false)} />}
     </>
   )
 }

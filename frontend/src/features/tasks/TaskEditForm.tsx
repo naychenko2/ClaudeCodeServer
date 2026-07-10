@@ -1,7 +1,7 @@
 // Редактирование задачи — инлайн-экран вместо деталей (как в макете):
 // шапка «Редактирование задачи» с Отмена / ✓ Готово / корзина, ниже поля формы.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Task, TaskAssignee, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskSubtask, UpdateTaskDto } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { IconButton } from '../../components/ui';
@@ -46,6 +46,9 @@ interface Props {
   onSave: (dto: UpdateTaskDto) => Promise<void>;
   onCancel: () => void;
   onDelete: () => void;
+  // AI-хаб: авто-запуск генерации при входе в правку из палитры/подсказки
+  pendingAi?: 'task.description' | 'task.subtasks' | null;
+  onPendingConsumed?: () => void;
 }
 
 function fieldLabelStyle(): React.CSSProperties {
@@ -70,7 +73,7 @@ function reminderChipStyle(active: boolean): React.CSSProperties {
   };
 }
 
-export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Props) {
+export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendingAi, onPendingConsumed }: Props) {
   const [title, setTitle] = useState(task.title);
   const [priority, setPriority] = useState<TaskPriority>(task.priority);
   const [dueDate, setDueDate] = useState<string | null>(task.dueDate ?? null);
@@ -126,6 +129,15 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete }: Pro
       setAiSubsLoading(false);
     }
   };
+
+  // AI-хаб: если в правку вошли по действию из палитры/подсказки — сразу запускаем генерацию
+  useEffect(() => {
+    if (!pendingAi) return;
+    if (pendingAi === 'task.description') void generateDescription();
+    else if (pendingAi === 'task.subtasks') void generateSubtasks();
+    onPendingConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAi]);
 
   const addSubtask = () => {
     const t = newSubtask.trim();

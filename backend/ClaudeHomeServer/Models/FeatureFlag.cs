@@ -33,6 +33,7 @@ public static class FeatureFlagKeys
     public const string TaskBoard = "task-board";
     public const string TasksOffline = "tasks-offline";
     public const string NotesOffline = "notes-offline";
+    public const string AiHub = "ai-hub";
 }
 
 /// <summary>
@@ -150,6 +151,15 @@ public static class FeatureFlagCatalog
             Description: "Просматривайте, правьте и создавайте заметки без соединения — изменения сохраняются на устройстве и синхронизируются при возврате связи. Конфликты сохраняются копией.",
             Default: false,
             Stage: "beta"),
+
+        // AI-хаб — единая точка входа во все AI-возможности продукта: плавающая кнопка
+        // и палитра (⌘/Ctrl+K) с действиями, ранжированными под текущий раздел.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.AiHub,
+            Title: "AI-хаб",
+            Description: "Единая точка входа во все AI-возможности: плавающая кнопка и палитра (⌘/Ctrl+K), которая поднимает наверх действия под текущий раздел — заметку, задачу, чат.",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

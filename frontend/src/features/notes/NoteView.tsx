@@ -17,6 +17,7 @@ import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useOnline } from '../../hooks/useOnline';
 import { OfflineError } from '../../lib/offline';
 import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } from '../../lib/notesOffline';
+import { showToast } from '../../lib/toast';
 import {
   SourceBadge, usePanelWidth,
   IconChat, IconTrash, IconCalendarDay, IconLink, IconSparkle, IconFolder, IconFolderMove,
@@ -134,6 +135,25 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       .then(n => { setNote(n); bumpNotes(); })
       .finally(() => setAiBusy(false));
   };
+
+  // AI-хаб: контекстные действия из палитры делегируются сюда — над открытой заметкой,
+  // переиспользуя те же обработчики, что и ✨-кнопки тулбара.
+  useEffect(() => {
+    const onRun = (e: Event) => {
+      const action = (e as CustomEvent<{ action?: string }>).detail?.action;
+      if (!action || !note) return;
+      if (action === 'note.links') suggestLinks();
+      else if (action === 'note.tags') suggestTags();
+      else if (action === 'note.ask') onAskClaude?.(note);
+      else if (action === 'note.daily') {
+        if (isDaily) makeDailySummary();
+        else showToast('Конспект дня', 'Доступно только в дневниковой заметке (раздел «Заметки» → сегодня)', 'info');
+      }
+    };
+    window.addEventListener('cc-ai-run', onRun);
+    return () => window.removeEventListener('cc-ai-run', onRun);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note, isDaily]);
 
   const save = async () => {
     if (!note) return;

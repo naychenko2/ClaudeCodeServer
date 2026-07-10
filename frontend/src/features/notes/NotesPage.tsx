@@ -21,23 +21,26 @@ import { EmptyState } from '../../components/EmptyState';
 import { Splitter, IconButton } from '../../components/ui';
 import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot } from './shared';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
-import { useWindowWidth } from '../../lib/breakpoints';
+import { useIsMobile, useWindowWidth } from '../../lib/breakpoints';
 
 type Mode = 'notes' | 'graph';
 
-// Заметкам нужно три зоны (список | контент | связи справа), поэтому им тесно на
-// узких экранах даже в «десктопной» ширине приложения (порог 699). Ниже этого
-// значения раздел переходит на мобильную раскладку: один экран за раз, связи под
-// контентом, контенту — вся ширина. Актуально для раскладных (Galaxy Fold в
-// развёрнутом виде ~716px CSS).
-const NOTES_DESKTOP_MIN = 900;
+// Правый сайдбар связей внутри заметки уместен только на широком экране: список
+// слева + контент + связи справа. Ниже этого порога (планшет/раскладной Galaxy
+// Fold развёрнут ~716px) три колонки не помещаются — связи показываем снизу под
+// контентом, а список слева остаётся (десктопная раскладка, порог 699).
+const NOTE_CONN_SIDEBAR_MIN = 1000;
 
 export function NotesPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
   onLogout: () => void;
   onHubTab: (t: HubTab) => void;
 }) {
-  const isMobile = useWindowWidth() < NOTES_DESKTOP_MIN;
+  const isMobile = useIsMobile();
+  const windowWidth = useWindowWidth();
+  // «Планшет»: раскладка десктопная (список слева), но правому сайдбару связей уже
+  // мало места — показываем связи под контентом заметки.
+  const connectionsBelow = !isMobile && windowWidth < NOTE_CONN_SIDEBAR_MIN;
   const notes = useNotes();
   const offlineEnabled = useFeature(FLAGS.offline);
   const online = useOnline();
@@ -327,6 +330,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     : selectedId
       ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink}
           onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} isMobile={isMobile}
+          connectionsBelow={connectionsBelow}
           onBack={isMobile ? clearNote : undefined}
           onDeleted={clearNote} />
       : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

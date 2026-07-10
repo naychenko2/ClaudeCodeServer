@@ -25,7 +25,7 @@ import {
 
 // Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
 // в правом сайдбаре на десктопе, снизу на мобильном.
-export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted, onTag, isMobile, onBack, extraToolbar }: {
+export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted, onTag, isMobile, connectionsBelow, onBack, extraToolbar }: {
   noteId: string;
   existingTitles: Set<string>;
   onWikilink: (target: string) => void;
@@ -34,6 +34,9 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   onDeleted: () => void;
   onTag?: (tag: string) => void;
   isMobile?: boolean;
+  // Планшет/узкий десктоп: связи под контентом (а не правым сайдбаром), но
+  // раскладка остаётся десктопной (список слева, без стрелки «назад»).
+  connectionsBelow?: boolean;
   // Мобайл: стрелка «назад» в тулбаре (и клик по заголовку) — как у файлов/чатов
   onBack?: () => void;
   // Дополнительные кнопки справа в тулбаре (закрыть/fullscreen при встраивании в файлы)
@@ -373,8 +376,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
           resolveNote={resolveNote} embedSource={note.source} />
 
-        {/* Мобильный: задачи из заметки + связи снизу под контентом (сайдбару нет места) */}
-        {isMobile && (
+        {/* Мобильный/планшет: задачи из заметки + связи снизу под контентом (сайдбару нет места) */}
+        {(isMobile || connectionsBelow) && (
           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
             {taskSyncEnabled && <NoteTasksSection noteId={note.id} version={version} />}
             <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
@@ -385,8 +388,9 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       )}
 
       {/* Десктоп: сайдбар связей справа — стиль как при просмотре заметки в файлах
-          (прозрачный фон, тонкая линия-сплиттер), ширина перетаскивается */}
-      {!editing && !isMobile && (
+          (прозрачный фон, тонкая линия-сплиттер), ширина перетаскивается.
+          На планшете/узком экране (connectionsBelow) связи уходят под контент. */}
+      {!editing && !isMobile && !connectionsBelow && (
         <>
           <Splitter active={connDragging} onMouseDown={startConnDrag} />
           <aside style={{

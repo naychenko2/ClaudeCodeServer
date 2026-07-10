@@ -6,17 +6,21 @@ import { C, FONT, R, FIELD, SHADOW } from '../../lib/design';
 import { Toolbar, tbBtnGhost } from '../../components/Toolbar';
 import { IconButton } from '../../components/ui';
 import { SectionLabel } from '../tasks/bits';
+import { agentDotColor } from '../../components/AgentSelector';
+import { PERSONA_TEMPLATES, type PersonaTemplate } from './personaTemplates';
 
 // Экран быстрого создания персоны по свободному промпту — первый шаг флоу «Новая персона».
 // Пользователь описывает, кто это и чем будет заниматься, LLM придумывает роль/имя/
 // характер/приветствие/цвет и генерирует фото-аватар. «Заполнить вручную» — запасной
 // путь к пустой PersonaForm. Используется и в глобальной студии (PersonasPage),
 // и в проектной вкладке «Команда» (ProjectPersonaPane).
-export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onCancel, onBack, isMobile }: {
+export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTemplate, onCancel, onBack, isMobile }: {
   scope: PersonaScope;
   projectId?: string;
   onCreated: (p: Persona) => void;
   onManual: () => void;
+  // Выбор готового шаблона роли — родитель откроет PersonaForm с предзаполнением
+  onTemplate?: (t: PersonaTemplate) => void;
   // Отмена создания (кнопка в тулбаре) — есть не во всех точках встраивания
   onCancel?: () => void;
   // Кнопка «Назад» для мобильной раскладки
@@ -142,6 +146,51 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onCa
               Заполнить вручную
             </button>
           </div>
+
+          {/* Библиотека шаблонов: готовые роли с выверенным характером.
+              Выбор открывает ручную форму, предзаполненную шаблоном. */}
+          {onTemplate && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : 'auto' }}>
+              <SectionLabel>Или начните с шаблона</SectionLabel>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10 }}>
+                {PERSONA_TEMPLATES.map(t => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => onTemplate(t)}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = agentDotColor(t.avatarColor); e.currentTarget.style.background = C.bgWhite; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.bgWhite; }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left',
+                      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+                      padding: '11px 13px', cursor: 'pointer', fontFamily: FONT.sans,
+                      transition: 'border-color 0.15s',
+                    }}
+                  >
+                    <span style={{
+                      width: 36, height: 36, borderRadius: R.full, flexShrink: 0,
+                      background: agentDotColor(t.avatarColor), color: '#fff',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 15, fontWeight: 600,
+                    }}>
+                      {t.role.slice(0, 1)}
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>
+                        {t.role}
+                      </span>
+                      <span style={{
+                        display: 'block', fontSize: 12, color: C.textMuted, marginTop: 2, lineHeight: 1.4,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
+                        {t.description}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

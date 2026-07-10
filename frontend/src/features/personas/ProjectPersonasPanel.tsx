@@ -9,6 +9,7 @@ import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './P
 import { PersonaToolbar } from './PersonaToolbar';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
+import type { PersonaTemplate } from './personaTemplates';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -73,7 +74,9 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
   // Создание: сначала экран быстрого создания по промпту, «Заполнить вручную» — пустая форма.
   // Сбрасываем на быстрый экран при каждом новом входе в режим создания.
   const [manualCreate, setManualCreate] = useState(false);
-  useEffect(() => { if (creating) setManualCreate(false); }, [creating]);
+  // Выбранный шаблон роли — предзаполняет ручную форму
+  const [template, setTemplate] = useState<PersonaTemplate | null>(null);
+  useEffect(() => { if (creating) { setManualCreate(false); setTemplate(null); } }, [creating]);
 
   const [talking, setTalking] = useState(false);
   const formRef = useRef<PersonaFormHandle>(null);
@@ -121,7 +124,8 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
         scope="project"
         projectId={project.id}
         onCreated={p => onSelectPersona(p.id)}
-        onManual={() => setManualCreate(true)}
+        onManual={() => { setTemplate(null); setManualCreate(true); }}
+        onTemplate={t => { setTemplate(t); setManualCreate(true); }}
         onCancel={onCleared}
         onBack={onBack}
         isMobile={isMobile}
@@ -184,6 +188,7 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
             projects={[project]}
             defaultScope="project"
             defaultProjectId={project.id}
+            initial={template ? { role: template.role, description: template.description, systemPrompt: template.systemPrompt, greeting: template.greeting, color: template.avatarColor, tools: template.tools } : undefined}
             onStatus={onStatus}
             onColorChange={setLiveColor}
             onSaved={p => onSelectPersona(p.id)}

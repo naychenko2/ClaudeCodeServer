@@ -13,6 +13,7 @@ import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './P
 import { PersonaToolbar } from './PersonaToolbar';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
+import type { PersonaTemplate } from './personaTemplates';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -200,6 +201,8 @@ function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {
   const isMobile = useIsMobile();
   // Ручной путь создания (пустая форма) — по кнопке «Заполнить вручную»
   const [manual, setManual] = useState(false);
+  // Выбранный шаблон роли — предзаполняет ручную форму
+  const [template, setTemplate] = useState<PersonaTemplate | null>(null);
   const formRef = useRef<PersonaFormHandle>(null);
   const [status, setStatus] = useState<PersonaFormStatus>({ canSave: false, saving: false, dirty: false });
   const onStatus = useCallback((s: PersonaFormStatus) => {
@@ -215,7 +218,8 @@ function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {
       <PersonaQuickCreate
         scope="global"
         onCreated={onSaved}
-        onManual={() => setManual(true)}
+        onManual={() => { setTemplate(null); setManual(true); }}
+        onTemplate={t => { setTemplate(t); setManual(true); }}
         onCancel={onCancel}
         onBack={onBack}
         isMobile={isMobile}
@@ -236,7 +240,9 @@ function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {
       />
       <div style={{ flex: 'none', height: 2, background: `${accent}55` }} />
       <div style={{ flex: 1, minHeight: 0 }}>
-        <PersonaForm ref={formRef} persona={null} projects={projects} onStatus={onStatus} onColorChange={setLiveColor} onSaved={onSaved} />
+        <PersonaForm ref={formRef} persona={null} projects={projects}
+          initial={template ? { role: template.role, description: template.description, systemPrompt: template.systemPrompt, greeting: template.greeting, color: template.avatarColor, tools: template.tools } : undefined}
+          onStatus={onStatus} onColorChange={setLiveColor} onSaved={onSaved} />
       </div>
     </div>
   );

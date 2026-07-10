@@ -22,13 +22,14 @@ public class PersonasController : ControllerBase
     private readonly PersonaMemoryService _memory;
     private readonly FalImageService _falImage;
     private readonly Services.Llm.OneShotClaudeRunner _oneShot;
+    private readonly FeatureFlagService _flags;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonasController> _log;
     private readonly IHubContext<SessionHub> _hub;
 
     public PersonasController(PersonaManager personas, ProjectManager projects,
         SessionManager sessions, PersonaMemoryService memory, FalImageService falImage,
-        Services.Llm.OneShotClaudeRunner oneShot, IConfiguration config,
+        Services.Llm.OneShotClaudeRunner oneShot, FeatureFlagService flags, IConfiguration config,
         ILogger<PersonasController> log, IHubContext<SessionHub> hub)
     {
         _personas = personas;
@@ -37,6 +38,7 @@ public class PersonasController : ControllerBase
         _memory = memory;
         _falImage = falImage;
         _oneShot = oneShot;
+        _flags = flags;
         _config = config;
         _log = log;
         _hub = hub;
@@ -469,6 +471,59 @@ public class PersonasController : ControllerBase
         return NoContent();
     }
 
+    // --- @упоминания: спросить персону (persona_ask из MCP personas-server) ---
+
+    // One-shot ответ персоны от своего лица: слой персоны (роль+характер) + recall её долгой
+    // памяти + вопрос. Модель — модель персоны. Анти-рекурсия по построению: one-shot идёт
+    // без MCP-серверов, «спросить третью персону» изнутри ответа невозможно.
+    [HttpPost("ask")]
+    public async Task<ActionResult> Ask([FromBody] PersonaAskRequest req)
+    {
+        if (!_flags.IsEnabled(UserId, FeatureFlagKeys.Personas) ||
+            !_flags.IsEnabled(UserId, FeatureFlagKeys.PersonaMentions))
+            return BadRequest(new { error = "Фича @упоминаний персон выключена" });
+        if (string.IsNullOrWhiteSpace(req.Handle)) return BadRequest(new { error = "Не указан handle персоны" });
+        if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest(new { error = "Пустой вопрос" });
+
+        var persona = _personas.GetByHandle(UserId, req.Handle.Trim().TrimStart('@'));
+        if (persona is null) return NotFound(new { error = $"Персона @{req.Handle} не найдена" });
+
+        // Слой персоны + релевантная память (best-effort: без памяти ответ всё равно валиден)
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine(SessionManager.BuildPersonaPrompt(persona));
+        if (persona.MemoryEnabled)
+        {
+            try
+            {
+                var recall = await _memory.BuildRecallAsync(UserId, persona.Id, req.Question, topK: 5, minScore: 0.02);
+                if (!string.IsNullOrWhiteSpace(recall)) sb.AppendLine().AppendLine(recall);
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "persona_ask: recall памяти {Persona}", persona.Id); }
+        }
+        sb.AppendLine();
+        sb.AppendLine("Тебя спрашивает ассистент пользователя из другого разговора. Этот разговор ты не видишь — " +
+                      "отвечай по вопросу и переданному контексту, от своего лица и в своём характере, по существу.");
+        if (!string.IsNullOrWhiteSpace(req.Context))
+            sb.AppendLine($"\nКонтекст: {req.Context.Trim()}");
+        sb.AppendLine($"\nВопрос: {req.Question.Trim()}");
+
+        var timeout = TimeSpan.FromMilliseconds(
+            int.TryParse(_config["Persona:AskTimeoutMs"], out var t) ? t : 120_000);
+        try
+        {
+            var answer = await _oneShot.RunAsync(sb.ToString(), _oneShot.NormalizeModel(persona.Model),
+                timeout, HttpContext.RequestAborted);
+            if (string.IsNullOrWhiteSpace(answer))
+                return StatusCode(502, new { error = "Персона не ответила (пустой ответ модели)" });
+            return Ok(new { handle = persona.Handle, name = persona.Name, role = persona.Role, answer });
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "persona_ask: one-shot ответа @{Handle} не удался", persona.Handle);
+            return StatusCode(502, new { error = $"Не удалось получить ответ персоны: {ex.Message}" });
+        }
+    }
+
     // Проект существует и принадлежит владельцу
     private bool ValidProject(string? projectId)
     {
@@ -517,3 +572,5 @@ public record AiCharacterRequest(string? Name, string? Role, string? Description
 public record AiQuickCreateRequest(string Prompt, PersonaScope? Scope = null, string? ProjectId = null);
 
 public record SelectAvatarRequest(string File);
+
+public record PersonaAskRequest(string Handle, string Question, string? Context = null);

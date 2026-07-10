@@ -16,6 +16,11 @@ public record NotesMcpContext(string ApiUrl, string Token, string? ProjectId);
 // чья долгая память доступна инструментами mcp__memory__* в этой сессии.
 public record MemoryMcpContext(string ApiUrl, string Token, string PersonaId);
 
+// Контекст MCP-сервера персон (@упоминания): адрес API, сервисный токен владельца,
+// проект сессии (пусто = чат вне проекта), id собственной персоны сессии (исключается
+// из списка собеседников) и готовый блок-подсказка для системного промпта.
+public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId, string? SelfPersonaId, string Hint);
+
 // Per-session контекст, общий для всех адаптеров — то, что SessionManager передаёт
 // при создании сессии независимо от провайдера. Claude-специфичные зависимости
 // (MCP-конфиг, скиллы, disallowed tools) живут в фабрике адаптеров.
@@ -40,4 +45,6 @@ public sealed record LlmSessionContext(
     Func<string, Task<string?>>? PersonaRecallProvider = null,
     // Дополнительные запрещённые инструменты сессии (поверх конфига Claude:DisallowedTools) —
     // например, WebSearch/WebFetch у персоны с выключенной возможностью «web».
-    IReadOnlyList<string>? ExtraDisallowedTools = null);
+    IReadOnlyList<string>? ExtraDisallowedTools = null,
+    // MCP-сервер персон: @упоминания и persona_ask (null — фича выключена или персон нет).
+    PersonasMcpContext? PersonasMcp = null);

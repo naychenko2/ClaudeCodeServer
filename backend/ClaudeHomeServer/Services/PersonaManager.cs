@@ -49,6 +49,11 @@ public class PersonaManager
     // где владелец берётся из самой персоны. Не использовать в обработчиках запросов.
     public Persona? GetByIdInternal(string id) => _personas.GetValueOrDefault(id);
 
+    // Персона владельца по handle (@упоминания). Handle уникален per-owner.
+    public Persona? GetByHandle(string userId, string handle) =>
+        _personas.Values.FirstOrDefault(p => p.OwnerId == userId
+            && string.Equals(p.Handle, handle, StringComparison.OrdinalIgnoreCase));
+
     // Известные ключи возможностей персоны. Полный набор эквивалентен «без ограничений»
     // и нормализуется в null (поведение как раньше, по фич-флагам владельца).
     private static readonly string[] AllTools = ["tasks", "notes", "web"];

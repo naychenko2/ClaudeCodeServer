@@ -15,6 +15,7 @@ export const FLAGS = {
   offline: 'offline',
   personas: 'personas',
   personaMemoryAutolearn: 'persona-memory-autolearn',
+  personaMentions: 'persona-mentions',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

@@ -31,6 +31,8 @@ public static class FeatureFlagKeys
     public const string Offline = "offline";
     public const string Personas = "personas";
     public const string PersonaMemoryAutolearn = "persona-memory-autolearn";
+    // @упоминания персон в чатах: MCP persona_ask, автокомплит @ в композере
+    public const string PersonaMentions = "persona-mentions";
 }
 
 /// <summary>
@@ -100,6 +102,15 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.PersonaMemoryAutolearn,
             Title: "Авто-память персон",
             Description: "После разговора персона сама вычленяет из диалога факты и выводы и сохраняет их в свою долгую память — без явной команды «запомни».",
+            Default: false,
+            Stage: "dev"),
+
+        // @упоминания персон: в любом чате можно позвать другую персону (@handle) —
+        // она ответит от своего лица через persona_ask, со своим характером и памятью.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PersonaMentions,
+            Title: "@упоминания персон",
+            Description: "Упомяни персону через @ в любом чате — ассистент спросит её, и она ответит в своём характере, со своей моделью и долгой памятью. Плюс кнопка «Обсудить с командой» в чате персоны.",
             Default: false,
             Stage: "dev"),
     ];

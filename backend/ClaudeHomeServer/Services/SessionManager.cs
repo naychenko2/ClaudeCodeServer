@@ -436,6 +436,42 @@ public class SessionManager
     private static bool PersonaToolEnabled(List<string>? tools, string key) =>
         tools is null || tools.Contains(key, StringComparer.OrdinalIgnoreCase);
 
+    // Контекст MCP-сервера персон (@упоминания): доступен за флагами personas + persona-mentions,
+    // когда в контексте сессии есть хотя бы одна другая персона. Hint — блок для системного
+    // промпта со списком «@handle — Роль (Имя)».
+    private PersonasMcpContext? BuildPersonasContext(string? ownerId, string? projectId, string? selfPersonaId)
+    {
+        if (ownerId is null) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.Personas) ||
+            !_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaMentions)) return null;
+
+        var others = _personas.GetForContext(ownerId, projectId)
+            .Where(p => p.Id != selfPersonaId)
+            .ToList();
+        if (others.Count == 0) return null;
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("У пользователя есть другие персоны-ассистенты. Ты можешь спросить любую из них " +
+            "инструментом mcp__personas__persona_ask (handle, question, context?) — она ответит от своего " +
+            "лица, со своим характером и памятью. Когда пользователь упоминает персону через @handle — " +
+            "обязательно обратись к ней через persona_ask и учти её ответ. Вопрос формулируй " +
+            "самодостаточно: персона не видит этот разговор. Доступные персоны:");
+        foreach (var p in others)
+        {
+            var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
+            sb.Append($"- @{p.Handle} — {title}");
+            if (!string.IsNullOrWhiteSpace(p.Description)) sb.Append($": {p.Description.Trim()}");
+            sb.AppendLine();
+        }
+
+        var entry = _notesTokens.AddOrUpdate(ownerId,
+            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
+            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
+                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
+                : old);
+        return new PersonasMcpContext(ResolveTasksApiUrl(), entry.Token, projectId, selfPersonaId, sb.ToString().TrimEnd());
+    }
+
     // Ограничение «web»: у персоны с выключенным веб-поиском запрещаем встроенные
     // тулы CLI (не MCP) поверх конфига Claude:DisallowedTools
     private static IReadOnlyList<string>? BuildExtraDisallowed(List<string>? tools) =>
@@ -485,7 +521,8 @@ public class SessionManager
     }
 
     // Системный промпт персоны: имя + роль/описание + характер (тело systemPrompt).
-    private static string BuildPersonaPrompt(Persona persona)
+    // Public static: переиспользуется PersonasController при one-shot ответе persona_ask.
+    public static string BuildPersonaPrompt(Persona persona)
     {
         var sb = new System.Text.StringBuilder();
         // Роль — главная («Ты — Дизайнер по имени Светлана»); без роли — просто имя
@@ -532,7 +569,8 @@ public class SessionManager
             persona.Prompt,
             persona.Memory,
             persona.Recall,
-            BuildExtraDisallowed(persona.Tools)));
+            BuildExtraDisallowed(persona.Tools),
+            BuildPersonasContext(ownerId, session.ProjectId, session.PersonaId)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -621,7 +659,8 @@ public class SessionManager
                 PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(entry.Info.OwnerId, null) : null,
                 BuildRecallProvider(entry.Info.OwnerId),
                 persona.Prompt, persona.Memory, persona.Recall,
-                BuildExtraDisallowed(persona.Tools));
+                BuildExtraDisallowed(persona.Tools),
+                BuildPersonasContext(entry.Info.OwnerId, null, entry.Info.PersonaId));
         }
         else
         {
@@ -636,7 +675,8 @@ public class SessionManager
                 PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
                 BuildRecallProvider(project.OwnerId),
                 persona.Prompt, persona.Memory, persona.Recall,
-                BuildExtraDisallowed(persona.Tools));
+                BuildExtraDisallowed(persona.Tools),
+                BuildPersonasContext(project.OwnerId, project.Id, entry.Info.PersonaId));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

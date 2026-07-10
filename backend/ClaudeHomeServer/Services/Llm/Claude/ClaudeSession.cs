@@ -70,6 +70,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // MCP-сервер долгой памяти персоны + auto-recall её памяти
     private readonly MemoryMcpContext? _memoryMcp;
     private readonly Func<string, Task<string?>>? _personaRecallProvider;
+    // MCP-сервер персон: @упоминания и persona_ask
+    private readonly PersonasMcpContext? _personasMcp;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -94,6 +96,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _personaPrompt = context.PersonaSystemPrompt;
         _memoryMcp = context.MemoryMcp;
         _personaRecallProvider = context.PersonaRecallProvider;
+        _personasMcp = context.PersonasMcp;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
             ? [.. (disallowedTools ?? []), .. extra]
@@ -113,9 +116,11 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasNotes = notesServerPath is not null;
         var memoryServerPath = _memoryMcp is not null ? MemoryServerLocator.FindMemoryServerPath() : null;
         var hasMemory = memoryServerPath is not null;
+        var personasServerPath = _personasMcp is not null ? PersonasServerLocator.FindPersonasServerPath() : null;
+        var hasPersonas = personasServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var userServers = LoadUserScopeMcpServers();
-        if (!hasTasks && !hasNotes && !hasMemory && !hasDataset && userServers is null) return null;
+        if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasDataset && userServers is null) return null;
 
         try
         {
@@ -189,6 +194,22 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["MEMORY_API_URL"] = _memoryMcp!.ApiUrl,
                         ["MEMORY_API_TOKEN"] = _memoryMcp.Token,
                         ["MEMORY_PERSONA_ID"] = _memoryMcp.PersonaId,
+                    },
+                };
+            }
+
+            if (hasPersonas)
+            {
+                servers["personas"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["command"] = "node",
+                    ["args"] = new System.Text.Json.Nodes.JsonArray { personasServerPath! },
+                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["PERSONAS_API_URL"] = _personasMcp!.ApiUrl,
+                        ["PERSONAS_API_TOKEN"] = _personasMcp.Token,
+                        ["PERSONAS_PROJECT_ID"] = _personasMcp.ProjectId ?? "",
+                        ["PERSONAS_SELF_ID"] = _personasMcp.SelfPersonaId ?? "",
                     },
                 };
             }
@@ -602,6 +623,14 @@ public class ClaudeSession : ILlmSessionAdapter
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? memoryHint
                     : basePrompt + "\n\n" + memoryHint;
+            }
+
+            // Подсказка про команду персон (@упоминания) — только когда personas-server подключён
+            if (_personasMcp is not null)
+            {
+                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                    ? _personasMcp.Hint
+                    : basePrompt + "\n\n" + _personasMcp.Hint;
             }
 
             // Auto-recall долгой памяти персоны: релевантные записи по тексту хода.

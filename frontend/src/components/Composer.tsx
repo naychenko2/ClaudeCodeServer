@@ -1,11 +1,14 @@
 import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { SkillsDropdown } from './SkillsDropdown';
+import { MentionsDropdown } from './MentionsDropdown';
 import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
+import { DiscussTeamDialog } from '../features/personas/DiscussTeamDialog';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import type { SkillInfo, AgentInfo, Persona } from '../types';
 
 export interface ComposerProps {
@@ -171,6 +174,18 @@ export function Composer({
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
   const [skillQuery, setSkillQuery] = useState('');
   const skillWordStartRef = useRef(0);
+  // Autocomplete @упоминаний персон (флаг persona-mentions)
+  const mentionsOn = useFeature(FLAGS.personaMentions);
+  const [showMentions, setShowMentions] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const mentionWordStartRef = useRef(0);
+  // Кого можно упомянуть: персоны контекста, кроме персоны самого чата
+  const mentionable = mentionsOn
+    ? personas.filter(p => p.id !== selectedPersona?.id)
+    : [];
+  // Мультиперсонная дискуссия: доступна в чате персоны, когда есть кого позвать
+  const [showDiscuss, setShowDiscuss] = useState(false);
+  const canDiscuss = mentionsOn && !!selectedPersona && mentionable.length > 0;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
   const recCancelRef = useRef(false);
@@ -202,20 +217,45 @@ export function Composer({
 
   // Обновление состояния autocomplete при каждом изменении текста
   const updateSkillDropdown = useCallback((newText: string, cursorPos: number) => {
-    if (skills.length === 0) { setShowSkillsDropdown(false); return; }
     // Ищем слово под курсором: от курсора назад до пробела/переноса
     let wordStart = cursorPos - 1;
     while (wordStart >= 0 && newText[wordStart] !== ' ' && newText[wordStart] !== '\n') wordStart--;
     wordStart++;
     const word = newText.slice(wordStart, cursorPos);
-    if (word.startsWith('/')) {
+    if (skills.length > 0 && word.startsWith('/')) {
       skillWordStartRef.current = wordStart;
       setSkillQuery(word.slice(1));
       setShowSkillsDropdown(true);
     } else {
       setShowSkillsDropdown(false);
     }
-  }, [skills.length]);
+    // @упоминание персоны — тот же принцип, что и /скилл
+    if (mentionable.length > 0 && word.startsWith('@')) {
+      mentionWordStartRef.current = wordStart;
+      setMentionQuery(word.slice(1));
+      setShowMentions(true);
+    } else {
+      setShowMentions(false);
+    }
+  }, [skills.length, mentionable.length]);
+
+  const handleMentionSelect = useCallback((p: Persona) => {
+    const wordStart = mentionWordStartRef.current;
+    const before = text.slice(0, wordStart);
+    const after = text.slice(wordStart + 1 + mentionQuery.length); // +1 за @
+    const inserted = '@' + p.handle + ' ';
+    const newText = before + inserted + after.trimStart();
+    setText(newText);
+    setShowMentions(false);
+    setTimeout(() => {
+      const el = textareaRef.current;
+      if (el) {
+        const pos = (before + inserted).length;
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      }
+    }, 0);
+  }, [text, mentionQuery]);
 
   const handleSkillSelect = useCallback((skill: SkillInfo) => {
     const wordStart = skillWordStartRef.current;
@@ -439,6 +479,26 @@ export function Composer({
       }}
     >
       /
+    </button>
+  ) : null;
+
+  // Кнопка «Обсудить с командой» — открывает диалог выбора участников дискуссии
+  const discussButton = canDiscuss ? (
+    <button
+      onClick={() => setShowDiscuss(true)}
+      title="Обсудить с командой"
+      style={{
+        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: 'none',
+        cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
+        justifyContent: 'center', flexShrink: 0,
+      }}
+    >
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
     </button>
   ) : null;
 
@@ -683,6 +743,17 @@ export function Composer({
           isMobile={isMobile}
         />
       )}
+      {/* Dropdown @упоминаний персон (при @query, флаг persona-mentions) */}
+      {showMentions && mentionable.length > 0 && (
+        <MentionsDropdown
+          personas={mentionable}
+          query={mentionQuery}
+          onSelect={handleMentionSelect}
+          onClose={() => setShowMentions(false)}
+          anchorRef={textareaRef as React.RefObject<HTMLElement | null>}
+          isMobile={isMobile}
+        />
+      )}
       {/* Чипы вложений */}
       {attachments.length > 0 && (
         <div
@@ -745,6 +816,7 @@ export function Composer({
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {attachButton}
             {slashButton}
+            {discussButton}
             {modeButton}
             {companionSelector}
             <div style={{ flex: 1 }} />
@@ -757,6 +829,7 @@ export function Composer({
           {modeButton}
           {attachButton}
           {slashButton}
+          {discussButton}
           {inputArea}
           {companionSelector}
           {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <><div style={{ width: 12, flexShrink: 0 }} />{micButton}{sendButton}</>}
@@ -769,6 +842,14 @@ export function Composer({
           assistantName={asstName}
           onConfirm={() => { onModeChange(pendingMode); setPendingMode(null); }}
           onCancel={() => setPendingMode(null)}
+        />
+      )}
+
+      {showDiscuss && (
+        <DiscussTeamDialog
+          candidates={mentionable}
+          onSend={t => onSend(t, [])}
+          onClose={() => setShowDiscuss(false)}
         />
       )}
     </div>

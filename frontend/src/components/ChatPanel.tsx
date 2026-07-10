@@ -15,6 +15,7 @@ import { useModelCaps, assistantName } from '../lib/models';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { ChatHeaderBar, RateLimitBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { ChatProjectContext, FalCostContext, AssistantNameContext } from './chat/contexts';
 import { WaitingIndicator } from './chat/WaitingIndicator';
@@ -167,6 +168,15 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     bottomRef, scrollRef, contentRef, composerWrapRef, composerH,
     showScrollDown, atBottomRef, handleMessagesScroll, scrollToBottom,
   } = useChatScroll(session.id, items, isHistoryLoading, online);
+  // FAB AI-хаба должен вставать НАД композером (иначе налезает на композер и кнопку
+  // «вниз»): пробрасываем высоту композера в глобальную CSS-переменную, читаемую FAB.
+  const aiAssistOn = useFeature(FLAGS.aiAssist);
+  useEffect(() => {
+    if (!aiAssistOn) return;
+    const root = document.documentElement;
+    root.style.setProperty('--cc-fab-bottom', `${composerH + 12}px`);
+    return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
+  }, [aiAssistOn, composerH]);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);
 
@@ -722,11 +732,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           onClick={scrollToBottom}
           title="Вниз чата"
           style={{
-            position: 'absolute', right: isMobile ? 16 : 24, bottom: composerH + 14,
-            width: 44, height: 44, borderRadius: '50%', border: 'none',
-            background: C.accent, color: C.onAccent, cursor: 'pointer',
+            // Когда включён AI-хаб, поднимаем кнопку «вниз» выше FAB (над композером) с зазором.
+            // Служебная прокрутка — нейтральная (не accent), чтобы единственным акцентом в углу был FAB.
+            position: 'absolute', right: isMobile ? 16 : 20, bottom: composerH + 14 + (aiAssistOn ? 64 : 0),
+            width: 44, height: 44, borderRadius: '50%',
+            border: `1px solid ${C.border}`,
+            background: C.bgCard, color: C.textSecondary, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: SHADOW.fab, zIndex: 15,
+            boxShadow: SHADOW.card, zIndex: 15,
           }}
         >
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">

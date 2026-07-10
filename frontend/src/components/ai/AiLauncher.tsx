@@ -150,7 +150,7 @@ export function AiLauncher() {
           onClick={() => { setQ(''); setOpen(true); }}
           aria-label="AI-действия (Ctrl/⌘ + K)"
           title="AI-действия · ⌘K"
-          style={fabStyle}
+          style={{ ...fabStyle, ...(isMobile ? { right: 16 } : {}) }}
           onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; }}
           onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
         >
@@ -254,7 +254,9 @@ function Kbd({ children }: { children: React.ReactNode }) {
 }
 
 const fabStyle: React.CSSProperties = {
-  position: 'fixed', right: 20, bottom: 'calc(env(safe-area-inset-bottom, 0px) + 20px)',
+  // --cc-fab-bottom задаёт страница снизу (в чате — высота композера + зазор), чтобы
+  // FAB вставал НАД композером и не сталкивался с кнопкой «вниз». Дефолт — угол 20px.
+  position: 'fixed', right: 20, bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
   width: 54, height: 54, borderRadius: '50%', border: 'none', cursor: 'pointer',
   background: C.accent, color: C.onAccent, boxShadow: SHADOW.fab,
   display: 'grid', placeItems: 'center', zIndex: Z.modal - 1, transition: 'transform .16s',
@@ -324,7 +326,7 @@ const pulseDot: React.CSSProperties = {
   background: C.success, border: `2px solid ${C.accent}`,
 };
 const balloonStyle: React.CSSProperties = {
-  position: 'fixed', right: 20, bottom: 'calc(env(safe-area-inset-bottom, 0px) + 86px)',
+  position: 'fixed', right: 20, bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 66px)',
   width: 280, background: C.bgCard, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl,
   boxShadow: SHADOW.modal, padding: '13px 14px 12px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };

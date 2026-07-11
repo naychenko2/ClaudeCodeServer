@@ -338,7 +338,7 @@ public class SessionManager
 
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
-        string? effort = null)
+        string? effort = null, string? personaId = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -352,6 +352,9 @@ public class SessionManager
             Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
             AgentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim(),
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
+            // Персона-слой подхватится общим механизмом (BuildPersonaLayer).
+            // Маршрутизация остаётся по вызывающему коду (задача), не по зоне персоны.
+            PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
         };
 
         await StartNewSessionAsync(session, project.RootPath, project.SystemPrompt,
@@ -362,7 +365,8 @@ public class SessionManager
     // Создание чата вне проекта: рабочая папка — {DefaultProjectsPath}/{username}/Chats,
     // системный промпт — только встроенная часть (rawSystemPrompt=null), без проектных правил.
     public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
-        string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null)
+        string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,
+        string? personaId = null)
     {
         var rootPath = ResolveChatRoot(ownerId);
 
@@ -375,6 +379,8 @@ public class SessionManager
             Name = name,
             Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
+            // Персона-слой подхватится общим механизмом (BuildPersonaLayer)
+            PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
         };
 
         await StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);

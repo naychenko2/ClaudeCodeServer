@@ -19,6 +19,7 @@ import {
   PriorityFlag, SectionLabel, SubtaskCheck,
 } from './bits';
 import { TaskEditForm } from './TaskEditForm';
+import { TaskPersonaBadge } from './TaskPersonaBadge';
 
 interface Props {
   task: Task;
@@ -341,6 +342,12 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           <HeaderChip>
             {task.assignee === 'claude' ? <ClaudeBadge size={17} /> : <MeBadge size={17} />}
             {task.assignee === 'claude' ? 'Claude' : 'Я'}
+          </HeaderChip>
+        )}
+        {/* Персона-исполнитель: от чьего лица работает Claude */}
+        {task.personaId && (
+          <HeaderChip>
+            <TaskPersonaBadge personaId={task.personaId} size={17} />
           </HeaderChip>
         )}
       </div>

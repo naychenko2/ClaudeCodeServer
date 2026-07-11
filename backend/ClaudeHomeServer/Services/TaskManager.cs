@@ -65,6 +65,7 @@ public class TaskManager
             Recurrence = req.Recurrence is { Type: not TaskRecurrenceType.None } ? req.Recurrence : null,
             Assignee = req.Assignee,
             LinkedSessionId = req.LinkedSessionId,
+            PersonaId = string.IsNullOrEmpty(req.PersonaId) ? null : req.PersonaId,
             LinkedFiles = req.LinkedFiles ?? [],
             Subtasks = req.Subtasks?.Select(s => new TaskSubtask { Title = s.Title }).ToList() ?? [],
             Labels = req.Labels ?? [],
@@ -112,6 +113,9 @@ public class TaskManager
         }
         if (req.LinkedSessionId is not null)
             task.LinkedSessionId = req.LinkedSessionId == "" ? null : req.LinkedSessionId;
+        // Персона-исполнитель: null = не менять, "" = убрать (как у строковых полей)
+        if (req.PersonaId is not null)
+            task.PersonaId = req.PersonaId == "" ? null : req.PersonaId;
         if (req.LinkedFiles is not null) task.LinkedFiles = req.LinkedFiles;
         if (req.Labels is not null) task.Labels = req.Labels;
         if (req.Order is not null) task.Order = req.Order.Value;
@@ -268,6 +272,8 @@ public record CreateTaskRequest(
     TaskItemAssignee? Assignee = null,
     TaskRecurrence? Recurrence = null,
     string? LinkedSessionId = null,
+    // Исполнение от лица персоны (assignee=Claude); null/пусто — обычный Claude
+    string? PersonaId = null,
     List<string>? LinkedFiles = null,
     List<CreateSubtaskRequest>? Subtasks = null,
     List<string>? Labels = null,
@@ -289,6 +295,8 @@ public record UpdateTaskRequest(
     // null = не менять, Type=None = убрать повторение
     TaskRecurrence? Recurrence = null,
     string? LinkedSessionId = null,
+    // Персона-исполнитель: null = не менять, "" = убрать
+    string? PersonaId = null,
     List<string>? LinkedFiles = null,
     List<UpdateSubtaskRequest>? Subtasks = null,
     List<string>? Labels = null,

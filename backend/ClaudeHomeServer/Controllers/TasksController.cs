@@ -15,7 +15,8 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/projects/{projectId}/tasks")]
 public class ProjectTasksController(
-    TaskManager tasks, ProjectManager projects, IHubContext<SessionHub> hub) : ControllerBase
+    TaskManager tasks, ProjectManager projects, PersonaManager personas,
+    IHubContext<SessionHub> hub) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -44,6 +45,11 @@ public class ProjectTasksController(
         var cat = BoardColumnHelper.Category(project, req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
 
+        // Персона-исполнитель: своя и в правильном проекте
+        if (!string.IsNullOrEmpty(req.PersonaId)
+            && TaskPersonaValidator.Error(personas, UserId, req.PersonaId, projectId) is { } personaError)
+            return BadRequest(new { error = personaError });
+
         var task = tasks.Create(projectId, UserId, req);
         await hub.BroadcastTaskChangedAsync(UserId, "created", task);
         return Ok(task);
@@ -56,7 +62,7 @@ public class ProjectTasksController(
 [Route("api/tasks")]
 public class TasksController(
     TaskManager tasks, IHubContext<SessionHub> hub, TaskAiService ai, ProjectManager projects,
-    TaskExecutionService executor, NoteTaskSyncService noteSync) : ControllerBase
+    PersonaManager personas, TaskExecutionService executor, NoteTaskSyncService noteSync) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -103,6 +109,11 @@ public class TasksController(
         // Колонка доски → статус из категории (у личных — только дефолтные колонки)
         var cat = BoardColumnHelper.Category(null, req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
+
+        // Персона-исполнитель: своя; проектная персона личную задачу не берёт
+        if (!string.IsNullOrEmpty(req.PersonaId)
+            && TaskPersonaValidator.Error(personas, UserId, req.PersonaId, taskProjectId: null) is { } personaError)
+            return BadRequest(new { error = personaError });
 
         var task = tasks.Create(null, UserId, req);
         await hub.BroadcastTaskChangedAsync(UserId, "created", task);
@@ -159,6 +170,11 @@ public class TasksController(
         var cat = BoardColumnHelper.Category(task.ProjectId is null ? null : projects.GetById(task.ProjectId), req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
 
+        // Персона-исполнитель: "" = убрать (валидировать нечего), непустая — проверяем
+        if (!string.IsNullOrEmpty(req.PersonaId)
+            && TaskPersonaValidator.Error(personas, UserId, req.PersonaId, task.ProjectId) is { } personaError)
+            return BadRequest(new { error = personaError });
+
         var wasDone = task.Status == TaskItemStatus.Done;
         var updated = tasks.Update(taskId, req)!;
         await hub.BroadcastTaskChangedAsync(UserId, "updated", updated);
@@ -211,6 +227,20 @@ public class TasksController(
 
 public record GenerateDescriptionRequest(string Title, string? ProjectId = null);
 public record GenerateSubtasksRequest(string Title, string? Description = null, string? ProjectId = null);
+
+// Валидация персоны-исполнителя задачи: персона существует и принадлежит владельцу,
+// проектная персона допустима только у задач её проекта. null — ошибок нет.
+public static class TaskPersonaValidator
+{
+    public static string? Error(PersonaManager personas, string userId, string personaId, string? taskProjectId)
+    {
+        var persona = personas.Get(personaId, userId);
+        if (persona is null) return "Персона не найдена или недоступна";
+        if (persona.Scope == PersonaScope.Project && persona.ProjectId != taskProjectId)
+            return "Проектная персона может выполнять только задачи своего проекта";
+        return null;
+    }
+}
 
 // Резолв категории статуса по id колонки доски
 public static class BoardColumnHelper

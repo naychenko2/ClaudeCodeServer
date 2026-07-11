@@ -87,6 +87,7 @@ export interface Task {
   recurrence?: TaskRecurrence;
   seriesId?: string;         // общий id серии регулярной задачи
   linkedSessionId?: string;
+  personaId?: string;        // исполнение от лица персоны (assignee=claude)
   claudeStartedAt?: string;  // отметка запуска Claude-исполнителя
   claudeResult?: 'success' | 'error';  // итог последнего запуска (null — выполняется/не запускалась)
   linkedFiles: string[];
@@ -151,6 +152,7 @@ export interface CreateTaskDto {
   assignee?: TaskAssignee;
   recurrence?: TaskRecurrence;
   linkedSessionId?: string;
+  personaId?: string;        // исполнение от лица персоны
   linkedFiles?: string[];
   subtasks?: { title: string }[];
   labels?: string[];
@@ -170,6 +172,8 @@ export interface UpdateTaskDto {
   // type 'none' = убрать повторение, undefined = не менять
   recurrence?: TaskRecurrence;
   linkedSessionId?: string;
+  // Персона-исполнитель: '' = убрать, undefined = не менять
+  personaId?: string;
   linkedFiles?: string[];
   subtasks?: TaskSubtask[];
   labels?: string[];

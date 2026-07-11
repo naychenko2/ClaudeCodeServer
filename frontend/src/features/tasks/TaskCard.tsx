@@ -4,6 +4,7 @@ import type { Task } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { projectColor } from '../../lib/tasks';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
+import { TaskPersonaBadge } from './TaskPersonaBadge';
 
 interface Props {
   task: Task;
@@ -49,8 +50,11 @@ export function TaskCard({ task, selected, onClick, compact, projectName }: Prop
           }}>
             {task.title}
           </span>
-          {/* В компактных карточках сайдбара показываем только Claude (как в макете) */}
-          <AssigneeBadge assignee={compact && task.assignee === 'me' ? undefined : task.assignee} />
+          {/* В компактных карточках сайдбара показываем только Claude (как в макете).
+              У задачи с персоной-исполнителем — её мини-плашка вместо значка Claude */}
+          {task.personaId
+            ? <TaskPersonaBadge personaId={task.personaId} />
+            : <AssigneeBadge assignee={compact && task.assignee === 'me' ? undefined : task.assignee} />}
         </div>
 
         {/* Нижняя строка: чипы */}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AuthState, Persona, Project } from '../../types';
+import type { AuthState, Persona, Project, Session } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
 import { EmptyState } from '../../components/EmptyState';
@@ -10,7 +10,8 @@ import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '.
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { PersonaList } from './PersonaList';
 import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './PersonaForm';
-import { PersonaToolbar } from './PersonaToolbar';
+import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
+import { PersonaPreview } from './PersonaPreview';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
 import type { PersonaTemplate } from './personaTemplates';
@@ -140,6 +141,20 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     }
   };
 
+  // Открыть СУЩЕСТВУЮЩИЙ чат персоны (из «Недавних разговоров» обзора) —
+  // та же навигация, что у talk(), но без создания новой сессии.
+  const openSession = (session: Session) => {
+    if (session.projectId) {
+      const proj = projects.find(x => x.id === session.projectId);
+      if (!proj) { alert('Проект чата недоступен.'); return; }
+      sessionStorage.setItem('cc_pending_session', JSON.stringify(session));
+      window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project: proj } }));
+    } else {
+      localStorage.setItem('cc_open_chat', session.id);
+      onHubTab('chats');
+    }
+  };
+
   const sidebar = (
     <PersonaList personas={personas} selectedId={selectedId} onSelect={selectPersona} onNew={startCreate} />
   );
@@ -158,6 +173,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         talking={talking}
         onDelete={() => onDelete(selected)}
         onTalk={() => talk(selected)}
+        onOpenSession={openSession}
         onBack={isMobile ? clearSelection : undefined}
         isMobile={isMobile} />
     : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -248,19 +264,22 @@ function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {
   );
 }
 
-// Студия персоны: центральная область = инлайн-форма профиля ИЛИ долгая память.
-// Чата здесь нет — разговор живёт среди обычных чатов (кнопка «Поговорить»).
-function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onBack, isMobile }: {
+// Студия персоны: центральная область = обзор-визитка (дефолт), инлайн-форма
+// профиля ИЛИ долгая память. Чата здесь нет — разговор живёт среди обычных
+// чатов (кнопка «Поговорить»).
+function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSession, onBack, isMobile }: {
   persona: Persona;
   projects: Project[];
   talking: boolean;
   onDelete: () => void;
   onTalk: () => void;
+  onOpenSession: (s: Session) => void;
   onBack?: () => void;
   isMobile: boolean;
 }) {
-  // Активный вид: профиль (форма настройки) или долгая память персоны
-  const [view, setView] = useState<'profile' | 'memory'>('profile');
+  // Активный вид: обзор (read-only визитка), профиль (форма) или память.
+  // Компонент перемонтируется по key={persona.id} — смена персоны сама сбрасывает вид на обзор.
+  const [view, setView] = useState<PersonaView>('preview');
 
   // Императивный доступ к форме профиля + её состояние (для кнопок тулбара)
   const formRef = useRef<PersonaFormHandle>(null);
@@ -282,11 +301,18 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onBack, i
   const content = view === 'memory'
     // Память — под тулбаром, свой заголовок не нужен (идентичность уже в тулбаре)
     ? <div style={{ flex: 1, minHeight: 0 }}><PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded /></div>
+    : view === 'profile'
     // Профиль — инлайн-форма настройки прямо в контентной зоне (действия — в тулбаре)
-    : <div style={{ flex: 1, minHeight: 0 }}>
+    ? <div style={{ flex: 1, minHeight: 0 }}>
         <PersonaForm ref={formRef} persona={persona} projects={projects} onStatus={onStatus}
           onColorChange={setLiveColor} onOpenMemory={() => setView('memory')}
           onSaved={() => {}} onDelete={() => onDelete()} />
+      </div>
+    // Обзор — read-only визитка со сводкой и недавними разговорами
+    : <div style={{ flex: 1, minHeight: 0 }}>
+        <PersonaPreview persona={persona} accent={accent} talking={talking}
+          onTalk={onTalk} onOpenSession={onOpenSession}
+          onEditProfile={() => setView('profile')} isMobile={isMobile} />
       </div>;
 
   return (

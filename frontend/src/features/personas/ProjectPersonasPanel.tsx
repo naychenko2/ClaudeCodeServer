@@ -6,7 +6,8 @@ import { AGENT_COLORS } from '../../components/AgentSelector';
 import { C, FONT, R } from '../../lib/design';
 import { PersonaList } from './PersonaList';
 import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './PersonaForm';
-import { PersonaToolbar } from './PersonaToolbar';
+import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
+import { PersonaPreview } from './PersonaPreview';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
 import type { PersonaTemplate } from './personaTemplates';
@@ -67,9 +68,10 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
   const persona = personaId ? personas.find(p => p.id === personaId) ?? null : null;
   const isMobile = useIsMobile();
 
-  // Активный вид (для существующей персоны): профиль или долгая память
-  const [view, setView] = useState<'profile' | 'memory'>('profile');
-  useEffect(() => { setView('profile'); }, [personaId]);
+  // Активный вид (для существующей персоны): обзор (дефолт), профиль или память.
+  // Смена персоны в списке сбрасывает вид обратно на обзор.
+  const [view, setView] = useState<PersonaView>('preview');
+  useEffect(() => { setView('preview'); }, [personaId]);
 
   // Создание: сначала экран быстрого создания по промпту, «Заполнить вручную» — пустая форма.
   // Сбрасываем на быстрый экран при каждом новом входе в режим создания.
@@ -168,6 +170,17 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
         {persona ? (
           view === 'memory' ? (
             <PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded />
+          ) : view === 'preview' ? (
+            // Обзор — read-only визитка; чаты проектной персоны открываются на месте
+            <PersonaPreview
+              persona={persona}
+              accent={accent}
+              talking={talking}
+              onTalk={() => talk(persona)}
+              onOpenSession={onOpenChat}
+              onEditProfile={() => setView('profile')}
+              isMobile={isMobile}
+            />
           ) : (
             <PersonaForm
               ref={formRef}

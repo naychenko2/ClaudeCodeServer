@@ -8,12 +8,27 @@ import { personaTitleLines } from '../../lib/personas';
 import type { PersonaFormStatus } from './PersonaForm';
 
 // Единый тулбар студии персоны — общий для глобальной студии (PersonasPage) и
-// проектной панели (ProjectPersonaPane). Состав в режиме редактирования:
-// [полоса цвета] аватар + Роль(Имя) + бейдж зоны | сегмент Профиль|Память |
-// Поговорить | ⋯-меню (Удалить внутри) | Сохранить (+точка dirty).
+// проектной панели (ProjectPersonaPane). Состав в режиме просмотра/редактирования:
+// [полоса цвета] аватар + Роль(Имя) + бейдж зоны | сегмент Обзор|Профиль|Память |
+// Поговорить | ⋯-меню (Удалить внутри) и Сохранить (+точка dirty) — только в «Профиль».
 // В режиме создания: «Новая персона» + [Отмена] [Создать].
 
-export type PersonaView = 'profile' | 'memory';
+export type PersonaView = 'preview' | 'profile' | 'memory';
+
+// Иконки видов — на мобиле пилюли компактные (подпись только у активного)
+const viewIcon = (d: React.ReactNode) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    {d}
+  </svg>
+);
+const VIEW_OPTIONS: { value: PersonaView; label: string; icon: React.ReactNode }[] = [
+  // Обзор — глаз
+  { value: 'preview', label: 'Обзор', icon: viewIcon(<><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></>) },
+  // Профиль — карандаш
+  { value: 'profile', label: 'Профиль', icon: viewIcon(<><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></>) },
+  // Память — слои
+  { value: 'memory', label: 'Память', icon: viewIcon(<><path d="M12 2 2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" /></>) },
+];
 
 interface CommonProps {
   accent: string;
@@ -116,11 +131,13 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
         </div>
       </div>
 
-      {/* Сегмент Профиль | Память */}
+      {/* Сегмент Обзор | Профиль | Память (на мобиле — компактный, иконки) */}
       <PillSwitch<PersonaView>
         value={view}
         onChange={onView}
-        options={[{ value: 'profile', label: 'Профиль' }, { value: 'memory', label: 'Память' }]}
+        options={VIEW_OPTIONS}
+        compact={isMobile}
+        isMobile={isMobile}
       />
 
       {/* Поговорить — доступно в обоих видах */}

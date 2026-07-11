@@ -2,8 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AuthState, Persona, Project } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { EmptyState } from '../../components/EmptyState';
-import { C, FONT, R } from '../../lib/design';
+import { C, FONT } from '../../lib/design';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
@@ -13,6 +12,7 @@ import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './P
 import { PersonaToolbar } from './PersonaToolbar';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
+import { PersonasOverview } from './PersonasOverview';
 import type { PersonaTemplate } from './personaTemplates';
 
 function useIsMobile(): boolean {
@@ -24,17 +24,6 @@ function useIsMobile(): boolean {
     return () => mq.removeEventListener('change', h);
   }, []);
   return m;
-}
-
-// Иконка раздела для пустого состояния (персона)
-function IconPersonas() {
-  return (
-    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="8" r="4" />
-      <path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" />
-    </svg>
-  );
 }
 
 export function PersonasPage({ auth, onLogout, onHubTab }: {
@@ -160,11 +149,9 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         onTalk={() => talk(selected)}
         onBack={isMobile ? clearSelection : undefined}
         isMobile={isMobile} />
-    : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <EmptyState icon={<IconPersonas />} title="Персоны"
-          subtitle={personas.length ? 'Выбери персону слева, чтобы открыть её профиль и память' : 'Создай первую персону: имя, характер, аватар'}
-          action={<button onClick={startCreate} style={newBtn}>Новая персона</button>} />
-      </div>;
+    // Ничего не выбрано — обзор-«витрина команды» (десктоп; мобилка показывает список)
+    : <PersonasOverview personas={personas} projects={projects}
+        onSelect={selectPersona} onTalk={p => void talk(p)} onNew={startCreate} talking={talking} />;
 
   const hasContent = creating || !!selected;
 
@@ -312,8 +299,3 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onBack, i
     </div>
   );
 }
-
-const newBtn: React.CSSProperties = {
-  background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.md,
-  padding: '9px 16px', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: FONT.sans,
-};

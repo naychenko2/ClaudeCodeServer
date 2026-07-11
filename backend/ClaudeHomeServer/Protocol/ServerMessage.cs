@@ -117,6 +117,12 @@ public record TaskChangedMessage(string Action, Models.TaskItem Task)
 public record NotesChangedMessage(string Action, string? NoteId = null)
     : ServerMessage("notes_changed");
 
+// Изменение баз знаний раздела «Знания» (created/deleted/doc_changed) — в группу
+// user_{userId}, чтобы все устройства обновили список и состав базы. DatasetId — id
+// датасета Dify, к которому относится изменение (для точечного рефреша на фронте).
+public record KnowledgeChangedMessage(string Action, string? DatasetId = null)
+    : ServerMessage("knowledge_changed");
+
 // Изменение персон — created/updated/deleted — в группу user_{userId},
 // чтобы все устройства обновили раздел «Персоны».
 public record PersonasChangedMessage(string Action, string? PersonaId = null)

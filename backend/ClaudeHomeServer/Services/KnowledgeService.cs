@@ -35,7 +35,14 @@ public record DifyDatasetResponse(
 
 public record DifyDatasetListItem(
     [property: JsonPropertyName("id")] string Id,
-    [property: JsonPropertyName("name")] string Name);
+    [property: JsonPropertyName("name")] string Name,
+    // Дополнительные поля списка датасетов (использует раздел «Знания»): право доступа,
+    // счётчики, дата создания, описание. У старых вызовов остаются необязательными.
+    [property: JsonPropertyName("permission")] string? Permission = null,
+    [property: JsonPropertyName("document_count")] int DocumentCount = 0,
+    [property: JsonPropertyName("word_count")] int WordCount = 0,
+    [property: JsonPropertyName("created_at")] double? CreatedAt = null,
+    [property: JsonPropertyName("description")] string? Description = null);
 
 public record DifyDatasetsPage(
     [property: JsonPropertyName("data")] List<DifyDatasetListItem> Data,
@@ -138,18 +145,23 @@ public class KnowledgeService
     public bool IsConfigured =>
         !string.IsNullOrEmpty(_cfg.ApiUrl) && !string.IsNullOrEmpty(_cfg.ApiKey);
 
-    // Создание датасета по имени, без привязки к проекту (для заметок пользователя)
-    public async Task<string> CreateDatasetAsync(string name)
+    // Создание датасета по имени, без привязки к проекту (для заметок пользователя).
+    // permission: "only_me" (личный) | "all_team_members" (публичный, общий на workspace);
+    // description — необязательное описание (Dify хранит сам). Существующие вызовы
+    // (заметки/проекты) остаются на дефолте only_me.
+    public async Task<string> CreateDatasetAsync(string name, string permission = "only_me", string? description = null)
     {
         if (!IsConfigured)
             throw new InvalidOperationException("Dify не настроен: задайте Dify:ApiUrl и Dify:ApiKey в конфигурации");
-        var client = CreateClient();
-        var resp = await client.PostAsJsonAsync("datasets", new
+        var payload = new Dictionary<string, object?>
         {
-            name,
-            indexing_technique = _cfg.IndexingTechnique,
-            permission = "only_me",
-        });
+            ["name"] = name,
+            ["indexing_technique"] = _cfg.IndexingTechnique,
+            ["permission"] = permission,
+        };
+        if (!string.IsNullOrWhiteSpace(description)) payload["description"] = description;
+        var client = CreateClient();
+        var resp = await client.PostAsJsonAsync("datasets", payload);
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<DifyDatasetResponse>()
             ?? throw new InvalidOperationException("Пустой ответ от Dify при создании датасета");
@@ -163,9 +175,13 @@ public class KnowledgeService
     // индексация без полнотекста) — тихий фолбэк на чисто смысловой поиск.
     // filters — необязательная фильтрация по метаданным документов (дата встречи,
     // источник и т.п.); logic — как объединять условия ("and"/"or").
+    // searchMethod (явный): "semantic_search" | "full_text_search" | "hybrid_search".
+    // Если не задан — гибридный поиск с тихим фолбэком на семантический (как раньше).
     public async Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8,
-        IReadOnlyList<KnowledgeMetadataFilter>? filters = null, string logic = "and")
+        IReadOnlyList<KnowledgeMetadataFilter>? filters = null, string logic = "and", string? searchMethod = null)
     {
+        if (!string.IsNullOrEmpty(searchMethod))
+            return await RetrieveWithMethodAsync(datasetId, query, topK, searchMethod, filters, logic);
         try { return await RetrieveWithMethodAsync(datasetId, query, topK, "hybrid_search", filters, logic); }
         catch { return await RetrieveWithMethodAsync(datasetId, query, topK, "semantic_search", filters, logic); }
     }

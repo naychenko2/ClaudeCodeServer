@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -640,6 +640,50 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ documentName, documentId, tags }),
       }),
+  },
+
+  // Раздел «Знания»: менеджер баз знаний Dify (личные + публичные), не путать с
+  // проектным knowledge выше. Dify — источник истины; configured=false — не настроен.
+  knowledgeBases: {
+    list: () => request<KnowledgeListResponse>('/knowledge'),
+    get: (id: string) => request<KnowledgeBaseDetail>(`/knowledge/${encodeURIComponent(id)}`),
+    create: (dto: CreateKnowledgeBaseDto) =>
+      request<{ id: string; title: string; visibility: string }>('/knowledge', {
+        method: 'POST', body: JSON.stringify(dto),
+      }),
+    remove: (id: string) => request<void>(`/knowledge/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    // Добавить документ текстом
+    addDocumentText: (id: string, name: string, text: string) =>
+      request<{ id: string; name: string; indexingStatus: string }>(
+        `/knowledge/${encodeURIComponent(id)}/documents`,
+        { method: 'POST', body: JSON.stringify({ name, text }) },
+      ),
+    // Загрузить документ файлом (multipart — request() не ставит Content-Type для FormData)
+    addDocumentFile: async (id: string, file: File, name?: string): Promise<{ id: string; name: string; indexingStatus: string }> => {
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const form = new FormData();
+      form.append('file', file);
+      if (name) form.append('name', name);
+      const res = await fetch(`/api/knowledge/${encodeURIComponent(id)}/documents/file`,
+        { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form });
+      if (res.status === 401) {
+        if (token && typeof window !== 'undefined') window.dispatchEvent(new Event('cc-unauthorized'));
+        throw new Error('Нет доступа');
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error ?? res.statusText);
+      }
+      return res.json();
+    },
+    removeDocument: (id: string, docId: string) =>
+      request<void>(`/knowledge/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`, { method: 'DELETE' }),
+    // method: semantic (по смыслу) | fulltext (точный полнотекстовый)
+    search: (id: string, q: string, method: 'semantic' | 'fulltext', topK = 8) =>
+      request<{ items: KnowledgeSearchHit[] }>(
+        `/knowledge/${encodeURIComponent(id)}/search?q=${encodeURIComponent(q)}&topK=${topK}&method=${method}`),
   },
 
   skills: {

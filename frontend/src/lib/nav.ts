@@ -5,7 +5,7 @@ import type { Project } from '../types';
 // отражается в hash-части URL (#/calendar, #/project/{id}/task/{taskId}…) —
 // адрес можно копировать/обновлять, серверного роутинга под пути не нужно.
 export interface NavSnapshot {
-  screen: 'projects' | 'project' | 'chats' | 'calendar' | 'notes' | 'personas';
+  screen: 'projects' | 'project' | 'chats' | 'calendar' | 'notes' | 'personas' | 'knowledge';
   project?: Project;              // когда screen === 'project'
   chatId?: string;                // активный чат вне проекта (screen === 'chats')
   view?: 'sidebar' | 'chat';     // мобильный вид внутри проекта / чатов
@@ -14,6 +14,7 @@ export interface NavSnapshot {
   board?: boolean;               // режим Kanban-доски проекта (screen === 'project')
   note?: string | null;          // открытая заметка (id) или null (screen === 'notes')
   persona?: string | null;       // открытая персона (id) или null (screen === 'personas')
+  knowledge?: string | null;     // открытая база знаний (id датасета Dify) или null
 }
 
 // Hash-представление снапшота для адресной строки
@@ -23,6 +24,7 @@ function toHash(s: NavSnapshot): string {
     case 'calendar': return s.board ? '#/calendar/board' : '#/calendar';
     case 'notes': return s.note ? `#/notes/${encodeURIComponent(s.note)}` : '#/notes';
     case 'personas': return s.persona ? `#/personas/${encodeURIComponent(s.persona)}` : '#/personas';
+    case 'knowledge': return s.knowledge ? `#/knowledge/${encodeURIComponent(s.knowledge)}` : '#/knowledge';
     case 'projects': return '#/projects';
     case 'project': {
       if (!s.project) return '#/projects';
@@ -37,13 +39,14 @@ function toHash(s: NavSnapshot): string {
 
 // Разбор hash при загрузке страницы (диплинк/обновление)
 export interface HashTarget {
-  screen: 'projects' | 'chats' | 'calendar' | 'project' | 'notes' | 'personas';
+  screen: 'projects' | 'chats' | 'calendar' | 'project' | 'notes' | 'personas' | 'knowledge';
   projectId?: string;
   taskId?: string;
   file?: string;
   board?: boolean;
   noteId?: string;
   personaId?: string;
+  knowledgeId?: string;
   chatId?: string;   // #/chats/{id} — диплинк на конкретный чат вне проекта
 }
 
@@ -74,6 +77,11 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
     case 'agents': {
       const target: HashTarget = { screen: 'personas' };
       if (parts[1]) target.personaId = decodeURIComponent(parts[1]);
+      return target;
+    }
+    case 'knowledge': {
+      const target: HashTarget = { screen: 'knowledge' };
+      if (parts[1]) target.knowledgeId = decodeURIComponent(parts[1]);
       return target;
     }
     case 'projects': return { screen: 'projects' };

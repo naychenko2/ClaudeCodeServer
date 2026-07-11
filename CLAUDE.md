@@ -187,6 +187,32 @@ WorkingDirectory = `project.RootPath`
   (живая/призрачная/внешняя), embeds `![[…]]`, hover-preview; стор
   [lib/notes.ts](frontend/src/lib/notes.ts) (realtime notes_changed).
 
+## Знания
+
+Раздел-хаб «Знания» — единый менеджер баз знаний Dify, релевантных пользователю: личных
+(`{username}:…` — заметок/проектов/памяти персон/самостоятельные) и публичных (глобальных,
+`permission: all_team_members`). Dify — источник истины, отдельного JSON-стора нет: список
+берётся из `KnowledgeService.ListDatasetsAsync()` и классифицируется по имени датасета + permission.
+
+- **Бэкенд**: [KnowledgeBasesController.cs](backend/ClaudeHomeServer/Controllers/KnowledgeBasesController.cs)
+  — `/api/knowledge/*` (list/get/create/delete, documents add(text/file)/delete, search).
+  Классификация (`Classify`): `{user}:notes`→Заметки, `{user}:persona:{handle}`→Память персоны,
+  `{user}:kb:{Title}`→Самостоятельная (deletable), `{user}:{project}`→Проект, `all_team_members`→Публичная
+  (deletable). **Безопасность**: каждый `{id}`-эндпоинт резолвит датасет из `ListDatasetsAsync` и
+  проверяет relevant текущему пользователю (иначе 403) — с общим Dify-ключом нельзя лезть в чужую
+  only_me базу. Самостоятельные/публичные — создавать и удалять; привязанные (заметок/проектов/персон) —
+  только управлять документами (DELETE базы → 403). Realtime — `KnowledgeChangedMessage` в группу `user_*`.
+- **KnowledgeService** расширен: `CreateDatasetAsync(name, permission="only_me", description)`,
+  `RetrieveAsync(…, searchMethod)` (`semantic_search` | `full_text_search` | гибрид с фолбэком),
+  `DifyDatasetListItem` несёт `permission`/`document_count`/`created_at`/`description`.
+- **Фронт**: [features/knowledge/](frontend/src/features/knowledge/) — KnowledgePage (сайдбар со
+  сплиттером и общей шириной `cc_sidebar_width`, режимы pinned/collapsed/open, мобила list/item),
+  KnowledgeList (группы Мои/Публичные + контекстное меню базы: правый клик/⋯), KnowledgeView
+  (симметричный тулбар + документы + переключатель семантичный/полнотекстовый поиск),
+  NewKnowledgeBaseDialog (видимость личная/публичная), AddDocumentDialog (текст/файл); стор
+  [lib/knowledge.ts](frontend/src/lib/knowledge.ts) (realtime `knowledge_changed`). Без `Dify:ApiKey` —
+  `GET /api/knowledge` → `{configured:false, items:[]}`, раздел показывает empty-state.
+
 ## Персоны
 
 Концепция **«Персоны = контакты, Чаты = разговоры»** (фич-флаг `personas`): глобальный раздел
@@ -459,6 +485,14 @@ POST                /api/chats/{id}/meeting/cancel     → 204  (отмена и
 PUT                 /api/chats/{id}/loop               { enabled } → Session  (цикл «до готово», флаг work-loop; работает и для проектных сессий)
 POST                /api/chats/{id}/pipeline           { task, executorKey? } → { pipelineId }  (конвейер пантеона, флаг persona-pipeline)
 POST                /api/chats/{id}/pipeline/cancel    → 204  (отмена идущего конвейера)
+GET/POST/DELETE     /api/knowledge                     (базы знаний Dify: список релевантных + CRUD; раздел «Знания»)
+GET                 /api/knowledge/{id}                → база знаний + документы
+POST                /api/knowledge                     { title, description?, visibility: personal|public } → { id, title, visibility }
+DELETE              /api/knowledge/{id}                → 204 (только deletable — самостоятельные/публичные; 403 для привязанных)
+POST                /api/knowledge/{id}/documents      { name, text } → документ (текст)
+POST                /api/knowledge/{id}/documents/file (multipart file) → документ (файл)
+DELETE              /api/knowledge/{id}/documents/{docId}  → 204
+GET                 /api/knowledge/{id}/search?q=&topK=&method=semantic|fulltext → { items[] }
 ```
 
 Эффективные значения флагов также возвращаются в `GET /api/auth/me` (поле `featureFlags`),

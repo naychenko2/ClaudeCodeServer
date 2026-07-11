@@ -280,6 +280,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }
+  | { type: 'knowledge_changed'; action: string; datasetId?: string }
   | { type: 'personas_changed'; action: 'created' | 'updated' | 'deleted' | 'memory'; personaId?: string }
   | { type: 'speaker_changed'; personaId: string; label: string }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
@@ -620,6 +621,51 @@ export interface CreateNoteDto {
 export interface UpdateNoteDto {
   title?: string;
   content?: string;
+}
+
+// ===== Знания (базы знаний Dify — раздел «Знания») =====
+// База знаний = Dify-датасет. Список классифицируется бэкендом по имени/permission:
+// личные («{user}:…» — заметок/проектов/памяти персон/самостоятельные) и публичные
+// (all_team_members). deletable — можно ли удалить из раздела (самостоятельные/публичные).
+export type KnowledgeVisibility = 'personal' | 'public';
+
+export interface KnowledgeBaseSummary {
+  id: string;
+  title: string;
+  type: string;                 // Заметки | Проект | Память персоны | Самостоятельная | Публичная
+  visibility: KnowledgeVisibility;
+  documentCount: number;
+  createdAt: string | null;
+  deletable: boolean;
+  description?: string | null;
+}
+
+export interface KnowledgeDocument {
+  id: string;
+  name: string;
+  indexingStatus: string;       // completed | indexing | error и т.п. (строка Dify)
+}
+
+export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
+  documents: KnowledgeDocument[];
+}
+
+export interface KnowledgeSearchHit {
+  score: number;
+  content: string;
+  documentName: string;
+}
+
+export interface CreateKnowledgeBaseDto {
+  title: string;
+  description?: string;
+  visibility: KnowledgeVisibility;
+}
+
+// Ответ GET /api/knowledge: configured=false — Dify не настроен (фронт показывает empty-state)
+export interface KnowledgeListResponse {
+  configured: boolean;
+  items: KnowledgeBaseSummary[];
 }
 
 // ===== Персоны (олицетворённые ИИ-собеседники) =====

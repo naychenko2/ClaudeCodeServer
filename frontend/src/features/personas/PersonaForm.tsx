@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
-import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaWorkingFocus, Project } from '../../types';
+import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScheduleType, PersonaScope, PersonaWorkingFocus, Project } from '../../types';
 import { api } from '../../lib/api';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl } from '../../components/ui';
 import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
@@ -112,6 +113,13 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'));
   const [disallowedText, setDisallowedText] = useState(
     (persona?.disallowedTools ?? []).join(', '));
+  // Проактивность «пишет первой» (флаг persona-proactive) — пользовательские поля
+  const proactiveEnabled = useFeature(FLAGS.personaProactive);
+  const [proEnabled, setProEnabled] = useState(persona?.proactive?.enabled ?? false);
+  const [proType, setProType] = useState<PersonaScheduleType>(persona?.proactive?.type ?? 'daily');
+  const [proWeekdays, setProWeekdays] = useState<number[]>(persona?.proactive?.weekdays ?? []);
+  const [proTime, setProTime] = useState(persona?.proactive?.time ?? '09:00');
+  const [proInstruction, setProInstruction] = useState(persona?.proactive?.instruction ?? '');
   const [memoryEnabled, setMemoryEnabled] = useState(persona?.memoryEnabled ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -283,6 +291,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     tools: [...tools].sort(),
     access,
     disallowed: access === 'custom' ? parseDisallowed(disallowedText) : [],
+    proactive: { enabled: proEnabled, type: proType, weekdays: [...proWeekdays].sort(), time: proTime, instruction: proInstruction.trim() },
   });
   // Исходный снимок считается от предзаполненного состояния: у legacy-персоны
   // слот «Характер» = systemPrompt, поэтому сама миграция не делает форму dirty.
@@ -310,6 +319,13 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       tools: [...(persona ? (persona.tools ?? ALL_TOOL_KEYS) : ALL_TOOL_KEYS)].sort(),
       access: persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'),
       disallowed: (persona?.access ?? 'full') === 'custom' ? (persona?.disallowedTools ?? []) : [],
+      proactive: {
+        enabled: persona?.proactive?.enabled ?? false,
+        type: persona?.proactive?.type ?? 'daily',
+        weekdays: [...(persona?.proactive?.weekdays ?? [])].sort(),
+        time: persona?.proactive?.time ?? '09:00',
+        instruction: (persona?.proactive?.instruction ?? '').trim(),
+      },
     });
   }, [persona, defaultScope, defaultProjectId, initial?.access]);
   const dirty = snapshot !== initialSnapshot;
@@ -337,6 +353,14 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       // Профиль доступа: свой список запретов уходит только при custom
       access,
       disallowedTools: access === 'custom' ? parseDisallowed(disallowedText) : [],
+      // Проактивность — только пользовательские поля (служебные бэкенд сохраняет сам)
+      proactive: {
+        enabled: proEnabled,
+        type: proType,
+        weekdays: proType === 'weekly' ? proWeekdays : undefined,
+        time: proTime,
+        instruction: proInstruction.trim(),
+      },
     };
     try {
       const saved = isEdit
@@ -807,6 +831,78 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     </div>
   );
 
+  // === Секция 3.7 — Проактивность (флаг persona-proactive): «пишет первой» по расписанию ===
+  const toggleWeekday = (d: number) =>
+    setProWeekdays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
+
+  const proactiveSection = proactiveEnabled ? (
+    <div style={section}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div>
+          <SectionLabel style={{ marginBottom: 10 }}>Проактивность</SectionLabel>
+          <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans }}>
+            {proEnabled ? 'Персона пишет первой по расписанию' : 'Пишет первой'}
+          </span>
+        </div>
+        <Toggle checked={proEnabled} onChange={setProEnabled} />
+      </div>
+
+      {proEnabled && (
+        <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <SegmentedControl<PersonaScheduleType>
+            value={proType}
+            onChange={setProType}
+            columns={3}
+            options={[
+              { value: 'daily', label: 'Каждый день' },
+              { value: 'weekdays', label: 'По будням' },
+              { value: 'weekly', label: 'Дни недели' },
+            ]}
+          />
+
+          {proType === 'weekly' && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {WEEKDAY_CHIPS.map(w => {
+                const active = proWeekdays.includes(w.day);
+                return (
+                  <button
+                    key={w.day}
+                    type="button"
+                    onClick={() => toggleWeekday(w.day)}
+                    style={{
+                      ...presetChip,
+                      background: active ? C.accentLight : C.bgWhite,
+                      borderColor: active ? C.accent : C.border,
+                      color: active ? C.accent : C.textSecondary,
+                      fontWeight: active ? 600 : 500,
+                    }}
+                  >
+                    {w.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <Field label="Время" hint="Локальное время вашего устройства">
+            <input
+              type="time"
+              value={proTime}
+              onChange={e => setProTime(e.target.value || '09:00')}
+              aria-label="Время срабатывания"
+              style={{ ...selectStyle, maxWidth: 160 }}
+            />
+          </Field>
+
+          <Field label="Что сделать при срабатывании" hint="Без инструкции триггер не срабатывает">
+            <TextArea value={proInstruction} onChange={setProInstruction} autoGrow minHeight={72}
+              placeholder="Например: собери утренний бриф — мои задачи на сегодня, просроченные и вчерашние итоги" />
+          </Field>
+        </div>
+      )}
+    </div>
+  ) : null;
+
   // === Секция 4 — Долгая память (summary) ===
   const memorySection = (
     <div style={section}>
@@ -896,6 +992,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         {characterSection}
         {behaviorSection}
         {toolsSection}
+        {proactiveSection}
         {memorySection}
         {error && (
           <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>
@@ -916,6 +1013,12 @@ const TOOL_OPTIONS: { key: string; title: string; hint: string }[] = [
   { key: 'tasks', title: 'Задачи', hint: 'Ведёт ваши задачи через инструменты задач' },
   { key: 'notes', title: 'Заметки', hint: 'Читает и пишет в базу знаний' },
   { key: 'web', title: 'Веб', hint: 'Ищет и читает страницы в интернете' },
+];
+
+// Чипы дней недели (ISO: 1=Пн … 7=Вс) — для расписания «Дни недели»
+const WEEKDAY_CHIPS: { day: number; label: string }[] = [
+  { day: 1, label: 'Пн' }, { day: 2, label: 'Вт' }, { day: 3, label: 'Ср' },
+  { day: 4, label: 'Чт' }, { day: 5, label: 'Пт' }, { day: 6, label: 'Сб' }, { day: 7, label: 'Вс' },
 ];
 
 // Пресеты тона — single-select: выбор записывает текст в редактируемый слот «Тон»

@@ -44,6 +44,11 @@ if (initialHash?.screen === 'project' && initialHash.projectId) {
 if (initialHash?.screen === 'calendar' && initialHash.taskId) {
   sessionStorage.setItem('cc_pending_calendar_task', initialHash.taskId)
 }
+// Диплинк #/chats/{id} — конкретный чат: ChatsPage читает активный чат
+// из nav-снимка или localStorage при монтировании
+if (initialHash?.screen === 'chats' && initialHash.chatId) {
+  localStorage.setItem('cc_open_chat', initialHash.chatId)
+}
 
 export default function App() {
   // Авторизация — из localStorage (постоянно) или sessionStorage (saveKey=false)
@@ -220,6 +225,8 @@ export default function App() {
     // Диплинк #/calendar/board: сохраняем доску, чтобы URL пережил перезагрузку
     if (seed.screen === 'calendar' && initialHash?.screen === 'calendar' && initialHash.board) seed.board = true
     navReplace(seed)
+    // Диплинк #/chats/{id}: сохраняем чат в снимок, иначе сид затрёт id в URL
+    if (seed.screen === 'chats' && initialHash?.screen === 'chats' && initialHash.chatId) seed.chatId = initialHash.chatId
     // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
     // проектом — при hubTab==='chats' проект «спит» и в истории не отражается.
     // Если hash-диплинк указывает на ДРУГОЙ проект — восстановленный не пушим,
@@ -378,6 +385,17 @@ export default function App() {
       sessionStorage.setItem('cc_pending_calendar_task', target.taskId)
       if (effectiveHubTab === 'calendar') window.dispatchEvent(new Event('cc-pending-task'))
       else switchHubTab('calendar')
+      return
+    }
+    // Диплинк на конкретный чат (#/chats/{id}) — уведомления проактивных персон.
+    // Тот же канал, что и форк чата: событие cc-open-chat + localStorage для монтирования.
+    if (target?.screen === 'chats' && target.chatId) {
+      localStorage.setItem('cc_open_chat', target.chatId)
+      if (effectiveHubTab === 'chats') {
+        window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: target.chatId } }))
+      } else {
+        switchHubTab('chats')
+      }
       return
     }
     if (target?.screen === 'project' && target.projectId && target.taskId) {

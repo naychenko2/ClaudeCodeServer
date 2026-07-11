@@ -58,6 +58,29 @@ public class PersonaContract
         && (SpeechExamples is null || SpeechExamples.All(string.IsNullOrWhiteSpace));
 }
 
+// Тип расписания проактивности: каждый день / по будням / по выбранным дням недели.
+public enum PersonaScheduleType { Daily, Weekdays, Weekly }
+
+// Проактивность персоны (флаг persona-proactive): «пишет первой» по расписанию.
+// Пользовательские поля — Enabled/Type/Weekdays/Time/Instruction; служебные —
+// LastFiredAt (идемпотентность срабатываний) и SessionId (закреплённый чат) —
+// при обновлении через API не затираются (partial-merge в PersonaManager.Update).
+public class PersonaProactiveConfig
+{
+    public bool Enabled { get; set; }
+    public PersonaScheduleType Type { get; set; } = PersonaScheduleType.Daily;
+    // ISO-дни недели (1=Пн … 7=Вс) — только для Type == Weekly
+    public List<int>? Weekdays { get; set; }
+    // Локальное время срабатывания в таймзоне владельца, "HH:mm"
+    public string Time { get; set; } = "09:00";
+    // Что сделать при срабатывании (пустая — триггер не срабатывает)
+    public string Instruction { get; set; } = "";
+    // UTC-отметка последнего срабатывания (идемпотентность, переживает рестарт)
+    public DateTime? LastFiredAt { get; set; }
+    // Чат, в котором персона пишет по расписанию (создаётся при первом срабатывании)
+    public string? SessionId { get; set; }
+}
+
 // Персона — сущность с именем, внешностью, характером, своей памятью и зоной контекста.
 // Не путать с .md-агентами Claude Code (.claude/agents) — те подключаются через Session.AgentName.
 public class Persona
@@ -92,6 +115,8 @@ public class Persona
     public List<string>? DisallowedTools { get; set; }
     // Первое приветственное сообщение при открытии чата (опционально)
     public string? Greeting { get; set; }
+    // Проактивность «пишет первой» (флаг persona-proactive); null — выключена
+    public PersonaProactiveConfig? Proactive { get; set; }
     public bool MemoryEnabled { get; set; } = true;
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

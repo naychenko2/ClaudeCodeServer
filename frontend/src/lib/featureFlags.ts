@@ -17,6 +17,7 @@ export const FLAGS = {
   personaMemoryAutolearn: 'persona-memory-autolearn',
   personaMemoryConsolidation: 'persona-memory-consolidation',
   personaMentions: 'persona-mentions',
+  personaProactive: 'persona-proactive',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

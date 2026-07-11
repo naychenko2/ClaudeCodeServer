@@ -562,6 +562,30 @@ export interface PersonaAvatar {
   imageFile?: string;
 }
 
+// Тип расписания проактивности персоны
+export type PersonaScheduleType = 'daily' | 'weekdays' | 'weekly';
+
+// Проактивность «пишет первой» (флаг persona-proactive). lastFiredAt/sessionId —
+// служебные (бэкенд не даёт их затирать через API).
+export interface PersonaProactiveConfig {
+  enabled: boolean;
+  type: PersonaScheduleType;
+  weekdays?: number[] | null;   // ISO 1=Пн … 7=Вс (для weekly)
+  time: string;                 // "HH:mm" в таймзоне владельца
+  instruction: string;          // что сделать при срабатывании
+  lastFiredAt?: string | null;
+  sessionId?: string | null;
+}
+
+// Пользовательские поля проактивности для create/update DTO
+export interface PersonaProactiveDto {
+  enabled: boolean;
+  type?: PersonaScheduleType;
+  weekdays?: number[];
+  time?: string;
+  instruction?: string;
+}
+
 // Структурированный контракт персоны (P1): характер разложен по слотам,
 // каждый слот попадает в свою секцию системного промпта. Отсутствие контракта —
 // legacy-режим: весь характер живёт единым текстом в systemPrompt.
@@ -589,6 +613,8 @@ export interface Persona {
   projectId?: string;         // задан только для scope === 'project'
   avatar: PersonaAvatar;
   greeting?: string;          // приветствие персоны в начале чата
+  // Проактивность «пишет первой» (флаг persona-proactive); null — выключена
+  proactive?: PersonaProactiveConfig | null;
   memoryEnabled: boolean;     // долгая память (этап 2)
   // Возможности персоны (ключи tasks/notes/web); null/отсутствие — без ограничений
   tools?: string[] | null;
@@ -621,6 +647,8 @@ export interface CreatePersonaDto {
   access?: PersonaAccess;
   // Свой список запрещённых инструментов (для custom)
   disallowedTools?: string[];
+  // Проактивность (только пользовательские поля); undefined — не менять
+  proactive?: PersonaProactiveDto;
 }
 
 // Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны

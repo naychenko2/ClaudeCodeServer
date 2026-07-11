@@ -89,11 +89,13 @@ public class PersonasController : ControllerBase
             return BadRequest("Для проектной персоны нужен корректный projectId");
         if (!TryParseAccess(req.Access, out var access))
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
+        if (!TryParseProactive(req.Proactive, out var proactive, out var proactiveError))
+            return BadRequest(proactiveError);
 
         var persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
             req.MemoryEnabled ?? true, req.Tools, req.Contract,
-            access ?? PersonaAccess.Full, req.DisallowedTools);
+            access ?? PersonaAccess.Full, req.DisallowedTools, proactive);
         await Broadcast("created", persona.Id);
         return Ok(persona);
     }
@@ -109,10 +111,12 @@ public class PersonasController : ControllerBase
             return BadRequest("Проект не найден или недоступен");
         if (!TryParseAccess(req.Access, out var access))
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
+        if (!TryParseProactive(req.Proactive, out var proactive, out var proactiveError))
+            return BadRequest(proactiveError);
 
         var persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools);
+            req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, proactive);
         await Broadcast("updated", id);
         return Ok(persona);
     }
@@ -596,6 +600,36 @@ public class PersonasController : ControllerBase
         return true;
     }
 
+    // Парс DTO проактивности: null — не менять (out null); валидация типа расписания
+    // и времени "HH:mm". Служебные поля (LastFiredAt/SessionId) клиент не задаёт.
+    private static bool TryParseProactive(PersonaProactiveDto? dto,
+        out PersonaProactiveConfig? config, out string error)
+    {
+        config = null;
+        error = "";
+        if (dto is null) return true;
+        if (!Enum.TryParse<PersonaScheduleType>(dto.Type ?? "daily", ignoreCase: true, out var type))
+        {
+            error = "Неверный тип расписания (ожидается daily | weekdays | weekly)";
+            return false;
+        }
+        var time = string.IsNullOrWhiteSpace(dto.Time) ? "09:00" : dto.Time.Trim();
+        if (!TimeOnly.TryParseExact(time, "HH:mm", out _))
+        {
+            error = "Неверное время расписания (ожидается HH:mm)";
+            return false;
+        }
+        config = new PersonaProactiveConfig
+        {
+            Enabled = dto.Enabled,
+            Type = type,
+            Weekdays = dto.Weekdays,
+            Time = time,
+            Instruction = dto.Instruction ?? "",
+        };
+        return true;
+    }
+
     // Проект существует и принадлежит владельцу
     private bool ValidProject(string? projectId)
     {
@@ -623,7 +657,9 @@ public record CreatePersonaRequest(
     // Профиль доступа (P6): full | readOnly | custom; null — дефолт (full)
     string? Access = null,
     // Свой список запрещённых инструментов (для custom)
-    List<string>? DisallowedTools = null);
+    List<string>? DisallowedTools = null,
+    // Проактивность «пишет первой» (флаг persona-proactive); null — не задана
+    PersonaProactiveDto? Proactive = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -643,7 +679,17 @@ public record UpdatePersonaRequest(
     // Профиль доступа (P6): full | readOnly | custom; null — не менять
     string? Access = null,
     // Свой список запрещённых инструментов (для custom); null — не менять
-    List<string>? DisallowedTools = null);
+    List<string>? DisallowedTools = null,
+    // Проактивность: null — не менять; служебные поля не затираются (partial-merge)
+    PersonaProactiveDto? Proactive = null);
+
+// Пользовательские поля проактивности (без служебных LastFiredAt/SessionId)
+public record PersonaProactiveDto(
+    bool Enabled,
+    string? Type = null,        // daily | weekdays | weekly
+    List<int>? Weekdays = null, // ISO 1=Пн … 7=Вс (для weekly)
+    string? Time = null,        // "HH:mm" в таймзоне владельца
+    string? Instruction = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null);
 

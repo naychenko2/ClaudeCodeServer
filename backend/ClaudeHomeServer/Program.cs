@@ -70,6 +70,9 @@ builder.Services.AddSingleton<FalImageService>();
 builder.Services.AddSingleton<PersonaMemoryConsolidationService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PersonaMemoryConsolidationService>());
 builder.Services.AddHostedService<PersonaMemoryAutolearnService>();
+// Проактивность персон («пишет первой» по расписанию, флаг persona-proactive)
+builder.Services.AddSingleton<PersonaProactiveService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PersonaProactiveService>());
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();

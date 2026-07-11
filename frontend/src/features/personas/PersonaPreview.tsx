@@ -298,7 +298,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
           </span>
           {onOpenKnowledge && (
             <button type="button" onClick={onOpenKnowledge} style={{ ...linkBtn, marginTop: 0 }}>
-              Подключить знания →
+              Подключить умения →
             </button>
           )}
         </div>
@@ -310,7 +310,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
                 key={b.id}
                 type="button"
                 onClick={onOpenKnowledge}
-                title="Настроить знания"
+                title="Настроить умения"
                 onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                 style={{
@@ -339,7 +339,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
           )}
           {onOpenKnowledge && (
             <button type="button" onClick={onOpenKnowledge} style={linkBtn}>
-              Настроить знания →
+              Настроить умения →
             </button>
           )}
         </>

@@ -122,7 +122,7 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
                   animation: 'cc-quick-pulse 1.2s ease-in-out infinite',
                 }} />
                 {bindingsEnabled
-                  ? 'Придумываю характер, подбираю знания и генерирую аватар — до пары минут'
+                  ? 'Придумываю характер, подбираю умения и генерирую аватар — до пары минут'
                   : 'Придумываю характер и генерирую аватар — до минуты'}
                 <style>{'@keyframes cc-quick-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }'}</style>
               </div>

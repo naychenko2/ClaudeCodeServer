@@ -17,7 +17,6 @@ export const FLAGS = {
   personaMemoryAutolearn: 'persona-memory-autolearn',
   personaMemoryConsolidation: 'persona-memory-consolidation',
   personaMentions: 'persona-mentions',
-  personaProactive: 'persona-proactive',
   personaGroupChats: 'persona-group-chats',
   personaBindings: 'persona-bindings',
   workspaceTools: 'workspace-tools',

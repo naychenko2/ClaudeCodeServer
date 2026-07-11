@@ -16,6 +16,7 @@ import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
 import { PersonaPreview } from './PersonaPreview';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaBindingsPanel } from './PersonaBindingsPanel';
+import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
 import type { PersonaTemplate } from './personaTemplates';
 
@@ -318,6 +319,9 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSes
   const content = view === 'memory'
     // Память — под тулбаром, свой заголовок не нужен (идентичность уже в тулбаре)
     ? <div style={{ flex: 1, minHeight: 0 }}><PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded /></div>
+    : view === 'tasks'
+    // Задачи — отфильтрованный вид реальных задач, где персона исполнитель
+    ? <div style={{ flex: 1, minHeight: 0 }}><PersonaTasksPanel persona={persona} isMobile={isMobile} /></div>
     : view === 'knowledge'
     // Знания — привязки источников и правил (фича persona-bindings)
     ? <div style={{ flex: 1, minHeight: 0 }}>
@@ -336,7 +340,8 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSes
         <PersonaPreview persona={persona} accent={accent} talking={talking}
           onTalk={onTalk} onOpenSession={onOpenSession}
           onEditProfile={() => setView('profile')}
-          onOpenKnowledge={() => setView('knowledge')} isMobile={isMobile} />
+          onOpenKnowledge={() => setView('knowledge')}
+          onOpenTasks={() => setView('tasks')} isMobile={isMobile} />
       </div>;
 
   return (

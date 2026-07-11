@@ -276,7 +276,9 @@ export function buildLocalTask(id: string, projectId: string | null, dto: Create
     dueDate: dto.dueDate || undefined,
     dueTime: dto.dueTime || undefined,
     reminderMinutes: dto.reminderMinutes,
-    assignee: dto.assignee,
+    // Персона-исполнитель ⇒ assignee=claude (зеркало инварианта TaskManager)
+    assignee: dto.personaId ? 'claude' : dto.assignee,
+    personaId: dto.personaId || undefined,
     recurrence: dto.recurrence && dto.recurrence.type !== 'none' ? dto.recurrence : undefined,
     seriesId: dto.recurrence && dto.recurrence.type !== 'none' ? id : undefined,
     linkedSessionId: dto.linkedSessionId,
@@ -305,6 +307,11 @@ export function applyUpdateLocally(task: Task, dto: UpdateTaskDto): Task {
   if (dueBefore !== dueAfter) next.reminderSentAt = undefined;
 
   if (dto.assignee !== undefined) next.assignee = dto.assignee;
+  // Персона-исполнитель: '' — снять; иначе назначить и выставить assignee=claude (инвариант)
+  if (dto.personaId !== undefined) {
+    next.personaId = dto.personaId === '' ? undefined : dto.personaId;
+    if (next.personaId) next.assignee = 'claude';
+  }
   if (dto.recurrence !== undefined) {
     next.recurrence = dto.recurrence.type === 'none' ? undefined : dto.recurrence;
     if (next.recurrence && !next.seriesId) next.seriesId = next.id;

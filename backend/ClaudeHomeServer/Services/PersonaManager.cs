@@ -120,7 +120,7 @@ public class PersonaManager
         string? model, string? effort, PersonaScope scope, string? projectId,
         string? color, string? greeting, bool memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess access = PersonaAccess.Full,
-        List<string>? disallowedTools = null, PersonaProactiveConfig? proactive = null)
+        List<string>? disallowedTools = null)
     {
         var persona = new Persona
         {
@@ -141,7 +141,6 @@ public class PersonaManager
             // Свой список запретов имеет смысл только при Custom-профиле
             DisallowedTools = access == PersonaAccess.Custom ? NormalizeDisallowed(disallowedTools) : null,
             Avatar = new PersonaAvatar { Kind = PersonaAvatarKind.Initials, Color = color },
-            Proactive = proactive is null ? null : MergeProactive(current: null, proactive),
         };
         // Генерация handle и вставка атомарны: без лока два одновременных Create
         // с одинаковым именем вычислили бы один и тот же слаг (гонка TOCTOU)
@@ -158,7 +157,7 @@ public class PersonaManager
         string? systemPrompt, string? model, string? effort, PersonaScope? scope, string? projectId,
         string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess? access = null,
-        List<string>? disallowedTools = null, PersonaProactiveConfig? proactive = null)
+        List<string>? disallowedTools = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -189,9 +188,6 @@ public class PersonaManager
         if (access is not null) persona.Access = access.Value;
         if (disallowedTools is not null) persona.DisallowedTools = NormalizeDisallowed(disallowedTools);
         if (persona.Access != PersonaAccess.Custom) persona.DisallowedTools = null;
-        // Проактивность: null — не менять; иначе partial-merge пользовательских полей
-        // (служебные LastFiredAt/SessionId НЕ затираются)
-        if (proactive is not null) persona.Proactive = MergeProactive(persona.Proactive, proactive);
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
         OnPersonaChanged?.Invoke(persona);
@@ -209,39 +205,6 @@ public class PersonaManager
         Save();
         OnPersonaChanged?.Invoke(persona);
         return persona;
-    }
-
-    // Слияние конфига проактивности: пользовательские поля — из запроса,
-    // служебные (LastFiredAt/SessionId) — сохраняются от текущего состояния
-    private static PersonaProactiveConfig MergeProactive(
-        PersonaProactiveConfig? current, PersonaProactiveConfig incoming) => new()
-    {
-        Enabled = incoming.Enabled,
-        Type = incoming.Type,
-        Weekdays = incoming.Weekdays?.Where(d => d is >= 1 and <= 7).Distinct().Order().ToList() is { Count: > 0 } days
-            ? days : null,
-        Time = string.IsNullOrWhiteSpace(incoming.Time) ? "09:00" : incoming.Time.Trim(),
-        Instruction = incoming.Instruction?.Trim() ?? "",
-        LastFiredAt = current?.LastFiredAt,
-        SessionId = current?.SessionId,
-    };
-
-    // Отметка срабатывания проактивности (идемпотентность планировщика)
-    public void MarkProactiveFired(string id, DateTime nowUtc)
-    {
-        var persona = GetByIdInternal(id);
-        if (persona?.Proactive is null) return;
-        persona.Proactive.LastFiredAt = nowUtc;
-        Save();
-    }
-
-    // Закрепить чат проактивности за персоной (создан при первом срабатывании)
-    public void SetProactiveSession(string id, string sessionId)
-    {
-        var persona = GetByIdInternal(id);
-        if (persona?.Proactive is null) return;
-        persona.Proactive.SessionId = sessionId;
-        Save();
     }
 
     // Установить сгенерированный аватар-картинку. Оригинал/кроп загруженного файла

@@ -35,8 +35,6 @@ public static class FeatureFlagKeys
     public const string PersonaMemoryConsolidation = "persona-memory-consolidation";
     // @упоминания персон в чатах: MCP persona_ask, автокомплит @ в композере
     public const string PersonaMentions = "persona-mentions";
-    // Проактивность персон: «пишет первой» по расписанию (утренний бриф и т.п.)
-    public const string PersonaProactive = "persona-proactive";
     // Групповые чаты персон (2-4 участника, роутинг спикера по @) + совещания cross-attack
     public const string PersonaGroupChats = "persona-group-chats";
     // Привязки персон: источники знаний и правила с условиями применения (индекс в промпте)
@@ -135,15 +133,6 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.PersonaMentions,
             Title: "@упоминания персон",
             Description: "Упомяни персону через @ в любом чате — ассистент спросит её, и она ответит в своём характере, со своей моделью и долгой памятью. Плюс кнопка «Обсудить с командой» в чате персоны.",
-            Default: false,
-            Stage: "dev"),
-
-        // Проактивность персон: персона сама пишет первой по расписанию —
-        // выполняет свою инструкцию (напр. утренний бриф) и присылает уведомление.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.PersonaProactive,
-            Title: "Проактивные персоны",
-            Description: "Персона может писать первой по расписанию: в заданное время выполняет свою инструкцию (например, собирает утренний бриф) и присылает уведомление со ссылкой на чат.",
             Default: false,
             Stage: "dev"),
 

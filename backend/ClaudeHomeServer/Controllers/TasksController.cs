@@ -121,13 +121,15 @@ public class TasksController(
     }
 
     // Все задачи пользователя (календарь, MCP): диапазон по сроку, поиск и фильтры.
-    // personal=true — только личные (вне проекта); projectId — только задачи проекта.
+    // personal=true — только личные (вне проекта); projectId — только задачи проекта;
+    // personaId — только задачи, порученные конкретной персоне-исполнителю.
     [HttpGet]
     public IActionResult GetAll(
         [FromQuery] string? from = null, [FromQuery] string? to = null,
         [FromQuery] string? q = null, [FromQuery] string? status = null,
         [FromQuery] string? priority = null, [FromQuery] string? assignee = null,
-        [FromQuery] string? projectId = null, [FromQuery] bool personal = false)
+        [FromQuery] string? projectId = null, [FromQuery] bool personal = false,
+        [FromQuery] string? personaId = null)
     {
         var result = tasks.GetByOwner(UserId).AsEnumerable();
         // Строковое сравнение корректно для ISO-дат YYYY-MM-DD
@@ -145,6 +147,8 @@ public class TasksController(
             result = result.Where(t => t.Priority == p);
         if (assignee is not null && Enum.TryParse<TaskItemAssignee>(assignee, true, out var a))
             result = result.Where(t => t.Assignee == a);
+        if (!string.IsNullOrEmpty(personaId))
+            result = result.Where(t => t.PersonaId == personaId);
         if (!string.IsNullOrWhiteSpace(q))
             result = result.Where(t =>
                 t.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||

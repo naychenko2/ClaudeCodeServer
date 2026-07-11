@@ -75,9 +75,19 @@ public class TaskManager
         };
         // Серия регулярной задачи начинается с её первого экземпляра
         if (task.Recurrence is not null) task.SeriesId = task.Id;
+        // Инвариант: исполнитель-персона подразумевает исполнение силами Claude
+        NormalizePersonaAssignee(task);
         _tasks[task.Id] = task;
         Save();
         return task;
+    }
+
+    // Персона-исполнитель имеет смысл только у Claude-исполнения: если задаче назначена
+    // персона, принудительно ставим Assignee=Claude (иначе автозапуск планировщиком,
+    // завязанный на Assignee==Claude, не подхватит задачу — рассинхрон).
+    private static void NormalizePersonaAssignee(TaskItem task)
+    {
+        if (task.PersonaId is not null) task.Assignee = TaskItemAssignee.Claude;
     }
 
     // Следующее значение Order для новой задачи владельца — в конец глобального порядка.
@@ -131,6 +141,8 @@ public class TaskManager
                 IsDone = s.IsDone,
             }).ToList();
 
+        // Инвариант «персона ⇒ Claude» — после того как учли и Assignee, и PersonaId
+        NormalizePersonaAssignee(task);
         task.UpdatedAt = DateTime.UtcNow;
         Save();
         return task;
@@ -156,6 +168,10 @@ public class TaskManager
             DueTime = completed.DueTime,
             ReminderMinutes = completed.ReminderMinutes,
             Assignee = completed.Assignee,
+            // Исполнитель-персона переносится в следующий экземпляр — иначе регулярная
+            // задача теряла бы персону и падала на обычного Claude (ClaudeStartedAt/
+            // ClaudeResult/LinkedSessionId у нового экземпляра дефолтные → отработает заново)
+            PersonaId = completed.PersonaId,
             Recurrence = completed.Recurrence,
             SeriesId = completed.SeriesId ?? completed.Id,
             LinkedFiles = [.. completed.LinkedFiles],

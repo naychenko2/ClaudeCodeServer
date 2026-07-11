@@ -79,7 +79,10 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
         pipelines.set(pp.pipelineId, it);
         items.push(it);
       }
-      it.phases.push({ phase: pp.phase, personaId: pp.personaId, text: pp.text, round: pp.round ?? 1 });
+      const entry = { phase: pp.phase, personaId: pp.personaId, text: pp.text, round: pp.round ?? 1 };
+      // Идемпотентность по (phase, round) — как в live-редьюсере (защита от дублей)
+      const pIdx = it.phases.findIndex(p => p.phase === entry.phase && p.round === entry.round);
+      if (pIdx >= 0) it.phases[pIdx] = entry; else it.phases.push(entry);
       if (!it.task) it.task = pp.task;
       if (pp.phase === 'execute') it.status = 'done';
       continue;
@@ -338,10 +341,17 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       const entry: PipelinePhaseItem = { phase: msg.phase, personaId: msg.personaId, text: msg.text, round: msg.round ?? 1 };
       if (idx >= 0) {
         const ex = prev.items[idx] as PipelineItem;
+        // Идемпотентность по (phase, round): одно и то же событие приходит дважды —
+        // внеходовой broadcast шлёт и в session-группу, и в user/project-группу, а клиент
+        // подписан на обе. Существующую фазу обновляем, а не добавляем дубликат.
+        const pIdx = ex.phases.findIndex(p => p.phase === entry.phase && p.round === entry.round);
+        const phases = pIdx >= 0
+          ? ex.phases.map((p, i) => i === pIdx ? entry : p)
+          : [...ex.phases, entry];
         const updated: PipelineItem = {
           ...ex,
           task: ex.task || msg.task,
-          phases: [...ex.phases, entry],
+          phases,
           runningPhase: undefined,
           status: msg.phase === 'execute' ? 'done' : ex.status,
         };

@@ -791,6 +791,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         personaZoneName={project?.name ?? null}
         agent={persona ? null : chatAgent}
         participants={isGroupChat ? participantPersonas : null}
+        onSessionUpdated={onSessionUpdated}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}

@@ -92,6 +92,10 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
               const isActive = chat.id === activeId;
               // Чат от лица персоны: слева мини-аватар, имя персоны и акцент её цвета
               const persona = chat.personaId ? getPersonaById(chat.personaId) : undefined;
+              // Групповой чат: стек мини-аватаров участников вместо одиночного + подпись «Групповой»
+              const group = (chat.participants?.length ?? 0) > 1
+                ? chat.participants!.map(id => getPersonaById(id)).filter(p => p !== undefined)
+                : [];
               const accent = persona ? agentDotColor(persona.avatar?.color) : C.accent;
               return (
                 <div
@@ -113,14 +117,25 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'flex-start',
-                    gap: persona ? 9 : 0,
+                    gap: (persona || group.length > 1) ? 9 : 0,
                   }}
                 >
                   {/* Акцентная полоса слева — маркер текущего чата (у чатов персоны — её цветом) */}
                   {isActive && (
                     <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: accent }} />
                   )}
-                  {persona && (
+                  {group.length > 1 ? (
+                    <div style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}>
+                      {group.slice(0, 3).map((p, i) => (
+                        <div key={p!.id} style={{
+                          marginLeft: i === 0 ? 0 : -10, position: 'relative', zIndex: group.length - i,
+                          borderRadius: '50%', border: `2px solid ${C.bgWhite}`,
+                        }}>
+                          <PersonaAvatar persona={p!} size={26} />
+                        </div>
+                      ))}
+                    </div>
+                  ) : persona && (
                     <div style={{ flexShrink: 0, marginTop: 1 }}><PersonaAvatar persona={persona} size={28} /></div>
                   )}
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -138,7 +153,11 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                         <StatusBadge status={chat.status} />
                       )}
                     </div>
-                    {persona && (
+                    {group.length > 1 ? (
+                      <div style={{ fontSize: 11.5, fontWeight: 600, color: accent, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        Групповой · {group.map(p => p!.role || p!.name).join(', ')}
+                      </div>
+                    ) : persona && (
                       <div style={{ fontSize: 11.5, fontWeight: 600, color: accent, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {personaLabel(persona)}
                       </div>

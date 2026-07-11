@@ -5,6 +5,7 @@ import { modelLabel, modelProvider, assistantName, useModelLabel } from '../../l
 import { effortLabel } from '../../lib/effort';
 import { formatTimeLeft } from '../../lib/expiry';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { GroupParticipantsPopover } from '../../features/personas/GroupParticipantsPopover';
 import { personaTitleLines } from '../../lib/personas';
 import { AGENT_COLORS, agentDotColor } from '../AgentSelector';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from '../../lib/rateLimit';
@@ -662,6 +663,8 @@ interface ChatHeaderBarProps {
   // Участники группового чата (2-4): стек аватаров вместо одиночного блока персоны;
   // активный спикер (= persona) — с цветным кольцом
   participants?: Persona[] | null;
+  // Состав группы изменён через поповер участников — родитель обновляет session
+  onSessionUpdated?: (s: Session) => void;
 }
 
 // «Итог сессии в заметку» — теперь запускается ТОЛЬКО через AI-палитру (действие
@@ -770,7 +773,9 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated }: ChatHeaderBarProps) {
+  // Поповер управления участниками группового чата (клик по стеку аватаров)
+  const [participantsOpen, setParticipantsOpen] = useState(false);
   const sessionModelLabel = useModelLabel(session.model);
   const asstName = assistantName(session.model);
   const providerKey = modelProvider(session.model);
@@ -802,28 +807,55 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // Групповой чат: стек аватаров участников (активный спикер — с цветным кольцом)
     // вместо одиночного блока персоны; вторая строка — «Отвечает: Роль (Имя)».
     <div
-      title={participants.map(p => personaTitleLines(p).primary + (personaTitleLines(p).secondary ? ` (${personaTitleLines(p).secondary})` : '')).join(', ')}
       style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}
     >
-      <div style={{ display: 'flex', flexShrink: 0 }}>
-        {participants.map((p, i) => {
-          const active = p.id === persona?.id;
-          const ring = active
-            ? (AGENT_COLORS[p.avatar?.color ?? ''] ?? C.accent)
-            : C.bgMain;
-          return (
-            <div key={p.id} style={{
-              marginLeft: i === 0 ? 0 : -9,
-              borderRadius: '50%',
-              border: `2px solid ${ring}`,
-              zIndex: active ? participants.length + 1 : participants.length - i,
-              position: 'relative',
-              background: C.bgMain,
+      <div style={{ position: 'relative', flexShrink: 0 }}>
+        {/* Стек кликабелен: поповер со списком участников, добавлением и удалением */}
+        <button
+          type="button"
+          onClick={() => setParticipantsOpen(o => !o)}
+          title="Участники чата — нажмите, чтобы добавить или убрать"
+          style={{ display: 'flex', alignItems: 'center', border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
+        >
+          {participants.map((p, i) => {
+            const active = p.id === persona?.id;
+            const ring = active
+              ? (AGENT_COLORS[p.avatar?.color ?? ''] ?? C.accent)
+              : C.bgMain;
+            return (
+              <div key={p.id} style={{
+                marginLeft: i === 0 ? 0 : -9,
+                borderRadius: '50%',
+                border: `2px solid ${ring}`,
+                zIndex: active ? participants.length + 1 : participants.length - i,
+                position: 'relative',
+                background: C.bgMain,
+              }}>
+                <PersonaAvatar persona={p} size={isMobile ? 24 : 26} />
+              </div>
+            );
+          })}
+          {/* «+» — явный вход в управление составом (до 4 участников) */}
+          {participants.length < 4 && (
+            <span style={{
+              marginLeft: -6, zIndex: 0, width: isMobile ? 24 : 26, height: isMobile ? 24 : 26,
+              borderRadius: '50%', border: `1.5px dashed ${C.border}`, background: C.bgWhite,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted,
             }}>
-              <PersonaAvatar persona={p} size={isMobile ? 24 : 26} />
-            </div>
-          );
-        })}
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </span>
+          )}
+        </button>
+        {participantsOpen && (
+          <GroupParticipantsPopover
+            session={session}
+            participants={participants}
+            onUpdated={s => { onSessionUpdated?.(s); }}
+            onClose={() => setParticipantsOpen(false)}
+          />
+        )}
       </div>
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <span style={{ fontFamily: FONT.serif, fontSize: 16, fontWeight: 600, color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

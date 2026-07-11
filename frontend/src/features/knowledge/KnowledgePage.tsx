@@ -132,6 +132,7 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
         <KnowledgeList
           items={filtered}
           selectedId={selectedId}
+          isMobile={isMobile}
           onSelect={selectKb}
           onAddDocument={onAddDocument}
           onDelete={setDeleteKb}

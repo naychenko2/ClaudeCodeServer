@@ -1,15 +1,16 @@
 import { useState } from 'react';
 import type { KnowledgeBaseSummary } from '../../types';
 import { C, FONT, R } from '../../lib/design';
-import { Menu, MenuItem } from '../../components/ui';
-import { typeIcon, IconDots, IconLock, IconPlus, IconBook } from './shared';
+import { typeIcon, IconDots, IconPlus, IconBook } from './shared';
+import { KbActionsMenu } from './KbActionsMenu';
 
 // Список баз знаний с группами «Мои» / «Публичные». Карточка — кликабельная;
 // у удаляемых баз есть ⋯-меню и правый клик (Открыть / Добавить документ / Удалить),
 // у привязанных (заметок/проектов/персон) — только 🔒 (удалить через раздел-владелец).
-export function KnowledgeList({ items, selectedId, onSelect, onAddDocument, onDelete }: {
+export function KnowledgeList({ items, selectedId, isMobile, onSelect, onAddDocument, onDelete }: {
   items: KnowledgeBaseSummary[];
   selectedId: string | null;
+  isMobile: boolean;
   onSelect: (id: string) => void;
   onAddDocument: (kb: KnowledgeBaseSummary) => void;
   onDelete: (kb: KnowledgeBaseSummary) => void;
@@ -31,7 +32,7 @@ export function KnowledgeList({ items, selectedId, onSelect, onAddDocument, onDe
         <>
           <GroupLabel>Мои</GroupLabel>
           {personal.map(kb => (
-            <KnowledgeCard key={kb.id} kb={kb} active={kb.id === selectedId}
+            <KnowledgeCard key={kb.id} kb={kb} active={kb.id === selectedId} isMobile={isMobile}
               onSelect={onSelect} onAddDocument={onAddDocument} onDelete={onDelete} />
           ))}
         </>
@@ -40,7 +41,7 @@ export function KnowledgeList({ items, selectedId, onSelect, onAddDocument, onDe
         <>
           <GroupLabel>Публичные</GroupLabel>
           {pub.map(kb => (
-            <KnowledgeCard key={kb.id} kb={kb} active={kb.id === selectedId}
+            <KnowledgeCard key={kb.id} kb={kb} active={kb.id === selectedId} isMobile={isMobile}
               onSelect={onSelect} onAddDocument={onAddDocument} onDelete={onDelete} />
           ))}
         </>
@@ -73,9 +74,10 @@ export function VisibilityBadge({ visibility, variant = 'list' }: { visibility: 
   );
 }
 
-function KnowledgeCard({ kb, active, onSelect, onAddDocument, onDelete }: {
+function KnowledgeCard({ kb, active, isMobile, onSelect, onAddDocument, onDelete }: {
   kb: KnowledgeBaseSummary;
   active: boolean;
+  isMobile: boolean;
   onSelect: (id: string) => void;
   onAddDocument: (kb: KnowledgeBaseSummary) => void;
   onDelete: (kb: KnowledgeBaseSummary) => void;
@@ -91,7 +93,7 @@ function KnowledgeCard({ kb, active, onSelect, onAddDocument, onDelete }: {
   return (
     <div
       onClick={() => onSelect(kb.id)}
-      onContextMenu={kb.deletable ? triggerMenu : undefined}
+      onContextMenu={triggerMenu}
       title={kb.deletable ? undefined : 'Привязана к разделу — удаляется через него'}
       style={{
         position: 'relative',
@@ -128,34 +130,25 @@ function KnowledgeCard({ kb, active, onSelect, onAddDocument, onDelete }: {
         </div>
       </div>
 
-      {kb.deletable ? (
-        <span style={{ position: 'relative', flex: 'none' }}>
-          <button
-            onClick={triggerMenu}
-            title="Действия"
-            style={{
-              width: 26, height: 26, borderRadius: R.sm, border: 'none', background: 'transparent',
-              cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; e.currentTarget.style.color = C.textPrimary; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.textMuted; }}>
-            <IconDots size={16} />
-          </button>
-          {menu && (
-            <Menu onClose={() => setMenu(false)} top={30} align="right" minWidth={210}>
-              <MenuItem icon={<><path d="M9 18l6-6-6-6" /></>} label="Открыть" onClick={() => { setMenu(false); onSelect(kb.id); }} />
-              <MenuItem icon={<><path d="M12 5v14M5 12h14" /></>} label="Добавить документ" onClick={() => { setMenu(false); onAddDocument(kb); }} />
-              <div style={{ height: 1, background: C.border, margin: '4px 2px' }} />
-              <MenuItem icon={<><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></>}
-                label="Удалить базу" danger onClick={() => { setMenu(false); onDelete(kb); }} />
-            </Menu>
-          )}
-        </span>
-      ) : (
-        <span style={{ flex: 'none', color: C.textMuted, width: 26, display: 'flex', justifyContent: 'center' }} title="Привязана к разделу">
-          <IconLock size={13} />
-        </span>
-      )}
+      <span style={{ position: 'relative', flex: 'none' }}>
+        <button
+          onClick={triggerMenu}
+          title="Действия"
+          style={{
+            width: 26, height: 26, borderRadius: R.sm, border: 'none', background: 'transparent',
+            cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; e.currentTarget.style.color = C.textPrimary; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.textMuted; }}>
+          <IconDots size={16} />
+        </button>
+        {menu && (
+          <KbActionsMenu kb={kb} isMobile={isMobile}
+            onClose={() => setMenu(false)}
+            onAddDocument={() => onAddDocument(kb)}
+            onDelete={() => onDelete(kb)} />
+        )}
+      </span>
     </div>
   );
 }

@@ -4,12 +4,14 @@ import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { bumpKnowledge, useKnowledgeVersion } from '../../lib/knowledge';
 import { Toolbar, ToolbarIconButton, tbBtnPrimary } from '../../components/Toolbar';
-import { Menu, MenuItem } from '../../components/ui';
-import { typeIcon, IconBack, IconPlus, IconDots, IconFile, IconTrash, IconSearch } from './shared';
+import { typeIcon, IconBack, IconPlus, IconDots, IconFile, IconTrash, IconSearch, IconLock } from './shared';
 import { VisibilityBadge } from './KnowledgeList';
+import { KbActionsMenu } from './KbActionsMenu';
 
 // Детальная зона базы: тулбар (симметричный другим разделам) + описание + документы +
-// семантический/полнотекстовый поиск. Состав перезапрашивается по версии (realtime).
+// семантический/полнотекстовый поиск. На десктопе/планшете в тулбаре много места —
+// поиск, кол-во документов и пометка привязки живут прямо там; на мобиле они остаются
+// отдельными строками под тулбаром. Состав перезапрашивается по версии (realtime).
 export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }: {
   kb: KnowledgeBaseSummary;
   isMobile: boolean;
@@ -60,6 +62,25 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
     bumpKnowledge();
   };
 
+  // Поле поиска с «смысл»-пилюлей. inToolbar — десктоп/планшет (растёт в тулбаре),
+  // иначе — отдельная строка под тулбаром (мобила).
+  const searchInput = (inToolbar: boolean) => (
+    <div style={{
+      flex: inToolbar ? 1 : undefined, maxWidth: inToolbar ? 540 : 480, minWidth: 0,
+      display: 'flex', alignItems: 'center', gap: 8, height: 34,
+      padding: '0 11px', borderRadius: R.lg, background: C.bgCard, border: `1px solid ${C.border}`, color: C.textMuted,
+    }}>
+      <IconSearch size={15} />
+      <input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)}
+        placeholder={mode === 'semantic' ? 'Поиск по смыслу…' : 'Полнотекстовый поиск…'}
+        style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: FONT.sans, fontSize: 13, color: C.textHeading }} />
+      <button
+        onClick={() => setMode(m => m === 'semantic' ? 'fulltext' : 'semantic')}
+        title={mode === 'semantic' ? 'Поиск по смыслу — включён; клик — точный' : 'Точный поиск — включён; клик — по смыслу'}
+        style={semanticPill(mode === 'semantic')}>смысл</button>
+    </div>
+  );
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgMain }}>
       <Toolbar isMobile={isMobile}>
@@ -67,69 +88,71 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
           <ToolbarIconButton onClick={onBack} title="Назад"><IconBack size={18} /></ToolbarIconButton>
         )}
         <span style={{ color: C.accent, display: 'flex', flexShrink: 0 }}>{typeIcon(kb.type, 18)}</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: isMobile ? 1 : '0 1 auto' }}>
           <span style={{
             fontFamily: FONT.serif, fontWeight: 600, fontSize: 17, color: C.textHeading,
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>{kb.title}</span>
-          <TypeChip>{kb.type}</TypeChip>
-          <VisibilityBadge visibility={kb.visibility} variant="header" />
+          {!isMobile && <TypeChip>{kb.type}</TypeChip>}
+          {!isMobile && <VisibilityBadge visibility={kb.visibility} variant="header" />}
         </div>
+
+        {/* Десктоп/планшет: поиск, кол-во документов и пометка привязки — прямо в тулбаре */}
+        {!isMobile && searchInput(true)}
+        {!isMobile && (
+          <span style={{
+            flex: 'none', display: 'inline-flex', alignItems: 'center', height: 24, padding: '0 9px',
+            borderRadius: R.sm, background: C.bgSelected, color: C.textSecondary, fontSize: 11.5, fontWeight: 500, whiteSpace: 'nowrap',
+          }}>{kb.documentCount} {pluralDocs(kb.documentCount)}</span>
+        )}
+        {!isMobile && !kb.deletable && (
+          <span title={`Привязана к разделу «${kb.type}»`} style={{
+            flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5,
+            fontSize: 11.5, color: C.textMuted, whiteSpace: 'nowrap',
+          }}><IconLock size={12} />привязана</span>
+        )}
+
         <button onClick={() => onAddDocument(kb)} style={tbBtnPrimary}><IconPlus size={15} />Добавить</button>
-        <span style={{ position: 'relative' }}>
+        <span style={{ position: 'relative', flex: 'none' }}>
           <ToolbarIconButton onClick={() => setMenu(true)} title="Действия"><IconDots size={18} /></ToolbarIconButton>
           {menu && (
-            <Menu onClose={() => setMenu(false)} top={40} align="right" minWidth={210}>
-              <MenuItem icon={<><path d="M12 5v14M5 12h14" /></>} label="Добавить документ"
-                onClick={() => { setMenu(false); onAddDocument(kb); }} />
-              {kb.deletable && (
-                <MenuItem icon={<><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></>}
-                  label="Удалить базу" danger onClick={() => { setMenu(false); onDelete(kb); }} />
-              )}
-            </Menu>
+            <KbActionsMenu kb={kb} isMobile={isMobile}
+              onClose={() => setMenu(false)}
+              onAddDocument={() => onAddDocument(kb)}
+              onDelete={() => onDelete(kb)} />
           )}
         </span>
       </Toolbar>
 
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        {/* Описание + статистика */}
+        {/* Описание — везде. Кол-во/привязка отдельной строкой — только на мобиле
+            (на десктопе они в тулбаре). */}
         <div style={{ padding: '16px 18px 8px' }}>
           {kb.description && (
             <div style={{ color: C.textSecondary, fontSize: 13.5, maxWidth: 680, lineHeight: 1.5 }}>{kb.description}</div>
           )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12, color: C.textMuted }}>
-            <span>{kb.documentCount} {pluralDocs(kb.documentCount)}</span>
-            {!kb.deletable && (
-              <>
-                <span>·</span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>привязана к разделу «{kb.type}»</span>
-              </>
-            )}
-          </div>
+          {isMobile && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12, color: C.textMuted }}>
+              <span>{kb.documentCount} {pluralDocs(kb.documentCount)}</span>
+              {!kb.deletable && (
+                <>
+                  <span>·</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <IconLock size={11} />привязана к разделу «{kb.type}»
+                  </span>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Поиск + переключатель семантика/полнотекст.
-            «Пилюля» смысла — внутри поля, как в сайдбаре Заметок (компактный «смысл»). */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 18px 10px',
-          position: 'sticky', top: 0, background: C.bgMain, zIndex: 2,
-        }}>
+        {/* Поиск отдельной строкой — только на мобиле */}
+        {isMobile && (
           <div style={{
-            flex: 1, maxWidth: 480, display: 'flex', alignItems: 'center', gap: 8, height: 34,
-            padding: '0 11px', borderRadius: R.lg, background: C.bgCard, border: `1px solid ${C.border}`, color: C.textMuted,
-          }}>
-            <IconSearch size={15} />
-            <input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)}
-              placeholder={mode === 'semantic' ? 'Поиск по смыслу…' : 'Полнотекстовый поиск…'}
-              style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: FONT.sans, fontSize: 13, color: C.textHeading }} />
-            <button
-              onClick={() => setMode(m => m === 'semantic' ? 'fulltext' : 'semantic')}
-              title={mode === 'semantic' ? 'Поиск по смыслу — включён; клик — точный' : 'Точный поиск — включён; клик — по смыслу'}
-              style={semanticPill(mode === 'semantic')}>
-              смысл
-            </button>
-          </div>
-        </div>
+            display: 'flex', alignItems: 'center', gap: 8, padding: '8px 18px 10px',
+            position: 'sticky', top: 0, background: C.bgMain, zIndex: 2,
+          }}>{searchInput(false)}</div>
+        )}
 
         {query.trim() ? (
           <SearchResults hits={hits} searching={searching} query={query.trim()} mode={mode} />

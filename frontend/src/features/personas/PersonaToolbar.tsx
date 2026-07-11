@@ -15,7 +15,7 @@ import type { PersonaFormStatus } from './PersonaForm';
 // Сохранить (+точка dirty) — только в «Профиль».
 // В режиме создания: «Новая персона» + [Отмена] [Создать].
 
-export type PersonaView = 'preview' | 'profile' | 'knowledge' | 'memory';
+export type PersonaView = 'preview' | 'profile' | 'knowledge' | 'memory' | 'tasks';
 
 // Иконки видов — на мобиле пилюли компактные (подпись только у активного)
 const viewIcon = (d: React.ReactNode) => (
@@ -32,6 +32,8 @@ const VIEW_OPTIONS: { value: PersonaView; label: string; icon: React.ReactNode }
   { value: 'knowledge', label: 'Знания', icon: viewIcon(<><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></>) },
   // Память — слои
   { value: 'memory', label: 'Память', icon: viewIcon(<><path d="M12 2 2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" /></>) },
+  // Задачи — чек-лист (поручения персоне-исполнителю)
+  { value: 'tasks', label: 'Задачи', icon: viewIcon(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>) },
 ];
 
 interface CommonProps {

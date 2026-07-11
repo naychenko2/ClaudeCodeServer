@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Persona, PersonaBinding, PersonaMemoryEntry, Session } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { ensureTasksLoaded, useTasks } from '../../lib/tasks';
 import { relativeTime } from '../projects/projectUtil';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
@@ -33,7 +34,7 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
-export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking, onEditProfile, onOpenKnowledge, isMobile }: {
+export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking, onEditProfile, onOpenKnowledge, onOpenTasks, isMobile }: {
   persona: Persona;
   // Цвет персоны (уже разрезолвленный из палитры) — тот же, что в тулбаре
   accent: string;
@@ -46,10 +47,20 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   onEditProfile?: () => void;
   // Перейти во вкладку «Знания» (секция привязок, фича persona-bindings)
   onOpenKnowledge?: () => void;
+  // Перейти во вкладку «Задачи» (поручения персоне-исполнителю)
+  onOpenTasks?: () => void;
   isMobile?: boolean;
 }) {
   const modelName = useModelLabel(persona.model);
   const bindingsEnabled = useFeature(FLAGS.personaBindings);
+
+  // Сводка задач персоны-исполнителя (реальные задачи из общего стора)
+  const allTasks = useTasks();
+  useEffect(() => { void ensureTasksLoaded(); }, []);
+  const taskCounts = useMemo(() => {
+    const mine = allTasks.filter(t => t.personaId === persona.id);
+    return { total: mine.length, active: mine.filter(t => t.status === 'inProgress').length };
+  }, [allTasks, persona.id]);
 
   // Привязки «Знания и правила» — только при включённом флаге; тихий fail → пусто
   const [bindings, setBindings] = useState<PersonaBinding[] | null>(null);
@@ -193,6 +204,26 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
           <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading }}>{f.value}</span>
         </div>
       ))}
+      {/* Задачи — кликабельный чип, ведёт на вкладку «Задачи» персоны */}
+      {onOpenTasks && (
+        <button
+          type="button"
+          onClick={onOpenTasks}
+          title="Открыть задачи персоны"
+          style={{ ...factChip, cursor: 'pointer', textAlign: 'left', border: `1px solid ${C.border}` }}
+        >
+          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: C.textMuted }}>
+            Задачи
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading }}>
+            {taskCounts.total === 0
+              ? 'нет поручений'
+              : taskCounts.active > 0
+                ? `${taskCounts.active} в работе · ${taskCounts.total} всего`
+                : `${taskCounts.total} всего`}
+          </span>
+        </button>
+      )}
     </div>
   );
 

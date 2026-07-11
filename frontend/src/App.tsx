@@ -425,6 +425,16 @@ export default function App() {
     // Не задачный диплинк — фолбэк на полную загрузку, как раньше
     window.location.assign(url)
   }
+  // Открытие задачи по её hash-URL из любого раздела (вкладка «Задачи» персоны и т.п.) —
+  // переиспуем ту же навигацию, что у кликов по уведомлениям (календарь/проект, монтированный или нет).
+  useEffect(() => {
+    const onOpenUrl = (e: Event) => {
+      const url = (e as CustomEvent<{ url: string }>).detail?.url
+      if (url) openNotificationUrl(url)
+    }
+    window.addEventListener('cc-open-url', onOpenUrl as EventListener)
+    return () => window.removeEventListener('cc-open-url', onOpenUrl as EventListener)
+  })
   const logout = () => {
     localStorage.removeItem('cc_token')
     localStorage.removeItem('cc_username')

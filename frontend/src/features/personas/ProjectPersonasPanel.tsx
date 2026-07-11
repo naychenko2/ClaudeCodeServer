@@ -12,6 +12,7 @@ import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
 import { PersonaPreview } from './PersonaPreview';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaBindingsPanel } from './PersonaBindingsPanel';
+import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
 import type { PersonaTemplate } from './personaTemplates';
 
@@ -177,6 +178,8 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
         {persona ? (
           view === 'memory' ? (
             <PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded />
+          ) : view === 'tasks' ? (
+            <PersonaTasksPanel persona={persona} isMobile={isMobile} />
           ) : view === 'knowledge' ? (
             // Знания — привязки источников и правил (фича persona-bindings)
             <PersonaBindingsPanel persona={persona} accent={accent} isMobile={isMobile} />
@@ -190,6 +193,7 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
               onOpenSession={onOpenChat}
               onEditProfile={() => setView('profile')}
               onOpenKnowledge={() => setView('knowledge')}
+              onOpenTasks={() => setView('tasks')}
               isMobile={isMobile}
             />
           ) : (

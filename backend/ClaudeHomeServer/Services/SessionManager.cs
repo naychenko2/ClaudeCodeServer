@@ -915,8 +915,14 @@ public class SessionManager
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
 
+        // Working/Waiting — ход идёт или сессия ждёт человека → занята. Starting неоднозначен:
+        // у свежесозданного чата это дефолт (Session.Status = Starting, процесс ещё не запускался),
+        // ход не идёт — принимаем сообщение и стартуем первый ход. Starting при уже поднятом
+        // процессе означает раскрутку хода — это занятость. Гонку двух ходов ловит TurnWaiter ниже.
         var status = entry.Info.Status;
-        if (status is SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting)
+        var busy = status is SessionStatus.Working or SessionStatus.Waiting
+            || (status is SessionStatus.Starting && entry.Process is not null);
+        if (busy)
             return new SendAndWaitResult.Busy(status);
 
         await EnsureProcessAsync(sessionId, entry);

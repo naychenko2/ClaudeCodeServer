@@ -267,6 +267,10 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["WORKSPACE_SELF_SESSION_ID"] = _workspaceMcp.SelfSessionId ?? "",
                         ["WORKSPACE_AGENT_DEPTH"] = Math.Max(_workspaceMcp.AgentDepth, _currentTurnAgentDepth).ToString(),
                     },
+                    // alwaysLoad как у memory/personas: аккаунт-коннекторы claude.ai переводят
+                    // CLI в режим deferred-tools, где ленивые серверы прячут инструменты от модели.
+                    // Персона-секретарь опирается на workspace-инструменты — держим их всегда видимыми.
+                    ["alwaysLoad"] = true,
                 };
             }
 

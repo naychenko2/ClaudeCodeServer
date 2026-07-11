@@ -19,9 +19,11 @@ public class PersonaManager
     private readonly ConcurrentDictionary<string, Persona> _personas = new();
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
+    private readonly ILogger<PersonaManager>? _log;
 
-    public PersonaManager(IConfiguration config)
+    public PersonaManager(IConfiguration config, ILogger<PersonaManager>? log = null)
     {
+        _log = log;
         // Стор — в каталоге DataPath (как у всех сервисов): в контейнере это /data (volume).
         // Прежний фолбэк AppContext.BaseDirectory/data жил ВНУТРИ контейнера, и персоны
         // с аватарами пропадали при каждом его пересоздании (деплое).
@@ -141,8 +143,13 @@ public class PersonaManager
             Avatar = new PersonaAvatar { Kind = PersonaAvatarKind.Initials, Color = color },
             Proactive = proactive is null ? null : MergeProactive(current: null, proactive),
         };
-        persona.Handle = MakeUniqueHandle(persona.Name, userId);
-        _personas[persona.Id] = persona;
+        // Генерация handle и вставка атомарны: без лока два одновременных Create
+        // с одинаковым именем вычислили бы один и тот же слаг (гонка TOCTOU)
+        lock (_saveLock)
+        {
+            persona.Handle = MakeUniqueHandle(persona.Name, userId);
+            _personas[persona.Id] = persona;
+        }
         Save();
         return persona;
     }
@@ -363,13 +370,42 @@ public class PersonaManager
     private void Load()
     {
         var list = JsonFileStore.Load<List<Persona>>(_storePath, JsonOpts);
-        if (list is not null)
-            foreach (var p in list)
+        if (list is null) return;
+
+        // Проход 1: вставить всех как есть — генерация handle ниже должна видеть
+        // ВСЕ занятые handle, иначе legacy-персона без handle могла занять чужой
+        foreach (var p in list)
+        {
+            p.Avatar ??= new PersonaAvatar();
+            _personas[p.Id] = p;
+        }
+
+        var changed = false;
+
+        // Проход 2: миграция legacy-персон без handle
+        foreach (var p in _personas.Values.Where(p => string.IsNullOrEmpty(p.Handle)))
+        {
+            p.Handle = MakeUniqueHandle(p.Name, p.OwnerId);
+            changed = true;
+        }
+
+        // Проход 3: самолечение дублей handle (могли появиться до фикса миграции и гонки
+        // Create): handle остаётся у самой старой персоны, остальным перегенерируется
+        foreach (var group in _personas.Values
+                     .GroupBy(p => (p.OwnerId, Handle: p.Handle.ToLowerInvariant()))
+                     .Where(g => g.Count() > 1).ToList())
+        {
+            foreach (var p in group.OrderBy(p => p.CreatedAt).Skip(1))
             {
-                p.Avatar ??= new PersonaAvatar();
-                if (string.IsNullOrEmpty(p.Handle)) p.Handle = MakeUniqueHandle(p.Name, p.OwnerId);
-                _personas[p.Id] = p;
+                var old = p.Handle;
+                p.Handle = MakeUniqueHandle(p.Name, p.OwnerId);
+                _log?.LogWarning("Дубль handle у персон владельца {OwnerId}: «{Name}» переименована @{Old} → @{New}",
+                    p.OwnerId, p.Name, old, p.Handle);
+                changed = true;
             }
+        }
+
+        if (changed) Save();
     }
 
     private void Save()

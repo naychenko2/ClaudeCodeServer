@@ -125,13 +125,15 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                     <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: accent }} />
                   )}
                   {group.length > 1 ? (
-                    <div style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}>
-                      {group.slice(0, 3).map((p, i) => (
+                    // Вертикальный плотный стек: важно количество участников, а не лица —
+                    // карточку не распирает по ширине даже при 4 персонах
+                    <div style={{ flexShrink: 0, marginTop: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                      {group.map((p, i) => (
                         <div key={p!.id} style={{
-                          marginLeft: i === 0 ? 0 : -10, position: 'relative', zIndex: group.length - i,
-                          borderRadius: '50%', border: `2px solid ${C.bgWhite}`,
+                          marginTop: i === 0 ? 0 : -15, position: 'relative', zIndex: group.length - i,
+                          borderRadius: '50%', border: `1.5px solid ${C.bgWhite}`,
                         }}>
-                          <PersonaAvatar persona={p!} size={26} />
+                          <PersonaAvatar persona={p!} size={22} />
                         </div>
                       ))}
                     </div>
@@ -155,7 +157,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                     </div>
                     {group.length > 1 ? (
                       <div style={{ fontSize: 11.5, fontWeight: 600, color: accent, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        Групповой · {group.map(p => p!.role || p!.name).join(', ')}
+                        Групповой · {group.length} участника
                       </div>
                     ) : persona && (
                       <div style={{ fontSize: 11.5, fontWeight: 600, color: accent, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

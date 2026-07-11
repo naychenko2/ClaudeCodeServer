@@ -14,7 +14,7 @@ import type { SkillInfo, AgentInfo, Persona, WorkLoopState } from '../types';
 export interface ComposerProps {
   // Ключ чата — под него хранится черновик недовведённого текста
   sessionId: string;
-  onSend: (text: string, attachments: string[]) => void;
+  onSend: (text: string, attachments: string[], opts?: { auto?: boolean }) => void;
   onStop: () => void;
   onAttach: () => void;
   isGenerating: boolean;
@@ -909,7 +909,7 @@ export function Composer({
           sessionId={sessionId}
           meetingEnabled={true}
           pipelineEnabled={true}
-          onSend={t => onSend(t, [])}
+          onSend={t => onSend(t, [], { auto: true })}
           onClose={() => setShowDiscuss(false)}
         />
       )}

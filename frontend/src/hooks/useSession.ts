@@ -197,19 +197,20 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
 
   const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined };
 
-  const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string) => {
+  const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string, opts?: { auto?: boolean }) => {
     if (!sessionId) return;
+    const auto = opts?.auto ?? false;
     setState(sessionId, prev => ({
       ...prev,
       isWaiting: true,
-      items: [...prev.items, { kind: 'user_message', text, attachedPaths }],
+      items: [...prev.items, { kind: 'user_message', text, attachedPaths, ...(auto ? { auto: true } : {}) }],
     }));
     try {
       // Всегда подтверждаем членство в группе перед отправкой:
       // защита от потери группы при переподключении или переключении проекта
       await joinSession(sessionId);
       setState(sessionId, prev => ({ ...prev, isJoined: true }));
-      await sendMessage(sessionId, text, attachedPaths, mode);
+      await sendMessage(sessionId, text, attachedPaths, mode, auto);
     } catch (err) {
       setState(sessionId, prev => ({
         ...prev,

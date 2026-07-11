@@ -865,7 +865,7 @@ public class SessionManager
         SaveSessions();
     }
 
-    public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false)
+    public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -907,7 +907,7 @@ public class SessionManager
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
-        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective);
+        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId);
         // Обвязки хода (OmO) дописываются только к тексту для CLI —
         // история и UI хранят исходное сообщение пользователя
         await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths);

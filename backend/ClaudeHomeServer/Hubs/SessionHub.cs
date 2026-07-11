@@ -109,10 +109,12 @@ public class SessionHub : Hub
         return base.OnDisconnectedAsync(exception);
     }
 
-    public async Task SendMessage(string sessionId, string text, List<string>? attachedPaths = null, string? mode = null)
+    public async Task SendMessage(string sessionId, string text, List<string>? attachedPaths = null, string? mode = null, bool auto = false)
     {
         if (!OwnsSession(sessionId)) throw Denied();
-        await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? [], mode);
+        // auto — сообщение опубликовано автоматически (совещание «Продолжить обсуждение»,
+        // «Обсудить с командой»): UI покажет источник вместо пузыря пользователя
+        await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? [], mode, auto: auto);
     }
 
     public void RespondPermission(string sessionId, string requestId, string behavior)

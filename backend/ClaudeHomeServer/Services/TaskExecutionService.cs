@@ -83,7 +83,7 @@ public class TaskExecutionService
         var prompt = BuildPrompt(updated, persona);
         // Обогащение контекста семантически близкими заметками
         prompt += await BuildNotesContextAsync(updated);
-        await _sessions.SendMessageAsync(session.Id, prompt, []);
+        await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id);
 
         if (auto)
             await NotifyAsync(updated, new NotificationMessage(

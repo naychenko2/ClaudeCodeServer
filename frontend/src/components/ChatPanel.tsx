@@ -358,7 +358,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     }
   }, [isJoined, send]);
 
-  const handleSend = async (text: string) => {
+  const handleSend = async (text: string, _attachments?: string[], opts?: { auto?: boolean }) => {
+    // Авто-обвязка «Обсудить с командой» вложений не несёт — берём только при ручной отправке
+    if (opts?.auto) {
+      atBottomRef.current = true;
+      await send(text, [], mode, { auto: true });
+      return;
+    }
     if (!text.trim() && attachedFiles.length === 0) return;
     const paths = [...attachedFiles];
     onAttachedFilesChange([]);
@@ -560,7 +566,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // «Продолжить обсуждение» из карточки совещания: краткий итог уходит обычным сообщением
   const handleMeetingContinue = useCallback((text: string) => {
     atBottomRef.current = true;
-    void send(text, [], mode);
+    void send(text, [], mode, { auto: true });
   }, [send, mode]);
   // Отмена идущего совещания (карточка знает только о факте, id чата — тут)
   const handleMeetingCancel = useCallback(() => {

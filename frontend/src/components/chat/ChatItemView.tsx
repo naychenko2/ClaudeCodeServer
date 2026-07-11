@@ -200,13 +200,16 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
 // Нейтральный акцент для агента без персоны (как в PersonaAskView)
 const AGENT_NEUTRAL = '#8A8070';
 
-// Входящее сообщение от персоны/агента (chats_send из другого чата): карточка с лицом
-// отправителя и телом в Markdown — вместо безликого пузыря пользователя.
-function AgentMessageView({ text, persona }: { text: string; persona: Persona | null }) {
-  // В не-персон-чате стор мог быть не загружен — подтягиваем, чтобы резолвить лицо отправителя
+// Сообщение с источником (не от человека): входящее от персоны через chats_send, либо
+// авто-публикация — совещание/конвейер/задача. Карточка с лицом автора (персона или
+// стандартный значок) и телом в Markdown — вместо безликого пузыря пользователя.
+function AgentMessageView({ text, persona, neutralTitle = 'Агент', note }: {
+  text: string; persona: Persona | null; neutralTitle?: string; note?: string;
+}) {
+  // В не-персон-чате стор мог быть не загружен — подтягиваем, чтобы резолвить лицо автора
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const accent = persona ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? AGENT_NEUTRAL) : AGENT_NEUTRAL;
-  const title = persona ? personaLabel(persona) : 'Агент';
+  const title = persona ? personaLabel(persona) : neutralTitle;
   return (
     <div style={{
       border: `1px solid ${C.borderLight}`, borderLeft: `3px solid ${accent}`,
@@ -239,7 +242,7 @@ function AgentMessageView({ text, persona }: { text: string; persona: Persona | 
             <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>@{persona.handle}</span>
           )}
         </div>
-        <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>прислал(а) в чат</span>
+        {note && <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{note}</span>}
       </div>
       {/* Тело — Markdown */}
       <div style={{ padding: '10px 12px', fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
@@ -311,10 +314,15 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           </div>
         );
       }
-      // Входящее сообщение от персоны/агента (chats_send) — карточкой с лицом отправителя
-      if (item.viaAgent) {
+      // Сообщение не от человека — показываем источник карточкой с лицом автора:
+      //  • viaAgent — прислано персоной/агентом из другого чата (chats_send)
+      //  • auto — авто-публикация (совещание «Продолжить обсуждение», план конвейера, задача)
+      // Персона резолвится по senderPersonaId; иначе — стандартный значок.
+      if (item.viaAgent || item.auto) {
         const sender = item.senderPersonaId ? (getPersonaById(item.senderPersonaId) ?? null) : null;
-        return <AgentMessageView text={item.text} persona={sender} />;
+        return item.viaAgent
+          ? <AgentMessageView text={item.text} persona={sender} note="прислал(а) в чат" />
+          : <AgentMessageView text={item.text} persona={sender} neutralTitle="Автоматически" />;
       }
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>

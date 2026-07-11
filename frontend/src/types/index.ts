@@ -390,9 +390,10 @@ export interface PipelinePhaseItem {
 // Элементы чата
 export type ChatItem =
   // viaAgent — сообщение прислано не человеком, а агентом из другой сессии (chats_send);
-  // senderPersonaId — персона-отправитель (рендерим входящей репликой её лицом);
-  // systemDirective — служебная директива цикла «до готово» (компактная плашка вместо пузыря)
-  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean }
+  // senderPersonaId — персона-автор (рендерим сообщение её лицом);
+  // systemDirective — служебная директива цикла «до готово» (компактная плашка вместо пузыря);
+  // auto — опубликовано автоматически (не человеком): совещание/конвейер/задача — показываем источник
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.

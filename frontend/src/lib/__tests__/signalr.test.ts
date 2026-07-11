@@ -176,12 +176,15 @@ describe('вызовы хаба', () => {
     expect(h.fake.invoke).not.toHaveBeenCalled();
   });
 
-  it('sendMessage передаёт mode ?? null', async () => {
+  it('sendMessage передаёт mode ?? null и флаг auto', async () => {
     await signalr.sendMessage('s1', 'привет', ['a.ts']);
-    expect(h.fake.invoke).toHaveBeenCalledWith('SendMessage', 's1', 'привет', ['a.ts'], null);
+    expect(h.fake.invoke).toHaveBeenCalledWith('SendMessage', 's1', 'привет', ['a.ts'], null, false);
 
     await signalr.sendMessage('s1', 'привет', [], 'plan');
-    expect(h.fake.invoke).toHaveBeenCalledWith('SendMessage', 's1', 'привет', [], 'plan');
+    expect(h.fake.invoke).toHaveBeenCalledWith('SendMessage', 's1', 'привет', [], 'plan', false);
+
+    await signalr.sendMessage('s1', 'итог', [], undefined, true);
+    expect(h.fake.invoke).toHaveBeenCalledWith('SendMessage', 's1', 'итог', [], null, true);
   });
 
   it('respondPermission передаёт behavior', async () => {

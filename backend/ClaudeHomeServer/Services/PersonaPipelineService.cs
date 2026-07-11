@@ -187,7 +187,8 @@ public class PersonaPipelineService(
             sessions.SetPersona(sessionId, ownerId, executor.Id);
         await sessions.SetWorkLoopAsync(sessionId, true);
         await sessions.SendMessageAsync(sessionId,
-            $"Выполни план полностью.\n\nЗадача: {task}\n\nПлан (одобрен ревью):\n{plan}", []);
+            $"Выполни план полностью.\n\nЗадача: {task}\n\nПлан (одобрен ревью):\n{plan}", [],
+            auto: true, senderPersonaId: executor.Id);
     }
 
     // One-shot фаза: спрашиваем роль, публикуем результат в историю + live. null — фаза упала.

@@ -103,9 +103,9 @@ export async function leaveSession(sessionId: string): Promise<void> {
   }
 }
 
-export async function sendMessage(sessionId: string, text: string, attachedPaths: string[] = [], mode?: string): Promise<void> {
+export async function sendMessage(sessionId: string, text: string, attachedPaths: string[] = [], mode?: string, auto = false): Promise<void> {
   const conn = await ensureConnected();
-  await conn.invoke('SendMessage', sessionId, text, attachedPaths, mode ?? null);
+  await conn.invoke('SendMessage', sessionId, text, attachedPaths, mode ?? null, auto);
 }
 
 export async function respondPermission(

@@ -20,17 +20,21 @@ namespace ClaudeHomeServer.Protocol;
 public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
-    string? senderPersonaId = null, bool? systemDirective = null) : StoredMessage
+    string? senderPersonaId = null, bool? systemDirective = null, bool? auto = null) : StoredMessage
 {
     public string Text { get; init; } = text;
     public string[]? AttachedPaths { get; init; } = attachedPaths;
     // Сообщение прислано не человеком, а агентом из другой сессии (chats_send) — для пометки в UI
     public bool? ViaAgent { get; init; } = viaAgent;
-    // Персона-отправитель (chats_send из чата персоны) — для рендера входящей реплики её лицом
+    // Персона-отправитель (chats_send из чата персоны, авто-ход конвейера/задачи) — для рендера
+    // сообщения её лицом
     public string? SenderPersonaId { get; init; } = senderPersonaId;
     // Служебная директива механики цикла «до готово» (continuation/verification) — UI прячет
     // сырой текст за компактной плашкой вместо пузыря пользователя
     public bool? SystemDirective { get; init; } = systemDirective;
+    // Сообщение опубликовано автоматически (не человеком): совещание «Продолжить обсуждение»,
+    // план конвейера, промпт задачи. UI показывает источник (персона или стандартный значок)
+    public bool? Auto { get; init; } = auto;
 }
 
 public class StoredSessionStartedMessage(string model, string mode) : StoredMessage

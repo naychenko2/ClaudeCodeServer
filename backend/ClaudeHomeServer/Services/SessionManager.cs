@@ -871,11 +871,19 @@ public class SessionManager
     {
         if (entry.Process is not null) return;
 
-        var existingHistory = entry.Info.ClaudeSessionId != null
-            ? await _history.LoadAsync(entry.Info.ClaudeSessionId)
-            : [];
-        var accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
-        entry.Accumulator = accumulator;
+        // Переиспускаем существующий in-memory аккумулятор (процесс мог быть сброшен
+        // сменой собеседника — SwitchSpeaker; его состояние, включая ещё не сохранённые
+        // внеходовые карточки конвейера/совещания, нельзя терять). Новый создаём только
+        // при ленивом восстановлении сессии после рестарта сервера (Accumulator == null).
+        var accumulator = entry.Accumulator;
+        if (accumulator is null)
+        {
+            var existingHistory = entry.Info.ClaudeSessionId != null
+                ? await _history.LoadAsync(entry.Info.ClaudeSessionId)
+                : [];
+            accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
+            entry.Accumulator = accumulator;
+        }
 
         // Чат вне проекта — рабочая папка Chats, без проектного промпта и правил;
         // проектная сессия — RootPath/SystemPrompt/PermissionRules из проекта.

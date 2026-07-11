@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
-import type { Persona, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaWorkingFocus, Project } from '../../types';
+import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaWorkingFocus, Project } from '../../types';
 import { api } from '../../lib/api';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl } from '../../components/ui';
 import { PillSwitch } from '../../components/Toolbar';
@@ -44,6 +44,8 @@ export interface PersonaFormInitial {
   greeting?: string;
   color?: string;
   tools?: string[];
+  // Профиль доступа из шаблона (напр. Ревьюер — только чтение)
+  access?: PersonaAccess;
 }
 
 interface PersonaFormProps {
@@ -105,6 +107,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Возможности персоны: массив включённых ключей. null у персоны = все включены.
   const [tools, setTools] = useState<string[]>(
     persona ? (persona.tools ?? ALL_TOOL_KEYS) : (initial?.tools ?? ALL_TOOL_KEYS));
+  // Профиль доступа (P6) + свой список запретов (для custom, через запятую)
+  const [access, setAccess] = useState<PersonaAccess>(
+    persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'));
+  const [disallowedText, setDisallowedText] = useState(
+    (persona?.disallowedTools ?? []).join(', '));
   const [memoryEnabled, setMemoryEnabled] = useState(persona?.memoryEnabled ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -274,6 +281,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     projectId: scope === 'project' ? projectId : '',
     color, greeting: greeting.trim(), memoryEnabled,
     tools: [...tools].sort(),
+    access,
+    disallowed: access === 'custom' ? parseDisallowed(disallowedText) : [],
   });
   // Исходный снимок считается от предзаполненного состояния: у legacy-персоны
   // слот «Характер» = systemPrompt, поэтому сама миграция не делает форму dirty.
@@ -299,8 +308,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       greeting: (persona?.greeting ?? '').trim(),
       memoryEnabled: persona?.memoryEnabled ?? false,
       tools: [...(persona ? (persona.tools ?? ALL_TOOL_KEYS) : ALL_TOOL_KEYS)].sort(),
+      access: persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'),
+      disallowed: (persona?.access ?? 'full') === 'custom' ? (persona?.disallowedTools ?? []) : [],
     });
-  }, [persona, defaultScope, defaultProjectId]);
+  }, [persona, defaultScope, defaultProjectId, initial?.access]);
   const dirty = snapshot !== initialSnapshot;
 
   const save = async () => {
@@ -323,6 +334,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       memoryEnabled,
       // Всегда явный список: полный набор бэкенд нормализует в «без ограничений»
       tools,
+      // Профиль доступа: свой список запретов уходит только при custom
+      access,
+      disallowedTools: access === 'custom' ? parseDisallowed(disallowedText) : [],
     };
     try {
       const saved = isEdit
@@ -752,6 +766,33 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       <div style={{ fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans, marginBottom: 14 }}>
         Какими инструментами персона может пользоваться в чате
       </div>
+
+      {/* Профиль доступа (P6): full / readOnly / custom */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
+        <FieldLabel>Профиль доступа</FieldLabel>
+        <SegmentedControl<PersonaAccess>
+          value={access}
+          onChange={setAccess}
+          columns={3}
+          options={[
+            { value: 'full', label: 'Полный' },
+            { value: 'readOnly', label: 'Только чтение' },
+            { value: 'custom', label: 'Свой' },
+          ]}
+        />
+        {access === 'readOnly' && (
+          <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
+            Смотрит и советует, но ничего не меняет: без правок файлов, Bash и мутаций задач/заметок
+          </span>
+        )}
+        {access === 'custom' && (
+          <Field hint="Имена инструментов через запятую, напр. Bash, Edit, mcp__tasks__tasks_delete">
+            <TextArea value={disallowedText} onChange={setDisallowedText} autoGrow minHeight={56}
+              placeholder="Bash, Edit, Write" />
+          </Field>
+        )}
+      </div>
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {TOOL_OPTIONS.map(t => (
           <div key={t.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -863,6 +904,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     </div>
   );
 });
+
+// Разбор списка запретов «через запятую» (custom-профиль) — пустые куски выбрасываются
+function parseDisallowed(s: string): string[] {
+  return Array.from(new Set(s.split(',').map(t => t.trim()).filter(Boolean)));
+}
 
 // Возможности персоны: ключи и подписи тумблеров. Полный набор = «без ограничений».
 const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];

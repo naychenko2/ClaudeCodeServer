@@ -95,6 +95,15 @@ public class PersonaManager
     private static string? TrimToNull(string? s) =>
         string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
+    // Нормализация пользовательского списка запретов (Custom-профиль):
+    // трим, выброс пустых, дедуп; пустой список → null
+    internal static List<string>? NormalizeDisallowed(List<string>? tools)
+    {
+        var clean = tools?.Select(t => t.Trim()).Where(t => t.Length > 0)
+            .Distinct(StringComparer.Ordinal).ToList();
+        return clean is { Count: > 0 } ? clean : null;
+    }
+
     private static List<string>? CleanList(List<string>? items)
     {
         var clean = items?.Where(i => !string.IsNullOrWhiteSpace(i)).Select(i => i.Trim()).ToList();
@@ -104,7 +113,8 @@ public class PersonaManager
     public Persona Create(string userId, string name, string? role, string? description, string? systemPrompt,
         string? model, string? effort, PersonaScope scope, string? projectId,
         string? color, string? greeting, bool memoryEnabled, List<string>? tools = null,
-        PersonaContract? contract = null)
+        PersonaContract? contract = null, PersonaAccess access = PersonaAccess.Full,
+        List<string>? disallowedTools = null)
     {
         var persona = new Persona
         {
@@ -121,6 +131,9 @@ public class PersonaManager
             Greeting = greeting,
             MemoryEnabled = memoryEnabled,
             Tools = NormalizeTools(tools),
+            Access = access,
+            // Свой список запретов имеет смысл только при Custom-профиле
+            DisallowedTools = access == PersonaAccess.Custom ? NormalizeDisallowed(disallowedTools) : null,
             Avatar = new PersonaAvatar { Kind = PersonaAvatarKind.Initials, Color = color },
         };
         persona.Handle = MakeUniqueHandle(persona.Name, userId);
@@ -132,7 +145,8 @@ public class PersonaManager
     public Persona Update(string id, string userId, string? name, string? role, string? description,
         string? systemPrompt, string? model, string? effort, PersonaScope? scope, string? projectId,
         string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null,
-        PersonaContract? contract = null)
+        PersonaContract? contract = null, PersonaAccess? access = null,
+        List<string>? disallowedTools = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -159,6 +173,10 @@ public class PersonaManager
         if (memoryEnabled is not null) persona.MemoryEnabled = memoryEnabled.Value;
         // null — не менять; список — установить (полный набор нормализуется в null)
         if (tools is not null) persona.Tools = NormalizeTools(tools);
+        // Профиль доступа: null — не менять; свой список запретов живёт только при Custom
+        if (access is not null) persona.Access = access.Value;
+        if (disallowedTools is not null) persona.DisallowedTools = NormalizeDisallowed(disallowedTools);
+        if (persona.Access != PersonaAccess.Custom) persona.DisallowedTools = null;
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
         return persona;

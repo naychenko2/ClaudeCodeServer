@@ -3,7 +3,7 @@
 // выбирает карточку, правит имя и нюансы и сохраняет обычным POST /api/personas.
 // Поле tools — дефолтные возможности персоны (этап B, ключи tasks/notes/web).
 
-import type { PersonaContract } from '../../types';
+import type { PersonaAccess, PersonaContract } from '../../types';
 
 export interface PersonaTemplate {
   key: string;
@@ -14,6 +14,8 @@ export interface PersonaTemplate {
   greeting: string;
   avatarColor: string;
   tools?: string[];
+  // Профиль доступа (P6): у «советующих» ролей — readOnly
+  access?: PersonaAccess;
 }
 
 export const PERSONA_TEMPLATES: PersonaTemplate[] = [
@@ -43,6 +45,7 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
     greeting: 'Показывай, что проверить. Вердикт и до трёх замечаний — по существу.',
     avatarColor: 'red',
     tools: [],
+    access: 'readOnly',
   },
   {
     key: 'planner',
@@ -95,6 +98,7 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
     greeting: 'Что анализируем? Дай вводные или данные — разберу и покажу выводы с рисками.',
     avatarColor: 'purple',
     tools: ['web', 'notes'],
+    access: 'readOnly',
   },
   {
     key: 'mentor',
@@ -122,6 +126,7 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
     greeting: 'Привет! В чём хочешь разобраться? Начнём с того, что уже знаешь.',
     avatarColor: 'green',
     tools: [],
+    access: 'readOnly',
   },
   {
     key: 'secretary',

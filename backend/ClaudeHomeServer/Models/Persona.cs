@@ -14,6 +14,11 @@ public enum PersonaMemoryType { Semantic, Episodic, Procedural }
 // Вид аватара: Initials — круг с инициалами на цветном фоне; Image — сгенерированная/загруженная картинка.
 public enum PersonaAvatarKind { Initials, Image }
 
+// Профиль доступа персоны (P6): Full — без ограничений; ReadOnly — смотрит и советует,
+// но ничего не меняет (без правок файлов, Bash и мутаций задач/заметок/персон);
+// Custom — свой список запрещённых инструментов (Persona.DisallowedTools).
+public enum PersonaAccess { Full, ReadOnly, Custom }
+
 // Внешний вид персоны.
 public class PersonaAvatar
 {
@@ -81,6 +86,10 @@ public class Persona
     // Возможности персоны (ключи: tasks, notes, web). null — без ограничений
     // (как раньше, по фич-флагам владельца); список — только перечисленные.
     public List<string>? Tools { get; set; }
+    // Профиль доступа (P6): Full/ReadOnly/Custom (см. PersonaAccessPolicy)
+    public PersonaAccess Access { get; set; } = PersonaAccess.Full;
+    // Свой список запрещённых инструментов — только при Access == Custom
+    public List<string>? DisallowedTools { get; set; }
     // Первое приветственное сообщение при открытии чата (опционально)
     public string? Greeting { get; set; }
     public bool MemoryEnabled { get; set; } = true;

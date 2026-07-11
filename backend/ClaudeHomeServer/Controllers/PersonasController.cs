@@ -87,10 +87,13 @@ public class PersonasController : ControllerBase
         var scope = req.Scope ?? PersonaScope.Global;
         if (scope == PersonaScope.Project && !ValidProject(req.ProjectId))
             return BadRequest("Для проектной персоны нужен корректный projectId");
+        if (!TryParseAccess(req.Access, out var access))
+            return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
 
         var persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled ?? true, req.Tools, req.Contract);
+            req.MemoryEnabled ?? true, req.Tools, req.Contract,
+            access ?? PersonaAccess.Full, req.DisallowedTools);
         await Broadcast("created", persona.Id);
         return Ok(persona);
     }
@@ -104,10 +107,12 @@ public class PersonasController : ControllerBase
         // Любой непустой projectId (в т.ч. при partial-update без scope) — только свой проект
         if (!string.IsNullOrEmpty(req.ProjectId) && !ValidProject(req.ProjectId))
             return BadRequest("Проект не найден или недоступен");
+        if (!TryParseAccess(req.Access, out var access))
+            return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
 
         var persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled, req.Tools, req.Contract);
+            req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools);
         await Broadcast("updated", id);
         return Ok(persona);
     }
@@ -580,6 +585,17 @@ public class PersonasController : ControllerBase
         }
     }
 
+    // Парс профиля доступа из запроса: null/пусто → «не менять» (out null),
+    // валидная строка → значение, мусор → false (400 у вызывающего)
+    private static bool TryParseAccess(string? raw, out PersonaAccess? access)
+    {
+        access = null;
+        if (string.IsNullOrWhiteSpace(raw)) return true;
+        if (!Enum.TryParse<PersonaAccess>(raw, ignoreCase: true, out var parsed)) return false;
+        access = parsed;
+        return true;
+    }
+
     // Проект существует и принадлежит владельцу
     private bool ValidProject(string? projectId)
     {
@@ -603,7 +619,11 @@ public record CreatePersonaRequest(
     bool? MemoryEnabled,
     List<string>? Tools = null,
     // Структурированный контракт характера (P1); null — не задан
-    PersonaContract? Contract = null);
+    PersonaContract? Contract = null,
+    // Профиль доступа (P6): full | readOnly | custom; null — дефолт (full)
+    string? Access = null,
+    // Свой список запрещённых инструментов (для custom)
+    List<string>? DisallowedTools = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -619,7 +639,11 @@ public record UpdatePersonaRequest(
     bool? MemoryEnabled,
     List<string>? Tools = null,
     // null — не менять; объект с пустыми слотами — сбросить контракт
-    PersonaContract? Contract = null);
+    PersonaContract? Contract = null,
+    // Профиль доступа (P6): full | readOnly | custom; null — не менять
+    string? Access = null,
+    // Свой список запрещённых инструментов (для custom); null — не менять
+    List<string>? DisallowedTools = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null);
 

@@ -546,6 +546,10 @@ export interface UpdateNoteDto {
 // Зона контекста персоны: глобально (личное пространство) или в рамках проекта
 export type PersonaScope = 'global' | 'project';
 
+// Профиль доступа персоны (P6): full — без ограничений; readOnly — смотрит и
+// советует, но ничего не меняет; custom — свой список запрещённых инструментов
+export type PersonaAccess = 'full' | 'readOnly' | 'custom';
+
 // Аватар персоны: инициалы на цветном фоне или загруженная картинка (этап 4).
 // color — ключ палитры AGENT_COLORS; imageFile — имя файла в хранилище персоны.
 export interface PersonaAvatar {
@@ -584,6 +588,10 @@ export interface Persona {
   memoryEnabled: boolean;     // долгая память (этап 2)
   // Возможности персоны (ключи tasks/notes/web); null/отсутствие — без ограничений
   tools?: string[] | null;
+  // Профиль доступа (P6); отсутствие — full
+  access?: PersonaAccess;
+  // Свой список запрещённых инструментов (только при access === 'custom')
+  disallowedTools?: string[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -605,6 +613,10 @@ export interface CreatePersonaDto {
   memoryEnabled?: boolean;
   // Возможности (tasks/notes/web); полный набор бэкенд нормализует в «без ограничений»
   tools?: string[];
+  // Профиль доступа (P6): full | readOnly | custom
+  access?: PersonaAccess;
+  // Свой список запрещённых инструментов (для custom)
+  disallowedTools?: string[];
 }
 
 // Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны

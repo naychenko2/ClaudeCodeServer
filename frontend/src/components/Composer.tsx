@@ -9,7 +9,7 @@ import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
 import { useFeature, FLAGS } from '../lib/featureFlags';
-import type { SkillInfo, AgentInfo, Persona } from '../types';
+import type { SkillInfo, AgentInfo, Persona, WorkLoopState } from '../types';
 
 export interface ComposerProps {
   // Ключ чата — под него хранится черновик недовведённого текста
@@ -45,6 +45,10 @@ export interface ComposerProps {
   participantIds?: string[] | null;
   // Создание нового группового чата из селектора собеседника (флаг persona-group-chats)
   onCreateGroup?: (personaIds: string[]) => void;
+  // Цикл «до готово» (флаг work-loop): текущее состояние (live с фолбэком на Session.workLoop);
+  // null — цикл выключен. Тумблер виден при заданном onToggleWorkLoop
+  workLoop?: WorkLoopState | null;
+  onToggleWorkLoop?: () => void;
 }
 
 // Получить имя файла из пути
@@ -142,6 +146,8 @@ export function Composer({
   canPickCompanion,
   participantIds = null,
   onCreateGroup,
+  workLoop = null,
+  onToggleWorkLoop,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
@@ -517,6 +523,41 @@ export function Composer({
     </button>
   ) : null;
 
+  // Цикл «до готово» (флаг work-loop): тумблер + компактный бейдж прогресса итераций
+  const workLoopOn = useFeature(FLAGS.workLoop);
+  const loopActive = !!workLoop?.active;
+  const loopButton = workLoopOn && onToggleWorkLoop ? (
+    <button
+      onClick={onToggleWorkLoop}
+      title="Цикл «до готово»: агент работает итерациями, пока не отчитается о завершении, затем верификационный ход"
+      style={{
+        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
+        background: loopActive ? C.accentLight : 'none',
+        cursor: 'pointer', color: loopActive ? C.accent : C.textMuted,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        transition: 'color 0.15s, background 0.15s',
+      }}
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M23 4v6h-6" />
+        <path d="M1 20v-6h6" />
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+        <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
+      </svg>
+    </button>
+  ) : null;
+  const loopBadge = workLoopOn && onToggleWorkLoop && loopActive && workLoop ? (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', height: isMobile ? 26 : 24,
+      padding: '0 9px', borderRadius: R.pill, background: C.accentLight, color: C.accent,
+      fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
+    }}>
+      {workLoop.phase === 'verifying'
+        ? 'Цикл: верификация'
+        : `Цикл: итерация ${workLoop.iteration}/${workLoop.maxIterations}`}
+    </span>
+  ) : null;
+
   const inputArea = isListening ? (
     <div style={{ ...dotsStyle, gap: 10 }}>
       <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.danger, animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
@@ -833,6 +874,8 @@ export function Composer({
             {attachButton}
             {slashButton}
             {discussButton}
+            {loopButton}
+            {loopBadge}
             {modeButton}
             {companionSelector}
             <div style={{ flex: 1 }} />
@@ -846,6 +889,8 @@ export function Composer({
           {attachButton}
           {slashButton}
           {discussButton}
+          {loopButton}
+          {loopBadge}
           {inputArea}
           {companionSelector}
           {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <><div style={{ width: 12, flexShrink: 0 }} />{micButton}{sendButton}</>}

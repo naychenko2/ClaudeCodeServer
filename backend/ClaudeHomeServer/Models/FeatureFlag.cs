@@ -39,6 +39,10 @@ public static class FeatureFlagKeys
     public const string PersonaProactive = "persona-proactive";
     // Групповые чаты персон (2-4 участника, роутинг спикера по @) + совещания cross-attack
     public const string PersonaGroupChats = "persona-group-chats";
+    // Магическое слово ultrawork/ulw/«ультра» в сообщении — инжект режима максимального усилия
+    public const string UltraworkKeyword = "ultrawork-keyword";
+    // Цикл «до готово»: ход продолжается автоматически, пока агент не выведет маркер завершения
+    public const string WorkLoop = "work-loop";
 }
 
 /// <summary>
@@ -146,6 +150,24 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.PersonaGroupChats,
             Title: "Групповые чаты персон",
             Description: "Чат сразу с несколькими персонами: отвечает та, к кому обращаешься через @, остальных она может спросить сама. Плюс «Совещание»: участники независимо высказываются, критикуют позиции друг друга, ведущая сводит итог.",
+            Default: false,
+            Stage: "dev"),
+
+        // Магическое слово ultrawork (идея oh-my-openagent, промпт — их, в переводе):
+        // одно слово в сообщении включает режим максимального усилия на этот ход.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.UltraworkKeyword,
+            Title: "Слово ultrawork",
+            Description: "Напиши в сообщении ultrawork (или ulw) — и на этот ход включится режим максимального усилия: без ленивых ответов, с обязательной верификацией и работой до конца.",
+            Default: false,
+            Stage: "dev"),
+
+        // Цикл «до готово» (идея ralph/ulw-loop из oh-my-openagent): ход автоматически
+        // продолжается, пока агент не выведет маркер завершения, затем верификационный ход.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.WorkLoop,
+            Title: "Цикл «до готово»",
+            Description: "Кнопка в композере: агент работает циклами без твоего участия, пока честно не отчитается о завершении, — с финальной проверкой сделанного и лимитом итераций.",
             Default: false,
             Stage: "dev"),
     ];

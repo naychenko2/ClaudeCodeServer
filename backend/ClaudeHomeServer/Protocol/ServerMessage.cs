@@ -127,6 +127,11 @@ public record PersonasChangedMessage(string Action, string? PersonaId = null)
 public record SpeakerChangedMessage(string PersonaId, string Label)
     : ServerMessage("speaker_changed");
 
+// Состояние цикла «до готово» (флаг work-loop): активность, номер итерации, лимит,
+// фаза (working/verifying) — для тумблера в композере и счётчика в шапке чата.
+public record WorkLoopMessage(bool Active, int Iteration, int MaxIterations, string? Phase)
+    : ServerMessage("work_loop");
+
 // Live-прогресс совещания персон (P7). Phase: independent | attack | synthesis —
 // с PersonaId и Status (running/done/error) построчно по персонам либо без PersonaId
 // со Status="done" (фаза завершена); финал — Phase "done" или "error" (+ Error).

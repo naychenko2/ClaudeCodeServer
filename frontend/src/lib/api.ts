@@ -450,6 +450,13 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ personaIds }),
       }),
+    // Цикл «до готово» (флаг work-loop): агент работает итерациями до отчёта о завершении.
+    // Работает и для проектных сессий, и для чатов вне проекта
+    setWorkLoop: (id: string, enabled: boolean) =>
+      request<Session>(`/chats/${id}/loop`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      }),
     // Совещание персон (P7): независимые позиции → перекрёстная критика → синтез ведущей.
     // personaIds опциональны в групповом чате (дефолт — его участники)
     startMeeting: (id: string, question: string, personaIds?: string[]) =>

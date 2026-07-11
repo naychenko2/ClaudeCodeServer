@@ -2,8 +2,9 @@ import { memo, useState, useContext } from 'react';
 import type { ChatItem } from '../../types';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
-import { C, FONT, SHADOW } from '../../lib/design';
+import { C, FONT, SHADOW, R } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
+import { hasUltraworkKeyword } from '../../lib/ultrawork';
 import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { getPersonaById, usePersonasVersion, personaLabel } from '../../lib/personas';
@@ -231,6 +232,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   const project = useContext(ChatProjectContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
+  // Бейдж «ультра» на сообщении пользователя (флаг ultrawork-keyword)
+  const ultraOn = useFeature(FLAGS.ultraworkKeyword);
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
   usePersonasVersion();
   switch (item.kind) {
@@ -241,6 +244,19 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           borderRadius: '18px 18px 4px 18px', padding: '12px 17px',
           maxWidth: '80%', fontSize: 14,
         }}>
+          {/* Ключевое слово максимального усилия — бэкенд включает режим на этот ход */}
+          {ultraOn && hasUltraworkKeyword(item.text) && (
+            <div style={{ marginBottom: 5 }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 3,
+                background: C.accent, color: C.onAccent, borderRadius: R.pill,
+                padding: '2px 8px', fontSize: 9.5, fontWeight: 700,
+                letterSpacing: 0.6, textTransform: 'uppercase',
+              }}>
+                ⚡ ультра
+              </span>
+            </div>
+          )}
           {item.text}
           {item.attachedPaths && item.attachedPaths.length > 0 && (
             <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>

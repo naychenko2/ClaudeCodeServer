@@ -3,7 +3,7 @@
 // тестировать без рендера React. Побочные эффекты (загрузка истории, SignalR)
 // остаются в хуке; редьюсер только считает следующее состояние.
 
-import type { ChatItem, ServerMessage, RateLimitInfo, MeetingEntryItem, MeetingPhaseKey } from '../types';
+import type { ChatItem, ServerMessage, RateLimitInfo, MeetingEntryItem, MeetingPhaseKey, WorkLoopState } from '../types';
 
 type MeetingItem = Extract<ChatItem, { kind: 'meeting' }>;
 
@@ -17,6 +17,9 @@ export interface ChatState {
   isCompacting: boolean;
   // Мягкое уведомление о последнем компакте (например «нечего сжимать») — не ошибка
   compactNote?: string;
+  // Live-состояние цикла «до готово» (событие work_loop, флаг work-loop).
+  // undefined — событий ещё не было (UI берёт значение из Session.workLoop)
+  workLoop?: WorkLoopState;
 }
 
 export function initialChatState(): ChatState {
@@ -317,6 +320,13 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // Групповой чат: сервер переключил активного спикера по @упоминанию —
       // локальный разделитель тем же рендером, что и смена собеседника вручную
       return withItems([...prev.items, { kind: 'companion_switched', label: msg.label, personaId: msg.personaId }]);
+
+    case 'work_loop':
+      // Цикл «до готово»: приходит при каждом изменении состояния (вкл/итерация/верификация/стоп)
+      return {
+        ...prev,
+        workLoop: { active: msg.active, iteration: msg.iteration, maxIterations: msg.maxIterations, phase: msg.phase },
+      };
 
     case 'status_changed':
       // Синхронизируем isWaiting по статусу — работает для всех открытых вкладок/браузеров.

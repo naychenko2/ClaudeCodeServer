@@ -137,6 +137,18 @@ public class ChatsController(SessionManager sessions, FileService files,
         return NoContent();
     }
 
+    // Цикл «до готово» (флаг work-loop): вкл/выкл автопродолжения хода до маркера
+    // завершения. Работает и для проектной сессии (GetOwned резолвит владельца через проект).
+    [HttpPut("{id}/loop")]
+    public async Task<IActionResult> SetWorkLoop(string id, [FromBody] SetWorkLoopRequest req)
+    {
+        if (!flags.IsEnabled(UserId, FeatureFlagKeys.WorkLoop))
+            return BadRequest(new { error = "Цикл «до готово» выключен (флаг work-loop)" });
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        var updated = await sessions.SetWorkLoopAsync(id, req.Enabled);
+        return updated is null ? NotFound() : Ok(updated);
+    }
+
     [HttpGet("{id}/history")]
     public async Task<IActionResult> GetHistory(string id)
     {
@@ -193,3 +205,5 @@ public record CreateGroupChatRequest(List<string>? PersonaIds, string Mode = "au
 public record SetParticipantsRequest(List<string>? PersonaIds);
 
 public record StartMeetingRequest(string Question, List<string>? PersonaIds = null);
+
+public record SetWorkLoopRequest(bool Enabled);

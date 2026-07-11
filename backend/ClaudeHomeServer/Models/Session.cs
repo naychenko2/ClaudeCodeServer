@@ -30,6 +30,20 @@ public static class ClaudeModeExtensions
     };
 }
 
+// Состояние цикла «до готово» (флаг work-loop, идея ralph/ulw-loop из oh-my-openagent):
+// присутствие объекта у сессии = цикл активен; остановка обнуляет поле.
+public class SessionWorkLoop
+{
+    // Маркер завершения: агент выводит <promise>{Promise}</promise>, когда всё сделано
+    public string Promise { get; set; } = "ГОТОВО";
+    // Номер текущей итерации (растёт с каждым автопродолжением)
+    public int Iteration { get; set; }
+    // Потолок итераций — защита от бесконечного цикла (дефолт из конфига Loop:MaxIterations)
+    public int MaxIterations { get; set; } = 20;
+    // working — рабочие итерации; verifying — финальный верификационный ход после маркера
+    public string Phase { get; set; } = "working";
+}
+
 public class Session
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
@@ -64,6 +78,8 @@ public class Session
     public string? SummaryNoteId { get; set; }
     // Временный чат: авто-удаление через N минут после последней активности (UpdatedAt). null — обычный
     public int? ExpiresAfterMinutes { get; set; }
+    // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
+    public SessionWorkLoop? WorkLoop { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

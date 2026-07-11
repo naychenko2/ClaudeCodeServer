@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from 'react';
-import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona } from '../types';
+import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState } from '../types';
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { showToast } from '../lib/toast';
@@ -96,7 +96,23 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
+  // до первого события — из Session.workLoop; null — цикл выключен
+  const workLoopState = useMemo<WorkLoopState | null>(() => {
+    if (liveWorkLoop !== undefined) return liveWorkLoop.active ? liveWorkLoop : null;
+    return session.workLoop
+      ? { active: true, iteration: session.workLoop.iteration, maxIterations: session.workLoop.maxIterations, phase: session.workLoop.phase }
+      : null;
+  }, [liveWorkLoop, session.workLoop]);
+  const handleToggleWorkLoop = useCallback(async () => {
+    try {
+      const updated = await api.chats.setWorkLoop(session.id, !workLoopState);
+      onSessionUpdated?.(updated);
+    } catch (err) {
+      showToast('Цикл «до готово»', err instanceof Error ? err.message : 'Не удалось переключить цикл');
+    }
+  }, [session.id, workLoopState, onSessionUpdated]);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
   const worstRate = useMemo(() => worstWindow(rateWindows), [rateWindows]);
@@ -933,6 +949,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             hasMessages={items.length > 0}
             participantIds={session.participants}
             onCreateGroup={groupChatsOn ? handleCreateGroup : undefined}
+            workLoop={workLoopState}
+            onToggleWorkLoop={handleToggleWorkLoop}
           />
           </div>
         </div>

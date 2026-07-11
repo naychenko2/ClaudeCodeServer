@@ -224,6 +224,8 @@ export interface Session {
   agentName?: string;
   // Временный чат: авто-удаление через N минут после последней активности (updatedAt)
   expiresAfterMinutes?: number | null;
+  // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
+  workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
 }
 
 export interface FileEntry {
@@ -280,6 +282,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }
   | { type: 'personas_changed'; action: 'created' | 'updated' | 'deleted' | 'memory'; personaId?: string }
   | { type: 'speaker_changed'; personaId: string; label: string }
+  | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
   | { type: 'meeting_progress'; meetingId: string; phase: string; personaId?: string; status?: string; error?: string }
   | { type: 'meeting_phase'; meetingId: string; phase: MeetingPhaseKey; question: string; entries: MeetingEntryItem[] }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' }
@@ -360,6 +363,14 @@ export interface MeetingEntryItem {
 export interface MeetingRunningState {
   phase: string;
   persona: Record<string, 'running' | 'done' | 'error'>;
+}
+
+// Live-состояние цикла «до готово» (из события work_loop; флаг work-loop)
+export interface WorkLoopState {
+  active: boolean;
+  iteration: number;
+  maxIterations: number;
+  phase: string | null;
 }
 
 // Элементы чата
@@ -637,6 +648,7 @@ export interface PersonaContract {
   mustNot?: string[];         // правила «никогда …»
   outputFormat?: string;      // требования к формату ответов
   speechExamples?: string[];  // примеры реплик (образцы стиля)
+  instructions?: string;      // полный регламент роли (длинный markdown)
 }
 
 export interface Persona {

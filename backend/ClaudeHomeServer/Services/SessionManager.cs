@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Prompts;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
@@ -17,6 +18,10 @@ public class SessionManager
         public TurnAccumulator? Accumulator;
         // Кэш последних workflow_progress для replay при подключении нового клиента
         public Dictionary<string, WorkflowProgressMessage> WorkflowProgress = new();
+        // Текст ответа текущего хода — для поиска маркера завершения цикла «до готово»
+        public System.Text.StringBuilder LoopTurnText = new();
+        // Ход завершился ошибкой (result error / error) — цикл не продолжаем
+        public bool LoopTurnFailed;
     }
 
     private readonly ConcurrentDictionary<string, SessionEntry> _sessions = new();
@@ -797,8 +802,42 @@ public class SessionManager
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
         entry.Accumulator?.OnUserMessage(text, attachedPaths);
-        await entry.Process!.SendMessageAsync(text, attachedPaths);
+        // Обвязки хода (OmO) дописываются только к тексту для CLI —
+        // история и UI хранят исходное сообщение пользователя
+        await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths);
     }
+
+    // Текст хода для CLI: исходное сообщение + обвязки OmO.
+    // Ultrawork (флаг ultrawork-keyword) — по магическому слову в сообщении;
+    // протокол цикла «до готово» — пока Session.WorkLoop активен.
+    private string BuildCliTurnText(SessionEntry entry, string text)
+    {
+        var result = text;
+
+        var ownerId = SessionOwnerId(entry.Info);
+        if (ownerId is not null
+            && _flags.IsEnabled(ownerId, FeatureFlagKeys.UltraworkKeyword)
+            && OmoPrompts.ContainsUltraworkKeyword(text)
+            && OmoPrompts.Ultrawork.Length > 0)
+        {
+            result += "\n\n" + OmoPrompts.Ultrawork;
+        }
+
+        if (entry.Info.WorkLoop is { } loop)
+        {
+            entry.LoopTurnText.Clear(); // копим текст нового хода для поиска маркера
+            // Верификационный ход идёт со своей директивой — рабочий протокол не дописываем
+            if (loop.Phase != "verifying")
+                result += "\n\n" + OmoPrompts.WorkLoopTurn(loop.Promise);
+        }
+
+        return result;
+    }
+
+    // Владелец сессии: у проектной — владелец проекта, у чата — из самой сессии
+    private string? SessionOwnerId(Session session) => session.ProjectId is not null
+        ? _projects.GetById(session.ProjectId)?.OwnerId
+        : session.OwnerId;
 
     // Ручное сворачивание контекста: /compact в CLI, минуя счётчики и историю user-сообщений
     public async Task CompactAsync(string sessionId)
@@ -926,7 +965,89 @@ public class SessionManager
     public void Interrupt(string sessionId)
     {
         if (_sessions.TryGetValue(sessionId, out var entry))
+        {
+            // Стоп пользователя прерывает и цикл «до готово»: снимаем СИНХРОННО,
+            // чтобы exited прерванного хода не запустил автопродолжение
+            if (entry.Info.WorkLoop is not null)
+            {
+                entry.Info.WorkLoop = null;
+                SaveSessions();
+                _ = BroadcastWorkLoopAsync(sessionId, entry);
+            }
             entry.Process?.Interrupt();
+        }
+    }
+
+    // Включение/выключение цикла «до готово» (флаг work-loop). Включение сбрасывает
+    // счётчик итераций; лимит — из конфига Loop:MaxIterations (дефолт 20).
+    // userId задан (вызов из API) — сверяется с владельцем; null — внутренний вызов.
+    public async Task<Session?> SetWorkLoopAsync(string sessionId, bool enabled, string? userId = null)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        if (userId is not null && SessionOwnerId(entry.Info) != userId) return null;
+
+        entry.Info.WorkLoop = enabled
+            ? new SessionWorkLoop
+            {
+                MaxIterations = int.TryParse(_config["Loop:MaxIterations"], out var m) ? m : 20,
+            }
+            : null;
+        entry.LoopTurnText.Clear();
+        SaveSessions();
+        await BroadcastWorkLoopAsync(sessionId, entry);
+        return entry.Info;
+    }
+
+    private Task BroadcastWorkLoopAsync(string sessionId, SessionEntry entry)
+    {
+        var loop = entry.Info.WorkLoop;
+        return BroadcastAsync(sessionId, new WorkLoopMessage(
+            loop is not null, loop?.Iteration ?? 0, loop?.MaxIterations ?? 0, loop?.Phase));
+    }
+
+    // Автопродолжение цикла «до готово»: вызывается после штатного завершения хода (exited).
+    // Маркер найден → верификационный ход, затем стоп; нет → продолжение до лимита итераций.
+    private async Task ContinueWorkLoopAsync(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        if (entry.Info.WorkLoop is not { } loop) return;
+
+        if (entry.LoopTurnFailed)
+        {
+            await SetWorkLoopAsync(sessionId, false);
+            return;
+        }
+
+        var promiseFound = entry.LoopTurnText.ToString()
+            .Contains($"<promise>{loop.Promise}</promise>", StringComparison.OrdinalIgnoreCase);
+
+        if (loop.Phase == "verifying")
+        {
+            // Верификационный ход отработал — цикл завершён независимо от исхода
+            await SetWorkLoopAsync(sessionId, false);
+            return;
+        }
+
+        if (promiseFound)
+        {
+            loop.Phase = "verifying";
+            SaveSessions();
+            await BroadcastWorkLoopAsync(sessionId, entry);
+            await SendMessageAsync(sessionId, OmoPrompts.WorkLoopVerification, []);
+            return;
+        }
+
+        loop.Iteration++;
+        if (loop.Iteration >= loop.MaxIterations)
+        {
+            await SetWorkLoopAsync(sessionId, false);
+            return;
+        }
+
+        SaveSessions();
+        await BroadcastWorkLoopAsync(sessionId, entry);
+        await SendMessageAsync(sessionId,
+            OmoPrompts.WorkLoopContinuation(loop.Promise, loop.Iteration, loop.MaxIterations), []);
     }
 
     public void AnswerQuestion(string sessionId, string toolUseId, string answerText)
@@ -1042,7 +1163,11 @@ public class SessionManager
                     acc.OnSessionStarted(m.Model, m.Mode);
                     SaveSessions();
                     break;
-                case TextDeltaMessage m:    acc.OnTextDelta(m.Text); break;
+                case TextDeltaMessage m:
+                    acc.OnTextDelta(m.Text);
+                    // Цикл «до готово»: копим текст хода для поиска маркера завершения
+                    if (entry?.Info.WorkLoop is not null) entry.LoopTurnText.Append(m.Text);
+                    break;
                 case ThinkingDeltaMessage m: acc.OnThinkingDelta(m.Text); break;
                 case ToolUseMessage m:      acc.OnToolUse(m.Id, m.Name, m.Input, m.ParentToolUseId); break;
                 case ToolResultMessage m:
@@ -1070,7 +1195,10 @@ public class SessionManager
                     acc.OnPlanReview(m.RequestId, m.Plan);
                     await acc.SaveSnapshotAsync(_history);
                     break;
-                case ResultMessage m:       await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history); break;
+                case ResultMessage m:
+                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history);
+                    if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
+                    break;
                 case RateLimitMessage m:    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt); break;
                 case ErrorMessage m:        await acc.OnErrorAsync(m.Text, _history); break;
             }
@@ -1107,6 +1235,21 @@ public class SessionManager
 
             if (newStatus.HasValue)
                 await ApplyStatusAsync(sessionId, entry, newStatus.Value);
+
+            // Цикл «до готово»: ход штатно завершился (exited) — решаем, продолжать ли.
+            // В фоне, чтобы не блокировать read-loop адаптера пересозданием процесса.
+            if (msg is ExitedMessage && entry.Info.WorkLoop is not null
+                && entry.Info.Status is SessionStatus.Finished or SessionStatus.Active)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await ContinueWorkLoopAsync(sessionId); }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[SessionManager] Цикл «до готово» ({sessionId}): {ex.Message}");
+                    }
+                });
+            }
         }
 
         await BroadcastAsync(sessionId, msg);

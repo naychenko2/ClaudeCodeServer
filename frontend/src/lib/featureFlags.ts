@@ -19,6 +19,8 @@ export const FLAGS = {
   personaMentions: 'persona-mentions',
   personaProactive: 'persona-proactive',
   personaGroupChats: 'persona-group-chats',
+  ultraworkKeyword: 'ultrawork-keyword',
+  workLoop: 'work-loop',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

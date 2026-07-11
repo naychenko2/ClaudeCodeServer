@@ -4,6 +4,7 @@ import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { Button, IconField, Menu, MenuItem } from '../../components/ui';
+import { SkillSearchDialog } from '../../components/SkillSearchDialog';
 import { PillSwitch } from '../../components/Toolbar';
 import { SectionLabel } from '../tasks/bits';
 import {
@@ -73,6 +74,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   const [panel, setPanel] = useState<AddPanelState | null>(null);
   const [suggest, setSuggest] = useState<SuggestState | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
+  const [showSkillSearch, setShowSkillSearch] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -451,14 +453,28 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             <Button variant="ghostAccent" size="sm" onClick={() => void runSuggest()}>
               ✨ Подобрать автоматически
             </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
+              ⚡ Найти навык
+            </Button>
           </div>
         )}
         {bindings !== null && !error && list.length === 0 && !panel && !suggest && (
-          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
             <Button variant="ghostAccent" size="sm" onClick={() => void runSuggest()}>
               ✨ Подобрать автоматически
             </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
+              ⚡ Найти навык
+            </Button>
           </div>
+        )}
+
+        {showSkillSearch && (
+          <SkillSearchDialog
+            persona={{ id: persona.id, name: persona.name }}
+            onClose={() => setShowSkillSearch(false)}
+            onInstalled={() => void load()}
+          />
         )}
 
         {/* AI-подбор: спиннер / кандидаты с чекбоксами */}

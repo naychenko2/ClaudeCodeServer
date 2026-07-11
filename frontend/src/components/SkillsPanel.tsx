@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { AgentInfo, SkillInfo, SkillsData } from '../types';
 import { C, R, FONT } from '../lib/design';
 import { api } from '../lib/api';
 import { agentDotColor } from './AgentSelector';
+import { SkillSearchDialog } from './SkillSearchDialog';
 
 interface Props {
   projectId: string;
@@ -12,17 +13,51 @@ export function SkillsPanel({ projectId }: Props) {
   const [data, setData] = useState<SkillsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showSearch, setShowSearch] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     setLoading(true);
-    api.skills.list(projectId)
+    return api.skills.list(projectId)
       .then(d => { setData(d); setError(null); })
       .catch(() => setError('Не удалось загрузить скиллы и агенты'))
       .finally(() => setLoading(false));
   }, [projectId]);
 
+  useEffect(() => { void load(); }, [load]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {/* Шапка с кнопкой поиска навыка */}
+      <div style={{
+        display: 'flex', justifyContent: 'flex-end', padding: '8px 12px 4px', flexShrink: 0,
+      }}>
+        <button
+          onClick={() => setShowSearch(true)}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textSecondary; }}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            border: `1px solid ${C.border}`, background: C.bgWhite, color: C.textSecondary,
+            borderRadius: R.lg, padding: '6px 12px', fontSize: 12.5, fontWeight: 600,
+            cursor: 'pointer', fontFamily: FONT.sans, transition: 'border-color 0.15s, color 0.15s',
+          }}
+        >
+          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+          </svg>
+          Найти навык
+        </button>
+      </div>
+
+      {showSearch && (
+        <SkillSearchDialog
+          projectId={projectId}
+          onClose={() => setShowSearch(false)}
+          onInstalled={() => void load()}
+        />
+      )}
+
       {/* Тело */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
         {loading && <LoadingSkeleton />}
@@ -44,6 +79,23 @@ export function SkillsPanel({ projectId }: Props) {
 
         {!loading && !error && data && (
           <>
+            {/* Скиллы проекта (.claude/skills) — с удалением */}
+            {data.projectSkills.length > 0 && (
+              <Section label="Скиллы проекта">
+                {data.projectSkills.map(skill => (
+                  <SkillCard
+                    key={skill.name}
+                    skill={skill}
+                    onRemove={async () => {
+                      if (!confirm(`Удалить навык «${skill.name}» из проекта?`)) return;
+                      try { await api.skills.uninstall(skill.name, 'project', projectId); await load(); }
+                      catch { alert('Не удалось удалить навык'); }
+                    }}
+                  />
+                ))}
+              </Section>
+            )}
+
             {/* Глобальные скиллы */}
             {data.skills.length > 0 && (
               <Section label="Глобальные скиллы">
@@ -63,7 +115,7 @@ export function SkillsPanel({ projectId }: Props) {
             )}
 
             {/* Пустое состояние */}
-            {data.skills.length === 0 && data.agents.length === 0 && (
+            {data.skills.length === 0 && data.projectSkills.length === 0 && data.agents.length === 0 && (
               <EmptyState />
             )}
           </>
@@ -98,16 +150,22 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 
 // --- Карточка скилла ---
 
-function SkillCard({ skill }: { skill: SkillInfo }) {
+function SkillCard({ skill, onRemove }: { skill: SkillInfo; onRemove?: () => void }) {
+  const [hover, setHover] = useState(false);
   return (
-    <div style={{
-      padding: '9px 12px',
-      borderRadius: R.lg,
-      background: 'transparent',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 3,
-    }}>
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        padding: '9px 12px',
+        borderRadius: R.lg,
+        background: 'transparent',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 3,
+        position: 'relative',
+      }}
+    >
       {/* Команда */}
       <span style={{
         fontFamily: FONT.mono,
@@ -120,6 +178,23 @@ function SkillCard({ skill }: { skill: SkillInfo }) {
           <span style={{ color: C.textMuted, fontWeight: 400 }}> {skill.argumentHint}</span>
         )}
       </span>
+      {onRemove && hover && (
+        <button
+          onClick={onRemove}
+          aria-label="Удалить навык"
+          title="Удалить навык из проекта"
+          style={{
+            position: 'absolute', top: 6, right: 8, width: 26, height: 26, border: 'none',
+            background: 'transparent', borderRadius: R.md, cursor: 'pointer',
+            color: C.textMuted, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+        </button>
+      )}
       {/* Описание */}
       {skill.description && (
         <span style={{

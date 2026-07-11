@@ -205,9 +205,11 @@ public class PersonaBindingsService
         if (active.Count == 0) return null;
 
         var index = BuildIndex(ownerId, active, mountedSections);
-        if (index is null) return null;
-
-        var extracts = await BuildAlwaysExtractsAsync(ownerId, active, turnText);
+        // Серверные выжимки: always-источники + auto-привязки знаний к произвольным
+        // Dify-датасетам (у которых нет инструмента поиска — подгружаем сами по релевантности).
+        var extracts = await BuildExtractsAsync(ownerId, active, turnText);
+        if (index is null && extracts is null) return null;
+        if (index is null) return extracts;
         return extracts is null ? index : index + "\n" + extracts;
     }
 
@@ -267,14 +269,20 @@ public class PersonaBindingsService
             case PersonaBindingType.Knowledge:
             {
                 var ds = KnownDatasets(ownerId).FirstOrDefault(d => d.Id == binding.Target);
-                if (ds.Id is null) return null;
-                // Датасет проекта ищется workspace-инструментом (нужна секция knowledge);
-                // датасет заметок — семантическим поиском notes-сервера
-                if (ds.ProjectId is not null)
-                    return mountedSections.Contains("knowledge")
-                        ? $"mcp__wsp__knowledge_search (projectId \"{ds.ProjectId}\", база «{ds.Label}»)"
-                        : null;
-                return "mcp__notes__notes_semantic_search (база знаний заметок)";
+                if (ds.Id is not null)
+                {
+                    // Датасет проекта ищется workspace-инструментом (нужна секция knowledge);
+                    // датасет заметок — семантическим поиском notes-сервера
+                    if (ds.ProjectId is not null)
+                        return mountedSections.Contains("knowledge")
+                            ? $"mcp__wsp__knowledge_search (projectId \"{ds.ProjectId}\", база «{ds.Label}»)"
+                            : null;
+                    return "mcp__notes__notes_semantic_search (база знаний заметок)";
+                }
+                // Произвольный Dify-датасет (не проект и не заметки): ищется универсальным
+                // инструментом personas-server по id датасета (семантический поиск).
+                var label = _datasetLabelCache.TryGetValue(binding.Target, out var l) ? l : "привязанная база знаний";
+                return $"mcp__personas__knowledge_search (datasetId \"{binding.Target}\", база «{label}»)";
             }
             case PersonaBindingType.Notes:
             {
@@ -302,7 +310,10 @@ public class PersonaBindingsService
 
     // Выжимки Always-привязок по тексту хода: параллельно, с общим failsafe-таймаутом
     // (паттерн BuildPersonaRecallProvider). Упавшие/не успевшие источники молча пропускаются.
-    private async Task<string?> BuildAlwaysExtractsAsync(string ownerId,
+    // Auto-привязки знаний сюда НЕ входят — их подгружает сама персона инструментом
+    // knowledge_search по условию (для произвольных датасетов гейт по score невозможен:
+    // эмбеддинги дают высокий score и на нерелевантный запрос).
+    private async Task<string?> BuildExtractsAsync(string ownerId,
         IReadOnlyList<PersonaBinding> active, string turnText)
     {
         var always = active.Where(b => b.Mode == PersonaBindingMode.Always).Take(AlwaysLimit).ToList();
@@ -329,7 +340,7 @@ public class PersonaBindingsService
         return sb.ToString().TrimEnd();
     }
 
-    // Выжимка одного Always-источника. Ошибки → warning в лог и null (ход идёт без неё).
+    // Выжимка одного источника. Ошибки → warning в лог и null (ход идёт без неё).
     private async Task<string?> ExtractAsync(string ownerId, PersonaBinding binding, string query)
     {
         var maxChars = int.TryParse(_config["Persona:BindingsSnippetMaxChars"], out var m) ? m : 1500;

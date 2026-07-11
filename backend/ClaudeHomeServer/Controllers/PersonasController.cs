@@ -778,6 +778,28 @@ public class PersonasController : ControllerBase
         }
     }
 
+    // Семантический поиск по привязанной базе знаний Dify (по id датасета). Зовётся
+    // MCP-инструментом personas-server, когда персона по условию привязки решает
+    // подгрузить знания. Датасет должен быть доступен владельцу (правило префикса).
+    [HttpPost("knowledge-search")]
+    public async Task<ActionResult> KnowledgeSearch([FromBody] KnowledgeSearchRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.DatasetId) || string.IsNullOrWhiteSpace(req.Query))
+            return BadRequest(new { error = "Нужны datasetId и query" });
+        if (!_knowledge.IsConfigured)
+            return BadRequest(new { error = "База знаний (Dify) не настроена" });
+        // Только датасеты, доступные пользователю (его/общие; чужие скрыты)
+        if ((await _bindings.KnowledgeTargetsAsync(UserId)).All(d => d.Id != req.DatasetId))
+            return NotFound(new { error = "База знаний не найдена или недоступна" });
+
+        var topK = req.TopK is > 0 and <= 20 ? req.TopK.Value : 6;
+        var chunks = await _knowledge.RetrieveAsync(req.DatasetId, req.Query, topK);
+        return Ok(new
+        {
+            hits = chunks.Select(c => new { document = c.DocumentName, score = c.Score, content = c.Content }),
+        });
+    }
+
     // AI-формулировка условия «когда персоне применять источник» по превью его содержимого
     [HttpPost("bindings/ai-condition")]
     public async Task<ActionResult> AiCondition([FromBody] AiConditionRequest req)
@@ -1248,6 +1270,8 @@ public record PersonaBindingRequest(string Type, string Target, string? Path = n
 public record PersonaBindingsSetRequest(List<PersonaBindingRequest>? Bindings);
 
 public record AiConditionRequest(string Type, string Target, string? Path = null);
+
+public record KnowledgeSearchRequest(string DatasetId, string Query, int? TopK = null);
 
 public record SelectAvatarRequest(string File);
 

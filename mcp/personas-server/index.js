@@ -192,6 +192,22 @@ const TOOLS = [
         },
       },
     },
+    {
+      name: 'knowledge_search',
+      description: 'Семантический поиск по привязанной базе знаний (Dify) по её datasetId. ' +
+        'Используй, когда выполняется условие привязки-«базы знаний» из твоего контекста: ' +
+        'подставь datasetId из строки привязки и запрос по смыслу вопроса пользователя. ' +
+        'Возвращает релевантные выдержки (документ, score, текст).',
+      inputSchema: {
+        type: 'object',
+        required: ['datasetId', 'query'],
+        properties: {
+          datasetId: { type: 'string', description: 'ID датасета из строки привязки (mcp__personas__knowledge_search datasetId "…")' },
+          query: { type: 'string', description: 'Поисковый запрос на естественном языке (по смыслу вопроса)' },
+          topK: { type: 'integer', minimum: 1, maximum: 20, description: 'Сколько выдержек вернуть (по умолчанию 6)' },
+        },
+      },
+    },
   ] : []),
   {
     name: 'personas_delete',
@@ -353,6 +369,16 @@ async function callTool(name, args) {
         body: JSON.stringify({ bindings: args.bindings ?? [] }),
       }));
     }
+
+    case 'knowledge_search':
+      return json(await api('/api/personas/knowledge-search', {
+        method: 'POST',
+        body: JSON.stringify({
+          datasetId: args.datasetId,
+          query: args.query,
+          topK: args.topK ?? null,
+        }),
+      }));
 
     case 'personas_delete':
       await api(`/api/personas/${encodeURIComponent(args.id)}`, { method: 'DELETE' });

@@ -13,6 +13,7 @@ public class SkillsController(
     SkillsService skills,
     SkillsCliService cli,
     SkillSuggestService suggest,
+    SkillTranslationService translation,
     PersonaManager personas,
     PersonaBindingsService bindings,
     ProjectManager projects) : ControllerBase
@@ -51,8 +52,11 @@ public class SkillsController(
     {
         if (string.IsNullOrWhiteSpace(q) || q.Trim().Length < 2)
             return BadRequest(new { error = "Запрос должен быть не короче 2 символов" });
-        var results = await cli.FindAsync(q.Trim(), owner, ct);
-        return Ok(results);
+        // Реестр skills.sh — на английском: русский запрос переводим, иначе поиск мимо
+        var query = await translation.TranslateQueryAsync(q.Trim(), ct);
+        var results = await cli.FindAsync(query, owner, ct);
+        // translatedQuery отдаём фронту — показать, что реально искали
+        return Ok(new { query, translatedQuery = query != q.Trim() ? query : null, results });
     }
 
     // Установка навыка из реестра. scope=project требует projectId.

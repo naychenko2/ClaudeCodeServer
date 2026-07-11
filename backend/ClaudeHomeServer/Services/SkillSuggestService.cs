@@ -16,6 +16,7 @@ public record SkillSuggestion(RegistrySkill Skill, string Reason);
 public class SkillSuggestService(
     SkillsCliService cli,
     IOneShotRunner runner,
+    SkillTranslationService translation,
     PersonaManager personas,
     ProjectManager projects,
     IConfiguration config,
@@ -142,7 +143,31 @@ public class SkillSuggestService(
         foreach (var (skill, reason) in picks)
             if (byKey.TryGetValue(skill, out var s))
                 result.Add(new SkillSuggestion(s, reason));
-        return result;
+
+        return await LocalizeDescriptionsAsync(result, ct);
+    }
+
+    // Переводит описания кандидатов на русский (реестр — на английском). Ошибка перевода
+    // молча оставляет оригинал (перевод — украшение, не критичен для установки).
+    private async Task<IReadOnlyList<SkillSuggestion>> LocalizeDescriptionsAsync(
+        IReadOnlyList<SkillSuggestion> items, CancellationToken ct)
+    {
+        var toTranslate = items
+            .Where(i => !string.IsNullOrWhiteSpace(i.Skill.Description))
+            .Select(i => ($"{i.Skill.Source}@{i.Skill.Skill}", i.Skill.Description!))
+            .ToList();
+        if (toTranslate.Count == 0) return items;
+
+        var ru = await translation.TranslateDescriptionsAsync(toTranslate, ct);
+        if (ru.Count == 0) return items;
+
+        return items.Select(i =>
+        {
+            var key = $"{i.Skill.Source}@{i.Skill.Skill}";
+            return ru.TryGetValue(key, out var t) && !string.IsNullOrWhiteSpace(t)
+                ? new SkillSuggestion(i.Skill with { Description = t }, i.Reason)
+                : i;
+        }).ToList();
     }
 
     private static string BuildPrompt(string context, IReadOnlyList<RegistrySkill> catalog)

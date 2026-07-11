@@ -633,9 +633,12 @@ export const api = {
       request<{ name: string }>(`/projects/${projectId}/agents`, { method: 'POST', body: JSON.stringify({ name, content }) }),
 
     // --- Реестр skills.sh (обёртка npx skills) ---
-    // Поиск навыков по реестру; owner — опциональное сужение по GitHub-владельцу
+    // Поиск навыков по реестру; owner — опциональное сужение по GitHub-владельцу.
+    // Русский запрос переводится на английский (реестр англоязычный) — translatedQuery
+    // показывает, что реально искали (null, если перевод не понадобился).
     find: (q: string, owner?: string) =>
-      request<RegistrySkill[]>(`/skills/find?q=${encodeURIComponent(q)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`),
+      request<{ query: string; translatedQuery: string | null; results: RegistrySkill[] }>(
+        `/skills/find?q=${encodeURIComponent(q)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`),
     // Установка навыка: scope 'project' требует projectId, 'global' — нет
     install: (source: string, skill: string, scope: 'project' | 'global', projectId?: string) =>
       request<{ installed: string; scope: string }>('/skills/install', {

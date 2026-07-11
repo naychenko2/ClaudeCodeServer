@@ -242,7 +242,57 @@ WorkingDirectory = `project.RootPath`
   чата персоны → [DiscussTeamDialog.tsx](frontend/src/features/personas/DiscussTeamDialog.tsx)
   (выбор 1-2 участников + вопрос) → обычное сообщение с промпт-обвязкой: ведущая персона
   опрашивает участников через persona_ask, возражает при разногласиях (один раунд) и сводит
-  итог. Бэкенд и протокол не участвуют.
+  итог. Бэкенд и протокол не участвуют. При включённом `persona-group-chats` в диалоге есть
+  второй режим — «Совещание» (см. ниже).
+- **Контракт характера (P1) + дисциплина (P2)**: `Persona.Contract` (character/tone/mustDo/
+  mustNot/outputFormat/speechExamples — слоты вместо единого текста; legacy `SystemPrompt`
+  остаётся у персон без контракта). Единый сборщик промпта —
+  [PersonaPromptBuilder.cs](backend/ClaudeHomeServer/Services/PersonaPromptBuilder.cs):
+  идентичность + секции контракта + дисциплинарная обвязка по провайдеру модели
+  (Claude — только краткость; DeepSeek — полный набор; GLM — без секции достоверности).
+- **Память v2 (P3)**: скоринг взвешенной суммой ([PersonaMemoryScorer.cs](backend/ClaudeHomeServer/Services/PersonaMemoryScorer.cs)),
+  reinforcement (Touch при recall) и **рабочий фокус** «что я сейчас делаю» (одна ячейка,
+  в recall первым блоком; `GET/DELETE {id}/focus`). Autolearn выставляет salience и фокус;
+  фоновая консолидация (LLM-merge дублей + вытеснение) — за флагом `persona-memory-consolidation`
+  ([PersonaMemoryConsolidationService.cs](backend/ClaudeHomeServer/Services/PersonaMemoryConsolidationService.cs)).
+- **Профили доступа (P6)**: `Persona.Access` — `full` | `readOnly` (смотрит и советует, ничего
+  не меняет) | `custom` (свой список `DisallowedTools`); в disallowed-инструменты сессии их
+  превращает [PersonaAccessPolicy.cs](backend/ClaudeHomeServer/Services/PersonaAccessPolicy.cs)
+  (`BuildExtraDisallowed`, поверх ограничений `Tools`).
+- **Проактивность (флаг `persona-proactive`)**: `Persona.Proactive` (daily/weekdays/weekly +
+  время в таймзоне владельца + инструкция) — [PersonaProactiveService.cs](backend/ClaudeHomeServer/Services/PersonaProactiveService.cs)
+  (BackgroundService) в момент расписания пишет первой в закреплённый чат персоны
+  (`Proactive.SessionId`, проверка `chat.PersonaId == personaId`) и шлёт уведомление.
+- **Групповой чат (флаг `persona-group-chats`)**: `Session.Participants` (2-4 id персон,
+  первая — ведущая), `Session.PersonaId` = активный спикер. Создание —
+  `SessionManager.CreateGroupChatAsync` (`POST /api/chats/group`; зона — по ведущей, как у
+  CreatePersonaChatAsync), состав — `PUT /api/chats/{id}/participants` (спикер сохраняется,
+  если остался, иначе ведущая). Роутинг хода — [GroupChatRouter.cs](backend/ClaudeHomeServer/Services/GroupChatRouter.cs)
+  (первый @handle участника в тексте → спикер, остальные → AlsoMentioned; без упоминаний —
+  текущий/ведущая) в `SendMessageAsync` до пересоздания процесса: `SwitchSpeaker` (общее ядро
+  с SetPersona) + `speaker_changed` клиентам (разделитель «Теперь отвечает: …», рендер общий
+  с companion_switched; в истории derive по смене personaId — `normalizeHistory`).
+  Промпт спикера получает групповую надстройку (`BuildGroupChatHint`: участники + «говори
+  только за себя, остальных спрашивай persona_ask»), mentions-режим MCP персон в группе
+  включён всегда (независимо от `persona-mentions`), MentionsHint — по участникам.
+  UI: мультивыбор «Групповой чат…» в CompanionSelector (чекбоксы 2-4, метка «ведущая»,
+  предупреждение про разных провайдеров), стек аватаров в ChatHeaderBar (активный — с
+  цветным кольцом), участники первыми в @автокомплите.
+- **Совещание (P7, тот же флаг)**: [PersonaMeetingService.cs](backend/ClaudeHomeServer/Services/PersonaMeetingService.cs) —
+  `POST /api/chats/{id}/meeting` {question, personaIds?} (дефолт — participants чата; в чате
+  одной персоны personaIds обязателен), `POST .../meeting/cancel`. Три фазы one-shot через
+  [PersonaAskService.cs](backend/ClaudeHomeServer/Services/PersonaAskService.cs) (вынос
+  persona_ask из контроллера; интерфейс `IOneShotRunner` для моков): independent (N параллельных
+  позиций, ≤3 одновременно) → attack (каждому — позиции остальных: «критикуй слабое, защищай
+  своё, явно уступай сильному аргументу») → synthesis (итог от ведущей её моделью). Итого
+  ~2N+1 вызовов; упавшая персона → IsError-entry, <2 живых — фаза error; общий колпак
+  `Persona:MeetingTimeoutMs` (600с), персональный — `Persona:AskTimeoutMs`. Каждая фаза
+  пишется в историю вне хода (`StoredMeetingPhaseMessage` через `SessionManager.AppendStoredAsync` —
+  обобщённый паттерн PublishFalCostAsync) + live `meeting_phase`/`meeting_progress`.
+  Фронт: карточка [MeetingView.tsx](frontend/src/components/chat/MeetingView.tsx) (аккордеон
+  по персонам, спиннеры прогресса, «Итог» крупно, «Продолжить обсуждение» — краткий итог
+  обычным сообщением в транскрипт CLI, «Отменить»); запуск — переключатель
+  «Обсуждение/Совещание» в DiscussTeamDialog (лимит 4, подпись «≈2N+1 вызовов»).
 - **Долгая память** (типизация 2026 semantic/episodic/procedural):
   [PersonaMemoryService.cs](backend/ClaudeHomeServer/Services/PersonaMemoryService.cs) — записи в
   `data/persona-memory.json` (источник правды) + семантический слой в Dify-датасет
@@ -263,7 +313,10 @@ WorkingDirectory = `project.RootPath`
   `Fal:ImageModel`, дефолт `fal-ai/flux/schnell`; для фото-аватаров задают `flux/dev`). Генерация
   возвращает 1-4 **кандидата** (`POST {id}/avatar/generate` {prompt?,count?} → candidates во временную
   папку, аватар НЕ меняется), пользователь выбирает (`POST {id}/avatar/select`), отдача — `GET {id}/avatar`
-  (access_token в query для `<img>`).
+  (access_token в query для `<img>`). Плюс **загрузка своего фото** с кропом и зумом
+  (`POST {id}/avatar/upload` — original + cropped + параметры кропа; валидация по magic bytes)
+  и перекроп сохранённого оригинала без перезагрузки файла (`POST {id}/avatar/recrop`,
+  `GET {id}/avatar/original`).
 - **Авто-память** (флаг `persona-memory-autolearn`): [PersonaMemoryAutolearnService.cs](backend/ClaudeHomeServer/Services/PersonaMemoryAutolearnService.cs) —
   IHostedService на `SessionManager.OnSessionMessage`; по завершении хода персонной сессии one-shot
   извлекает факты (semantic) и итог (episodic) из транскрипта и сохраняет в память (дедуп в `Remember`).
@@ -285,7 +338,9 @@ WorkingDirectory = `project.RootPath`
   команда сразу, глобальные за «+N ещё»). Стор [lib/personas.ts](frontend/src/lib/personas.ts)
   (realtime personas_changed; `personaLabel`/`personaTitleLines` — единый формат «Роль (Имя)»).
 - **Флаги**: `personas` (раздел + чат + память + аватар), `persona-memory-autolearn` (авто-извлечение
-  фактов из диалога).
+  фактов из диалога), `persona-memory-consolidation` (фоновая уборка памяти), `persona-mentions`
+  (@упоминания + persona_ask + дискуссия), `persona-proactive` (пишет первой по расписанию),
+  `persona-group-chats` (групповые чаты + совещания P7).
 
 ## REST API
 
@@ -325,6 +380,10 @@ POST                /api/personas/{id}/avatar/generate { prompt? } → Persona  
 GET                 /api/personas/{id}/avatar          → картинка (access_token в query для <img>)
 POST                /api/personas/ask                  { handle, question, context? } → { handle, name, role, answer }
                                                        (one-shot ответ персоны от её лица; флаг persona-mentions; дёргается MCP personas-server)
+POST                /api/chats/group                   { personaIds[], mode?, name? } → Session  (групповой чат, флаг persona-group-chats)
+PUT                 /api/chats/{id}/participants       { personaIds[] } → Session  (состав группы; спикер сохраняется, иначе ведущая)
+POST                /api/chats/{id}/meeting            { question, personaIds? } → { meetingId }  (совещание P7; дефолт — participants чата)
+POST                /api/chats/{id}/meeting/cancel     → 204  (отмена идущего совещания)
 ```
 
 Эффективные значения флагов также возвращаются в `GET /api/auth/me` (поле `featureFlags`),

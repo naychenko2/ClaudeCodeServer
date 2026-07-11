@@ -127,6 +127,19 @@ public record PersonasChangedMessage(string Action, string? PersonaId = null)
 public record SpeakerChangedMessage(string PersonaId, string Label)
     : ServerMessage("speaker_changed");
 
+// Live-прогресс совещания персон (P7). Phase: independent | attack | synthesis —
+// с PersonaId и Status (running/done/error) построчно по персонам либо без PersonaId
+// со Status="done" (фаза завершена); финал — Phase "done" или "error" (+ Error).
+public record MeetingProgressMessage(string MeetingId, string Phase, string? PersonaId = null,
+    string? Status = null, string? Error = null)
+    : ServerMessage("meeting_progress");
+
+// Завершённая фаза совещания с содержимым (broadcast-пара StoredMeetingPhaseMessage) —
+// live-клиенты получают тексты позиций без перечитывания истории.
+public record MeetingPhaseMessage(string MeetingId, string Phase, string Question,
+    IReadOnlyList<MeetingEntry> Entries)
+    : ServerMessage("meeting_phase");
+
 // Пользовательское уведомление (напоминание о задаче, событие Claude-исполнителя и т.п.) —
 // в группу user_{userId}: открытое приложение показывает тост, клик ведёт по Url (hash-диплинк).
 // Kind — семантика для иконки/цвета: reminder | claude | info

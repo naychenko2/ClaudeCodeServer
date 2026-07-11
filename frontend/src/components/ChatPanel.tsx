@@ -545,6 +545,17 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }, [items]);
   const taskTodos = useMemo(() => (lastTaskIdx >= 0 ? computeTodos(items) : []), [items, lastTaskIdx]);
 
+  // «Продолжить обсуждение» из карточки совещания: краткий итог уходит обычным сообщением
+  const handleMeetingContinue = useCallback((text: string) => {
+    atBottomRef.current = true;
+    void send(text, [], mode);
+  }, [send, mode]);
+  // Отмена идущего совещания (карточка знает только о факте, id чата — тут)
+  const handleMeetingCancel = useCallback(() => {
+    api.chats.cancelMeeting(session.id)
+      .catch(() => showToast('Совещание', 'Не удалось отменить совещание', 'info'));
+  }, [session.id]);
+
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке).
   // useCallback + React.memo на ChatItemView: при дописывании ленты неизменившиеся
   // элементы не перерендериваются (все пропсы-функции стабильны).
@@ -571,12 +582,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onRetry={handleRetry}
       onInterrupt={interrupt}
       taskPlan={i === lastTaskIdx && taskTodos.length > 0 ? taskTodos : undefined}
+      onSendMessage={handleMeetingContinue}
+      onMeetingCancel={handleMeetingCancel}
     />
   ), [
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, lastTaskIdx, taskTodos,
+    interrupt, lastTaskIdx, taskTodos, handleMeetingContinue, handleMeetingCancel,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем

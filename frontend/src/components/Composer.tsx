@@ -182,6 +182,8 @@ export function Composer({
   const skillWordStartRef = useRef(0);
   // Autocomplete @упоминаний персон (флаг persona-mentions; в групповом чате — всегда)
   const mentionsOn = useFeature(FLAGS.personaMentions);
+  // Совещания P7 — по флагу групповых чатов (переключатель в DiscussTeamDialog)
+  const groupChatsOn = useFeature(FLAGS.personaGroupChats);
   const isGroupChat = (participantIds?.length ?? 0) > 1;
   const mentionsActive = mentionsOn || isGroupChat;
   const [showMentions, setShowMentions] = useState(false);
@@ -862,6 +864,9 @@ export function Composer({
       {showDiscuss && (
         <DiscussTeamDialog
           candidates={mentionable}
+          chatPersona={selectedPersona}
+          sessionId={sessionId}
+          meetingEnabled={groupChatsOn}
           onSend={t => onSend(t, [])}
           onClose={() => setShowDiscuss(false)}
         />

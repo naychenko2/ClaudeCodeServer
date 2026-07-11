@@ -24,6 +24,7 @@ public class PersonasController : ControllerBase
     private readonly Services.Llm.OneShotClaudeRunner _oneShot;
     private readonly FeatureFlagService _flags;
     private readonly PersonaPromptBuilder _promptBuilder;
+    private readonly PersonaAskService _ask;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonasController> _log;
     private readonly IHubContext<SessionHub> _hub;
@@ -31,7 +32,7 @@ public class PersonasController : ControllerBase
     public PersonasController(PersonaManager personas, ProjectManager projects,
         SessionManager sessions, PersonaMemoryService memory, FalImageService falImage,
         Services.Llm.OneShotClaudeRunner oneShot, FeatureFlagService flags,
-        PersonaPromptBuilder promptBuilder, IConfiguration config,
+        PersonaPromptBuilder promptBuilder, PersonaAskService ask, IConfiguration config,
         ILogger<PersonasController> log, IHubContext<SessionHub> hub)
     {
         _personas = personas;
@@ -42,6 +43,7 @@ public class PersonasController : ControllerBase
         _oneShot = oneShot;
         _flags = flags;
         _promptBuilder = promptBuilder;
+        _ask = ask;
         _config = config;
         _log = log;
         _hub = hub;
@@ -653,9 +655,8 @@ public class PersonasController : ControllerBase
 
     // --- @упоминания: спросить персону (persona_ask из MCP personas-server) ---
 
-    // One-shot ответ персоны от своего лица: слой персоны (роль+характер) + recall её долгой
-    // памяти + вопрос. Модель — модель персоны. Анти-рекурсия по построению: one-shot идёт
-    // без MCP-серверов, «спросить третью персону» изнутри ответа невозможно.
+    // One-shot ответ персоны от своего лица (PersonaAskService): слой персоны + recall
+    // долгой памяти + вопрос; модель — модель персоны. Поведение эндпоинта прежнее.
     [HttpPost("ask")]
     public async Task<ActionResult> Ask([FromBody] PersonaAskRequest req)
     {
@@ -668,37 +669,10 @@ public class PersonasController : ControllerBase
         var persona = _personas.GetByHandle(UserId, req.Handle.Trim().TrimStart('@'));
         if (persona is null) return NotFound(new { error = $"Персона @{req.Handle} не найдена" });
 
-        // Слой персоны + релевантная память (best-effort: без памяти ответ всё равно валиден)
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine(_promptBuilder.Build(persona, persona.Model, greeted: false));
-        if (persona.MemoryEnabled)
-        {
-            try
-            {
-                // Шкала скоринга — взвешенная сумма (PersonaMemoryScorer), порог ~0.30
-                // (старый 0.02 был для шкалы произведения)
-                var minScore = double.TryParse(_config["Persona:RecallMinScore"],
-                    System.Globalization.CultureInfo.InvariantCulture, out var ms) ? ms : 0.30;
-                var recall = await _memory.BuildRecallAsync(UserId, persona.Id, req.Question, topK: 5, minScore);
-                if (!string.IsNullOrWhiteSpace(recall)) sb.AppendLine().AppendLine(recall);
-            }
-            catch (Exception ex) { _log.LogWarning(ex, "persona_ask: recall памяти {Persona}", persona.Id); }
-        }
-        sb.AppendLine();
-        sb.AppendLine("Тебя спрашивает ассистент пользователя из другого разговора. Этот разговор ты не видишь — " +
-                      "отвечай по вопросу и переданному контексту, от своего лица и в своём характере, по существу.");
-        if (!string.IsNullOrWhiteSpace(req.Context))
-            sb.AppendLine($"\nКонтекст: {req.Context.Trim()}");
-        sb.AppendLine($"\nВопрос: {req.Question.Trim()}");
-
-        var timeout = TimeSpan.FromMilliseconds(
-            int.TryParse(_config["Persona:AskTimeoutMs"], out var t) ? t : 120_000);
         try
         {
-            var answer = await _oneShot.RunAsync(sb.ToString(), _oneShot.NormalizeModel(persona.Model),
-                timeout, HttpContext.RequestAborted);
-            if (string.IsNullOrWhiteSpace(answer))
-                return StatusCode(502, new { error = "Персона не ответила (пустой ответ модели)" });
+            var answer = await _ask.AskAsync(UserId, persona, req.Question, req.Context,
+                HttpContext.RequestAborted);
             return Ok(new { handle = persona.Handle, name = persona.Name, role = persona.Role, answer });
         }
         catch (Exception ex)

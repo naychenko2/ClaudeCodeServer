@@ -13,6 +13,7 @@ import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
+import { MeetingView } from './MeetingView';
 import { AskQuestionView } from './AskQuestionView';
 import { PlanReviewView } from './PlanReviewView';
 
@@ -217,12 +218,16 @@ interface ItemProps {
   onInterrupt: () => void;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
+  // «Продолжить обсуждение» из карточки совещания — обычное сообщение в чат
+  onSendMessage?: (text: string) => void;
+  // Отмена идущего совещания (кнопка на карточке)
+  onMeetingCancel?: () => void;
 }
 
 // React.memo: переключатель по kind — самый массовый компонент ленты. Элементы ChatItem
 // иммутабельны по ссылке (обновление элемента = новый объект), пропсы-функции стабильны
 // (useCallback в ChatPanel) — при дописывании ленты старые элементы не перерендериваются.
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan, onSendMessage, onMeetingCancel }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
@@ -686,6 +691,10 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
     case 'resumed':
       // Разделитель «продолжение чата» убран — декоративный, без полезной нагрузки
       return null;
+
+    case 'meeting':
+      // Карточка совещания персон (P7): фазы, live-прогресс, итог от ведущей
+      return <MeetingView item={item} onContinue={onSendMessage} onCancel={onMeetingCancel} />;
 
     case 'companion_switched': {
       // Разделитель смены собеседника/спикера. label задан явно (ручная смена,

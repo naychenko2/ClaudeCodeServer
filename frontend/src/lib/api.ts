@@ -450,6 +450,15 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ personaIds }),
       }),
+    // Совещание персон (P7): независимые позиции → перекрёстная критика → синтез ведущей.
+    // personaIds опциональны в групповом чате (дефолт — его участники)
+    startMeeting: (id: string, question: string, personaIds?: string[]) =>
+      request<{ meetingId: string }>(`/chats/${id}/meeting`, {
+        method: 'POST',
+        body: JSON.stringify({ question, personaIds }),
+      }),
+    cancelMeeting: (id: string) =>
+      request<void>(`/chats/${id}/meeting/cancel`, { method: 'POST' }),
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
     uploadFile: async (id: string, file: File): Promise<{ path: string }> => {

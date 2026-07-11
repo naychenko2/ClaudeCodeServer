@@ -280,6 +280,8 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }
   | { type: 'personas_changed'; action: 'created' | 'updated' | 'deleted' | 'memory'; personaId?: string }
   | { type: 'speaker_changed'; personaId: string; label: string }
+  | { type: 'meeting_progress'; meetingId: string; phase: string; personaId?: string; status?: string; error?: string }
+  | { type: 'meeting_phase'; meetingId: string; phase: MeetingPhaseKey; question: string; entries: MeetingEntryItem[] }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' }
 );
 
@@ -342,6 +344,24 @@ export interface FalAccountResponse {
   usage?: FalUsageSummary | null;
 }
 
+// === Совещание персон (P7, флаг persona-group-chats) ===
+
+// Фазы совещания: независимые позиции → перекрёстная критика → синтез ведущей
+export type MeetingPhaseKey = 'independent' | 'attack' | 'synthesis';
+
+// Реплика участника фазы; isError — персона не ответила (text = текст ошибки)
+export interface MeetingEntryItem {
+  personaId: string;
+  text: string;
+  isError: boolean;
+}
+
+// Live-статусы участников текущей фазы (из meeting_progress)
+export interface MeetingRunningState {
+  phase: string;
+  persona: Record<string, 'running' | 'done' | 'error'>;
+}
+
 // Элементы чата
 export type ChatItem =
   | { kind: 'user_message'; text: string; attachedPaths?: string[] }
@@ -367,6 +387,11 @@ export type ChatItem =
   // Разделитель «сменился собеседник»: label задан явно (смена вручную / speaker_changed
   // с сервера) либо резолвится по personaId (derived из истории группового чата)
   | { kind: 'companion_switched'; label: string; personaId?: string }
+  // Карточка совещания персон: агрегат всех фаз одного meetingId (собирается из
+  // meeting_phase/meeting_progress и из истории — StoredMeetingPhaseMessage)
+  | { kind: 'meeting'; meetingId: string; question: string;
+      phases: Partial<Record<MeetingPhaseKey, MeetingEntryItem[]>>;
+      running?: MeetingRunningState; status?: 'running' | 'done' | 'error'; error?: string }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 // Скиллы и агенты

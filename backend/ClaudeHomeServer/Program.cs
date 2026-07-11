@@ -82,6 +82,12 @@ builder.Services.AddSingleton<NotesAiService>();
 builder.Services.AddSingleton<NoteTaskSyncService>();
 builder.Services.AddSingleton<UnifiedSearchService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
+// Интерфейс one-shot раннера → тот же singleton (мокируется в тестах совещаний)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IOneShotRunner>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>());
+// Совещания персон (P7): one-shot ответы персон + оркестратор фаз
+builder.Services.AddSingleton<PersonaAskService>();
+builder.Services.AddSingleton<PersonaMeetingService>();
 builder.Services.AddSingleton<ChangelogService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();

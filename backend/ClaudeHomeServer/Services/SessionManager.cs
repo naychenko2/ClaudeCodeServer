@@ -1199,6 +1199,41 @@ public class SessionManager
         await BroadcastAsync(sessionId, msg);
     }
 
+    // Запись StoredMessage в историю сессии ВНЕ хода + broadcast (обобщение паттерна
+    // PublishFalCostAsync): активная сессия → через Accumulator + SaveSnapshot;
+    // неактивная → LoadAsync + append + SaveAsync под локом. Используется совещаниями.
+    public async Task AppendStoredAsync(string sessionId, StoredMessage stored, ServerMessage broadcast)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+
+        if (entry.Accumulator is { } acc)
+        {
+            acc.Append(stored);
+            try { await acc.SaveSnapshotAsync(_history); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Сохранение истории ({sessionId}) после внеходовой записи: {ex.Message}");
+            }
+        }
+        else if (entry.Info.ClaudeSessionId is string key)
+        {
+            await _falPersistLock.WaitAsync();
+            try
+            {
+                var stored0 = await _history.LoadAsync(key);
+                stored0.Add(stored);
+                await _history.SaveAsync(key, stored0);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Прямая внеходовая запись истории ({sessionId}): {ex.Message}");
+            }
+            finally { _falPersistLock.Release(); }
+        }
+
+        await BroadcastSessionMessageAsync(sessionId, broadcast);
+    }
+
     // Единая точка перехода статуса сессии: обновить Info → сохранить на диск → разослать клиентам
     private async Task ApplyStatusAsync(string sessionId, SessionEntry entry, SessionStatus status)
     {

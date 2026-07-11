@@ -3,12 +3,23 @@ using System.Text;
 
 namespace ClaudeHomeServer.Services.Llm;
 
+// Абстракция one-shot вызова LLM — для мокирования в тестах (совещания персон).
+// В DI интерфейс указывает на тот же singleton OneShotClaudeRunner.
+public interface IOneShotRunner
+{
+    // Модель ненастроенного провайдера тихо заменяется дефолтом claude
+    string? NormalizeModel(string? model);
+
+    Task<string> RunAsync(string prompt, string? model = null,
+        TimeSpan? timeout = null, CancellationToken ct = default);
+}
+
 // Общий раннер одноразовых вызовов claude --print (без сессии): промпт через stdin,
 // ответ — stdout целиком. Модель стороннего провайдера подключается env-оверрайдами
 // (LlmProviderRegistry.BuildCliEnv). Рабочая папка — пустая temp (claude не получает
 // доступ к файлам). Используется генерациями задач и заметок; ChangelogService
 // исторически держит свою копию.
-public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders)
+public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders) : IOneShotRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
 

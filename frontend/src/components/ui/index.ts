@@ -6,6 +6,7 @@ export { Splitter } from './Splitter';
 export { Menu, MenuItem } from './Menu';
 export { Modal } from './Modal';
 export { ModalActions, useIsMobileModal } from './ModalActions';
+export { ConfirmDialog } from './ConfirmDialog';
 export { Field, FieldLabel, TextField, TextArea, IconField } from './Field';
 export { SegmentedControl } from './Segmented';
 export { Toggle } from './Toggle';

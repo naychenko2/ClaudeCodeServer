@@ -4,6 +4,7 @@ import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
 import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
+import { showToast } from '../lib/toast';
 import { C, FONT } from '../lib/design';
 import { useSidebarDrag } from '../lib/sidebarWidth';
 import { useIsMobile } from '../lib/breakpoints';
@@ -175,7 +176,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       setChats(prev => [chat, ...prev]);
       selectChat(chat);
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Не удалось создать чат');
+      showToast('Чат', e instanceof Error ? e.message : 'Не удалось создать чат');
     } finally {
       setCreating(false);
     }

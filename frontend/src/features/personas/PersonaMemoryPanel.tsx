@@ -3,6 +3,7 @@ import type { Persona, PersonaMemoryEntry, PersonaMemoryType, ServerMessage } fr
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
+import { showToast } from '../../lib/toast';
 import { personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from './PersonaAvatar';
 
@@ -102,7 +103,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
       setEntries(prev => [created, ...prev.filter(e => e.id !== created.id)]);
       setAddText('');
     } catch {
-      alert('Не удалось сохранить запись.');
+      showToast('Память', 'Не удалось сохранить запись.');
     } finally {
       setSaving(false);
     }
@@ -114,7 +115,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
       await api.personas.forget(persona.id, entryId);
       setEntries(prev => prev.filter(e => e.id !== entryId));
     } catch {
-      alert('Не удалось удалить запись.');
+      showToast('Память', 'Не удалось удалить запись.');
     } finally {
       setRemovingId(null);
     }

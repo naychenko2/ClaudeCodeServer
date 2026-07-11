@@ -38,7 +38,7 @@ import { DrawioViewer, type DrawioHandle } from './DrawioViewer';
 import { base64ToBytes } from '../lib/binary';
 import { C, FONT, MODAL_W, SHADOW } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from './Toolbar';
-import { BackButton, Modal, ModalActions, Button, useIsMobileModal } from './ui';
+import { BackButton, Modal, ModalActions, Button, ConfirmDialog, useIsMobileModal } from './ui';
 import { DiffView } from './DiffView';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 
@@ -364,6 +364,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const [officeMode, setOfficeMode] = useState<'view' | 'edit'>('view');
   const [officeSwitching, setOfficeSwitching] = useState(false);
   const [officeDiscardConfirm, setOfficeDiscardConfirm] = useState(false);
+  // Мобильный вариант подтверждения отката office-правок — диалог (на десктопе — инлайн-плашка)
+  const [officeDiscardDialog, setOfficeDiscardDialog] = useState(false);
   const [officeCacheKey, setOfficeCacheKey] = useState<string | undefined>();
   // Режим draw.io: по умолчанию просмотр (read-only), кнопка «Редактировать» → edit
   const [drawioMode, setDrawioMode] = useState<'view' | 'edit'>('view');
@@ -712,12 +714,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
               <button
                 title="Отменить изменения"
                 onClick={isMobile
-                  ? async () => {
-                      if (!window.confirm('Отменить изменения? Несохранённые правки будут потеряны.')) return;
-                      setOfficeSwitching(true);
-                      try { await api.files.officeDiscard(project.id, filePath); } catch {}
-                      setOfficeMode('view');
-                    }
+                  ? () => setOfficeDiscardDialog(true)
                   : () => setOfficeDiscardConfirm(true)
                 }
                 style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textHeading, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
@@ -1133,6 +1130,23 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
               onCancel={() => setDeleteConfirm(false)}
             />
           }
+        />
+      )}
+
+      {/* Подтверждение отката office-правок (мобилка; на десктопе — инлайн-плашка в тулбаре) */}
+      {officeDiscardDialog && (
+        <ConfirmDialog
+          title="Отменить изменения?"
+          subtitle="Несохранённые правки будут потеряны."
+          confirmLabel="Отменить правки"
+          confirmVariant="danger"
+          onConfirm={async () => {
+            setOfficeDiscardDialog(false);
+            setOfficeSwitching(true);
+            try { await api.files.officeDiscard(project.id, filePath); } catch {}
+            setOfficeMode('view');
+          }}
+          onCancel={() => setOfficeDiscardDialog(false)}
         />
       )}
 

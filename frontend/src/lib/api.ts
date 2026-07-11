@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -251,10 +251,20 @@ export const api = {
       request<Persona>(`/personas/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dto) }),
     remove: (id: string) =>
       request<void>(`/personas/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-    // Чаты, ведущиеся от лица персоны (этап 2): список + создание нового
+    // Чаты, ведущиеся от лица персоны (этап 2): список + создание нового.
+    // projectId — глобальная персона, позванная из проекта, получает чат В этом проекте.
     chats: (id: string) => request<Session[]>(`/personas/${encodeURIComponent(id)}/chats`),
-    createChat: (id: string, body: { mode?: string; resumeSessionId?: string; name?: string }) =>
+    createChat: (id: string, body: { mode?: string; resumeSessionId?: string; name?: string; projectId?: string }) =>
       request<Session>(`/personas/${encodeURIComponent(id)}/chats`, { method: 'POST', body: JSON.stringify(body) }),
+
+    // Пантеон OmO: каталог ролей-специалистов с бэкенда + идемпотентное подключение
+    // всей команды (keys не передаём = все роли). После connect прилетит personas_changed.
+    pantheon: () => request<{ templates: PantheonTemplate[] }>('/personas/pantheon'),
+    connectPantheon: (keys?: string[]) =>
+      request<Persona[]>('/personas/pantheon/connect', {
+        method: 'POST',
+        body: JSON.stringify({ keys: keys ?? null }),
+      }),
 
     // Назначить/снять собеседника чату вне проекта: персона (personaId) либо .md-агент
     // (agentName) — взаимоисключающе, оба null = снять. 400, если чат уже начат.

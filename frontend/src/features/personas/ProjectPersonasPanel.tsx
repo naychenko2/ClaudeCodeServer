@@ -101,13 +101,14 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
     }
   };
 
-  // «Поговорить»: чат от лица проектной персоны — сессия создаётся в этом проекте.
+  // «Поговорить»: чат от лица персоны — сессия создаётся в этом проекте
+  // (projectId кладёт в проект и чат глобальной персоны, позванной из «Команды»).
   // Мы уже внутри нужного проекта, поэтому открываем её напрямую (без cc_pending_session).
   const talk = async (p: Persona) => {
     if (talking) return;
     setTalking(true);
     try {
-      const session = await api.personas.createChat(p.id, { mode: 'auto' });
+      const session = await api.personas.createChat(p.id, { mode: 'auto', projectId: project.id });
       onOpenChat(session);
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Не удалось создать чат');
@@ -201,7 +202,7 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
             projects={[project]}
             defaultScope="project"
             defaultProjectId={project.id}
-            initial={template ? { role: template.role, description: template.description, contract: template.contract, greeting: template.greeting, color: template.avatarColor, tools: template.tools, access: template.access, model: template.model, effort: template.effort } : undefined}
+            initial={template ? { name: template.namePlaceholder, role: template.role, description: template.description, contract: template.contract, greeting: template.greeting, color: template.avatarColor, tools: template.tools, access: template.access, model: template.model, effort: template.effort } : undefined}
             onStatus={onStatus}
             onColorChange={setLiveColor}
             onSaved={p => onSelectPersona(p.id)}

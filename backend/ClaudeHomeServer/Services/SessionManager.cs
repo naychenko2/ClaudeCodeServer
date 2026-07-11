@@ -395,14 +395,22 @@ public class SessionManager
     // Создание чата от лица персоны. Маршрутизация по зоне:
     // проектная персона → сессия в её проекте (scope = проект); глобальная (или проект
     // недоступен) → чат вне проекта (scope = все данные владельца). Модель по умолчанию — из персоны.
+    // contextProjectId — проект, ИЗ которого зовут глобальную персону («Поговорить» в проекте):
+    // чат создаётся в нём, а не вне проекта (как давно позволяет смена собеседника SetPersona).
     public async Task<Session> CreatePersonaChatAsync(string ownerId, string personaId,
-        ClaudeMode mode, string? resumeSessionId = null, string? name = null)
+        ClaudeMode mode, string? resumeSessionId = null, string? name = null,
+        string? contextProjectId = null)
     {
         var persona = _personas.Get(personaId, ownerId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {personaId}");
 
-        if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId)
-            && _projects.GetById(persona.ProjectId) is { } project && project.OwnerId == ownerId)
+        // Проект сессии: у проектной персоны — её собственный; у глобальной — контекстный
+        var targetProjectId = persona.Scope == PersonaScope.Project
+            ? persona.ProjectId
+            : contextProjectId;
+
+        if (!string.IsNullOrEmpty(targetProjectId)
+            && _projects.GetById(targetProjectId) is { } project && project.OwnerId == ownerId)
         {
             var projectSession = new Session
             {

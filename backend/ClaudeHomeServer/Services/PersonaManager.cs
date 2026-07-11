@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Prompts;
 
 namespace ClaudeHomeServer.Services;
 
@@ -30,6 +32,8 @@ public class PersonaManager
             ?? Path.Combine(AppContext.BaseDirectory, "data");
         _storePath = config["PersonasPath"] ?? Path.Combine(dataDir, "personas.json");
         Load();
+        // Каталог пантеона мог обновиться с релизом — подтянуть регламенты нетронутых персон
+        RefreshPantheonInstructions();
     }
 
     // Папка с ассетами персон (аватары): data/personas/
@@ -143,6 +147,71 @@ public class PersonaManager
         Save();
         return persona;
     }
+
+    // --- Подключаемая команда «Пантеон OmO» (built-in-подход, как у самих OmO) ---
+
+    // Персона владельца, подключённая из каталога по ключу (null — не подключена)
+    public Persona? GetByTemplateKey(string userId, string templateKey) =>
+        _personas.Values.FirstOrDefault(p => p.OwnerId == userId
+            && string.Equals(p.TemplateKey, templateKey, StringComparison.OrdinalIgnoreCase));
+
+    // Идемпотентное подключение ролей пантеона: создаёт ГЛОБАЛЬНЫЕ персоны для ключей,
+    // которых у владельца ещё нет (keys == null — все роли каталога). Существующие не трогает.
+    public IReadOnlyList<Persona> ConnectPantheon(string userId, IReadOnlyList<string>? keys = null)
+    {
+        var wanted = keys is { Count: > 0 }
+            ? keys.Select(k => OmoPantheonCatalog.Get(k)
+                ?? throw new KeyNotFoundException($"Роль пантеона не найдена: {k}")).ToList()
+            : OmoPantheonCatalog.All.ToList();
+
+        var result = new List<Persona>();
+        foreach (var t in wanted)
+        {
+            var existing = GetByTemplateKey(userId, t.Key);
+            if (existing is not null) { result.Add(existing); continue; }
+
+            var persona = Create(userId, t.Name, t.Role, t.Description, systemPrompt: null,
+                t.Model, t.Effort, PersonaScope.Global, projectId: null,
+                t.Color, t.Greeting, memoryEnabled: true, t.Tools, t.Contract, t.Access);
+            persona.TemplateKey = t.Key;
+            persona.TemplateInstructionsHash = HashInstructions(t.Contract.Instructions);
+            result.Add(persona);
+        }
+        Save();
+        return result;
+    }
+
+    // Авто-обновление регламентов подключённых ролей при изменении каталога (апдейт сервера):
+    // нетронутая инструкция (hash совпадает с поставленной) заменяется каталожной; правленная
+    // пользователем — «пришпилена» и не трогается (поведение prompt-оверрайдов OmO).
+    private void RefreshPantheonInstructions()
+    {
+        var updated = 0;
+        foreach (var persona in _personas.Values)
+        {
+            if (persona.TemplateKey is null || persona.TemplateInstructionsHash is null) continue;
+            var template = OmoPantheonCatalog.Get(persona.TemplateKey);
+            if (template?.Contract.Instructions is not { } fresh) continue;
+
+            var current = persona.Contract?.Instructions;
+            if (HashInstructions(current) != persona.TemplateInstructionsHash) continue; // пришпилено
+            if (current == fresh) continue; // уже актуальна
+
+            persona.Contract ??= new PersonaContract();
+            persona.Contract.Instructions = fresh;
+            persona.TemplateInstructionsHash = HashInstructions(fresh);
+            persona.UpdatedAt = DateTime.UtcNow;
+            updated++;
+        }
+        if (updated > 0)
+        {
+            Save();
+            Console.WriteLine($"[PersonaManager] Пантеон: обновлены регламенты {updated} нетронутых персон(ы)");
+        }
+    }
+
+    internal static string HashInstructions(string? instructions) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(instructions?.Trim() ?? "")));
 
     public Persona Update(string id, string userId, string? name, string? role, string? description,
         string? systemPrompt, string? model, string? effort, PersonaScope? scope, string? projectId,

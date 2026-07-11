@@ -675,8 +675,27 @@ export interface Persona {
   access?: PersonaAccess;
   // Свой список запрещённых инструментов (только при access === 'custom')
   disallowedTools?: string[] | null;
+  // Ключ шаблона пантеона OmO, из которого подключена персона (null — создана вручную)
+  templateKey?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// Шаблон роли пантеона OmO (GET /api/personas/pantheon): каталог живёт на бэкенде,
+// connectedPersonaId — id уже подключённой персоны владельца (null — не подключена)
+export interface PantheonTemplate {
+  key: string;
+  role: string;
+  name: string;
+  description: string;
+  contract: PersonaContract;
+  greeting: string;
+  color: string;
+  tools?: string[] | null;
+  access?: PersonaAccess;
+  model?: string;
+  effort?: string;
+  connectedPersonaId?: string | null;
 }
 
 // Тело создания персоны (POST /api/personas). Большинство полей опциональны.

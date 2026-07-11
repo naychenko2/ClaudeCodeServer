@@ -73,6 +73,43 @@ public class PersonasController : ControllerBase
         return Ok(_personas.GetByOwner(UserId));
     }
 
+    // Каталог пантеона OmO: карточки-шаблоны + связь с уже подключёнными персонами
+    // владельца (connectedPersonaId по TemplateKey). Единый источник — бэкенд-каталог.
+    [HttpGet("pantheon")]
+    public IActionResult GetPantheon() =>
+        Ok(new
+        {
+            templates = Services.Prompts.OmoPantheonCatalog.All.Select(t => new
+            {
+                key = t.Key,
+                role = t.Role,
+                name = t.Name,
+                description = t.Description,
+                contract = t.Contract,
+                greeting = t.Greeting,
+                color = t.Color,
+                tools = t.Tools,
+                access = t.Access,
+                model = t.Model,
+                effort = t.Effort,
+                connectedPersonaId = _personas.GetByTemplateKey(UserId, t.Key)?.Id,
+            }),
+        });
+
+    // Подключить команду пантеона: идемпотентно создаёт глобальные персоны с готовыми
+    // именами для недостающих ключей (пустой keys = все роли каталога).
+    [HttpPost("pantheon/connect")]
+    public async Task<IActionResult> ConnectPantheon([FromBody] ConnectPantheonRequest? req)
+    {
+        try
+        {
+            var personas = _personas.ConnectPantheon(UserId, req?.Keys);
+            await Broadcast("created");
+            return Ok(personas);
+        }
+        catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
     [HttpGet("{id}")]
     public ActionResult<Persona> Get(string id)
     {
@@ -147,7 +184,8 @@ public class PersonasController : ControllerBase
         var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
         try
         {
-            var chat = await _sessions.CreatePersonaChatAsync(UserId, id, mode, req.ResumeSessionId, req.Name);
+            var chat = await _sessions.CreatePersonaChatAsync(UserId, id, mode, req.ResumeSessionId, req.Name,
+                contextProjectId: req.ProjectId);
             return Ok(chat);
         }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
@@ -784,7 +822,10 @@ public record PersonaProactiveDto(
     string? Time = null,        // "HH:mm" в таймзоне владельца
     string? Instruction = null);
 
-public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null);
+public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
+    string? ProjectId = null);
+
+public record ConnectPantheonRequest(List<string>? Keys = null);
 
 public record RememberRequest(string Type, string Text, List<string>? Tags = null,
     string? SourceSessionId = null, double? Salience = null);

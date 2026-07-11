@@ -155,11 +155,14 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     </div>
   ) : null;
 
-  // === Факты-строка: модель / возможности / память ===
+  // === Факты-строка: модель / возможности / память (+ происхождение из пантеона) ===
   const facts: { label: string; value: string; title?: string }[] = [
     { label: 'Модель', value: persona.effort ? `${modelName} · ${effortLabel(persona.effort)}` : modelName },
     { label: 'Возможности', value: toolsText },
     { label: 'Память', value: memoryText, title: memoryTitle },
+    ...(persona.templateKey
+      ? [{ label: 'Происхождение', value: 'Пантеон OmO', title: `Подключена из шаблона «${persona.templateKey}»` }]
+      : []),
   ];
   const factsRow = (
     <div style={{ ...section, display: 'flex', flexWrap: 'wrap', gap: 10 }}>

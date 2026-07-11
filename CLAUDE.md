@@ -223,15 +223,21 @@ WorkingDirectory = `project.RootPath`
   6 готовых ролей с промптами-контрактами (Ревьюер, Планировщик, Аналитик, Ментор, Секретарь,
   Дизайнер) — сетка карточек на экране создания (PersonaQuickCreate), выбор предзаполняет
   PersonaForm (`initial`), включая дефолтные возможности, модель и усилие.
-- **Пантеон OmO** ([omoPantheonTemplates.ts](frontend/src/features/personas/omoPantheonTemplates.ts)):
-  вторая секция шаблонов — 8 ролей с ПОЛНЫМИ переведёнными промптами oh-my-openagent
-  (по договорённости с авторами, соответствие — [docs/omo-adoption.md](docs/omo-adoption.md)):
-  Оркестратор (Сизиф), Мастер (Гефест), Планировщик (Прометей), Координатор (Атлант),
-  Аналитик (Метида), Ревьюер (Мом), Консультант (Оракул), Библиотекарь (Клио). Полный
-  регламент — в слоте `contract.instructions` (raw-импорт `omo/*.md`), модуль грузится
-  лениво (dynamic import, ~280 КБ отдельным чанком); советникам — `access: readOnly`.
-  Переводы-первоисточники: docs/omo/translations (правишь → перегенерируй
-  docs/omo/gen-omo-prompts.ps1 и перекопируй тела в frontend/…/omo/).
+- **Пантеон OmO — подключаемая команда** (built-in-подход, как у самих OmO): каталог —
+  [OmoPantheonCatalog.cs](backend/ClaudeHomeServer/Services/Prompts/OmoPantheonCatalog.cs)
+  (8 ролей с ПОЛНЫМИ переведёнными промптами, по договорённости с авторами —
+  [docs/omo-adoption.md](docs/omo-adoption.md)): Оркестратор (Сизиф), Мастер (Гефест),
+  Планировщик (Прометей), Координатор (Атлант), Аналитик (Метида), Ревьюер (Мом),
+  Консультант (Оракул), Библиотекарь (Клио); регламенты — сгенерированный partial
+  `OmoPantheonCatalog.Instructions.cs` (docs/omo/gen-omo-prompts.ps1 из переводов).
+  `GET /api/personas/pantheon` — карточки + connectedPersonaId по `Persona.TemplateKey`;
+  `POST /api/personas/pantheon/connect` — идемпотентно создаёт ГЛОБАЛЬНЫЕ персоны с
+  готовыми именами (кнопка «Подключить всю команду» в PersonaQuickCreate; советники —
+  readOnly). **Авто-обновление регламентов**: `Persona.TemplateInstructionsHash` — SHA-256
+  поставленной из каталога инструкции; при старте (`RefreshPantheonInstructions`) нетронутые
+  (hash совпадает) подтягиваются из каталога, правленные пользователем — «пришпилены».
+  Карточки-шаблоны остаются вторым путём (кастомная копия с предзаполненным именем).
+  Отключение роли = обычное удаление персоны.
 - **Возможности per-persona** (`Persona.Tools`: ключи `tasks`/`notes`/`web`; null = без
   ограничений, полный набор нормализуется в null): гейт tasks/notes MCP при сборке
   LlmSessionContext; выключенный `web` добавляет WebSearch/WebFetch в
@@ -407,7 +413,9 @@ POST                /api/tasks/{id}/execute           → Task  (запуск Cl
 GET                 /api/push/vapid-public-key        → { publicKey }
 POST                /api/push/subscribe|unsubscribe   { endpoint, p256dh?, auth? }  (web-push подписки устройств)
 GET/POST/PUT/DELETE /api/personas                     (CRUD персон; ?scope=context&projectId= — доступные в контексте)  [флаг personas]
-GET/POST            /api/personas/{id}/chats          POST body { mode?, resumeSessionId?, name? } → Session (чат от лица персоны)
+GET                 /api/personas/pantheon             → { templates[] } (каталог пантеона OmO + connectedPersonaId)
+POST                /api/personas/pantheon/connect     { keys? } → Persona[]  (идемпотентно подключить команду глобально)
+GET/POST            /api/personas/{id}/chats          POST body { mode?, resumeSessionId?, name?, projectId? } → Session (чат от лица персоны; projectId — контекст проекта: глобальная персона получает чат В нём)
 GET/POST            /api/personas/{id}/memory         ?type=  / body { type, text, tags? } → записи памяти
 GET                 /api/personas/{id}/memory/search  ?q=&topK=  → hits (relevance×recency×type)
 DELETE              /api/personas/{id}/memory/{entryId}

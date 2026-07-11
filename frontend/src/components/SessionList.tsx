@@ -69,10 +69,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { onSessionsChanged?.(sessions.length); }, [sessions.length, onSessionsChanged]);
 
   const createNew = async (): Promise<Session> => {
-    // Выбрана персона → чат от её лица (проектная — сессия в этом проекте);
-    // выбран .md-агент → обычная сессия с агентом; никто → обычная сессия
+    // Выбрана персона → чат от её лица в этом проекте (projectId кладёт сюда
+    // и чат глобальной персоны); выбран .md-агент → обычная сессия с агентом;
+    // никто → обычная сессия
     const s = companion.persona
-      ? await api.personas.createChat(companion.persona.id, { mode: 'auto' })
+      ? await api.personas.createChat(companion.persona.id, { mode: 'auto', projectId: project.id })
       : await api.sessions.create(project.id, 'auto', undefined, undefined, undefined, companion.agent?.fileName);
     // Чужую (глобальную) сессию в список этого проекта не добавляем — поллинг сам синхронит
     if (s.projectId === project.id) setSessions(prev => [s, ...prev]);

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { Persona, PersonaScope } from '../../types';
+import type { PantheonTemplate, Persona, PersonaScope } from '../../types';
 import { api } from '../../lib/api';
 import { bumpPersonas } from '../../lib/personas';
+import { showToast } from '../../lib/toast';
 import { C, FONT, R, FIELD, SHADOW } from '../../lib/design';
 import { Toolbar, tbBtnGhost } from '../../components/Toolbar';
 import { IconButton } from '../../components/ui';
@@ -31,17 +32,33 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
-  // Шаблоны «Пантеон OmO»: модуль с полными промптами (~3000 строк md) грузится
-  // лениво отдельным чанком, чтобы не раздувать основной бандл. Пока грузится —
+  // Шаблоны «Пантеон OmO»: каталог живёт на бэкенде (GET /api/personas/pantheon),
+  // там же — признак «уже подключена» (connectedPersonaId). Пока грузится —
   // секция просто не показывается.
-  const [omoTemplates, setOmoTemplates] = useState<PersonaTemplate[] | null>(null);
-  useEffect(() => {
-    let alive = true;
-    void import('./omoPantheonTemplates')
-      .then(m => { if (alive) setOmoTemplates(m.OMO_PANTHEON_TEMPLATES); })
+  const [omoTemplates, setOmoTemplates] = useState<PantheonTemplate[] | null>(null);
+  const loadPantheon = () =>
+    api.personas.pantheon()
+      .then(r => setOmoTemplates(r.templates))
       .catch(() => { /* не критично: секция пантеона просто не появится */ });
-    return () => { alive = false; };
-  }, []);
+  useEffect(() => { void loadPantheon(); }, []);
+
+  // «Подключить всю команду»: идемпотентно создаёт глобальные персоны всех ролей
+  const [connecting, setConnecting] = useState(false);
+  const hasUnconnected = (omoTemplates ?? []).some(t => t.connectedPersonaId == null);
+  const connectAll = async () => {
+    if (connecting) return;
+    setConnecting(true);
+    try {
+      const created = await api.personas.connectPantheon();
+      bumpPersonas();
+      showToast('Пантеон OmO', `Команда подключена: ${created.length} ролей`);
+      await loadPantheon();
+    } catch (e) {
+      showToast('Пантеон OmO', e instanceof Error ? e.message : 'Не удалось подключить команду');
+    } finally {
+      setConnecting(false);
+    }
+  };
 
   const canSubmit = !!prompt.trim() && !busy;
 
@@ -163,7 +180,7 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
           {onTemplate && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : 'auto' }}>
               <SectionLabel>Или начните с шаблона</SectionLabel>
-              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'minmax(0,1fr)' : 'minmax(0,1fr) minmax(0,1fr)', gap: 10 }}>
                 {PERSONA_TEMPLATES.map(t => (
                   <TemplateCard key={t.key} template={t} title={t.role} onSelect={() => onTemplate(t)} />
                 ))}
@@ -172,16 +189,38 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
           )}
 
           {/* Пантеон OmO: роли-специалисты из oh-my-openagent с полными регламентами.
-              Появляется, когда лениво подгрузился чанк с промптами. */}
+              Каталог приходит с бэкенда; клик по карточке — кастомная копия через форму,
+              «Подключить всю команду» — идемпотентное создание всех глобальных персон. */}
           {onTemplate && omoTemplates && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : 'auto' }}>
               <SectionLabel>Пантеон OmO</SectionLabel>
               <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.45, marginTop: -4 }}>
                 Роли-специалисты из oh-my-openagent, адаптированные на русский — с полным регламентом роли.
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10 }}>
+              {hasUnconnected && (
+                <div>
+                  <button
+                    onClick={() => void connectAll()}
+                    disabled={connecting}
+                    style={{
+                      background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.md,
+                      padding: '10px 18px', fontSize: 13.5, fontWeight: 600, fontFamily: FONT.sans,
+                      cursor: connecting ? 'default' : 'pointer', opacity: connecting ? 0.55 : 1,
+                      display: 'inline-flex', alignItems: 'center', gap: 7,
+                    }}>
+                    {connecting ? 'Подключаю команду…' : '✨ Подключить всю команду'}
+                  </button>
+                </div>
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'minmax(0,1fr)' : 'minmax(0,1fr) minmax(0,1fr)', gap: 10 }}>
                 {omoTemplates.map(t => (
-                  <TemplateCard key={t.key} template={t} title={`${t.role} (${t.namePlaceholder})`} onSelect={() => onTemplate(t)} />
+                  <TemplateCard
+                    key={t.key}
+                    template={pantheonToTemplate(t)}
+                    title={`${t.role} (${t.name})`}
+                    badge={t.connectedPersonaId != null ? 'в команде' : undefined}
+                    onSelect={() => onTemplate(pantheonToTemplate(t))}
+                  />
                 ))}
               </div>
             </div>
@@ -192,10 +231,30 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
   );
 }
 
-// Карточка шаблона роли — общая для наших шаблонов и пантеона OmO
-function TemplateCard({ template: t, title, onSelect }: {
+// Маппинг шаблона пантеона (API) в фронтовый PersonaTemplate — для карточки
+// и предзаполнения PersonaForm (onTemplate)
+function pantheonToTemplate(t: PantheonTemplate): PersonaTemplate {
+  return {
+    key: t.key,
+    role: t.role,
+    namePlaceholder: t.name,
+    description: t.description,
+    contract: t.contract,
+    greeting: t.greeting,
+    avatarColor: t.color,
+    tools: t.tools ?? undefined,
+    access: t.access,
+    model: t.model,
+    effort: t.effort,
+  };
+}
+
+// Карточка шаблона роли — общая для наших шаблонов и пантеона OmO.
+// badge — пилюля в правом углу (у подключённых ролей пантеона — «в команде»).
+function TemplateCard({ template: t, title, badge, onSelect }: {
   template: PersonaTemplate;
   title: string;
+  badge?: string;
   onSelect: () => void;
 }) {
   return (
@@ -208,7 +267,7 @@ function TemplateCard({ template: t, title, onSelect }: {
         display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left',
         background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
         padding: '11px 13px', cursor: 'pointer', fontFamily: FONT.sans,
-        transition: 'border-color 0.15s',
+        transition: 'border-color 0.15s', minWidth: 0,
       }}
     >
       <span style={{
@@ -230,6 +289,16 @@ function TemplateCard({ template: t, title, onSelect }: {
           {t.description}
         </span>
       </span>
+      {badge && (
+        <span style={{
+          flexShrink: 0, alignSelf: 'flex-start',
+          background: C.accentLight, color: C.accent, borderRadius: R.full,
+          padding: '2px 8px', fontSize: 9.5, fontWeight: 700,
+          letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap',
+        }}>
+          {badge}
+        </span>
+      )}
     </button>
   );
 }

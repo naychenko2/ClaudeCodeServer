@@ -40,6 +40,7 @@ export interface PersonaFormStatus {
 
 // Предзаполнение формы создания из шаблона персоны (см. personaTemplates.ts)
 export interface PersonaFormInitial {
+  name?: string;
   role?: string;
   description?: string;
   contract?: PersonaContract;
@@ -85,7 +86,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const isMobile = useIsMobile();
   const models = useModels();
 
-  const [name, setName] = useState(persona?.name ?? '');
+  const [name, setName] = useState(persona?.name ?? initial?.name ?? '');
   const [role, setRole] = useState(persona?.role ?? initial?.role ?? '');
   const [description, setDescription] = useState(persona?.description ?? initial?.description ?? '');
   // Контракт характера (P1) по слотам. Legacy-персона (без contract) — её systemPrompt

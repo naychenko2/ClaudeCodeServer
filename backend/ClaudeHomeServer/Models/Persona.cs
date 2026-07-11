@@ -134,6 +134,12 @@ public class Persona
     public string? Greeting { get; set; }
     // Проактивность «пишет первой» (флаг persona-proactive); null — выключена
     public PersonaProactiveConfig? Proactive { get; set; }
+    // Ключ каталога пантеона OmO (omo-sisyphus…), если персона подключена из него:
+    // идемпотентность подключения, бейдж происхождения, авто-обновление регламента
+    public string? TemplateKey { get; set; }
+    // SHA-256 инструкции, поставленной из каталога. Совпадает с текущей — пользователь
+    // регламент не правил (нетронута) и её можно авто-обновлять вместе с каталогом
+    public string? TemplateInstructionsHash { get; set; }
     public bool MemoryEnabled { get; set; } = true;
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

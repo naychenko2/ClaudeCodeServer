@@ -75,6 +75,16 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
         var agentDepth = Request.Headers.TryGetValue("X-Agent-Depth", out var dh)
             && int.TryParse(dh.FirstOrDefault(), out var d) ? Math.Max(0, d) : 0;
 
+        // Персона-отправитель: chats_send передаёт id своей сессии — берём её PersonaId, чтобы
+        // получатель отрисовал входящую реплику лицом персоны. Только сессия того же владельца.
+        string? senderPersonaId = null;
+        if (Request.Headers.TryGetValue("X-Sender-Session-Id", out var sh)
+            && sh.FirstOrDefault() is { Length: > 0 } senderId)
+        {
+            var sender = OwnedSession(senderId);
+            senderPersonaId = sender?.PersonaId;
+        }
+
         var waitTurn = !string.Equals(req.Wait, "none", StringComparison.OrdinalIgnoreCase);
         var timeout = waitTurn
             ? TimeSpan.FromSeconds(Math.Clamp(req.TimeoutSec ?? 90, 5, 240))
@@ -83,7 +93,7 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
         SendAndWaitResult result;
         try
         {
-            result = await sessions.SendMessageAndWaitAsync(sessionId, text, timeout, agentDepth);
+            result = await sessions.SendMessageAndWaitAsync(sessionId, text, timeout, agentDepth, senderPersonaId);
         }
         catch (InvalidOperationException) { return NotFound(); }
 
@@ -117,7 +127,7 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
     // стоимость, границы компакции) в выдачу не попадают
     private static object? ToItem(StoredMessage m) => m switch
     {
-        StoredUserMessage u => new { kind = "user", text = Truncate(u.Text), viaAgent = u.ViaAgent },
+        StoredUserMessage u => new { kind = "user", text = Truncate(u.Text), viaAgent = u.ViaAgent, senderPersonaId = u.SenderPersonaId },
         StoredTextMessage t => new { kind = "assistant", text = Truncate(t.Text), personaId = t.PersonaId },
         StoredToolUseMessage t => new { kind = "tool", name = t.Name, isError = t.IsError } as object,
         StoredResultMessage r => new { kind = "result", subtype = r.Subtype, numTurns = r.NumTurns },

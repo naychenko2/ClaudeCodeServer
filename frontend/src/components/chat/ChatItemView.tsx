@@ -1,5 +1,5 @@
-import { memo, useState, useContext } from 'react';
-import type { ChatItem } from '../../types';
+import { memo, useState, useContext, useEffect } from 'react';
+import type { ChatItem, Persona } from '../../types';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW, R } from '../../lib/design';
@@ -7,7 +7,8 @@ import { relPath, stripRoot } from '../../lib/paths';
 import { hasUltraworkKeyword } from '../../lib/ultrawork';
 import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
-import { getPersonaById, usePersonasVersion, personaLabel } from '../../lib/personas';
+import { AGENT_COLORS } from '../AgentSelector';
+import { getPersonaById, usePersonasVersion, personaLabel, ensurePersonasLoaded } from '../../lib/personas';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
@@ -198,6 +199,58 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
   );
 }
 
+// Нейтральный акцент для агента без персоны (как в PersonaAskView)
+const AGENT_NEUTRAL = '#8A8070';
+
+// Входящее сообщение от персоны/агента (chats_send из другого чата): карточка с лицом
+// отправителя и телом в Markdown — вместо безликого пузыря пользователя.
+function AgentMessageView({ text, persona }: { text: string; persona: Persona | null }) {
+  // В не-персон-чате стор мог быть не загружен — подтягиваем, чтобы резолвить лицо отправителя
+  useEffect(() => { void ensurePersonasLoaded(); }, []);
+  const accent = persona ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? AGENT_NEUTRAL) : AGENT_NEUTRAL;
+  const title = persona ? personaLabel(persona) : 'Агент';
+  return (
+    <div style={{
+      border: `1px solid ${C.borderLight}`, borderLeft: `3px solid ${accent}`,
+      borderRadius: 12, background: C.bgWhite, overflow: 'hidden',
+      boxShadow: SHADOW.card, maxWidth: '100%',
+    }}>
+      {/* Шапка идентичности — лёгкая подложка цвета отправителя */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px',
+        background: `${accent}17`, borderBottom: `1px solid ${C.divider}`,
+      }}>
+        {persona ? (
+          <PersonaAvatar persona={persona} size={28} />
+        ) : (
+          <div aria-hidden style={{
+            width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
+            background: AGENT_NEUTRAL, color: '#fff',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="11" width="18" height="10" rx="2" /><circle cx="12" cy="5" r="2" /><path d="M12 7v4" /><path d="M8 16h.01M16 16h.01" />
+            </svg>
+          </div>
+        )}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 7, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+            {title}
+          </span>
+          {persona?.handle && (
+            <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>@{persona.handle}</span>
+          )}
+        </div>
+        <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>прислал(а) в чат</span>
+      </div>
+      {/* Тело — Markdown */}
+      <div style={{ padding: '10px 12px', fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
+        <MarkdownContent text={text} />
+      </div>
+    </div>
+  );
+}
+
 interface ItemProps {
   item: ChatItem;
   index: number;
@@ -240,7 +293,33 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
   usePersonasVersion();
   switch (item.kind) {
-    case 'user_message':
+    case 'user_message': {
+      // Служебная директива цикла «до готово» (continuation/verification) — компактная
+      // плашка-разделитель вместо сырого текста в пузыре пользователя
+      if (item.systemDirective) {
+        const mm = /(\d+)\s*\/\s*(\d+)/.exec(item.text);
+        const label = /ВЕРИФИКАЦ/i.test(item.text)
+          ? 'Цикл: финальная верификация'
+          : mm ? `Цикл: продолжение ${mm[1]}/${mm[2]}` : 'Цикл: системная директива';
+        return (
+          <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+            <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+            <span style={{
+              fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+              textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+              background: C.bgSelected, border: `1px solid ${C.border}`,
+            }}>
+              ⟳ {label}
+            </span>
+            <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+          </div>
+        );
+      }
+      // Входящее сообщение от персоны/агента (chats_send) — карточкой с лицом отправителя
+      if (item.viaAgent) {
+        const sender = item.senderPersonaId ? (getPersonaById(item.senderPersonaId) ?? null) : null;
+        return <AgentMessageView text={item.text} persona={sender} />;
+      }
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
           <div style={{
@@ -275,12 +354,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
               </div>
             )}
           </div>
-          {/* Приглушённая пометка: сообщение прислал агент из другой сессии (chats_send) */}
-          {item.viaAgent && (
-            <span style={{ fontSize: 11, color: C.textMuted, paddingRight: 4 }}>через агента</span>
-          )}
         </div>
       );
+    }
 
     case 'session_started':
       // Старт чата не показываем — тех-инфа (модель/режим/cwd/MCP) дублирует шапку и раздувает чат

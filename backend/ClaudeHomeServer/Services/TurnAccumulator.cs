@@ -43,11 +43,12 @@ internal class TurnAccumulator
         lock (_lock) _personaId = personaId;
     }
 
-    public void OnUserMessage(string text, IReadOnlyList<string> attachedPaths, bool viaAgent = false)
+    public void OnUserMessage(string text, IReadOnlyList<string> attachedPaths, bool viaAgent = false,
+        string? senderPersonaId = null, bool systemDirective = false)
     {
         lock (_lock)
             _currentTurn.Add(new StoredUserMessage(text, attachedPaths.Count > 0 ? [.. attachedPaths] : null,
-                viaAgent ? true : null));
+                viaAgent ? true : null, senderPersonaId, systemDirective ? true : null));
     }
 
     public void OnSessionStarted(string model, string mode)

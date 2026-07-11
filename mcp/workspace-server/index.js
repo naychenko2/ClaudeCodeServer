@@ -650,6 +650,8 @@ async function callTool(name, args) {
           Authorization: `Bearer ${API_TOKEN}`,
           // Глубина делегирования растёт на каждый хоп — сервер урезает инструменты по ней
           'X-Agent-Depth': String(AGENT_DEPTH + 1),
+          // Своя сессия — получатель по её PersonaId отрисует входящую реплику лицом персоны
+          ...(SELF_SESSION_ID ? { 'X-Sender-Session-Id': SELF_SESSION_ID } : {}),
         },
         body: JSON.stringify({
           text,

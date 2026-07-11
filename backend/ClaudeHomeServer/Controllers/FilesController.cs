@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -10,7 +12,21 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/files")]
 public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, ILogger<FilesController> logger) : ControllerBase
 {
-    private ClaudeHomeServer.Models.Project GetProject(string projectId) =>
+    // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
+    private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
+    // Проект текущего пользователя; чужой/несуществующий → KeyNotFoundException (клиенту 404, как в ProjectsController)
+    private ClaudeHomeServer.Models.Project GetProject(string projectId)
+    {
+        var p = projects.GetById(projectId);
+        if (p is null || p.OwnerId != UserId)
+            throw new KeyNotFoundException($"Проект не найден: {projectId}");
+        return p;
+    }
+
+    // Для анонимных OnlyOffice-эндпоинтов (office-download/office-callback): JWT нет,
+    // доступ защищён download-токеном — владельца не сверяем
+    private ClaudeHomeServer.Models.Project GetProjectByOfficeToken(string projectId) =>
         projects.GetById(projectId) ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
 
     private string GetRoot(string projectId) => GetProject(projectId).RootPath;
@@ -236,7 +252,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
         try
         {
-            var root = GetRoot(projectId);
+            var root = GetProjectByOfficeToken(projectId).RootPath;
             var safePath = FileService.SafeJoinPublic(root, path);
             if (!System.IO.File.Exists(safePath)) return NotFound();
             var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
@@ -402,7 +418,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 return Ok(new { error = 1, message = "url host not allowed" });
             try
             {
-                var root = GetRoot(projectId);
+                var root = GetProjectByOfficeToken(projectId).RootPath;
                 var client = httpClientFactory.CreateClient("proxy");
                 var bytes = await client.GetByteArrayAsync(payload.Url, ct);
                 files.WriteFileBytes(root, path, bytes);
@@ -448,6 +464,9 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         [FromServices] IHttpClientFactory httpClientFactory,
         CancellationToken ct)
     {
+        try { GetProject(projectId); }
+        catch (KeyNotFoundException) { return NotFound(); }
+
         var fileKey = $"{projectId}/{path}";
         if (!_activeEditKeys.TryGetValue(fileKey, out var docKey))
             return Ok(new { ok = false, reason = "no-session" });

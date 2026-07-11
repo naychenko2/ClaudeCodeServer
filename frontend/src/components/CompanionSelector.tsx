@@ -235,7 +235,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
             Групповой чат
           </div>
           <div style={{ padding: '0 10px 6px', fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.4 }}>
-            Выберите 2–4 участников. Первая выбранная — ведущая: её зона и модель задают чат.
+            Выберите 2–4 участников. Первый выбранный — ведущий: его зона и модель задают чат.
           </div>
           {personas.map(p => {
             const idx = groupSelected.indexOf(p.id);
@@ -264,7 +264,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
                     flexShrink: 0, fontSize: 10, fontWeight: 700, padding: '1px 7px',
                     borderRadius: R.pill, background: C.accentLight, color: C.accent, fontFamily: FONT.sans,
                   }}>
-                    ведущая
+                    ведущий
                   </span>
                 )}
               </button>

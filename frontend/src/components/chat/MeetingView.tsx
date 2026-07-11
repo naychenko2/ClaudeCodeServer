@@ -171,7 +171,7 @@ export function MeetingView({ item, onContinue, onCancel }: {
           )}
           {item.phases.synthesis && !synthesis && (
             <div style={{ padding: '4px 12px 12px', fontSize: 12.5, color: C.dangerText }}>
-              Ведущая не смогла свести итог: {item.phases.synthesis[0]?.text}
+              Ведущий не смог свести итог: {item.phases.synthesis[0]?.text}
             </div>
           )}
         </div>

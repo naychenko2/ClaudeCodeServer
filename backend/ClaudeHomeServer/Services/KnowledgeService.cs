@@ -143,8 +143,19 @@ public class KnowledgeService
         return body.Id;
     }
 
-    // Семантический поиск по датасету: чанки со score и документом-источником
+    // Поиск по датасету: чанки со score и документом-источником. По умолчанию
+    // ГИБРИДНЫЙ поиск — смысловой (векторный) + полнотекстовый (по ключевым словам)
+    // в одном запросе; Dify объединяет результаты. Работает без reranking-модели
+    // (reranking_enable=false). Если датасет не поддерживает гибрид (напр. economy-
+    // индексация без полнотекста) — тихий фолбэк на чисто смысловой поиск.
     public async Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8)
+    {
+        try { return await RetrieveWithMethodAsync(datasetId, query, topK, "hybrid_search"); }
+        catch { return await RetrieveWithMethodAsync(datasetId, query, topK, "semantic_search"); }
+    }
+
+    private async Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveWithMethodAsync(
+        string datasetId, string query, int topK, string searchMethod)
     {
         var client = CreateClient();
         var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/retrieve", new
@@ -152,7 +163,7 @@ public class KnowledgeService
             query,
             retrieval_model = new
             {
-                search_method = "semantic_search",
+                search_method = searchMethod,
                 reranking_enable = false,
                 top_k = topK,
                 score_threshold_enabled = false,

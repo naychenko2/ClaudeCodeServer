@@ -20,17 +20,15 @@ public class NotesController : ControllerBase
     private readonly NotesKnowledgeService _kb;
     private readonly NotesAiService _ai;
     private readonly NoteTaskSyncService _noteTasks;
-    private readonly FeatureFlagService _flags;
     private readonly IHubContext<SessionHub> _hub;
 
     public NotesController(NotesService notes, NotesKnowledgeService kb, NotesAiService ai,
-        NoteTaskSyncService noteTasks, FeatureFlagService flags, IHubContext<SessionHub> hub)
+        NoteTaskSyncService noteTasks, IHubContext<SessionHub> hub)
     {
         _notes = notes;
         _kb = kb;
         _ai = ai;
         _noteTasks = noteTasks;
-        _flags = flags;
         _hub = hub;
     }
 
@@ -170,7 +168,6 @@ public class NotesController : ControllerBase
     [HttpGet("{id}/tasks")]
     public ActionResult<IReadOnlyList<NoteTaskDto>> NoteTasks(string id)
     {
-        if (!NotesTaskSyncEnabled) return Forbid();
         try { return Ok(_noteTasks.ListForNote(UserId, id)); }
         catch (KeyNotFoundException) { return NotFound(); }
     }
@@ -179,7 +176,6 @@ public class NotesController : ControllerBase
     [HttpPost("{id}/tasks/promote")]
     public async Task<ActionResult> PromoteTask(string id, [FromBody] PromoteTaskRequest req)
     {
-        if (!NotesTaskSyncEnabled) return Forbid();
         try { return Ok(await _noteTasks.PromoteAsync(UserId, id, req.Line)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -190,7 +186,6 @@ public class NotesController : ControllerBase
     [HttpPost("{id}/tasks/toggle")]
     public async Task<ActionResult<NoteDetail>> ToggleTask(string id, [FromBody] ToggleTaskRequest req)
     {
-        if (!NotesTaskSyncEnabled) return Forbid();
         try { return Ok(await _noteTasks.ToggleAsync(UserId, id, req.Line, req.Done)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -201,7 +196,6 @@ public class NotesController : ControllerBase
     [HttpPost("{id}/tasks/set-due")]
     public async Task<ActionResult<NoteDetail>> SetTaskDue(string id, [FromBody] SetDueRequest req)
     {
-        if (!NotesTaskSyncEnabled) return Forbid();
         var due = string.IsNullOrWhiteSpace(req.Due) ? null : req.Due.Trim();
         if (due is not null && !DateOnly.TryParseExact(due, "yyyy-MM-dd", out _))
             return BadRequest(new { error = "Некорректная дата (нужен формат YYYY-MM-DD)" });
@@ -210,8 +204,6 @@ public class NotesController : ControllerBase
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
-
-    private bool NotesTaskSyncEnabled => _flags.IsEnabled(UserId, FeatureFlagKeys.Notes);
 
     // Переименование/перенос папки целиком: newPath — полный новый путь папки.
     [HttpPost("folder/move")]

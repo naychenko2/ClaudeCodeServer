@@ -8,7 +8,6 @@ import { C, FONT, R } from '../../lib/design';
 import {
   STATUS_DOT, STATUS_LABEL, daysFromToday, ensureTasksLoaded, useTasks,
 } from '../../lib/tasks';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import type { BoardGroupBy } from '../../lib/tasks';
 import { TaskCard } from './TaskCard';
 import { NewTaskDialog } from './NewTaskDialog';
@@ -75,20 +74,18 @@ function groupByDate(tasks: Task[]): Group[] {
 
 export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardMode, onBoardMode, onEditColumns }: Props) {
   const allTasks = useTasks();
-  const boardOn = useFeature(FLAGS.taskBoard);
   const [loading, setLoading] = useState(true);
   const [groupTab, setGroupTab] = useState<GroupTab>('status');
   const [showCreate, setShowCreate] = useState(false);
 
   // Значение переключателя: доска или одна из группировок списка
-  const panelTab: PanelTab = boardMode && boardOn ? 'board' : groupTab;
+  const panelTab: PanelTab = boardMode ? 'board' : groupTab;
   const onPanelTab = (v: PanelTab) => {
     if (v === 'board') { onBoardMode?.(true); return; }
     onBoardMode?.(false);
     setGroupTab(v);
   };
-  const tabOptions = (base: { value: PanelTab; label: string; icon: ReactNode }[]) =>
-    boardOn ? base : base.filter(o => o.value !== 'board');
+  const tabOptions = (base: { value: PanelTab; label: string; icon: ReactNode }[]) => base;
 
   useEffect(() => {
     let alive = true;
@@ -143,7 +140,7 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
 
       {/* Список (в режиме доски скрыт — доска рендерится в основной области) */}
       <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '4px 14px 16px' : '4px 12px 16px' }}>
-        {boardMode && boardOn ? (
+        {boardMode ? (
           isMobile ? (
             <div style={{ padding: '28px 8px 8px', textAlign: 'center', fontFamily: FONT.sans, fontSize: 13, color: C.textMuted, lineHeight: 1.5 }}>
               Доска задач открыта.<br />Перетаскивайте карточки между колонками.

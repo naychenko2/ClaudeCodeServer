@@ -10,7 +10,6 @@ import { C } from './design';
 import { getEffectiveTheme } from './themeMode';
 import { isOnline, OfflineError, subscribeOnline } from './offline';
 import { idbGet, idbSet } from './idb';
-import { getFlag, FLAGS } from './featureFlags';
 import {
   applyUpdateLocally, buildLocalTask, configureOutbox, drainTaskOutbox,
   enqueue, mergePending, outboxHasPending,
@@ -89,7 +88,7 @@ export async function reloadTasks(): Promise<void> {
   const list = await api.tasks.listAll();
   // Поверх серверного списка накатываем ещё не синхронизированные офлайн-правки
   // (защита от reload при непустой очереди — напр. online-эффект опередил дренаж).
-  _tasks = getFlag(FLAGS.offline) ? await mergePending(list, _tasks) : list;
+  _tasks = await mergePending(list, _tasks);
   _loaded = true;
   emit();
 }
@@ -113,7 +112,7 @@ export function ensureTasksLoaded(): Promise<void> {
   // Членство в группе подтверждаем на каждый заход (идемпотентно): если какая-то
   // страница ранее вышла из user_{id}, страница задач переподпишется.
   joinUserGroup();
-  if (getFlag(FLAGS.offline)) { void hydrateFromCache(); void drainTaskOutbox(); }
+  void hydrateFromCache(); void drainTaskOutbox();
   if (_loaded) return Promise.resolve();
   if (!_loading)
     _loading = reloadTasks().finally(() => { _loading = null; });
@@ -132,7 +131,7 @@ export function useTasks(): Task[] {
 // При флаге tasks-offline и отсутствии связи (или сетевом сбое) мутация уходит в
 // outbox + оптимистично применяется локально; синхронизация — при возврате связи.
 
-const offlineEnabled = () => getFlag(FLAGS.offline);
+const offlineEnabled = () => true;
 
 // Order для новой локальной задачи — в конец глобального порядка (как NextOrder на бэке)
 function localNextOrder(): number {

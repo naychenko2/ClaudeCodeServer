@@ -214,8 +214,6 @@ public class SessionManager
 
         return async text =>
         {
-            if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.Notes) ||
-                !_flags.IsEnabled(ownerId, FeatureFlagKeys.AiAssist)) return null;
             if (!_notesKb.Available || !_notesKb.HasIndex(ownerId)) return null;
 
             var query = text.Trim();
@@ -462,9 +460,6 @@ public class SessionManager
     public async Task<Session> CreateGroupChatAsync(string ownerId, IReadOnlyList<string> personaIds,
         ClaudeMode mode, string? name = null)
     {
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaGroupChats))
-            throw new InvalidOperationException("Групповые чаты персон выключены (флаг persona-group-chats)");
-
         var participants = ValidateParticipants(ownerId, personaIds);
         var leader = participants[0];
         var participantIds = participants.Select(p => p.Id).ToList();
@@ -512,8 +507,6 @@ public class SessionManager
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (SessionOwner(entry.Info) != ownerId) return null;
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaGroupChats))
-            throw new InvalidOperationException("Групповые чаты персон выключены (флаг persona-group-chats)");
 
         var participants = ValidateParticipants(ownerId, personaIds);
         entry.Info.Participants = participants.Select(p => p.Id).ToList();
@@ -570,8 +563,8 @@ public class SessionManager
             }
             return built;
         };
-        // Долгая память — только если включена у персоны и владелец имеет доступ к фиче
-        if (persona.MemoryEnabled && _flags.IsEnabled(ownerId, FeatureFlagKeys.Personas))
+        // Долгая память — только если включена у персоны
+        if (persona.MemoryEnabled)
             return (prompt, BuildMemoryContext(ownerId, persona.Id), BuildPersonaRecallProvider(ownerId, persona.Id), persona);
         return (prompt, null, null, persona);
     }
@@ -639,12 +632,12 @@ public class SessionManager
     // всегда, независимо от флага persona-mentions — иначе спикер не сможет спросить коллег.
     private PersonasMcpContext? BuildPersonasContext(string? ownerId, string? projectId, Session session)
     {
-        if (ownerId is null || !_flags.IsEnabled(ownerId, FeatureFlagKeys.Personas)) return null;
+        if (ownerId is null) return null;
 
         var selfPersonaId = session.PersonaId;
         var isGroup = session.Participants is { Count: > 1 };
         string? mentionsHint = null;
-        if (isGroup || _flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaMentions))
+        // @упоминания (persona_ask + подсказка) теперь всегда включены
         {
             var others = (isGroup
                     ? session.Participants!.Select(id => _personas.Get(id, ownerId)).OfType<Persona>()
@@ -677,7 +670,7 @@ public class SessionManager
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
         return new PersonasMcpContext(ResolveTasksApiUrl(), entry.Token, projectId, selfPersonaId,
-            mentionsHint, BindingsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaBindings));
+            mentionsHint, BindingsEnabled: true);
     }
 
     // Контекст MCP-сервера рабочего пространства: доступ ко всем проектам владельца
@@ -692,13 +685,12 @@ public class SessionManager
     private WorkspaceMcpContext? BuildWorkspaceContext(string? ownerId, string? projectId,
         string? selfSessionId, Persona? persona)
     {
-        if (ownerId is null || !_flags.IsEnabled(ownerId, FeatureFlagKeys.WorkspaceTools)) return null;
+        if (ownerId is null) return null;
 
         var sections = new List<string>();
         foreach (var key in new[] { "projects", "files", "knowledge" })
             if (_bindings.EffectiveToolEnabled(ownerId, persona, key)) sections.Add(key);
-        if (_flags.IsEnabled(ownerId, FeatureFlagKeys.WorkspaceChatSend)
-            && _bindings.EffectiveToolEnabled(ownerId, persona, "chats"))
+        if (_bindings.EffectiveToolEnabled(ownerId, persona, "chats"))
             sections.Add("chats");
         if (sections.Count == 0) return null;
         // Разрушающие операции (files_delete/chats_delete) — за отдельным флагом
@@ -930,10 +922,7 @@ public class SessionManager
     {
         var result = text;
 
-        var ownerId = SessionOwnerId(entry.Info);
-        if (ownerId is not null
-            && _flags.IsEnabled(ownerId, FeatureFlagKeys.UltraworkKeyword)
-            && OmoPrompts.ContainsUltraworkKeyword(text)
+        if (OmoPrompts.ContainsUltraworkKeyword(text)
             && OmoPrompts.Ultrawork.Length > 0)
         {
             result += "\n\n" + OmoPrompts.Ultrawork;

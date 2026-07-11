@@ -68,7 +68,7 @@ public class SessionManagerTests : IDisposable
         _personaManager = personas;
         var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config, NullLogger<PersonaMemoryService>.Instance);
         var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), flags, userStore, config, NullLogger<PersonaBindingsService>.Instance);
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
         var promptBuilder = new PersonaPromptBuilder(llmProviders);
         _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, NullLogger<SessionManager>.Instance);
     }
@@ -301,15 +301,14 @@ public class SessionManagerTests : IDisposable
         _sut.SetExpiry("nonexistent", 60).Should().BeNull();
     }
 
-    // --- Групповые чаты (флаг persona-group-chats) ---
+    // --- Групповые чаты ---
 
-    // Пользователь с включённым флагом групповых чатов + проект + N проектных персон.
-    // Ведущая — проектная, чтобы CreateGroupChatAsync шёл маршрутом проекта
-    // (чат вне проекта требует DefaultProjectsPath, которого в тестовом конфиге нет).
+    // Пользователь + проект + N проектных персон. Ведущая — проектная, чтобы
+    // CreateGroupChatAsync шёл маршрутом проекта (чат вне проекта требует
+    // DefaultProjectsPath, которого в тестовом конфиге нет).
     private (User User, Project Project, List<Persona> Personas) MkGroupFixture(int count, string suffix)
     {
         var user = _userStore.Add("group-user-" + suffix, "pw-123456", "user");
-        _userStore.SetFeatureFlag(user.Id, FeatureFlagKeys.PersonaGroupChats, true);
         var dir = MkProjectDir("grp_" + suffix);
         var project = _projectManager.Create("GRP-" + suffix, dir, user.Id, user.Username);
         var personas = Enumerable.Range(1, count)
@@ -343,17 +342,6 @@ public class SessionManagerTests : IDisposable
         var (user, _, personas) = MkGroupFixture(1, "b");
 
         var act = () => _sut.CreateGroupChatAsync(user.Id, [personas[0].Id], ClaudeMode.Auto);
-
-        await act.Should().ThrowAsync<InvalidOperationException>();
-    }
-
-    [Fact]
-    public async Task CreateGroupChatAsync_ФлагВыключен_400()
-    {
-        var (user, _, personas) = MkGroupFixture(2, "c");
-        _userStore.SetFeatureFlag(user.Id, FeatureFlagKeys.PersonaGroupChats, false);
-
-        var act = () => _sut.CreateGroupChatAsync(user.Id, personas.Select(p => p.Id).ToList(), ClaudeMode.Auto);
 
         await act.Should().ThrowAsync<InvalidOperationException>();
     }

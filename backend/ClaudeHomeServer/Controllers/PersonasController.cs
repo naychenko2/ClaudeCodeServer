@@ -26,7 +26,6 @@ public class PersonasController : ControllerBase
     private readonly KnowledgeService _knowledge;
     private readonly FalImageService _falImage;
     private readonly Services.Llm.OneShotClaudeRunner _oneShot;
-    private readonly FeatureFlagService _flags;
     private readonly PersonaPromptBuilder _promptBuilder;
     private readonly PersonaAskService _ask;
     private readonly IConfiguration _config;
@@ -37,7 +36,7 @@ public class PersonasController : ControllerBase
         SessionManager sessions, PersonaMemoryService memory, PersonaBindingsService bindings,
         NotesService notes, SkillsService skills, KnowledgeService knowledge,
         FalImageService falImage,
-        Services.Llm.OneShotClaudeRunner oneShot, FeatureFlagService flags,
+        Services.Llm.OneShotClaudeRunner oneShot,
         PersonaPromptBuilder promptBuilder, PersonaAskService ask, IConfiguration config,
         ILogger<PersonasController> log, IHubContext<SessionHub> hub)
     {
@@ -51,7 +50,6 @@ public class PersonasController : ControllerBase
         _knowledge = knowledge;
         _falImage = falImage;
         _oneShot = oneShot;
-        _flags = flags;
         _promptBuilder = promptBuilder;
         _ask = ask;
         _config = config;
@@ -159,9 +157,9 @@ public class PersonasController : ControllerBase
             access ?? PersonaAccess.Full, req.DisallowedTools);
         if (bindings.Count > 0)
             persona = _personas.UpdateBindings(persona.Id, UserId, bindings);
-        // Авто-подбор привязок (autoBindings, за флагом persona-bindings) — best-effort:
+        // Авто-подбор привязок (autoBindings) — best-effort:
         // сбой подбора не роняет создание, персона остаётся без привязок
-        if (req.AutoBindings == true && _flags.IsEnabled(UserId, FeatureFlagKeys.PersonaBindings))
+        if (req.AutoBindings == true)
             persona = await TryAutoBindAsync(persona);
         await Broadcast("created", persona.Id);
         return Ok(persona);
@@ -583,9 +581,9 @@ public class PersonasController : ControllerBase
             catch { /* аватар не критичен для быстрого создания */ }
         }
 
-        // 4. Авто-подбор привязок (за флагом persona-bindings; по умолчанию включён) —
+        // 4. Авто-подбор привязок (по умолчанию включён) —
         // best-effort: сбой не роняет создание, персона остаётся без привязок
-        if (req.AutoBindings != false && _flags.IsEnabled(UserId, FeatureFlagKeys.PersonaBindings))
+        if (req.AutoBindings != false)
             persona = await TryAutoBindAsync(persona);
 
         await Broadcast("created", persona.Id);
@@ -915,8 +913,6 @@ public class PersonasController : ControllerBase
     [HttpPost("{id}/bindings/suggest")]
     public async Task<ActionResult> SuggestBindings(string id)
     {
-        if (!_flags.IsEnabled(UserId, FeatureFlagKeys.PersonaBindings))
-            return BadRequest(new { error = "Фича привязок персон выключена (флаг persona-bindings)" });
         var persona = _personas.Get(id, UserId);
         if (persona is null) return NotFound();
 
@@ -1238,9 +1234,6 @@ public class PersonasController : ControllerBase
     [HttpPost("ask")]
     public async Task<ActionResult> Ask([FromBody] PersonaAskRequest req)
     {
-        if (!_flags.IsEnabled(UserId, FeatureFlagKeys.Personas) ||
-            !_flags.IsEnabled(UserId, FeatureFlagKeys.PersonaMentions))
-            return BadRequest(new { error = "Фича @упоминаний персон выключена" });
         if (string.IsNullOrWhiteSpace(req.Handle)) return BadRequest(new { error = "Не указан handle персоны" });
         if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest(new { error = "Пустой вопрос" });
 

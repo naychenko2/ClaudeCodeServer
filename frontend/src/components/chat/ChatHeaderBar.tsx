@@ -14,7 +14,6 @@ import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { C, FONT, R, SHADOW, TB } from '../../lib/design';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { BackButton, Modal, ModalActions } from '../ui';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { bumpNotes } from '../../lib/notes';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
@@ -669,10 +668,8 @@ interface ChatHeaderBarProps {
 
 // «Итог сессии в заметку» — теперь запускается ТОЛЬКО через AI-палитру (действие
 // chat.summary). Компонент невидим, но остаётся смонтированным ради слушателя
-// cc-ai-run; при успехе открывает созданную заметку. Гейт — флаги notes + ai-assist.
+// cc-ai-run; при успехе открывает созданную заметку.
 function SessionSummaryButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
-  const notesOn = useFeature(FLAGS.notes);
-  const summaryOn = useFeature(FLAGS.aiAssist);
   const [busy, setBusy] = useState(false);
   useEffect(() => { setBusy(false); }, [session.id]);
   const run = () => {
@@ -684,21 +681,20 @@ function SessionSummaryButton({ session, hasMessages, online }: { session: Sessi
       .finally(() => setBusy(false));
   };
   useEffect(() => {
-    if (!notesOn || !summaryOn || !online || !hasMessages) return;
+    if (!online || !hasMessages) return;
     const onRun = (e: Event) => { if ((e as CustomEvent<{ action?: string }>).detail?.action === 'chat.summary') run(); };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notesOn, summaryOn, online, session.id, hasMessages, busy]);
+  }, [online, session.id, hasMessages, busy]);
   return null;
 }
 
 // Иконка «задачи из чата» — документ с плюсом
 // «Задачи из чата» — запускаются ТОЛЬКО через AI-палитру (действие chat.extract).
 // Кнопка убрана; компонент остаётся смонтированным ради слушателя cc-ai-run и
-// показывает модалку выбора извлечённых кандидатов. Гейт — флаг ai-assist.
+// показывает модалку выбора извлечённых кандидатов.
 function ExtractTasksButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
-  const on = useFeature(FLAGS.aiAssist);
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<{ projectId: string | null; items: (ExtractedTaskCandidate & { sel: boolean })[] } | null>(null);
@@ -720,13 +716,13 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   };
   // AI-хаб: запуск «Задачи из чата» из палитры/подсказки (тот же обработчик, что и кнопка)
   useEffect(() => {
-    if (!on || !online || !hasMessages) return;
+    if (!online || !hasMessages) return;
     const onRun = (e: Event) => { if ((e as CustomEvent<{ action?: string }>).detail?.action === 'chat.extract') run(); };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [on, online, session.id, hasMessages, busy]);
-  if (!on || !online || !hasMessages) return null;
+  }, [online, session.id, hasMessages, busy]);
+  if (!online || !hasMessages) return null;
   const toggle = (i: number) =>
     setDialog(d => d && ({ ...d, items: d.items.map((t, idx) => idx === i ? { ...t, sel: !t.sel } : t) }));
   const create = async () => {

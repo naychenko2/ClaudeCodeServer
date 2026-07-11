@@ -4,7 +4,6 @@ import { api } from '../../lib/api';
 import { C, FONT, R } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { ensureTasksLoaded, useTasks } from '../../lib/tasks';
 import { relativeTime } from '../projects/projectUtil';
 import { SectionLabel } from '../tasks/bits';
@@ -52,7 +51,6 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   isMobile?: boolean;
 }) {
   const modelName = useModelLabel(persona.model);
-  const bindingsEnabled = useFeature(FLAGS.personaBindings);
 
   // Сводка задач персоны-исполнителя (реальные задачи из общего стора)
   const allTasks = useTasks();
@@ -62,17 +60,16 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     return { total: mine.length, active: mine.filter(t => t.status === 'inProgress').length };
   }, [allTasks, persona.id]);
 
-  // Привязки «Знания и правила» — только при включённом флаге; тихий fail → пусто
+  // Привязки «Знания и правила»; тихий fail → пусто
   const [bindings, setBindings] = useState<PersonaBinding[] | null>(null);
   useEffect(() => {
     let alive = true;
     setBindings(null);
-    if (!bindingsEnabled) return;
     api.personas.bindings(persona.id)
       .then(list => { if (alive) setBindings(list); })
       .catch(() => { if (alive) setBindings([]); });
     return () => { alive = false; };
-  }, [persona.id, bindingsEnabled]);
+  }, [persona.id]);
   const bindingLabelOf = useBindingLabels(bindings);
 
   // Недавние разговоры: best-effort, тихий fail → пустой список
@@ -188,10 +185,10 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   const facts: { label: string; value: string; title?: string }[] = [
     { label: 'Модель', value: persona.effort ? `${modelName} · ${effortLabel(persona.effort)}` : modelName },
     { label: 'Возможности', value: toolsText },
-    ...(bindingsEnabled ? [{
+    {
       label: 'Умения',
       value: bindings === null ? '…' : bindings.length === 0 ? 'нет привязок' : bindingsCounter(bindings),
-    }] : []),
+    },
     { label: 'Память', value: memoryText, title: memoryTitle },
     ...(persona.templateKey
       ? [{ label: 'Происхождение', value: 'Пантеон OmO', title: `Подключена из шаблона «${persona.templateKey}»` }]
@@ -277,7 +274,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   // === Знания и правила (фича persona-bindings): компактная выжимка привязок ===
   const shownBindings = (bindings ?? []).filter(b => b.mode !== 'off').slice(0, 4);
   const moreBindings = (bindings?.length ?? 0) - shownBindings.length;
-  const knowledgeSection = bindingsEnabled ? (
+  const knowledgeSection = (
     <div style={section}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
         <SectionLabel>Умения и правила</SectionLabel>
@@ -348,7 +345,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
         </>
       )}
     </div>
-  ) : null;
+  );
 
   // === Недавние разговоры ===
   const chatsSection = (

@@ -13,7 +13,6 @@ import { useNotes } from '../../lib/notes';
 import type { NoteSource } from '../../types';
 import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useOnline } from '../../hooks/useOnline';
 import { OfflineError } from '../../lib/offline';
 import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } from '../../lib/notesOffline';
@@ -43,8 +42,6 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   extraToolbar?: React.ReactNode;
 }) {
   const version = useNotesVersion();
-  const taskSyncEnabled = useFeature(FLAGS.notes);
-  const offlineEnabled = useFeature(FLAGS.offline);
   const online = useOnline();
   // Перетаскиваемая ширина сайдбара связей (справа: тянем влево — растёт)
   const [connWidth, connDragging, startConnDrag] = usePanelWidth('cc_notes_conn_width', 280, 230, 460, true);
@@ -60,14 +57,14 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    // При флаге офлайна читаем через слой (черновик/кэш офлайн, сеть онлайн)
-    (offlineEnabled ? getNoteForView(noteId) : api.notes.get(noteId))
+    // Читаем через офлайн-слой (черновик/кэш офлайн, сеть онлайн)
+    getNoteForView(noteId)
       .then(n => { if (alive) { setNote(n); if (!editingRef.current) { setDraftTitle(n.title); setDraftBody(n.content); } } })
       .catch(() => { if (alive) setNote(null); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
     // Перечитываем при смене заметки и при realtime-изменении (version)
-  }, [noteId, version, offlineEnabled]);
+  }, [noteId, version]);
 
   const startEdit = () => { if (note) { setDraftTitle(note.title); setDraftBody(note.content); setEditing(true); } };
 
@@ -78,8 +75,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       return { title: r.note.title, content: r.fragment ?? r.note.content };
     } catch {
       // Офлайн — резолвим по кэшированному контенту (title-match)
-      if (offlineEnabled) return offlineResolve(name, anchor);
-      return null;
+      return offlineResolve(name, anchor);
     }
   };
 
@@ -173,7 +169,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       if (updated.id !== note.id) onSelectNote(updated.id);
       else setNote(updated);
     } catch (e) {
-      if (offlineEnabled && e instanceof OfflineError) {
+      if (e instanceof OfflineError) {
         await saveNoteOffline(note.id, { content: draftBody });
         setEditing(false);
         setNote({ ...note, content: draftBody });
@@ -193,7 +189,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     try {
       await api.notes.delete(note.id);
     } catch (e) {
-      if (offlineEnabled && e instanceof OfflineError) await deleteNoteOffline(note.id);
+      if (e instanceof OfflineError) await deleteNoteOffline(note.id);
       else throw e;
     }
     bumpNotes();
@@ -261,11 +257,11 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               value={draftTitle}
               onChange={e => setDraftTitle(e.target.value)}
               // Переименование меняет id файла и каскадно правит [[ссылки]] — только онлайн
-              readOnly={offlineEnabled && !online}
-              title={offlineEnabled && !online ? 'Переименование недоступно офлайн' : undefined}
+              readOnly={!online}
+              title={!online ? 'Переименование недоступно офлайн' : undefined}
               style={{
                 flex: 1, minWidth: 120, fontFamily: FONT.serif, fontSize: 16, fontWeight: 700,
-                color: offlineEnabled && !online ? C.textMuted : C.textHeading,
+                color: !online ? C.textMuted : C.textHeading,
                 background: C.bgWhite, border: `1px solid ${C.border}`,
                 borderRadius: R.md, padding: '5px 10px',
               }}
@@ -382,7 +378,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         {/* Мобильный/планшет: задачи из заметки + связи снизу под контентом (сайдбару нет места) */}
         {(isMobile || connectionsBelow) && (
           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
-            {taskSyncEnabled && <NoteTasksSection noteId={note.id} version={version} />}
+            <NoteTasksSection noteId={note.id} version={version} />
             <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
               onWikilink={onWikilink} onLinkMention={linkMention} />
           </div>
@@ -400,7 +396,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             width: connWidth, flex: 'none', overflowY: 'auto',
             padding: '12px 14px 24px', boxSizing: 'border-box',
           }}>
-            {taskSyncEnabled && <NoteTasksSection noteId={note.id} version={version} />}
+            <NoteTasksSection noteId={note.id} version={version} />
             <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
               onWikilink={onWikilink} onLinkMention={linkMention} />
           </aside>

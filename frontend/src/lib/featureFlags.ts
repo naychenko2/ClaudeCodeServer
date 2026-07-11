@@ -7,23 +7,10 @@ import { useSyncExternalStore } from 'react';
 // Тонкий реестр ключей для type-safe вызовов useFeature. Дублирует ключи из
 // бэкового FeatureFlagCatalog (одна строка на флаг). Описания/дефолты/стадии
 // приходят с сервера — здесь только ключи.
+// Каталог опустошён: все фичи включены безусловно. Остался единственный флаг —
+// предохранитель от необратимого удаления файлов/чатов агентом. Механика флагов
+// (стор, useFeature, модалка «Экспериментальные функции») оставлена для будущих флагов.
 export const FLAGS = {
-  sessionArtifacts: 'session-artifacts',
-  notes: 'notes',
-  taskBoard: 'task-board',
-  aiAssist: 'ai-assist',
-  offline: 'offline',
-  personas: 'personas',
-  personaMemoryAutolearn: 'persona-memory-autolearn',
-  personaMemoryConsolidation: 'persona-memory-consolidation',
-  personaMentions: 'persona-mentions',
-  personaGroupChats: 'persona-group-chats',
-  ultraworkKeyword: 'ultrawork-keyword',
-  workLoop: 'work-loop',
-  personaPipeline: 'persona-pipeline',
-  personaBindings: 'persona-bindings',
-  workspaceTools: 'workspace-tools',
-  workspaceChatSend: 'workspace-chat-send',
   workspaceDestructive: 'workspace-destructive',
 } as const;
 

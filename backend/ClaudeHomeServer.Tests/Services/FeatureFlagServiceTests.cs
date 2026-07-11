@@ -95,7 +95,7 @@ public class FeatureFlagServiceTests : IDisposable
     [Fact]
     public void SetFeatureFlag_UnknownUser_ReturnsFalse()
     {
-        _users.SetFeatureFlag("no-such-user", FeatureFlagKeys.SessionArtifacts, true).Should().BeFalse();
+        _users.SetFeatureFlag("no-such-user", FeatureFlagKeys.WorkspaceDestructive, true).Should().BeFalse();
     }
 
     // --- Несуществующий ключ ---

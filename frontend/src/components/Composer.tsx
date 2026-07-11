@@ -9,7 +9,6 @@ import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
 import { showToast } from '../lib/toast';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import type { SkillInfo, AgentInfo, Persona, WorkLoopState } from '../types';
 
 export interface ComposerProps {
@@ -187,12 +186,9 @@ export function Composer({
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
   const [skillQuery, setSkillQuery] = useState('');
   const skillWordStartRef = useRef(0);
-  // Autocomplete @упоминаний персон (флаг persona-mentions; в групповом чате — всегда)
-  const mentionsOn = useFeature(FLAGS.personaMentions);
-  // Совещания P7 — по флагу групповых чатов (переключатель в DiscussTeamDialog)
-  const groupChatsOn = useFeature(FLAGS.personaGroupChats);
+  // Autocomplete @упоминаний персон — включён всегда; isGroupChat нужен для ранжирования участников
   const isGroupChat = (participantIds?.length ?? 0) > 1;
-  const mentionsActive = mentionsOn || isGroupChat;
+  const mentionsActive = true;
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const mentionWordStartRef = useRef(0);
@@ -205,12 +201,9 @@ export function Composer({
     const rank = (p: Persona) => participantIds!.includes(p.id) ? 0 : 1;
     return [...base].sort((a, b) => rank(a) - rank(b));
   })();
-  // Конвейер пантеона (флаг persona-pipeline): запускается из «Обсудить с командой» в любом чате
-  const pipelineOn = useFeature(FLAGS.personaPipeline);
   // Мультиперсонная дискуссия: в чате персоны — когда есть кого позвать; конвейер — в любом чате
   const [showDiscuss, setShowDiscuss] = useState(false);
-  const canDiscuss = (mentionsActive && !!selectedPersona && mentionable.length > 0)
-    || (pipelineOn && !!sessionId);
+  const canDiscuss = (!!selectedPersona && mentionable.length > 0) || !!sessionId;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
   const recCancelRef = useRef(false);
@@ -527,10 +520,9 @@ export function Composer({
     </button>
   ) : null;
 
-  // Цикл «до готово» (флаг work-loop): тумблер + компактный бейдж прогресса итераций
-  const workLoopOn = useFeature(FLAGS.workLoop);
+  // Цикл «до готово»: тумблер + компактный бейдж прогресса итераций
   const loopActive = !!workLoop?.active;
-  const loopButton = workLoopOn && onToggleWorkLoop ? (
+  const loopButton = onToggleWorkLoop ? (
     <button
       onClick={onToggleWorkLoop}
       title="Цикл «до готово»: агент работает итерациями, пока не отчитается о завершении, затем верификационный ход"
@@ -550,7 +542,7 @@ export function Composer({
       </svg>
     </button>
   ) : null;
-  const loopBadge = workLoopOn && onToggleWorkLoop && loopActive && workLoop ? (
+  const loopBadge = onToggleWorkLoop && loopActive && workLoop ? (
     <span style={{
       display: 'inline-flex', alignItems: 'center', height: isMobile ? 26 : 24,
       padding: '0 9px', borderRadius: R.pill, background: C.accentLight, color: C.accent,
@@ -915,8 +907,8 @@ export function Composer({
           candidates={mentionable}
           chatPersona={selectedPersona}
           sessionId={sessionId}
-          meetingEnabled={groupChatsOn}
-          pipelineEnabled={pipelineOn}
+          meetingEnabled={true}
+          pipelineEnabled={true}
           onSend={t => onSend(t, [])}
           onClose={() => setShowDiscuss(false)}
         />

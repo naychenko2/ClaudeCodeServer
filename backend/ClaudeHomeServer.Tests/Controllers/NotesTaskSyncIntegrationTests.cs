@@ -12,18 +12,12 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // читаем обратно через API — тест устойчив к трансформациям контента при создании.
 public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFactory>
 {
-    private readonly HttpClient _client;   // testuser — флаг notes включён
-    private readonly HttpClient _noFlag;   // seconduser — флаг выключен
+    private readonly HttpClient _client;
 
     public NotesTaskSyncIntegrationTests(TestWebApplicationFactory factory)
     {
+        // Синхронизация задач из заметок работает безусловно (гейт снят)
         _client = factory.CreateAuthenticatedClient();
-        _noFlag = factory.CreateAuthenticatedClient(
-            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        // Синхронизация гейтится зонтичным флагом notes (бывший notes-task-sync
-        // влит в него рефакторингом 8b94482) — включаем только основному юзеру
-        _client.PutAsJsonAsync("/api/feature-flags/notes", new { enabled = true })
-            .GetAwaiter().GetResult().EnsureSuccessStatusCode();
     }
 
     private static string Url(string id) => $"/api/notes/{Uri.EscapeDataString(id)}";
@@ -51,16 +45,6 @@ public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFac
 
     private async Task<JsonElement> GetTaskAsync(string taskId) =>
         await (await _client.GetAsync($"/api/tasks/{taskId}")).Content.ReadFromJsonAsync<JsonElement>();
-
-    // ─── Гейтинг флага ─────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task NoteTasks_БезФлага_403()
-    {
-        var id = await CreateNoteAsync("Список", "- [ ] дело");
-        (await _noFlag.GetAsync($"{Url(id)}/tasks")).StatusCode
-            .Should().Be(HttpStatusCode.Forbidden);
-    }
 
     // ─── Разбор чекбоксов ──────────────────────────────────────────────────────
 

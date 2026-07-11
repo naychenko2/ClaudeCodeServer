@@ -108,7 +108,7 @@ public class PersonaPipelineServiceTests : IDisposable
             NullLogger<PersonaMemoryService>.Instance);
         var promptBuilder = new PersonaPromptBuilder(llmProviders);
         var bindings = new PersonaBindingsService(_personas, _projects, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), flags, _users, config, NullLogger<PersonaBindingsService>.Instance);
+            knowledge, new SkillsService(), _users, config, NullLogger<PersonaBindingsService>.Instance);
         _sessions = new SessionManager(_projects, hub.Object, history, config, adapters, falCost,
             usage, appSettings, _users, jwt, server.Object, llmProviders, notesKb, flags,
             _personas, personaMemory, bindings, promptBuilder, NullLogger<SessionManager>.Instance);

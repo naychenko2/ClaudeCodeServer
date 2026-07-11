@@ -7,7 +7,6 @@ import { NewNoteDialog } from './NewNoteDialog';
 import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes } from '../../lib/notes';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useOnline } from '../../hooks/useOnline';
 import { OfflineError } from '../../lib/offline';
 import { createNoteOffline } from '../../lib/notesOffline';
@@ -42,7 +41,6 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // мало места — показываем связи под контентом заметки.
   const connectionsBelow = !isMobile && windowWidth < NOTE_CONN_SIDEBAR_MIN;
   const notes = useNotes();
-  const offlineEnabled = useFeature(FLAGS.offline);
   const online = useOnline();
   const [mode, setMode] = useState<Mode>('notes');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -138,7 +136,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     const q = query.trim();
     if (!q) { setResults(null); setSemanticHits(null); return; }
     // Офлайн — фильтруем кэшированный список локально (серверный поиск/семантика недоступны)
-    if (offlineEnabled && !online) {
+    if (!online) {
       const ql = q.toLowerCase();
       setResults(notes.filter(n => n.title.toLowerCase().includes(ql) || n.tags.some(t => t.toLowerCase().includes(ql))));
       setSemanticHits(null);
@@ -151,7 +149,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         api.notes.list(undefined, q).then(setResults).catch(() => {});
     }, searchMode === 'semantic' ? 450 : 250);
     return () => clearTimeout(t);
-  }, [query, searchMode, semanticAvailable, offlineEnabled, online, notes]);
+  }, [query, searchMode, semanticAvailable, online, notes]);
   const listed = results ?? notes;
   const showSemantic = searchMode === 'semantic' && query.trim().length > 0;
 
@@ -193,7 +191,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     void api.notes.create({ title, source })
       .then(n => { bumpNotes(); selectNote(n.id); })
       .catch(async e => {
-        if (offlineEnabled && e instanceof OfflineError) {
+        if (e instanceof OfflineError) {
           const localKey = await createNoteOffline({ title, source });
           bumpNotes(); selectNote(localKey);
         }

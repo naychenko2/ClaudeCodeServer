@@ -7,7 +7,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Persona, TaskAssignee } from '../../types';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { api } from '../../lib/api';
 import { personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
@@ -29,20 +28,18 @@ interface Props {
 }
 
 export function ExecutorPicker({ assignee, personaId, projectId, onChange, disabled }: Props) {
-  const personasEnabled = useFeature(FLAGS.personas);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   // Персоны, доступные в контексте задачи (глобальные + её проекта)
   useEffect(() => {
-    if (!personasEnabled) return;
     let alive = true;
     api.personas.list({ scope: 'context', projectId: projectId ?? undefined })
       .then(list => { if (alive) setPersonas(list); })
       .catch(() => { if (alive) setPersonas([]); });
     return () => { alive = false; };
-  }, [personasEnabled, projectId]);
+  }, [projectId]);
 
   // Закрытие по клику вне контрола
   useEffect(() => {
@@ -117,7 +114,7 @@ export function ExecutorPicker({ assignee, personaId, projectId, onChange, disab
             onClick={() => pick({ assignee: 'claude', personaId: null })}
           />
 
-          {personasEnabled && projectPersonas.length > 0 && (
+          {projectPersonas.length > 0 && (
             <>
               <GroupHeader text="Команда проекта" />
               {projectPersonas.map(p => (
@@ -126,7 +123,7 @@ export function ExecutorPicker({ assignee, personaId, projectId, onChange, disab
               ))}
             </>
           )}
-          {personasEnabled && globalPersonas.length > 0 && (
+          {globalPersonas.length > 0 && (
             <>
               <GroupHeader text="Глобальные" />
               {globalPersonas.map(p => (

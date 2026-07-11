@@ -18,7 +18,6 @@ public class TaskExecutionService
     private readonly IHubContext<SessionHub> _hub;
     private readonly PushService _push;
     private readonly NotesKnowledgeService _kb;
-    private readonly FeatureFlagService _flags;
     private readonly ILogger<TaskExecutionService> _log;
     // Модель сессии-исполнителя (Tasks:ExecutorModel): null → дефолт Claude;
     // deepseek-модель тоже валидна — задачи доступны ей через MCP tasks-server
@@ -27,7 +26,7 @@ public class TaskExecutionService
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
         IHubContext<SessionHub> hub, PushService push,
-        NotesKnowledgeService kb, FeatureFlagService flags,
+        NotesKnowledgeService kb,
         ILogger<TaskExecutionService> log, IConfiguration config)
     {
         _tasks = tasks;
@@ -36,7 +35,6 @@ public class TaskExecutionService
         _hub = hub;
         _push = push;
         _kb = kb;
-        _flags = flags;
         _log = log;
         _executorModel = config["Tasks:ExecutorModel"];
         _sessions.OnSessionMessage += OnSessionMessageAsync;
@@ -83,9 +81,8 @@ public class TaskExecutionService
         await _hub.BroadcastTaskChangedAsync(task.OwnerId, "updated", updated);
 
         var prompt = BuildPrompt(updated, persona);
-        // Обогащение контекста семантически близкими заметками (флаг task-exec-context)
-        if (_flags.IsEnabled(updated.OwnerId!, FeatureFlagKeys.AiAssist))
-            prompt += await BuildNotesContextAsync(updated);
+        // Обогащение контекста семантически близкими заметками
+        prompt += await BuildNotesContextAsync(updated);
         await _sessions.SendMessageAsync(session.Id, prompt, []);
 
         if (auto)

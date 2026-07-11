@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Services;
 // на фронте через обычный tasks-API по выбору пользователя.
 public sealed class ChatTaskExtractionService(
     SessionManager sessions, ProjectManager projects,
-    Llm.OneShotClaudeRunner runner, FeatureFlagService flags, IConfiguration config,
+    Llm.OneShotClaudeRunner runner, IConfiguration config,
     ILogger<ChatTaskExtractionService> log)
 {
     private const int TranscriptBudget = 30_000;
@@ -26,8 +26,6 @@ public sealed class ChatTaskExtractionService(
             : session.OwnerId;
         if (ownerId is null || ownerId != userId)
             throw new UnauthorizedAccessException("Сессия принадлежит другому пользователю");
-        if (!flags.IsEnabled(userId, FeatureFlagKeys.AiAssist))
-            throw new InvalidOperationException("Функция «Задачи из чата» выключена");
 
         var history = await sessions.GetHistoryAsync(sessionId);
         var transcript = SessionSummaryService.BuildTranscript(history, TranscriptBudget);

@@ -40,7 +40,6 @@ public class PersonaBindingsService
     private readonly NotesKnowledgeService _notesKb;
     private readonly KnowledgeService _knowledge;
     private readonly SkillsService _skills;
-    private readonly FeatureFlagService _flags;
     private readonly UserStore _users;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaBindingsService> _log;
@@ -52,7 +51,7 @@ public class PersonaBindingsService
 
     public PersonaBindingsService(PersonaManager personas, ProjectManager projects,
         WorkspaceKnowledgeStore wkStore, NotesService notes, NotesKnowledgeService notesKb,
-        KnowledgeService knowledge, SkillsService skills, FeatureFlagService flags,
+        KnowledgeService knowledge, SkillsService skills,
         UserStore users, IConfiguration config, ILogger<PersonaBindingsService> log)
     {
         _personas = personas;
@@ -62,7 +61,6 @@ public class PersonaBindingsService
         _notesKb = notesKb;
         _knowledge = knowledge;
         _skills = skills;
-        _flags = flags;
         _users = users;
         _config = config;
         _log = log;
@@ -70,29 +68,26 @@ public class PersonaBindingsService
 
     // --- Tool-рубильники ---
 
-    // Эффективная возможность персоны: Tool-привязка (при включённом флаге) приоритетнее
-    // старого Persona.Tools — Mode != Off включает, Off выключает; без привязки — прежняя
-    // семантика (null-список = без ограничений). Выключенный флаг = чистый откат к Tools.
+    // Эффективная возможность персоны: Tool-привязка приоритетнее старого Persona.Tools —
+    // Mode != Off включает, Off выключает; без привязки — прежняя семантика
+    // (null-список = без ограничений).
     public bool EffectiveToolEnabled(string? ownerId, Persona? persona, string key)
     {
         if (persona is null) return true;
-        if (ownerId is not null && _flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaBindings))
-        {
-            var binding = persona.Bindings?.LastOrDefault(b => b.Type == PersonaBindingType.Tool
-                && string.Equals(b.Target, key, StringComparison.OrdinalIgnoreCase));
-            if (binding is not null) return binding.Mode != PersonaBindingMode.Off;
-        }
+        var binding = persona.Bindings?.LastOrDefault(b => b.Type == PersonaBindingType.Tool
+            && string.Equals(b.Target, key, StringComparison.OrdinalIgnoreCase));
+        if (binding is not null) return binding.Mode != PersonaBindingMode.Off;
         return persona.Tools is null || persona.Tools.Contains(key, StringComparer.OrdinalIgnoreCase);
     }
 
     // --- Сужение зоны workspace ---
 
     // Проекты из Project/ProjectPath-привязок (Mode != Off) — для сужения AllowedProjectIds
-    // workspace-сервера. null — флаг выключен или таких привязок нет: поведение как раньше
+    // workspace-сервера. null — таких привязок нет: поведение как раньше
     // (все проекты владельца), сужаем ТОЛЬКО при наличии привязок.
     public IReadOnlyList<string>? BuildFileScopes(string ownerId, Persona? persona)
     {
-        if (persona?.Bindings is null || !_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaBindings))
+        if (persona?.Bindings is null)
             return null;
         var ids = persona.Bindings
             .Where(b => b.Mode != PersonaBindingMode.Off
@@ -107,7 +102,7 @@ public class PersonaBindingsService
     // Датасеты из Knowledge-привязок (Mode != Off) — симметричный хелпер для сужения знаний
     public IReadOnlyList<string>? BuildKnowledgeDatasetIds(string ownerId, Persona? persona)
     {
-        if (persona?.Bindings is null || !_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaBindings))
+        if (persona?.Bindings is null)
             return null;
         var ids = persona.Bindings
             .Where(b => b.Mode != PersonaBindingMode.Off
@@ -192,13 +187,12 @@ public class PersonaBindingsService
     // --- Блок хода ---
 
     // Блок «Привязанные знания и правила» для системного промпта хода: индекс активных
-    // привязок + выжимки Always-источников по тексту хода. null — флаг выключен,
-    // персоны/привязок нет или в индекс ничего не попало. mountedSections — секции
-    // workspace, реально смонтированные сессии (типы без своей секции опускаются).
+    // привязок + выжимки Always-источников по тексту хода. null — персоны/привязок нет
+    // или в индекс ничего не попало. mountedSections — секции workspace, реально
+    // смонтированные сессии (типы без своей секции опускаются).
     public async Task<string?> BuildTurnBlockAsync(string ownerId, string personaId, string turnText,
         IReadOnlyList<string> mountedSections)
     {
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaBindings)) return null;
         var persona = _personas.Get(personaId, ownerId);
         if (persona?.Bindings is not { Count: > 0 } bindings) return null;
         var active = bindings.Where(b => b.Mode != PersonaBindingMode.Off).ToList();

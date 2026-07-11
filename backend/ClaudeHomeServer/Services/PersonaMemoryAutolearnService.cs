@@ -20,13 +20,12 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
     private readonly PersonaMemoryService _memory;
     private readonly PersonaMemoryConsolidationService _consolidation;
     private readonly Llm.OneShotClaudeRunner _runner;
-    private readonly FeatureFlagService _flags;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaMemoryAutolearnService> _log;
 
     public PersonaMemoryAutolearnService(SessionManager sessions, PersonaManager personas,
         PersonaMemoryService memory, PersonaMemoryConsolidationService consolidation,
-        Llm.OneShotClaudeRunner runner, FeatureFlagService flags,
+        Llm.OneShotClaudeRunner runner,
         IConfiguration config, ILogger<PersonaMemoryAutolearnService> log)
     {
         _sessions = sessions;
@@ -34,7 +33,6 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
         _memory = memory;
         _consolidation = consolidation;
         _runner = runner;
-        _flags = flags;
         _config = config;
         _log = log;
     }
@@ -58,7 +56,6 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
 
         var persona = _personas.GetByIdInternal(session.PersonaId);
         if (persona is null || !persona.MemoryEnabled) return Task.CompletedTask;
-        if (!_flags.IsEnabled(persona.OwnerId, FeatureFlagKeys.PersonaMemoryAutolearn)) return Task.CompletedTask;
 
         // Извлечение не должно тормозить пайплайн хода/broadcast — уводим в фон
         _ = Task.Run(() => LearnSafeAsync(session.Id, persona));

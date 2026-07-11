@@ -14,7 +14,6 @@ import { HubHeader } from '../components/HubHeader';
 import { ChatList } from '../components/ChatList';
 import { ChatPanel } from '../components/ChatPanel';
 import { ArtifactsPanel } from '../components/ArtifactsPanel';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { ensurePersonasLoaded } from '../lib/personas';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
@@ -61,9 +60,8 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // что в «Проектах», «Заметках», воркспейсе).
   const { width: sidebarWidth, dragging: draggingSplitter, startDrag: handleSidebarSplitterMouseDown } = useSidebarDrag();
 
-  // Панель «Артефакты сессии» (за фич-флагом): открыта/закрыта + ширина, персист в localStorage.
+  // Панель «Артефакты сессии»: открыта/закрыта + ширина, персист в localStorage.
   // Ключи отдельные от проектов (cc_chat_artifacts_*), чтобы состояния не пересекались.
-  const artifactsEnabled = useFeature(FLAGS.sessionArtifacts);
   const [artifactsOpen, setArtifactsOpen] = useState(() => localStorage.getItem('cc_chat_artifacts_open') === '1');
   useEffect(() => { localStorage.setItem('cc_chat_artifacts_open', artifactsOpen ? '1' : '0'); }, [artifactsOpen]);
   const [artifactsWidth, setArtifactsWidth] = useState(() => {
@@ -238,10 +236,10 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               attachedFiles={attachedFiles}
               onAttachedFilesChange={setAttachedFiles}
               onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
-              artifactsOpen={artifactsEnabled ? artifactsOpen : undefined}
-              onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined}
+              artifactsOpen={artifactsOpen}
+              onToggleArtifacts={toggleArtifacts}
             />
-            {artifactsEnabled && artifactsOpen && (
+            {artifactsOpen && (
               <>
                 <div onClick={() => setArtifactsOpen(false)}
                   style={{ position: 'absolute', inset: 0, zIndex: 900, background: C.overlay }} />
@@ -310,8 +308,8 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               onAttachedFilesChange={setAttachedFiles}
               onOpenSidebar={openSidebar}
               onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
-              artifactsOpen={artifactsEnabled ? artifactsOpen : undefined}
-              onToggleArtifacts={artifactsEnabled ? toggleArtifacts : undefined}
+              artifactsOpen={artifactsOpen}
+              onToggleArtifacts={toggleArtifacts}
             />
           ) : (
             <>
@@ -357,7 +355,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
         </div>
 
         {/* Панель артефактов сессии (за фич-флагом) — колонка справа от чата */}
-        {artifactsEnabled && artifactsOpen && activeChat && (
+        {artifactsOpen && activeChat && (
           <>
             <Splitter active={draggingArtifacts} onMouseDown={handleArtifactsSplitterMouseDown} />
             <div style={{ width: artifactsWidth, flexShrink: 0, height: '100%' }}>

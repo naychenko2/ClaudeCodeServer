@@ -10,7 +10,6 @@ import type { FileEntry, SyncMark } from '../types';
 import { api } from './api';
 import { isOnline } from './offline';
 import { idbGet, idbSet, idbKeys, idbDelete } from './idb';
-import { getFlag, FLAGS } from './featureFlags';
 import { warmNote, drainNotesOutbox } from './notesOffline';
 import { drainTaskOutbox } from './taskOutbox';
 import './tasks';   // side-effect: configureOutbox регистрирует store-хуки очереди задач
@@ -326,9 +325,9 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
       await saveMtimes(p.id, mtimes);
     }
 
-    // Прогрев заметок (флаг notes-offline): список + folders/graph в GET-кэш, контент
-    // изменившихся — в редактируемый локальный слой (с mtime-диффом; не затираем черновики).
-    if (getFlag(FLAGS.offline)) await warmNotes();
+    // Прогрев заметок: список + folders/graph в GET-кэш, контент изменившихся —
+    // в редактируемый локальный слой (с mtime-диффом; не затираем черновики).
+    await warmNotes();
 
     notifyMarks();
   } catch {

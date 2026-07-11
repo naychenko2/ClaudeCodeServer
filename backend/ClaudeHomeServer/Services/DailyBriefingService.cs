@@ -21,7 +21,6 @@ public sealed class DailyBriefingService
     private readonly NotesService _notes;
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
-    private readonly FeatureFlagService _flags;
     private readonly Llm.OneShotClaudeRunner _runner;
     private readonly PushService _push;
     private readonly IHubContext<SessionHub> _hub;
@@ -36,14 +35,13 @@ public sealed class DailyBriefingService
 
     public DailyBriefingService(
         TaskManager tasks, NotesService notes, ProjectManager projects, UserStore users,
-        FeatureFlagService flags, Llm.OneShotClaudeRunner runner, PushService push,
+        Llm.OneShotClaudeRunner runner, PushService push,
         IHubContext<SessionHub> hub, IConfiguration config, ILogger<DailyBriefingService> log)
     {
         _tasks = tasks;
         _notes = notes;
         _projects = projects;
         _users = users;
-        _flags = flags;
         _runner = runner;
         _push = push;
         _hub = hub;
@@ -70,15 +68,13 @@ public sealed class DailyBriefingService
         return saved;
     }
 
-    // Хук планировщика: если у юзера включён флаг, наступило утро в его таймзоне и
-    // сегодня бриф ещё не делали — запустить генерацию. Гейт синхронный и мгновенный;
-    // тяжёлая работа (git-сбор + LLM, десятки секунд) уходит в фон, чтобы НЕ блокировать
-    // тик планировщика (напоминания/автозапуски остальных пользователей). Идемпотентность
-    // обеспечивается меткой ДО запуска (одна попытка в день, переживает рестарт).
+    // Хук планировщика: если наступило утро в таймзоне юзера и сегодня бриф ещё не делали —
+    // запустить генерацию. Гейт синхронный и мгновенный; тяжёлая работа (git-сбор + LLM,
+    // десятки секунд) уходит в фон, чтобы НЕ блокировать тик планировщика
+    // (напоминания/автозапуски остальных пользователей). Идемпотентность обеспечивается
+    // меткой ДО запуска (одна попытка в день, переживает рестарт).
     public Task MaybeRunScheduledAsync(User user, TimeZoneInfo tz, DateTime nowUtc, CancellationToken ct = default)
     {
-        if (!_flags.IsEnabled(user.Id, FeatureFlagKeys.AiAssist)) return Task.CompletedTask;
-
         var local = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
         var hour = _config.GetValue("Briefing:Hour", 8);
         if (local.Hour < hour) return Task.CompletedTask; // ещё не утро в таймзоне пользователя

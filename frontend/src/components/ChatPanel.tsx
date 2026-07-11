@@ -18,7 +18,6 @@ import { useModelCaps, assistantName } from '../lib/models';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { setChatContext } from '../lib/ai/chatContext';
 import { ChatHeaderBar, RateLimitBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { ChatProjectContext, FalCostContext, AssistantNameContext, PersonaContext } from './chat/contexts';
@@ -190,10 +189,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     [handleCompanionChange]
   );
 
-  // Групповой чат (флаг persona-group-chats): создаём НОВЫЙ чат с 2-4 участниками
+  // Групповой чат: создаём НОВЫЙ чат с 2-4 участниками
   // и уводим пользователя в него. Ведущая проектная → сессия текущего проекта,
   // глобальная → чат вне проекта (переход в раздел «Чаты»).
-  const groupChatsOn = useFeature(FLAGS.personaGroupChats);
   const handleCreateGroup = useCallback(async (personaIds: string[]) => {
     try {
       const chat = await api.chats.createGroup(personaIds);
@@ -290,13 +288,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   } = useChatScroll(session.id, items, isHistoryLoading, online);
   // FAB AI-хаба должен вставать НАД композером (иначе налезает на композер и кнопку
   // «вниз»): пробрасываем высоту композера в глобальную CSS-переменную, читаемую FAB.
-  const aiAssistOn = useFeature(FLAGS.aiAssist);
   useEffect(() => {
-    if (!aiAssistOn) return;
     const root = document.documentElement;
     root.style.setProperty('--cc-fab-bottom', `${composerH + 12}px`);
     return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
-  }, [aiAssistOn, composerH]);
+  }, [composerH]);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);
 
@@ -892,7 +888,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           style={{
             // Когда включён AI-хаб, поднимаем кнопку «вниз» выше FAB (над композером) с зазором.
             // Служебная прокрутка — нейтральная (не accent), чтобы единственным акцентом в углу был FAB.
-            position: 'absolute', right: isMobile ? 16 : 20, bottom: composerH + 14 + (aiAssistOn ? 64 : 0),
+            position: 'absolute', right: isMobile ? 16 : 20, bottom: composerH + 14 + 64,
             width: 44, height: 44, borderRadius: '50%',
             border: `1px solid ${C.border}`,
             background: C.bgCard, color: C.textSecondary, cursor: 'pointer',
@@ -956,7 +952,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             canPickCompanion={online}
             hasMessages={items.length > 0}
             participantIds={session.participants}
-            onCreateGroup={groupChatsOn ? handleCreateGroup : undefined}
+            onCreateGroup={handleCreateGroup}
             workLoop={workLoopState}
             onToggleWorkLoop={handleToggleWorkLoop}
           />

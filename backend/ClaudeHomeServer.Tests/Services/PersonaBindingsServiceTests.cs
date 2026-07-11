@@ -43,10 +43,9 @@ public class PersonaBindingsServiceTests : IDisposable
         var notesSvc = new NotesService(_projects, config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, _users, config,
             NullLogger<NotesKnowledgeService>.Instance);
-        var flags = new FeatureFlagService(_users);
 
         _sut = new PersonaBindingsService(_personas, _projects, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), flags, _users, config,
+            knowledge, new SkillsService(), _users, config,
             NullLogger<PersonaBindingsService>.Instance);
     }
 
@@ -54,8 +53,6 @@ public class PersonaBindingsServiceTests : IDisposable
     {
         if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
     }
-
-    private void EnableFlag() => _users.SetFeatureFlag(_userId, FeatureFlagKeys.PersonaBindings, true);
 
     private Persona MakePersona(List<string>? tools = null, List<PersonaBinding>? bindings = null) =>
         new() { OwnerId = _userId, Name = "Тест", Tools = tools, Bindings = bindings };
@@ -98,7 +95,6 @@ public class PersonaBindingsServiceTests : IDisposable
     [Fact]
     public void EffectiveToolEnabled_БезПривязок_СемантикаTools()
     {
-        EnableFlag();
         // null-список — без ограничений
         _sut.EffectiveToolEnabled(_userId, MakePersona(), "tasks").Should().BeTrue();
         // ограниченный список — только перечисленные
@@ -110,7 +106,6 @@ public class PersonaBindingsServiceTests : IDisposable
     [Fact]
     public void EffectiveToolEnabled_ПривязкаПриоритетнееTools()
     {
-        EnableFlag();
         // Tools запрещает tasks, но Tool-привязка (Auto) включает
         var persona = MakePersona(tools: ["notes"],
             bindings: [ToolBinding("tasks", PersonaBindingMode.Auto)]);
@@ -120,7 +115,6 @@ public class PersonaBindingsServiceTests : IDisposable
     [Fact]
     public void EffectiveToolEnabled_РежимOff_Выключает()
     {
-        EnableFlag();
         // Tools разрешает всё (null), но Off-привязка выключает web
         var persona = MakePersona(bindings: [ToolBinding("web", PersonaBindingMode.Off)]);
         _sut.EffectiveToolEnabled(_userId, persona, "web").Should().BeFalse();
@@ -128,31 +122,17 @@ public class PersonaBindingsServiceTests : IDisposable
         _sut.EffectiveToolEnabled(_userId, persona, "tasks").Should().BeTrue();
     }
 
-    [Fact]
-    public void EffectiveToolEnabled_ФлагВыключен_ПривязкиИгнорируются()
-    {
-        // Флаг persona-bindings НЕ включён — чистый откат к семантике Tools
-        var persona = MakePersona(tools: ["notes"],
-            bindings: [ToolBinding("tasks", PersonaBindingMode.Auto)]);
-        _sut.EffectiveToolEnabled(_userId, persona, "tasks").Should().BeFalse();
-
-        var offPersona = MakePersona(bindings: [ToolBinding("web", PersonaBindingMode.Off)]);
-        _sut.EffectiveToolEnabled(_userId, offPersona, "web").Should().BeTrue();
-    }
-
     // --- BuildFileScopes ---
 
     [Fact]
     public void BuildFileScopes_БезПривязок_Null()
     {
-        EnableFlag();
         _sut.BuildFileScopes(_userId, MakePersona()).Should().BeNull();
     }
 
     [Fact]
     public void BuildFileScopes_ПроектныеПривязки_СписокБезOff()
     {
-        EnableFlag();
         var persona = MakePersona(bindings:
         [
             new PersonaBinding { Type = PersonaBindingType.Project, Target = "p1" },
@@ -163,20 +143,11 @@ public class PersonaBindingsServiceTests : IDisposable
         _sut.BuildFileScopes(_userId, persona).Should().BeEquivalentTo(["p1", "p2"]);
     }
 
-    [Fact]
-    public void BuildFileScopes_ФлагВыключен_Null()
-    {
-        var persona = MakePersona(bindings:
-            [new PersonaBinding { Type = PersonaBindingType.Project, Target = "p1" }]);
-        _sut.BuildFileScopes(_userId, persona).Should().BeNull();
-    }
-
     // --- BuildIndex ---
 
     [Fact]
     public void BuildIndex_ЛимитСтрок()
     {
-        EnableFlag();
         // 20 Tool-привязок (не зависят от секций/целей) → в индексе не больше 12 строк
         var bindings = Enumerable.Range(0, 20)
             .Select(i => new PersonaBinding
@@ -195,7 +166,6 @@ public class PersonaBindingsServiceTests : IDisposable
     [Fact]
     public void BuildIndex_ПустоеУсловие_ВсегдаПодРукой()
     {
-        EnableFlag();
         var bindings = new List<PersonaBinding>
         {
             new() { Type = PersonaBindingType.Tool, Target = "notes", Condition = "" },
@@ -210,7 +180,6 @@ public class PersonaBindingsServiceTests : IDisposable
     [Fact]
     public void BuildIndex_ПроектБезСекцииFiles_Опускается()
     {
-        EnableFlag();
         var project = MakeProject("Биллинг");
         var bindings = new List<PersonaBinding>
         {
@@ -232,7 +201,6 @@ public class PersonaBindingsServiceTests : IDisposable
     [Fact]
     public void BuildIndex_НиОднойДоступнойПривязки_Null()
     {
-        EnableFlag();
         // Проектная привязка без секции files — способ недоступен, индекс пуст
         var project = MakeProject("Скрытый");
         var bindings = new List<PersonaBinding>
@@ -242,23 +210,11 @@ public class PersonaBindingsServiceTests : IDisposable
         _sut.BuildIndex(_userId, bindings, mountedSections: []).Should().BeNull();
     }
 
-    // --- BuildTurnBlockAsync (гейты) ---
-
-    [Fact]
-    public async Task BuildTurnBlockAsync_ФлагВыключен_Null()
-    {
-        var persona = _personas.Create(_userId, "Аналитик", "Аналитик", null, null,
-            null, null, PersonaScope.Global, null, null, null, true);
-        _personas.UpdateBindings(persona.Id, _userId,
-            [ToolBinding("tasks", PersonaBindingMode.Auto)]);
-
-        (await _sut.BuildTurnBlockAsync(_userId, persona.Id, "вопрос", [])).Should().BeNull();
-    }
+    // --- BuildTurnBlockAsync ---
 
     [Fact]
     public async Task BuildTurnBlockAsync_ПривязокНет_Null()
     {
-        EnableFlag();
         var persona = _personas.Create(_userId, "Пустой", null, null, null,
             null, null, PersonaScope.Global, null, null, null, true);
 
@@ -268,7 +224,6 @@ public class PersonaBindingsServiceTests : IDisposable
     [Fact]
     public async Task BuildTurnBlockAsync_АктивныеПривязки_БлокСИндексом()
     {
-        EnableFlag();
         var persona = _personas.Create(_userId, "Секретарь", "Секретарь", null, null,
             null, null, PersonaScope.Global, null, null, null, true);
         _personas.UpdateBindings(persona.Id, _userId,

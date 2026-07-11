@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/chats")]
 public class ChatsController(SessionManager sessions, FileService files,
-    PersonaMeetingService meetings, PersonaPipelineService pipelines, FeatureFlagService flags) : ControllerBase
+    PersonaMeetingService meetings, PersonaPipelineService pipelines) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -109,8 +109,6 @@ public class ChatsController(SessionManager sessions, FileService files,
     [HttpPost("{id}/meeting")]
     public IActionResult StartMeeting(string id, [FromBody] StartMeetingRequest req)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.PersonaGroupChats))
-            return BadRequest(new { error = "Совещания персон выключены (флаг persona-group-chats)" });
         var session = sessions.GetOwned(id, UserId);
         if (session is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Question))
@@ -142,8 +140,6 @@ public class ChatsController(SessionManager sessions, FileService files,
     [HttpPost("{id}/pipeline")]
     public IActionResult StartPipeline(string id, [FromBody] StartPipelineRequest req)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.PersonaPipeline))
-            return BadRequest(new { error = "Конвейер пантеона выключен (флаг persona-pipeline)" });
         if (sessions.GetOwned(id, UserId) is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Task))
             return BadRequest(new { error = "Пустая задача конвейера" });
@@ -169,8 +165,6 @@ public class ChatsController(SessionManager sessions, FileService files,
     [HttpPut("{id}/loop")]
     public async Task<IActionResult> SetWorkLoop(string id, [FromBody] SetWorkLoopRequest req)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.WorkLoop))
-            return BadRequest(new { error = "Цикл «до готово» выключен (флаг work-loop)" });
         if (sessions.GetOwned(id, UserId) is null) return NotFound();
         var updated = await sessions.SetWorkLoopAsync(id, req.Enabled);
         return updated is null ? NotFound() : Ok(updated);

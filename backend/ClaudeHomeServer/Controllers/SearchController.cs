@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/search")]
-public class SearchController(UnifiedSearchService search, FeatureFlagService flags) : ControllerBase
+public class SearchController(UnifiedSearchService search) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -19,7 +19,6 @@ public class SearchController(UnifiedSearchService search, FeatureFlagService fl
     public async Task<ActionResult<IReadOnlyList<SearchHit>>> Search(
         [FromQuery] string q, [FromQuery] int topK = 8)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.AiAssist)) return Forbid();
         if (string.IsNullOrWhiteSpace(q)) return Ok(Array.Empty<SearchHit>());
         var hits = await search.SearchAsync(UserId, q.Trim(), Math.Clamp(topK, 1, 20));
         return Ok(hits);

@@ -10,12 +10,11 @@ import { rankedActions, type AiActionCtx } from '../ai/actions';
 function ctx(partial: Partial<AiActionCtx> & { nav: AiActionCtx['nav'] }): AiActionCtx {
   return { online: true, flag: () => false, caps: { semantic: false }, chat: { active: false, hasMessages: false }, ...partial };
 }
-const allFlags = (keys: string[]) => (k: string) => keys.includes(k);
 
 describe('rankedActions — доступность и ранжирование', () => {
-  it('на «Чатах» без флагов виден только глобальный «Что нового»', () => {
+  it('на «Чатах» без открытого чата видны глобальные действия', () => {
     const r = rankedActions(ctx({ nav: { screen: 'chats' } }));
-    expect(r.map(x => x.action.id)).toEqual(['global.whatsnew']);
+    expect(r.map(x => x.action.id)).toEqual(['global.briefing', 'global.search', 'global.whatsnew']);
   });
 
   it('в открытой заметке действия заметки идут первыми (контекстные)', () => {
@@ -36,19 +35,15 @@ describe('rankedActions — доступность и ранжирование',
     expect(on.map(x => x.action.id)).toContain('note.semantic');
   });
 
-  it('действия чата требуют соответствующих флагов и открытого чата с перепиской', () => {
+  it('действия чата требуют открытого чата с перепиской', () => {
     const openChat = { active: true, hasMessages: true };
-    // Чат открыт, но флагов нет → действий чата нет
-    const noFlags = rankedActions(ctx({ nav: { screen: 'chats', chatId: 'c1' }, chat: openChat }));
-    expect(noFlags.map(x => x.action.id)).not.toContain('chat.extract');
-    // Флаги есть, но чат не открыт (нет переписки) → тоже нет
-    const noChat = rankedActions(ctx({ nav: { screen: 'chats' }, flag: allFlags(['ai-assist', 'notes']) }));
+    // Чат не открыт (нет переписки) → действий чата нет
+    const noChat = rankedActions(ctx({ nav: { screen: 'chats' } }));
     expect(noChat.map(x => x.action.id)).not.toContain('chat.extract');
 
     const r = rankedActions(ctx({
       nav: { screen: 'chats', chatId: 'c1' },
       chat: openChat,
-      flag: allFlags(['ai-assist', 'notes']),
     }));
     const ids = r.map(x => x.action.id);
     expect(ids).toContain('chat.extract');

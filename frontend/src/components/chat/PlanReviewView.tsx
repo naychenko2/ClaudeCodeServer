@@ -7,7 +7,6 @@ import { ChatProjectContext, useAssistantName } from './contexts';
 import { MarkdownContent } from './MarkdownContent';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 
 // Иконка режима «План» — прямоугольник с линиями (как ModeIcon plan в Composer)
 function PlanIcon({ size = 13, color = 'currentColor', strokeWidth = 2 }: { size?: number; color?: string; strokeWidth?: number }) {
@@ -47,13 +46,12 @@ function CollapsedPlanBody({ plan }: { plan: string }) {
   );
 }
 
-// Иконка-кнопка «В заметку» — сохранить текст плана в базу заметок (за флагом notes)
+// Иконка-кнопка «В заметку» — сохранить текст плана в базу заметок
 function SavePlanButton({ plan, online }: { plan: string; online: boolean }) {
-  const notesOn = useFeature(FLAGS.notes);
   const project = useContext(ChatProjectContext);
   const [savedId, setSavedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  if (!notesOn || !online) return null;
+  if (!online) return null;
   const save = () => {
     if (busy || savedId) return;
     setBusy(true);

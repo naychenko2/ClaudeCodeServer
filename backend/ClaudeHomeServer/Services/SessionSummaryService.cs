@@ -19,7 +19,7 @@ public sealed class SummaryGenerationException(string message) : Exception(messa
 // Повторный вызов обновляет ту же заметку (Session.SummaryNoteId), а не плодит дубли.
 public class SessionSummaryService(
     SessionManager sessions, ProjectManager projects, NotesService notes,
-    NotesKnowledgeService kb, Llm.OneShotClaudeRunner runner, FeatureFlagService flags,
+    NotesKnowledgeService kb, Llm.OneShotClaudeRunner runner,
     IHubContext<SessionHub> hub, PushService push, IConfiguration config,
     ILogger<SessionSummaryService> logger)
 {
@@ -39,8 +39,6 @@ public class SessionSummaryService(
             : session.OwnerId;
         if (ownerId is null || ownerId != userId)
             throw new UnauthorizedAccessException("Сессия принадлежит другому пользователю");
-        if (!flags.IsEnabled(userId, FeatureFlagKeys.AiAssist))
-            throw new InvalidOperationException("Фича «Итог сессии» выключена");
 
         if (!_inFlight.TryAdd(sessionId, 0))
             throw new SummaryInProgressException();

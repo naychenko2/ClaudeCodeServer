@@ -21,35 +21,8 @@ public record FeatureFlagDefinition(
 /// </summary>
 public static class FeatureFlagKeys
 {
-    public const string SessionArtifacts = "session-artifacts";
-    public const string Notes = "notes";
-    public const string TaskBoard = "task-board";
-    // Зонтичный флаг расширенного AI: хаб-палитра + подсказки + вся кросс-раздельная
-    // AI-синергия (бриф, единый поиск, задачи из чата, итог сессии, auto-recall, контекст исполнителя).
-    public const string AiAssist = "ai-assist";
-    // Единый офлайн-режим для заметок и задач.
-    public const string Offline = "offline";
-    public const string Personas = "personas";
-    public const string PersonaMemoryAutolearn = "persona-memory-autolearn";
-    // Консолидация памяти персон: периодический LLM-merge дублей + вытеснение при переполнении
-    public const string PersonaMemoryConsolidation = "persona-memory-consolidation";
-    // @упоминания персон в чатах: MCP persona_ask, автокомплит @ в композере
-    public const string PersonaMentions = "persona-mentions";
-    // Групповые чаты персон (2-4 участника, роутинг спикера по @) + совещания cross-attack
-    public const string PersonaGroupChats = "persona-group-chats";
-    // Магическое слово ultrawork/ulw/«ультра» в сообщении — инжект режима максимального усилия
-    public const string UltraworkKeyword = "ultrawork-keyword";
-    // Цикл «до готово»: ход продолжается автоматически, пока агент не выведет маркер завершения
-    public const string WorkLoop = "work-loop";
-    // Конвейер пантеона: эстафета ролей OmO (анализ → план → ревью → авто-исполнение)
-    public const string PersonaPipeline = "persona-pipeline";
-    // Привязки персон: источники знаний и правила с условиями применения (индекс в промпте)
-    public const string PersonaBindings = "persona-bindings";
-    // MCP workspace-server: доступ сессии к проектам/файлам/знаниям/поиску владельца
-    public const string WorkspaceTools = "workspace-tools";
-    // Секция chats workspace-server: Claude и персоны могут писать в другие чаты (chats_send)
-    public const string WorkspaceChatSend = "workspace-chat-send";
-    // Секция destructive workspace-server: безвозвратное удаление файлов и чатов (files_delete/chats_delete)
+    // Секция destructive workspace-server: безвозвратное удаление файлов и чатов (files_delete/chats_delete).
+    // Единственный оставшийся флаг — предохранитель от необратимого удаления агентом.
     public const string WorkspaceDestructive = "workspace-destructive";
 }
 
@@ -61,158 +34,15 @@ public static class FeatureFlagCatalog
 {
     public static readonly IReadOnlyList<FeatureFlagDefinition> All =
     [
-        // Панель «Артефакты сессии» — сводка по активной сессии справа от чата:
-        // измененные файлы (с дельтами строк), план (из ExitPlanMode), задачи (TodoWrite) и ссылки.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.SessionArtifacts,
-            Title: "Артефакты сессии",
-            Description: "Панель справа от чата с измененными файлами, планом, задачами, агентами и ссылками за текущую сессию.",
-            Default: false,
-            Stage: "beta"),
-
-        // Раздел «Заметки» — Obsidian-совместимая база знаний: markdown-заметки с
-        // [[wikilinks]], backlinks и графом. Включает связь чекбоксов с задачами.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.Notes,
-            Title: "Заметки",
-            Description: "База знаний: markdown-заметки со связями [[…]], обратными ссылками и графом; единый граф поверх личного vault и проектов. Плюс чекбоксы `- [ ]` можно превращать в задачи с синхронизацией статуса.",
-            Default: false,
-            Stage: "beta"),
-
-        // Вид «Доска» (Kanban) в разделе «Календарь»: колонки по статусу,
-        // drag & drop, дорожки (swimlanes), фильтры и WIP-лимиты.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.TaskBoard,
-            Title: "Доска задач (Kanban)",
-            Description: "Вид «Доска» в разделе «Календарь»: колонки по статусу, drag & drop карточек, группировка по дорожкам, фильтры и WIP-лимиты.",
-            Default: false,
-            Stage: "beta"),
-
-        // Расширенный AI — зонтичный флаг: AI-хаб (палитра ⌘/Ctrl+K + проактивные
-        // подсказки) и вся кросс-раздельная AI-синергия одним тумблером.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.AiAssist,
-            Title: "Расширенный AI",
-            Description: "Единый AI-хаб (палитра ⌘/Ctrl+K + проактивные подсказки) и AI-синергия: утренний бриф, единый поиск по смыслу, задачи из чата, итог сессии в заметку, заметки как память Claude в чате и в контексте исполнителя.",
-            Default: false,
-            Stage: "dev"),
-
-        // Единый офлайн-режим для заметок и задач: правки без соединения сохраняются
-        // локально (IndexedDB) и синхронизируются при возврате связи.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.Offline,
-            Title: "Офлайн-режим",
-            Description: "Заметки и задачи работают без соединения — просмотр, правка и создание сохраняются на устройстве и синхронизируются с сервером, как только связь вернётся. Конфликты сохраняются копией.",
-            Default: false,
-            Stage: "beta"),
-
-        // Раздел «Персоны»: имя, аватар, характер, отдельный чат, долгая память и доступ
-        // к контексту (глобально или в рамках проекта). Не путать с .md-агентами Claude Code.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.Personas,
-            Title: "Персоны",
-            Description: "Персоны с именем, аватаром и характером: у каждой свой чат, долгая память и доступ ко всей информации в своей зоне контекста (глобально или по проекту).",
-            Default: false,
-            Stage: "beta"),
-
-        // Персона сама извлекает факты из диалога в долгую память (авто-обучение) после сессии.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.PersonaMemoryAutolearn,
-            Title: "Авто-память персон",
-            Description: "После разговора персона сама вычленяет из диалога факты и выводы и сохраняет их в свою долгую память — без явной команды «запомни».",
-            Default: false,
-            Stage: "dev"),
-
-        // Консолидация памяти персон: фоновый сервис периодически схлопывает дубли
-        // (LLM-merge с детерминированными гейтами) и вытесняет наименее ценные записи
-        // при переполнении памяти.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.PersonaMemoryConsolidation,
-            Title: "Консолидация памяти персон",
-            Description: "Фоновая уборка долгой памяти: похожие записи схлопываются в одну, а при переполнении наименее ценные забываются — память не разрастается бесконечно.",
-            Default: false,
-            Stage: "dev"),
-
-        // @упоминания персон: в любом чате можно позвать другую персону (@handle) —
-        // она ответит от своего лица через persona_ask, со своим характером и памятью.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.PersonaMentions,
-            Title: "@упоминания персон",
-            Description: "Упомяни персону через @ в любом чате — ассистент спросит её, и она ответит в своём характере, со своей моделью и долгой памятью. Плюс кнопка «Обсудить с командой» в чате персоны.",
-            Default: false,
-            Stage: "dev"),
-
-        // Групповые чаты персон: 2-4 участника в одном чате, отвечает тот, к кому
-        // обращаются через @handle. Плюс режим «Совещание»: независимые позиции,
-        // перекрёстная критика и синтез итога от ведущей.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.PersonaGroupChats,
-            Title: "Групповые чаты персон",
-            Description: "Чат сразу с несколькими персонами: отвечает та, к кому обращаешься через @, остальных она может спросить сама. Плюс «Совещание»: участники независимо высказываются, критикуют позиции друг друга, ведущая сводит итог.",
-            Default: false,
-            Stage: "dev"),
-
-        // Магическое слово ultrawork (идея oh-my-openagent, промпт — их, в переводе):
-        // одно слово в сообщении включает режим максимального усилия на этот ход.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.UltraworkKeyword,
-            Title: "Слово ultrawork",
-            Description: "Напиши в сообщении ultrawork (или ulw) — и на этот ход включится режим максимального усилия: без ленивых ответов, с обязательной верификацией и работой до конца.",
-            Default: false,
-            Stage: "dev"),
-
-        // Цикл «до готово» (идея ralph/ulw-loop из oh-my-openagent): ход автоматически
-        // продолжается, пока агент не выведет маркер завершения, затем верификационный ход.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.WorkLoop,
-            Title: "Цикл «до готово»",
-            Description: "Кнопка в композере: агент работает циклами без твоего участия, пока честно не отчитается о завершении, — с финальной проверкой сделанного и лимитом итераций.",
-            Default: false,
-            Stage: "dev"),
-
-        // Конвейер пантеона (идея конвейера ролей oh-my-openagent): задача проходит
-        // эстафету специалистов — анализ (Метида) → план (Прометей) → ревью (Мом) →
-        // исполнение (Сизиф/Гефест с циклом «до готово») — одной кнопкой.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.PersonaPipeline,
-            Title: "Конвейер пантеона",
-            Description: "Задача проходит эстафету ролей: Аналитик вскрывает риски, Планировщик пишет план, Ревьюер проверяет его, а затем план автоматически уходит исполнителю. Запускается из диалога «Обсудить с командой».",
-            Default: false,
-            Stage: "dev"),
-
-        // Привязки персон к источникам знаний и правилам: индекс «когда → откуда» в
-        // системном промпте, выжимки режима «всегда», сужение workspace до привязанных проектов.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.PersonaBindings,
-            Title: "Умения и правила персон",
-            Description: "Персоне можно привязать источники знаний (проекты, папки, базы знаний, заметки, скиллы) и правила инструментов с условиями «когда применять». Персона видит индекс привязок и сама подгружает нужный источник; режим «всегда» подмешивает выжимку в каждый ход.",
-            Default: false,
-            Stage: "dev"),
-
-        // MCP workspace-server: Claude в любом чате видит все проекты владельца —
-        // список, файлы, базы знаний и единый поиск по рабочему пространству.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.WorkspaceTools,
-            Title: "Инструменты рабочего пространства",
-            Description: "Claude в любом чате получает доступ ко всем твоим проектам: список и карточки, чтение и правка файлов других проектов, поиск по базам знаний и единый поиск по заметкам и задачам.",
-            Default: false,
-            Stage: "dev"),
-
-        // Секция chats workspace-server: список/история/создание чужих чатов и chats_send —
-        // полноценный ход в другом чате от имени пользователя (результат виден в его ленте).
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.WorkspaceChatSend,
-            Title: "Отправка сообщений в чаты",
-            Description: "Claude и персоны могут писать в другие твои чаты: просматривать список и историю, создавать чаты и отправлять сообщения (полноценный ход, ответ появляется в ленте чата). Требует включённых «Инструментов рабочего пространства».",
-            Default: false,
-            Stage: "dev"),
-
         // Секция destructive workspace-server: files_delete/chats_delete. Без флага секция
         // не выдаётся никому; персоне дополнительно нужен tool-ключ destructive (Tools/привязка).
+        // Единственный оставшийся флаг: все прочие фичи включены безусловно, а этот —
+        // предохранитель от необратимого удаления (по умолчанию выключен). Механика флагов
+        // (сервис, каталог, модалка, /api/feature-flags) оставлена рабочей для будущих флагов.
         new FeatureFlagDefinition(
             Key: FeatureFlagKeys.WorkspaceDestructive,
             Title: "Разрушающие операции агента",
-            Description: "Claude может БЕЗВОЗВРАТНО удалять файлы проектов и чаты через инструменты рабочего пространства (files_delete, chats_delete) — только по явной просьбе. Требует включённых «Инструментов рабочего пространства»; персоне дополнительно нужна возможность «Удаление (опасно)».",
+            Description: "Claude может БЕЗВОЗВРАТНО удалять файлы проектов и чаты через инструменты рабочего пространства (files_delete, chats_delete) — только по явной просьбе. Персоне дополнительно нужна возможность «Удаление (опасно)».",
             Default: false,
             Stage: "dev"),
     ];

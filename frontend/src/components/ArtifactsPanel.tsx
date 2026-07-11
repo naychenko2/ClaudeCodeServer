@@ -5,7 +5,6 @@ import { MarkdownViewer } from './MarkdownViewer';
 import { useSessionArtifacts, type AgentArtifact, type AgentToolCall, type ArtifactFile, type ArtifactLink, type PlanStatus, type TodoItem, type WorkflowGroup } from '../hooks/useSessionArtifacts';
 import { IconNotes } from '../features/notes/shared';
 import { saveChatNote, openNoteById } from '../features/notes/saveToNote';
-import { FLAGS, useFeature } from '../lib/featureFlags';
 
 interface Props {
   sessionId: string | null;
@@ -46,10 +45,8 @@ interface Heading { level: number; text: string; el: HTMLElement }
 
 // Чип «в заметку» в навигаторе плана — сохраняет текущий план в базу заметок
 function SavePlanChip({ plan, projectId }: { plan: string; projectId?: string }) {
-  const notesOn = useFeature(FLAGS.notes);
   const [savedId, setSavedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  if (!notesOn) return null;
   const save = () => {
     if (busy) return;
     if (savedId) { openNoteById(savedId); return; }

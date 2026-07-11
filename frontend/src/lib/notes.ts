@@ -9,7 +9,6 @@ import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { clearResolveCache } from '../components/MarkdownViewer';
 import { isOnline, OfflineError, subscribeOnline } from './offline';
-import { getFlag, FLAGS } from './featureFlags';
 import { drainNotesOutbox, overlayNotesList } from './notesOffline';
 
 let _notes: NoteSummary[] = [];
@@ -32,7 +31,7 @@ function joinUserGroup() {
 }
 
 let _fileChangeTimer: number | null = null;
-const offlineEnabled = () => getFlag(FLAGS.offline);
+const offlineEnabled = () => true;
 
 // Во время дренажа очереди подавляем перечитку списка от realtime (иначе она сбросит
 // оптимистичные записи середины синхронизации); одна перечитка — в конце дренажа.

@@ -24,7 +24,6 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
 
     private readonly PersonaMemoryService _memory;
     private readonly PersonaManager _personas;
-    private readonly FeatureFlagService _flags;
     private readonly Llm.OneShotClaudeRunner _runner;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaMemoryConsolidationService> _log;
@@ -33,12 +32,11 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
     private readonly ConcurrentDictionary<string, string> _pending = new();
 
     public PersonaMemoryConsolidationService(PersonaMemoryService memory, PersonaManager personas,
-        FeatureFlagService flags, Llm.OneShotClaudeRunner runner, IConfiguration config,
+        Llm.OneShotClaudeRunner runner, IConfiguration config,
         ILogger<PersonaMemoryConsolidationService> log)
     {
         _memory = memory;
         _personas = personas;
-        _flags = flags;
         _runner = runner;
         _config = config;
         _log = log;
@@ -91,9 +89,8 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
 
     private async Task ConsolidateAsync(Persona persona, CancellationToken ct)
     {
-        // Гейт: флаг владельца + включённая память персоны
+        // Гейт: включённая память персоны
         if (!persona.MemoryEnabled) return;
-        if (!_flags.IsEnabled(persona.OwnerId, FeatureFlagKeys.PersonaMemoryConsolidation)) return;
 
         var entries = _memory.List(persona.OwnerId, persona.Id, null);
         if (entries.Count <= SoftLimit) return;   // софт-порог: мало записей — не трогаем

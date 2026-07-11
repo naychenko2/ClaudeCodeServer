@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import { PillSwitch } from './Toolbar';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 
 export type HubTab = 'chats' | 'projects' | 'calendar' | 'notes' | 'personas';
 
@@ -19,23 +18,20 @@ const TAB_ICONS: Record<HubTab, ReactNode> = {
   personas: tabSvg(<><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" /></>),
 };
 
-// Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки» — на общем PillSwitch.
-// Вкладка «Заметки» появляется только при включённом фич-флаге notes.
+// Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки | Персоны» — на общем PillSwitch.
 // mobile: компакт-режим — неактивные сегменты иконками, подпись только у активного
-// (4 раздела помещаются на 320px без обрезания и скролла).
+// (разделы помещаются на 320px без обрезания и скролла).
 export function HubTabs({ value, onChange, mobile }: {
   value: HubTab;
   onChange: (t: HubTab) => void;
   mobile?: boolean;
 }) {
-  const notesOn = useFeature(FLAGS.notes);
-  const personasOn = useFeature(FLAGS.personas);
   const options = [
     { value: 'chats' as HubTab, label: 'Чаты' },
     { value: 'projects' as HubTab, label: 'Проекты' },
     { value: 'calendar' as HubTab, label: 'Календарь' },
-    ...(notesOn ? [{ value: 'notes' as HubTab, label: 'Заметки' }] : []),
-    ...(personasOn ? [{ value: 'personas' as HubTab, label: 'Персоны' }] : []),
+    { value: 'notes' as HubTab, label: 'Заметки' },
+    { value: 'personas' as HubTab, label: 'Персоны' },
   ].map(o => mobile ? { ...o, icon: TAB_ICONS[o.value] } : o);
   return (
     <PillSwitch<HubTab>

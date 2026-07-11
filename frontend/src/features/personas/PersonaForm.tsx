@@ -1,7 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaWorkingFocus, Project } from '../../types';
 import { api } from '../../lib/api';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem } from '../../components/ui';
 import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
@@ -87,9 +86,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const isEdit = !!persona;
   const isMobile = useIsMobile();
   const models = useModels();
-  // Фича persona-bindings: возможности переехали во вкладку «Знания» —
-  // вместо тумблеров показываем плашку-переадресацию
-  const bindingsEnabled = useFeature(FLAGS.personaBindings);
+  // Возможности переехали во вкладку «Знания» — вместо тумблеров показываем
+  // плашку-переадресацию. Прежний блок тумблеров оставлен как ветка-легаси.
+  const bindingsEnabled = true;
 
   const [name, setName] = useState(persona?.name ?? initial?.name ?? '');
   const [role, setRole] = useState(persona?.role ?? initial?.role ?? '');

@@ -10,7 +10,6 @@ import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { getPersonaById, usePersonasVersion, personaLabel } from '../../lib/personas';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
@@ -127,7 +126,6 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
     navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {});
   };
   // «В заметку»: сохранение ответа в базу заметок (проект → notes/, чат → personal)
-  const notesOn = useFeature(FLAGS.notes);
   const project = useContext(ChatProjectContext);
   const [savedNoteId, setSavedNoteId] = useState<string | null>(null);
   const [savingNote, setSavingNote] = useState(false);
@@ -163,7 +161,7 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
               ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
               : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>}
           </button>
-          {notesOn && online && (
+          {online && (
             <>
               {savedNoteId && (
                 <button onClick={() => openNoteById(savedNoteId)}
@@ -235,8 +233,6 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   const project = useContext(ChatProjectContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
-  // Бейдж «ультра» на сообщении пользователя (флаг ultrawork-keyword)
-  const ultraOn = useFeature(FLAGS.ultraworkKeyword);
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
   usePersonasVersion();
   switch (item.kind) {
@@ -248,7 +244,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             borderRadius: '18px 18px 4px 18px', padding: '12px 17px', fontSize: 14,
           }}>
             {/* Ключевое слово максимального усилия — бэкенд включает режим на этот ход */}
-            {ultraOn && hasUltraworkKeyword(item.text) && (
+            {hasUltraworkKeyword(item.text) && (
               <div style={{ marginBottom: 5 }}>
                 <span style={{
                   display: 'inline-flex', alignItems: 'center', gap: 3,

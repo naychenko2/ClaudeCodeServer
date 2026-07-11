@@ -3,7 +3,6 @@ import type { Persona } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { Menu, MenuItem, IconButton } from '../../components/ui';
 import { Toolbar, PillSwitch, tbBtnPrimary, tbBtnGhost } from '../../components/Toolbar';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { PersonaAvatar } from './PersonaAvatar';
 import { personaTitleLines } from '../../lib/personas';
 import type { PersonaFormStatus } from './PersonaForm';
@@ -63,9 +62,7 @@ interface CreateProps extends CommonProps {
 export function PersonaToolbar(props: EditProps | CreateProps) {
   const { accent, status, onSave, onBack, isMobile } = props;
   const creating = props.mode === 'create';
-  // Вкладка «Знания» — только при включённом флаге привязок
-  const bindingsEnabled = useFeature(FLAGS.personaBindings);
-  const viewOptions = bindingsEnabled ? VIEW_OPTIONS : VIEW_OPTIONS.filter(o => o.value !== 'knowledge');
+  const viewOptions = VIEW_OPTIONS;
 
   // Текст и доступность кнопки сохранения зависят от режима
   const saveLabel = status.saving

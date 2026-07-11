@@ -10,7 +10,6 @@ import { PillSwitch } from '../../components/Toolbar';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { addDaysIso, DEFAULT_BOARD_COLUMNS, ensureTasksLoaded, expandRecurringTasks, todayIso, toIsoDate, useTasks } from '../../lib/tasks';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useIsMobile } from '../../lib/breakpoints';
 import { AgendaIcon, BoardIcon, IconViewSwitcher, MonthIcon, WeekIcon } from './bits';
 import { TaskDetailsModal } from './TaskDetailsModal';
@@ -65,7 +64,6 @@ const VIEW_LABEL: Record<CalView, string> = { month: 'Месяц', week: 'Нед
 
 export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   const isMobile = useIsMobile();
-  const boardOn = useFeature(FLAGS.taskBoard);
   const allTasks = useTasks();
   const [view, setView] = useState<CalView>(() => {
     // Диплинк #/calendar/board восстанавливает доску; иначе — сохранённый вид
@@ -80,8 +78,6 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
     localStorage.setItem(VIEW_KEY, view);
     if (view !== 'board') lastNonBoardView.current = view;
   }, [view]);
-  // Флаг доски выключен, а сохранён вид «board» — откатываемся на месяц
-  useEffect(() => { if (view === 'board' && !boardOn) setView('month'); }, [view, boardOn]);
 
   // Браузерная навигация: доска — отдельная запись истории (#/calendar/board).
   // Монтирование пропускаем — историю экрана сидирует App (иначе гонка перетрёт URL).
@@ -251,7 +247,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
           <div style={{ marginBottom: 12 }}>
             <IconViewSwitcher<CalView>
               value={view}
-              options={(['month', 'week', 'agenda', ...(boardOn ? ['board'] : [])] as CalView[]).map(v => ({
+              options={(['month', 'week', 'agenda', 'board'] as CalView[]).map(v => ({
                 value: v, label: VIEW_LABEL[v], icon: <ViewIcon view={v} />,
               }))}
               onChange={setView}
@@ -276,7 +272,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
                     { value: 'month', label: 'Месяц', icon: <MonthIcon /> },
                     { value: 'week', label: 'Неделя', icon: <WeekIcon /> },
                     { value: 'agenda', label: 'Агенда', icon: <AgendaIcon /> },
-                    ...(boardOn ? [{ value: 'board' as const, label: 'Доска', icon: <BoardIcon /> }] : []),
+                    { value: 'board' as const, label: 'Доска', icon: <BoardIcon /> },
                   ]}
                   onChange={setView}
                 />

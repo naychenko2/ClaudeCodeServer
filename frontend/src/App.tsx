@@ -21,7 +21,7 @@ import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
-import { setAllFlags, useFeature, FLAGS } from './lib/featureFlags'
+import { setAllFlags } from './lib/featureFlags'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
@@ -111,8 +111,6 @@ export default function App() {
     return () => window.removeEventListener(PRODUCT_HISTORY_EVENT, open)
   }, [])
 
-  // AI-хаб (флаг ai-hub): единый лаунчер AI-действий поверх любого раздела.
-  const aiAssistEnabled = useFeature(FLAGS.aiAssist)
   // Единый поиск, открытый из AI-палитры (App-уровневый оверлей, независимый от шапки)
   const [aiSearchOpen, setAiSearchOpen] = useState(false)
   useEffect(() => {
@@ -474,7 +472,7 @@ export default function App() {
       {auth && historyOpen && (
         <ProductHistory isMobile={isMobileView} onClose={() => setHistoryOpen(false)} />
       )}
-      {auth && !authChecking && aiAssistEnabled && <AiLauncher />}
+      {auth && !authChecking && <AiLauncher />}
       {auth && aiSearchOpen && <GlobalSearch onClose={() => setAiSearchOpen(false)} />}
     </>
   )

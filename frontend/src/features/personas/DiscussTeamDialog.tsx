@@ -89,6 +89,106 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
   // Участники совещания: ведущая (персона чата) + выбранные
   const meetingCount = selected.length + (chatPersona ? 1 : 0);
 
+  // Подгруппы кандидатов (как в CompanionSelector): проектные → глобальные → пантеон.
+  // Пантеонные материализованные персоны (с templateKey) идут отдельной группой внизу
+  // вместе с ещё не подключёнными виртуальными ролями.
+  const projectCandidates = allCandidates.filter(p => p.scope === 'project');
+  const globalCandidates = allCandidates.filter(p => p.scope === 'global' && !p.templateKey);
+  const pantheonCandidates = allCandidates.filter(p => p.templateKey);
+  const hasPantheonGroup = pantheonCandidates.length > 0 || virtualPantheon.length > 0;
+  const candidateGroups = (projectCandidates.length > 0 ? 1 : 0)
+    + (globalCandidates.length > 0 ? 1 : 0) + (hasPantheonGroup ? 1 : 0);
+  const showGroupHeaders = candidateGroups > 1;
+
+  // Заголовок-разделитель подгруппы участников
+  const groupHeader = (text: string) => (
+    <div key={`h-${text}`} style={{
+      padding: '8px 2px 2px', fontSize: 10.5, fontWeight: 700, color: C.textMuted,
+      textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
+    }}>{text}</div>
+  );
+
+  // Пункт-кандидат (обычная персона) с чекбоксом
+  const candidateItem = (p: Persona) => {
+    const active = selected.includes(p.id);
+    const disabled = !active && selected.length >= max;
+    return (
+      <button
+        key={p.id}
+        type="button"
+        onClick={() => toggle(p.id)}
+        disabled={disabled}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
+          padding: '8px 10px', borderRadius: R.lg, cursor: disabled ? 'default' : 'pointer',
+          border: `1.5px solid ${active ? C.accent : C.border}`,
+          background: active ? C.accentLight : C.bgWhite,
+          opacity: disabled ? 0.5 : 1, fontFamily: FONT.sans,
+        }}
+      >
+        <span style={{
+          flexShrink: 0, width: 18, height: 18, borderRadius: 5,
+          border: `2px solid ${active ? C.accent : C.border}`,
+          background: active ? C.accent : C.bgWhite,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {active && (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.onAccent}
+              strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 6L9 17l-5-5" />
+            </svg>
+          )}
+        </span>
+        <PersonaAvatar persona={p} size={30} />
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading }}>
+            {personaTitleLines(p).primary}
+          </span>
+          {p.description && (
+            <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {p.description}
+            </span>
+          )}
+        </span>
+      </button>
+    );
+  };
+
+  // Пункт виртуальной роли пантеона (материализуется при выборе)
+  const virtualItem = (t: PantheonTemplate) => {
+    const disabled = materializing !== null || selected.length >= max;
+    return (
+      <button
+        key={`v-${t.key}`}
+        type="button"
+        onClick={() => void toggleVirtual(t)}
+        disabled={disabled}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
+          padding: '8px 10px', borderRadius: R.lg, cursor: disabled ? 'default' : 'pointer',
+          border: `1.5px solid ${C.border}`, background: C.bgWhite,
+          opacity: disabled && materializing !== t.key ? 0.5 : 1, fontFamily: FONT.sans,
+        }}
+      >
+        <span style={{
+          flexShrink: 0, width: 18, height: 18, borderRadius: 5,
+          border: `2px solid ${C.border}`, background: C.bgWhite,
+        }} />
+        <span style={{
+          width: 30, height: 30, borderRadius: R.full, flexShrink: 0,
+          background: agentDotColor(t.color), color: '#fff',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700,
+        }}>{t.role.slice(0, 1)}</span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading }}>{t.role}</span>
+          <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {materializing === t.key ? 'Подключаю…' : t.description}
+          </span>
+        </span>
+      </button>
+    );
+  };
+
   const submit = async () => {
     if (!canSend || !sessionId) {
       // Обсуждение работает и без sessionId (обычный send), остальное требует чат
@@ -257,85 +357,16 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
                 <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans }}>Кого спросить</span>
                 <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>выбрано {selected.length} из {max}</span>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {allCandidates.map(p => {
-                  const active = selected.includes(p.id);
-                  const disabled = !active && selected.length >= max;
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => toggle(p.id)}
-                      disabled={disabled}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
-                        padding: '8px 10px', borderRadius: R.lg, cursor: disabled ? 'default' : 'pointer',
-                        border: `1.5px solid ${active ? C.accent : C.border}`,
-                        background: active ? C.accentLight : C.bgWhite,
-                        opacity: disabled ? 0.5 : 1, fontFamily: FONT.sans,
-                      }}
-                    >
-                      <span style={{
-                        flexShrink: 0, width: 18, height: 18, borderRadius: 5,
-                        border: `2px solid ${active ? C.accent : C.border}`,
-                        background: active ? C.accent : C.bgWhite,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      }}>
-                        {active && (
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.onAccent}
-                            strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M20 6L9 17l-5-5" />
-                          </svg>
-                        )}
-                      </span>
-                      <PersonaAvatar persona={p} size={30} />
-                      <span style={{ flex: 1, minWidth: 0 }}>
-                        <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading }}>
-                          {personaTitleLines(p).primary}
-                        </span>
-                        {p.description && (
-                          <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {p.description}
-                          </span>
-                        )}
-                      </span>
-                    </button>
-                  );
-                })}
-                {/* Пантеон OmO — виртуальные роли участниками (материализуются при выборе) */}
-                {virtualPantheon.map(t => {
-                  const disabled = materializing !== null || selected.length >= max;
-                  return (
-                    <button
-                      key={`v-${t.key}`}
-                      type="button"
-                      onClick={() => void toggleVirtual(t)}
-                      disabled={disabled}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
-                        padding: '8px 10px', borderRadius: R.lg, cursor: disabled ? 'default' : 'pointer',
-                        border: `1.5px solid ${C.border}`, background: C.bgWhite,
-                        opacity: disabled && materializing !== t.key ? 0.5 : 1, fontFamily: FONT.sans,
-                      }}
-                    >
-                      <span style={{
-                        flexShrink: 0, width: 18, height: 18, borderRadius: 5,
-                        border: `2px solid ${C.border}`, background: C.bgWhite,
-                      }} />
-                      <span style={{
-                        width: 30, height: 30, borderRadius: R.full, flexShrink: 0,
-                        background: agentDotColor(t.color), color: '#fff',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700,
-                      }}>{t.role.slice(0, 1)}</span>
-                      <span style={{ flex: 1, minWidth: 0 }}>
-                        <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading }}>{t.role}</span>
-                        <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {materializing === t.key ? 'Подключаю…' : t.description}
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })}
+              {/* Список участников подгруппами (проектные → глобальные → пантеон);
+                  ограничен по высоте со скроллом, чтобы не распирать диалог */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 340, overflowY: 'auto' }}>
+                {showGroupHeaders && projectCandidates.length > 0 && groupHeader('Команда проекта')}
+                {projectCandidates.map(candidateItem)}
+                {showGroupHeaders && globalCandidates.length > 0 && groupHeader('Глобальные')}
+                {globalCandidates.map(candidateItem)}
+                {hasPantheonGroup && showGroupHeaders && groupHeader('Пантеон OmO')}
+                {pantheonCandidates.map(candidateItem)}
+                {virtualPantheon.map(virtualItem)}
               </div>
               {selected.length === 0 && (
                 <div style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, marginTop: 6 }}>

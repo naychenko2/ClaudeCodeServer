@@ -27,6 +27,7 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
   // reason по ключу навыка — заполняется при LLM-подборе (иначе карточка без обоснования)
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [mode, setMode] = useState<'search' | 'suggest' | null>(null);
+  const [translatedQuery, setTranslatedQuery] = useState<string | null>(null);
   const [cardStates, setCardStates] = useState<Record<string, CardState>>({});
 
   const canContextSuggest = !!persona || !!projectId;
@@ -34,9 +35,11 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
   const runFind = async () => {
     const q = query.trim();
     if (q.length < 2) { setError('Введите минимум 2 символа'); return; }
-    setLoading(true); setError(null); setReasons({}); setMode('search');
+    setLoading(true); setError(null); setReasons({}); setMode('search'); setTranslatedQuery(null);
     try {
-      setResults(await api.skills.find(q));
+      const { results, translatedQuery } = await api.skills.find(q);
+      setResults(results);
+      setTranslatedQuery(translatedQuery);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Поиск не удался');
       setResults([]);
@@ -52,7 +55,7 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
       : projectId ? { projectId }
       : null;
     if (!ctx) { setError('Введите запрос для подбора'); return; }
-    setLoading(true); setError(null); setMode('suggest');
+    setLoading(true); setError(null); setMode('suggest'); setTranslatedQuery(null);
     try {
       const { candidates } = await api.skills.suggest(ctx);
       setResults(candidates.map((c: SkillSuggestion) => c.skill));
@@ -140,6 +143,13 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
           padding: '10px 12px', background: C.dangerBg, border: `1px solid ${C.dangerBorder}`,
           borderRadius: R.lg, fontSize: 12.5, color: C.dangerText,
         }}>{error}</div>
+      )}
+
+      {/* Показываем, что запрос переведён на английский для поиска по реестру */}
+      {!loading && mode === 'search' && translatedQuery && (
+        <div style={{ fontSize: 12, color: C.textMuted, marginTop: -4 }}>
+          Искал по-английски: <span style={{ fontFamily: FONT.mono, color: C.textSecondary }}>{translatedQuery}</span>
+        </div>
       )}
 
       {/* Результаты */}

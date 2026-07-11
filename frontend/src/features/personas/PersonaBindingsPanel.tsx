@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { BindingTarget, Persona, PersonaBinding, PersonaBindingDto, PersonaBindingMode, PersonaBindingType, ServerMessage } from '../../types';
+import type { BindingTarget, Persona, PersonaBinding, PersonaBindingDto, PersonaBindingMode, PersonaBindingType, ServerMessage, SkillSuggestion } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
@@ -13,7 +13,7 @@ import {
   fetchBindingTargets, useBindingLabels,
 } from './bindingMeta';
 
-// Вкладка «Знания» студии персоны (фича persona-bindings): карточки привязок
+// Вкладка «Умения» студии персоны (фича persona-bindings): карточки привязок
 // «источник + правило, когда им пользоваться». Семантика мгновенного сохранения
 // (как PersonaMemoryPanel): каждая правка — сразу PUT/POST/DELETE, без общей формы.
 
@@ -44,10 +44,12 @@ interface AddPanelState {
   mode: PersonaBindingMode;
 }
 
-// Кандидаты AI-подбора с чекбоксами
+// Кандидаты AI-подбора с чекбоксами: привязки к существующим источникам +
+// навыки из реестра (их нужно установить и привязать)
 interface SuggestState {
   loading: boolean;
   candidates?: (PersonaBinding & { on: boolean })[];
+  skills?: (SkillSuggestion & { on: boolean })[];
   error?: string;
   adding?: boolean;
 }
@@ -218,22 +220,32 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
     }
   };
 
-  // «✨ Подобрать автоматически» — кандидаты с чекбоксами, сохранение по подтверждению
+  // «✨ Подобрать автоматически» — параллельно: привязки к существующим источникам +
+  // релевантные навыки из реестра (их предложим установить и привязать)
   const runSuggest = async () => {
     setPanel(null);
     setExpandedId(null);
     setSuggest({ loading: true });
-    try {
-      const { candidates } = await api.personas.suggestBindings(persona.id);
-      setSuggest({ loading: false, candidates: candidates.map(c => ({ ...c, on: true })) });
-    } catch (e) {
-      setSuggest({ loading: false, error: e instanceof Error ? e.message : 'Не удалось подобрать привязки.' });
+    const [bindingsRes, skillsRes] = await Promise.allSettled([
+      api.personas.suggestBindings(persona.id),
+      api.skills.suggest({ personaId: persona.id }),
+    ]);
+    const candidates = bindingsRes.status === 'fulfilled'
+      ? bindingsRes.value.candidates.map(c => ({ ...c, on: true })) : [];
+    const skills = skillsRes.status === 'fulfilled'
+      ? skillsRes.value.candidates.map(s => ({ ...s, on: true })) : [];
+    // Оба источника упали — показываем ошибку; иначе показываем что есть
+    if (candidates.length === 0 && skills.length === 0 && bindingsRes.status === 'rejected') {
+      setSuggest({ loading: false, error: 'Не удалось подобрать. Попробуйте ещё раз.' });
+      return;
     }
+    setSuggest({ loading: false, candidates, skills });
   };
 
   const acceptSuggest = async () => {
     const picked = (suggest?.candidates ?? []).filter(c => c.on);
-    if (picked.length === 0) { setSuggest(null); return; }
+    const pickedSkills = (suggest?.skills ?? []).filter(s => s.on);
+    if (picked.length === 0 && pickedSkills.length === 0) { setSuggest(null); return; }
     setSuggest(s => s ? { ...s, adding: true } : s);
     const added: string[] = [];
     try {
@@ -245,10 +257,14 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         added.push(created.id);
         setBindings(prev => [...(prev ?? []), created]);
       }
+      // Навыки из реестра: установить глобально + привязать (installForPersona)
+      for (const s of pickedSkills)
+        await api.skills.installForPersona(persona.id, s.skill.source, s.skill.skill);
+      if (pickedSkills.length > 0) await load();
       setSuggest(null);
       flash(added);
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Не удалось добавить привязки.');
+      alert(e instanceof Error ? e.message : 'Не удалось добавить.');
       setSuggest(null);
       void load();
     }
@@ -492,58 +508,95 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
                 <button onClick={() => void runSuggest()} style={linkBtn}>Повторить</button>{' '}
                 <button onClick={() => setSuggest(null)} style={{ ...linkBtn, color: C.textMuted }}>Закрыть</button>
               </div>
-            ) : (suggest.candidates ?? []).length === 0 ? (
+            ) : (suggest.candidates ?? []).length === 0 && (suggest.skills ?? []).length === 0 ? (
               <div style={{ fontSize: 12.5, color: C.textMuted }}>
                 Ничего подходящего не нашлось — попробуйте добавить привязку вручную.{' '}
                 <button onClick={() => setSuggest(null)} style={linkBtn}>Закрыть</button>
               </div>
             ) : (
               <>
-                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
-                  <SectionLabel>Умения подобраны автоматически</SectionLabel>
-                  <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
-                    {suggest.candidates!.filter(c => c.on).length} из {suggest.candidates!.length}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-                  {suggest.candidates!.map(c => (
-                    <div
-                      key={c.id}
-                      onClick={() => setSuggest(s => s?.candidates
-                        ? { ...s, candidates: s.candidates.map(x => x.id === c.id ? { ...x, on: !x.on } : x) }
-                        : s)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
-                        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
-                        padding: '10px 14px', opacity: c.on ? 1 : 0.5,
-                      }}
-                    >
-                      <span style={{
-                        width: 18, height: 18, borderRadius: 5, flexShrink: 0,
-                        border: `1.5px solid ${c.on ? C.accent : C.border}`,
-                        background: c.on ? C.accent : C.bgWhite,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
-                      }}>
-                        {c.on && bindingSvg(<path d="M20 6 9 17l-5-5" />, 12)}
+                {/* Привязки к существующим источникам */}
+                {suggest.candidates!.length > 0 && (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+                      <SectionLabel>Умения подобраны автоматически</SectionLabel>
+                      <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
+                        {suggest.candidates!.filter(c => c.on).length} из {suggest.candidates!.length}
                       </span>
-                      <BindingTypeIcon type={c.type} />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>{labelOf(c)}</div>
-                        <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {c.condition}
-                        </div>
-                      </div>
-                      <BindingModeBadge mode={c.mode} />
                     </div>
-                  ))}
-                </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+                      {suggest.candidates!.map(c => (
+                        <div
+                          key={c.id}
+                          onClick={() => setSuggest(s => s?.candidates
+                            ? { ...s, candidates: s.candidates.map(x => x.id === c.id ? { ...x, on: !x.on } : x) }
+                            : s)}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
+                            background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+                            padding: '10px 14px', opacity: c.on ? 1 : 0.5,
+                          }}
+                        >
+                          <Check on={c.on} />
+                          <BindingTypeIcon type={c.type} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>{labelOf(c)}</div>
+                            <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {c.condition}
+                            </div>
+                          </div>
+                          <BindingModeBadge mode={c.mode} />
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {/* Навыки из реестра — установить и привязать */}
+                {(suggest.skills ?? []).length > 0 && (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginTop: suggest.candidates!.length > 0 ? 18 : 0 }}>
+                      <SectionLabel>Навыки из реестра</SectionLabel>
+                      <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
+                        {suggest.skills!.filter(s => s.on).length} из {suggest.skills!.length}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+                      {suggest.skills!.map(s => (
+                        <div
+                          key={`${s.skill.source}@${s.skill.skill}`}
+                          onClick={() => setSuggest(st => st?.skills
+                            ? { ...st, skills: st.skills.map(x => x.skill.skill === s.skill.skill && x.skill.source === s.skill.source ? { ...x, on: !x.on } : x) }
+                            : st)}
+                          style={{
+                            display: 'flex', alignItems: 'flex-start', gap: 12, cursor: 'pointer',
+                            background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+                            padding: '10px 14px', opacity: s.on ? 1 : 0.5,
+                          }}
+                        >
+                          <div style={{ marginTop: 1 }}><Check on={s.on} /></div>
+                          <div style={{ marginTop: 1 }}><BindingTypeIcon type="skill" /></div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading, fontFamily: FONT.mono }}>{s.skill.skill}</div>
+                            <div style={{ fontSize: 12.5, color: C.accent, marginTop: 2, lineHeight: 1.4 }}>{s.reason}</div>
+                            {s.skill.description && (
+                              <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2, lineHeight: 1.45 }}>{s.skill.description}</div>
+                            )}
+                            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 3, fontFamily: FONT.mono }}>{s.skill.source}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12, color: C.textMuted }}>
-                  ✨ Кандидаты предложены ИИ по роли и доступным источникам — ничего не сохранено, пока вы не подтвердите.
+                  ✨ Предложено ИИ по роли и доступным источникам. Навыки из реестра будут установлены и привязаны. Ничего не сохранено, пока вы не подтвердите.
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
                   <Button variant="ghost" size="sm" disabled={busyOverlay} onClick={() => setSuggest(null)}>Отмена</Button>
                   <Button variant="primary" size="sm" loading={suggest.adding}
-                    disabled={busyOverlay || suggest.candidates!.every(c => !c.on)}
+                    disabled={busyOverlay || ((suggest.candidates ?? []).every(c => !c.on) && (suggest.skills ?? []).every(s => !s.on))}
                     onClick={() => void acceptSuggest()}>
                     {suggest.adding ? 'Добавляю…' : 'Добавить выбранные'}
                   </Button>
@@ -984,6 +1037,20 @@ function ExampleChip({ label, onClick }: { label: string; onClick: () => void })
     >
       {label}
     </button>
+  );
+}
+
+// Квадратный чекбокс кандидата подбора
+function Check({ on }: { on: boolean }) {
+  return (
+    <span style={{
+      width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+      border: `1.5px solid ${on ? C.accent : C.border}`,
+      background: on ? C.accent : C.bgWhite,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
+    }}>
+      {on && bindingSvg(<path d="M20 6 9 17l-5-5" />, 12)}
+    </span>
   );
 }
 

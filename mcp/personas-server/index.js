@@ -54,7 +54,14 @@ const COLORS = ['yellow', 'orange', 'blue', 'green', 'purple', 'red', 'brown', '
 const PERSONA_FIELDS = {
   role: { type: 'string', description: 'Роль — главное в отображении («Роль (Имя)»), например «Дизайнер»' },
   description: { type: 'string', description: 'Короткое описание, кто это (для карточки)' },
-  systemPrompt: { type: 'string', description: 'Характер персоны — тело системного промпта на «ты» («Ты — …»), 2-5 предложений' },
+  // Контракт характера — по слотам (собирается в contract на бэкенде)
+  character: { type: 'string', description: 'Характер и ценности персоны на «ты» («Ты — …»), 2-5 предложений' },
+  tone: { type: 'string', description: 'Тон общения одной короткой фразой (напр. «сухо и по делу»)' },
+  mustDo: { type: 'array', items: { type: 'string' }, description: 'Правила «что делать всегда», 2-4 коротких пункта' },
+  mustNot: { type: 'array', items: { type: 'string' }, description: 'Анти-паттерны «чего не делать никогда», 2-4 пункта' },
+  outputFormat: { type: 'string', description: 'Требования к формату ответов, 1-2 предложения' },
+  speechExamples: { type: 'array', items: { type: 'string' }, description: '1-2 характерные реплики от лица персоны (образцы стиля)' },
+  systemPrompt: { type: 'string', description: 'УСТАРЕЛО: единый текст характера — используй character и остальные слоты' },
   model: { type: 'string', description: 'Модель LLM (пусто = дефолт сервера)' },
   effort: { type: 'string', description: 'Усилие рассуждения модели' },
   color: { type: 'string', enum: COLORS, description: 'Цвет аватара из палитры' },
@@ -88,7 +95,8 @@ const TOOLS = [
     name: 'personas_create',
     description: `Создать персону — AI-собеседника с именем, ролью и характером. ${CONTEXT_NOTE} ` +
       'scope: "global" — доступна во всех чатах (по умолчанию); "project" — привязана к проекту. ' +
-      'Характер пиши в systemPrompt на «ты», приветствие — в greeting от лица персоны.',
+      'Заполняй ВСЕ слоты характера: character (на «ты»), tone, mustDo, mustNot, outputFormat, ' +
+      'speechExamples; приветствие — в greeting от лица персоны.',
     inputSchema: {
       type: 'object',
       required: ['name'],
@@ -174,6 +182,19 @@ function personaBody(args, keys) {
 
 const FIELD_KEYS = ['name', 'role', 'description', 'systemPrompt', 'model', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId'];
 
+// Слоты контракта характера (P1): плоские аргументы инструмента → объект contract API
+const CONTRACT_KEYS = ['character', 'tone', 'mustDo', 'mustNot', 'outputFormat', 'speechExamples'];
+
+// Собрать contract из аргументов; systemPrompt — legacy-алиас character.
+// null — слоты не переданы (contract в body не включаем)
+function contractFrom(args) {
+  const c = {};
+  for (const key of CONTRACT_KEYS) if (key in args) c[key] = args[key];
+  if (!('character' in c) && typeof args.systemPrompt === 'string' && args.systemPrompt.trim())
+    c.character = args.systemPrompt;
+  return Object.keys(c).length ? c : null;
+}
+
 async function callTool(name, args) {
   switch (name) {
     case 'personas_list': {
@@ -191,6 +212,12 @@ async function callTool(name, args) {
 
     case 'personas_create': {
       const body = personaBody(args, FIELD_KEYS);
+      // Характер — сразу контрактом по слотам; legacy systemPrompt мапится в character
+      const contract = contractFrom(args);
+      if (contract) {
+        body.contract = contract;
+        delete body.systemPrompt;
+      }
       body.scope = args.scope ?? 'global';
       if (body.scope === 'project') {
         body.projectId = args.projectId ?? PROJECT_ID;
@@ -204,6 +231,14 @@ async function callTool(name, args) {
 
     case 'personas_update': {
       const body = personaBody(args, FIELD_KEYS);
+      // Частичная правка контракта: мержим с текущим, иначе передача одного слота
+      // (напр. только tone) затёрла бы остальные — API заменяет contract целиком
+      const contract = contractFrom(args);
+      if (contract) {
+        const current = await api(`/api/personas/${encodeURIComponent(args.id)}`);
+        body.contract = { ...(current?.contract ?? {}), ...contract };
+        delete body.systemPrompt;
+      }
       if (body.scope === 'project' && !('projectId' in body)) {
         if (!PROJECT_ID)
           throw new Error('Для смены зоны на проектную нужен projectId: текущая сессия вне проекта.');

@@ -630,8 +630,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     "глобальные или привязанные к проекту. Управляй ими через MCP-инструменты mcp__personas__* " +
                     "(personas_list, personas_get, personas_create, personas_update, personas_delete, personas_generate_avatar). " +
                     scope + " Когда пользователь просит создать/изменить/удалить персону или сгенерировать ей аватар — " +
-                    "используй эти инструменты. Характер персоны пиши в systemPrompt на «ты» («Ты — …»), " +
-                    "приветствие — в greeting от её лица.";
+                    "используй эти инструменты. Создавая персону, заполняй ВСЕ слоты характера: character (на «ты», " +
+                    "«Ты — …»), tone, mustDo, mustNot, outputFormat, speechExamples; приветствие — в greeting от её лица.";
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? personasHint
                     : basePrompt + "\n\n" + personasHint;

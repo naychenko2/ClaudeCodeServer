@@ -27,7 +27,10 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
   onClose: () => void;
 }) {
   const [mode, setMode] = useState<DiscussMode>('discuss');
-  const [selected, setSelected] = useState<string[]>([]);
+  // Единственный кандидат выбран сразу — выбор без альтернатив не должен требовать клика
+  const [selected, setSelected] = useState<string[]>(
+    candidates.length === 1 ? [candidates[0].id] : []
+  );
   const [question, setQuestion] = useState('');
   const [starting, setStarting] = useState(false);
   // Обсуждение — до 2 собеседников; совещание — до 3 (плюс ведущая = максимум 4)
@@ -111,7 +114,38 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
           </div>
         )}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {/* Ведущая — персона этого чата: она собирает мнения и сводит итог, участия не требует */}
+        {chatPersona && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
+            borderRadius: R.lg, background: C.bgPanel, fontFamily: FONT.sans }}>
+            <PersonaAvatar persona={chatPersona} size={30} />
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading }}>
+                {personaTitleLines(chatPersona).primary}
+              </span>
+              <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted }}>
+                {mode === 'meeting' ? 'Ведущая — выскажется и сведёт итог' : 'Ведущая — опросит участников и сведёт итог'}
+              </span>
+            </span>
+            <span style={{
+              flexShrink: 0, fontSize: 10, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase',
+              padding: '2px 8px', borderRadius: R.pill, background: C.accentLight, color: C.accent,
+            }}>
+              ведущая
+            </span>
+          </div>
+        )}
+
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+            <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans }}>
+              Кого спросить
+            </span>
+            <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>
+              выбрано {selected.length} из {max}
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {candidates.map(p => {
             const active = selected.includes(p.id);
             const disabled = !active && selected.length >= max;
@@ -129,6 +163,20 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
                   opacity: disabled ? 0.5 : 1, fontFamily: FONT.sans,
                 }}
               >
+                {/* Явный чекбокс: карточка — это выбор участника, а не информационная плашка */}
+                <span style={{
+                  flexShrink: 0, width: 18, height: 18, borderRadius: 5,
+                  border: `2px solid ${active ? C.accent : C.border}`,
+                  background: active ? C.accent : C.bgWhite,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  {active && (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.onAccent}
+                      strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg>
+                  )}
+                </span>
                 <PersonaAvatar persona={p} size={30} />
                 <span style={{ flex: 1, minWidth: 0 }}>
                   <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading }}>
@@ -143,15 +191,15 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
                     </span>
                   )}
                 </span>
-                {active && (
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.accent}
-                    strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                    <path d="M20 6L9 17l-5-5" />
-                  </svg>
-                )}
               </button>
             );
           })}
+          </div>
+          {selected.length === 0 && (
+            <div style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, marginTop: 6 }}>
+              Отметь хотя бы одного участника — без этого обсуждение не начать.
+            </div>
+          )}
         </div>
 
         <div>

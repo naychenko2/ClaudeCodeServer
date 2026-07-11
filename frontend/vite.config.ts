@@ -20,6 +20,8 @@ export default defineConfig({
       // .mjs включён в precache — иначе pdf.worker.min.mjs выпадает и PDF не работает офлайн
       injectManifest: {
         globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,webmanifest}'],
+        // Основной бандл перевалил дефолтный лимит precache (2 MiB) — поднимаем до 4 MiB
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
       manifest: {
         name: 'AI Home',

@@ -414,7 +414,23 @@ export interface AgentInfo {
 
 export interface SkillsData {
   skills: SkillInfo[];
+  projectSkills: SkillInfo[];
   agents: AgentInfo[];
+}
+
+// Навык из реестра skills.sh (результат поиска/подбора). source — «owner/repo».
+export interface RegistrySkill {
+  source: string;
+  skill: string;
+  description: string | null;
+  installs: number | null;
+  url: string;
+}
+
+// Кандидат LLM-подбора: навык реестра + обоснование.
+export interface SkillSuggestion {
+  skill: RegistrySkill;
+  reason: string;
 }
 
 export interface AuthState {

@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -631,6 +631,27 @@ export const api = {
       request<void>(`/projects/${projectId}/agents/${agentName}`, { method: 'PUT', body: JSON.stringify({ content }) }),
     createAgent: (projectId: string, name: string, content: string) =>
       request<{ name: string }>(`/projects/${projectId}/agents`, { method: 'POST', body: JSON.stringify({ name, content }) }),
+
+    // --- Реестр skills.sh (обёртка npx skills) ---
+    // Поиск навыков по реестру; owner — опциональное сужение по GitHub-владельцу
+    find: (q: string, owner?: string) =>
+      request<RegistrySkill[]>(`/skills/find?q=${encodeURIComponent(q)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`),
+    // Установка навыка: scope 'project' требует projectId, 'global' — нет
+    install: (source: string, skill: string, scope: 'project' | 'global', projectId?: string) =>
+      request<{ installed: string; scope: string }>('/skills/install', {
+        method: 'POST', body: JSON.stringify({ source, skill, scope, projectId }),
+      }),
+    uninstall: (skill: string, scope: 'project' | 'global', projectId?: string) =>
+      request<void>(`/skills/installed?skill=${encodeURIComponent(skill)}&scope=${scope}${projectId ? `&projectId=${projectId}` : ''}`,
+        { method: 'DELETE' }),
+    // LLM-подбор: ровно один из personaId / projectId / query
+    suggest: (ctx: { personaId?: string; projectId?: string; query?: string }) =>
+      request<{ candidates: SkillSuggestion[] }>('/skills/suggest', { method: 'POST', body: JSON.stringify(ctx) }),
+    // Установить навык персоне: глобальная установка + привязка (Skill)
+    installForPersona: (personaId: string, source: string, skill: string) =>
+      request<{ installed: string; bound: boolean; warning?: string }>(`/personas/${personaId}/skills`, {
+        method: 'POST', body: JSON.stringify({ source, skill }),
+      }),
   },
 
   workflow: {

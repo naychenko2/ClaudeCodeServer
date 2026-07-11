@@ -89,6 +89,8 @@ builder.Services.AddSingleton<PersonaMeetingService>();
 builder.Services.AddSingleton<ChangelogService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();
+builder.Services.AddSingleton<SkillsCliService>();
+builder.Services.AddSingleton<SkillSuggestService>();
 builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddSingleton<ConnectionDiagnostics>();
 builder.Services.AddSingleton<ChatHistoryService>();

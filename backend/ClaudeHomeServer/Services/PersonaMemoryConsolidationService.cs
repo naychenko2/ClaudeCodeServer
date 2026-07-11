@@ -45,6 +45,7 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
     }
 
     private int MaxEntries => int.TryParse(_config["Persona:MemoryMaxEntries"], out var v) ? v : 150;
+    private int MaxEpisodic => int.TryParse(_config["Persona:MemoryMaxEpisodic"], out var v) ? v : 40;
     private int SoftLimit => int.TryParse(_config["Persona:MemorySoftLimit"], out var v) ? v : 100;
     private TimeSpan Interval => TimeSpan.FromHours(
         double.TryParse(_config["Persona:ConsolidateIntervalHours"],
@@ -105,8 +106,10 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
         var merged = ops.Count > 0 ? _memory.ApplyConsolidation(persona.OwnerId, persona.Id, ops) : 0;
 
         // Шаг 2: вытеснение хвоста по retention-скорингу при переполнении
+        // (общий потолок + под-лимит эпизодов); общая логика — PersonaMemoryScorer.SelectEvictionIds
         var after = _memory.List(persona.OwnerId, persona.Id, null);
-        var evictIds = SelectEvictionIds(after, MaxEntries, MemoryScoringOptions.Default, DateTime.UtcNow);
+        var evictIds = PersonaMemoryScorer.SelectEvictionIds(
+            after, MaxEntries, MaxEpisodic, MemoryScoringOptions.Default, DateTime.UtcNow);
         var evicted = 0;
         if (evictIds.Count > 0)
         {
@@ -128,9 +131,12 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
         var sb = new StringBuilder();
         sb.AppendLine("Ты — куратор долгой памяти ИИ-персоны. Ниже список записей её памяти в формате " +
                       "id|type|salience|text. Найди дубли и родственные записи, которые стоит схлопнуть, " +
-                      "и явный мусор, который стоит удалить.");
+                      "устаревшие факты и явный мусор, которые стоит удалить.");
         sb.AppendLine("Правила:");
         sb.AppendLine("- merge допустим ТОЛЬКО между записями одного type; сводный текст краток и сохраняет суть всех источников.");
+        sb.AppendLine("- Устаревание/противоречие: если несколько записей описывают один и тот же атрибут " +
+                      "пользователя, но факт изменился во времени (напр. «живёт в Питере» и «переехал в Москву»), " +
+                      "оставь только актуальную — либо merge в актуальную формулировку, либо drop устаревших.");
         sb.AppendLine("- Не трогай записи, в которых не уверен. Лучше меньше операций, чем потеря информации.");
         sb.AppendLine("- Ответь ТОЛЬКО JSON-массивом операций: " +
                       "[{\"op\":\"merge\",\"ids\":[\"…\",\"…\"],\"type\":\"semantic\",\"text\":\"…\",\"salience\":0.8}, " +
@@ -212,22 +218,6 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
             }
         }
         return result;
-    }
-
-    // Вытеснение при переполнении: если записей больше maxEntries — вернуть id хвоста
-    // с наименьшим retention-скорингом (взвешенная сумма без релевантности).
-    internal static List<string> SelectEvictionIds(IReadOnlyList<PersonaMemoryEntry> entries,
-        int maxEntries, MemoryScoringOptions options, DateTime nowUtc)
-    {
-        if (entries.Count <= maxEntries) return [];
-        // Релевантность недоступна вне запроса → её вес и гейт обнуляем
-        var retention = options with { RelevanceWeight = 0, MinRelevance = 0 };
-        return entries
-            .OrderBy(e => PersonaMemoryScorer.Score(e, 0, nowUtc, retention))
-            .ThenBy(e => e.CreatedAt)
-            .Take(entries.Count - maxEntries)
-            .Select(e => e.Id)
-            .ToList();
     }
 
     // Первый сбалансированный JSON-массив из ответа модели (устойчиво к преамбуле/fence)

@@ -1194,8 +1194,10 @@ public class PersonasController : ControllerBase
         if (_personas.Get(id, UserId) is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest("Пустой текст");
         if (!Enum.TryParse<PersonaMemoryType>(req.Type, true, out var type)) type = PersonaMemoryType.Semantic;
-        var entry = _memory.Remember(UserId, id, type, req.Text, req.Tags, req.SourceSessionId, req.Salience);
+        // Семантический write-path: близкий факт усилит существующую запись, а не создаст дубль
+        var entry = await _memory.RememberAsync(UserId, id, type, req.Text, req.Tags, req.SourceSessionId, req.Salience);
         if (entry is null) return NotFound();
+        _memory.EnforceCap(UserId, id);   // потолок и для явного write-path
         await Broadcast("memory", id);
         return Ok(entry);
     }

@@ -41,6 +41,12 @@ public sealed class PersonaMemoryService
     private readonly ILogger<PersonaMemoryService> _logger;
     private readonly string _storePath;
     private readonly MemoryScoringOptions _scoring;
+    // Потолки памяти (не гейтятся флагом консолидации — жёсткая защита от разрастания)
+    private readonly int _maxEntries;
+    private readonly int _maxEpisodic;
+    // Семантический дедуп на входе: порог близости и прирост важности при повторе (P1)
+    private readonly double _dedupThreshold;
+    private readonly double _dedupBoost;
     private readonly Dictionary<string, MemState> _store;
     private readonly Lock _saveLock = new();
     private readonly SemaphoreSlim _syncLock = new(1, 1);
@@ -65,6 +71,10 @@ public sealed class PersonaMemoryService
             ReadDouble(config, "Persona:Score:TypeWeight", d.TypeWeight),
             ReadDouble(config, "Persona:Score:RecencyHalfLifeDays", d.RecencyHalfLifeDays),
             ReadDouble(config, "Persona:Score:MinRelevance", d.MinRelevance));
+        _maxEntries = int.TryParse(config["Persona:MemoryMaxEntries"], out var me) && me > 0 ? me : 150;
+        _maxEpisodic = int.TryParse(config["Persona:MemoryMaxEpisodic"], out var mep) && mep > 0 ? mep : 40;
+        _dedupThreshold = ReadDouble(config, "Persona:DedupThreshold", 0.85);
+        _dedupBoost = ReadDouble(config, "Persona:DedupSalienceBoost", 0.1);
         _store = JsonFileStore.Load<Dictionary<string, MemState>>(_storePath, JsonOpts) ?? new();
     }
 
@@ -103,6 +113,78 @@ public sealed class PersonaMemoryService
         }
         QueueSync(ownerId, personaId);
         return entry;
+    }
+
+    // Семантический write-path (P1): перед добавлением ищет близкий дубль через Dify.
+    // Нашёлся дубль того же типа (score ≥ DedupThreshold) — не плодим запись, а усиливаем
+    // существующую (reinforcement важности + освежение + более полный текст) и возвращаем её.
+    // Без Dify / без дубля — делегирует в точный Remember. Предпочтителен для авто-памяти.
+    public async Task<PersonaMemoryEntry?> RememberAsync(string ownerId, string personaId,
+        PersonaMemoryType type, string text, List<string>? tags, string? sourceSessionId, double? salience = null)
+    {
+        var persona = _personas.Get(personaId, ownerId);
+        if (persona is null || string.IsNullOrWhiteSpace(text)) return null;
+        var trimmed = text.Trim();
+
+        var state = GetState(personaId);
+        if (Available && !string.IsNullOrEmpty(state.DatasetId))
+        {
+            try
+            {
+                var dup = await FindSemanticDuplicateAsync(state, type, trimmed);
+                if (dup is not null)
+                {
+                    Reinforce(personaId, dup.Id, trimmed, salience);
+                    QueueSync(ownerId, personaId);   // текст мог смениться на более полный
+                    return dup;
+                }
+            }
+            catch (Exception ex) { _logger.LogDebug(ex, "Семантический дедуп памяти {Persona}", personaId); }
+        }
+
+        return Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience);
+    }
+
+    // Найти запись того же типа, семантически близкую к тексту (Dify retrieve, порог DedupThreshold)
+    private async Task<PersonaMemoryEntry?> FindSemanticDuplicateAsync(
+        MemState state, PersonaMemoryType type, string text)
+    {
+        var chunks = await _knowledge.RetrieveAsync(state.DatasetId!, text, 5);
+        if (chunks.Count == 0) return null;
+
+        Dictionary<string, string> byDocId;
+        List<PersonaMemoryEntry> entries;
+        lock (_saveLock)
+        {
+            byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+            entries = state.Entries.ToList();
+        }
+        var byId = entries.ToDictionary(e => e.Id);
+
+        foreach (var ch in chunks.OrderByDescending(c => c.Score))
+        {
+            if (ch.Score < _dedupThreshold) break;   // дальше только менее близкие
+            if (byDocId.TryGetValue(ch.DocumentId, out var entryId)
+                && byId.TryGetValue(entryId, out var e) && e.Type == type)
+                return e;
+        }
+        return null;
+    }
+
+    // Reinforcement при повторе факта: усилить важность, освежить обращение, взять более
+    // полный текст (если новый длиннее). Двигает запись вверх в скоринге вместо дубля.
+    private void Reinforce(string personaId, string entryId, string newText, double? salience)
+    {
+        lock (_saveLock)
+        {
+            var e = GetState(personaId).Entries.FirstOrDefault(x => x.Id == entryId);
+            if (e is null) return;
+            e.LastAccessedAt = DateTime.UtcNow;
+            var baseSalience = salience is null ? e.Salience : Math.Max(e.Salience, Math.Clamp(salience.Value, 0.05, 1.0));
+            e.Salience = Math.Clamp(baseSalience + _dedupBoost, 0.05, 1.0);
+            if (newText.Length > e.Text.Length) e.Text = newText;   // более информативная формулировка
+            JsonFileStore.Save(_storePath, _store, JsonOpts);
+        }
     }
 
     // Все записи памяти персоны (для панели «что помнит персона»); type — необязательный фильтр
@@ -323,6 +405,33 @@ public sealed class PersonaMemoryService
         }
         if (affected > 0) QueueSync(ownerId, personaId);
         return affected;
+    }
+
+    // --- Потолок памяти (P0/P3): жёсткое вытеснение хвоста, НЕ гейтится флагом консолидации ---
+
+    // Настроенные потолки памяти (из конфига Persona:MemoryMaxEntries/MemoryMaxEpisodic)
+    public (int MaxEntries, int MaxEpisodic) Caps => (_maxEntries, _maxEpisodic);
+
+    // Привести число записей к потолку: вытеснить лишние эпизоды сверх под-лимита и хвост
+    // сверх общего лимита (по retention-скорингу). Возвращает число вытесненных записей.
+    // Механическое, детерминированное — работает при одном лишь autolearn, без LLM-merge.
+    public int EnforceCap(string ownerId, string personaId) =>
+        EnforceCap(ownerId, personaId, _maxEntries, _maxEpisodic);
+
+    public int EnforceCap(string ownerId, string personaId, int maxEntries, int maxEpisodic)
+    {
+        if (_personas.Get(personaId, ownerId) is null) return 0;
+        List<PersonaMemoryEntry> snapshot;
+        lock (_saveLock) snapshot = GetState(personaId).Entries.ToList();
+
+        var evictIds = PersonaMemoryScorer.SelectEvictionIds(
+            snapshot, maxEntries, maxEpisodic, _scoring, DateTime.UtcNow);
+        if (evictIds.Count == 0) return 0;
+
+        var dropOps = evictIds
+            .Select(id => new MemoryConsolidationOp("drop", null, id, null, null, null))
+            .ToList();
+        return ApplyConsolidation(ownerId, personaId, dropOps);
     }
 
     private static string TypeLabel(PersonaMemoryType t) => t switch

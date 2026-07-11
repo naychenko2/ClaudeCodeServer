@@ -330,6 +330,37 @@ export const api = {
       params.set('v', persona.avatar.imageFile);
       return `/api/personas/${encodeURIComponent(persona.id)}/avatar?${params}`;
     },
+    // Загрузка своего аватара: оригинал + кропнутый квадрат + параметры кропа.
+    // Multipart — request() не ставит Content-Type для FormData (boundary от браузера).
+    uploadAvatar: (id: string, original: File, cropped: Blob, crop: { scale: number; offsetX: number; offsetY: number }) => {
+      const form = new FormData();
+      form.append('original', original, original.name || 'original');
+      form.append('cropped', cropped, 'avatar.jpg');
+      form.append('crop', JSON.stringify(crop));
+      return request<Persona>(`/personas/${encodeURIComponent(id)}/avatar/upload`, {
+        method: 'POST', body: form, timeoutMs: 60_000,
+      });
+    },
+    // Перекроп сохранённого оригинала (без повторной загрузки файла)
+    recropAvatar: (id: string, cropped: Blob, crop: { scale: number; offsetX: number; offsetY: number }) => {
+      const form = new FormData();
+      form.append('cropped', cropped, 'avatar.jpg');
+      form.append('crop', JSON.stringify(crop));
+      return request<Persona>(`/personas/${encodeURIComponent(id)}/avatar/recrop`, {
+        method: 'POST', body: form, timeoutMs: 60_000,
+      });
+    },
+    // URL оригинала загруженного аватара (для перекропа) — токен через ?access_token=
+    avatarOriginalUrl: (persona: Persona): string | null => {
+      if (!persona.avatar?.originalFile) return null;
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const params = new URLSearchParams();
+      if (token) params.set('access_token', token);
+      params.set('v', persona.avatar.originalFile);
+      return `/api/personas/${encodeURIComponent(persona.id)}/avatar/original?${params}`;
+    },
     // URL картинки-кандидата (галерея генерации) для <img>: токен через ?access_token=
     avatarCandidateUrl: (id: string, file: string): string => {
       const token = typeof localStorage !== 'undefined'

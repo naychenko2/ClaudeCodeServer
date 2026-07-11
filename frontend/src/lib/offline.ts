@@ -110,12 +110,15 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs ?? FETCH_TIMEOUT_MS);
 
+  // FormData (multipart-загрузки) — Content-Type ставит сам браузер (с boundary)
+  const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
+
   try {
     const res = await fetch(BASE + url, {
       ...fetchOptions,
       signal: controller.signal,
       headers: {
-        'Content-Type': 'application/json',
+        ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(options?.headers as Record<string, string> | undefined),
       },

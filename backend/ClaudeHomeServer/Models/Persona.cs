@@ -19,6 +19,15 @@ public enum PersonaAvatarKind { Initials, Image }
 // Custom — свой список запрещённых инструментов (Persona.DisallowedTools).
 public enum PersonaAccess { Full, ReadOnly, Custom }
 
+// Состояние кропа загруженного аватара: масштаб и смещение центра окна
+// от центра картинки (в пикселях исходника) — для «Перекроить» без перезагрузки файла.
+public class AvatarCropState
+{
+    public double Scale { get; set; } = 1;
+    public double OffsetX { get; set; }
+    public double OffsetY { get; set; }
+}
+
 // Внешний вид персоны.
 public class PersonaAvatar
 {
@@ -27,6 +36,10 @@ public class PersonaAvatar
     public string? Color { get; set; }
     // Имя файла картинки в data/personas/{id}/ (когда Kind == Image)
     public string? ImageFile { get; set; }
+    // Оригинал загруженного файла (для перекропа); у сгенерированных аватаров — null
+    public string? OriginalFile { get; set; }
+    // Параметры кропа, которыми получен ImageFile из OriginalFile
+    public AvatarCropState? Crop { get; set; }
 }
 
 // Структурированный контракт персоны (P1): характер разложен по слотам, каждый слот

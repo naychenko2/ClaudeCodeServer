@@ -242,6 +242,125 @@ public class PersonasController : ControllerBase
         return System.IO.File.Exists(full) ? PhysicalFileByExt(full) : NotFound();
     }
 
+    // Оригинал загруженного аватара (для перекропа). access_token в query — как GET avatar.
+    [HttpGet("{id}/avatar/original")]
+    public IActionResult AvatarOriginal(string id)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null || string.IsNullOrEmpty(persona.Avatar.OriginalFile))
+            return NotFound();
+
+        var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.OriginalFile);
+        return System.IO.File.Exists(full) ? PhysicalFileByExt(full) : NotFound();
+    }
+
+    // Загрузка своего аватара: оригинал + кропнутый квадрат + параметры кропа (JSON).
+    // Валидация: заявленный ContentType из белого списка И настоящие magic bytes;
+    // расширение файла — по фактическому типу, а не по имени от клиента.
+    [HttpPost("{id}/avatar/upload")]
+    [RequestSizeLimit(15_000_000)]
+    public async Task<ActionResult<Persona>> UploadAvatar(string id,
+        [FromForm] IFormFile? original, [FromForm] IFormFile? cropped, [FromForm] string? crop)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        if (original is null || cropped is null)
+            return BadRequest(new { error = "Нужны файлы original и cropped" });
+
+        var originalCheck = await ValidateImageAsync(original);
+        if (originalCheck.Error is not null) return BadRequest(new { error = originalCheck.Error });
+        var croppedCheck = await ValidateImageAsync(cropped);
+        if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
+
+        var cropState = ParseCrop(crop);
+
+        var dir = Path.Combine(_personas.AssetsDir, id);
+        Directory.CreateDirectory(dir);
+        var originalName = $"original-{Guid.NewGuid():N}{originalCheck.Ext}";
+        var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
+        await SaveFormFileAsync(original, Path.Combine(dir, originalName));
+        await SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+
+        var updated = _personas.SetAvatarUploaded(id, UserId, imageName, originalName, cropState);
+        await Broadcast("updated", id);
+        return Ok(updated);
+    }
+
+    // Перекроп сохранённого оригинала: новая кропнутая картинка + параметры.
+    [HttpPost("{id}/avatar/recrop")]
+    [RequestSizeLimit(5_000_000)]
+    public async Task<ActionResult<Persona>> RecropAvatar(string id,
+        [FromForm] IFormFile? cropped, [FromForm] string? crop)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        if (string.IsNullOrEmpty(persona.Avatar.OriginalFile))
+            return BadRequest(new { error = "У персоны нет оригинала для перекропа" });
+        if (cropped is null) return BadRequest(new { error = "Нужен файл cropped" });
+
+        var croppedCheck = await ValidateImageAsync(cropped);
+        if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
+
+        var dir = Path.Combine(_personas.AssetsDir, id);
+        Directory.CreateDirectory(dir);
+        var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
+        await SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+
+        var updated = _personas.SetAvatarRecropped(id, UserId, imageName, ParseCrop(crop));
+        await Broadcast("updated", id);
+        return Ok(updated);
+    }
+
+    private static readonly string[] AllowedImageTypes = ["image/jpeg", "image/png", "image/webp"];
+
+    // Проверка загружаемой картинки: заявленный ContentType из белого списка
+    // И настоящие magic bytes (FF D8 FF / PNG / RIFF..WEBP). Ext — по фактическому типу.
+    private static async Task<(string? Error, string Ext)> ValidateImageAsync(IFormFile file)
+    {
+        if (!AllowedImageTypes.Contains(file.ContentType, StringComparer.OrdinalIgnoreCase))
+            return ("Допустимы только изображения JPEG, PNG или WebP", "");
+
+        var head = new byte[12];
+        await using (var stream = file.OpenReadStream())
+        {
+            var read = await stream.ReadAtLeastAsync(head, 12, throwOnEndOfStream: false);
+            if (read < 12) return ("Файл не похож на изображение", "");
+        }
+
+        var ext = DetectImageExt(head);
+        return ext is null ? ("Файл не похож на изображение (сигнатура не совпадает)", "") : (null, ext);
+    }
+
+    // Определение типа по magic bytes; null — не картинка из белого списка
+    private static string? DetectImageExt(byte[] head)
+    {
+        if (head is [0xFF, 0xD8, 0xFF, ..]) return ".jpg";
+        if (head is [0x89, 0x50, 0x4E, 0x47, ..]) return ".png";
+        if (head.Length >= 12
+            && head[0] == (byte)'R' && head[1] == (byte)'I' && head[2] == (byte)'F' && head[3] == (byte)'F'
+            && head[8] == (byte)'W' && head[9] == (byte)'E' && head[10] == (byte)'B' && head[11] == (byte)'P')
+            return ".webp";
+        return null;
+    }
+
+    private static async Task SaveFormFileAsync(IFormFile file, string path)
+    {
+        await using var target = System.IO.File.Create(path);
+        await file.CopyToAsync(target);
+    }
+
+    // Параметры кропа из multipart-поля (JSON {scale, offsetX, offsetY}); мусор → null
+    private static AvatarCropState? ParseCrop(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<AvatarCropState>(raw,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
     private static string ExtFor(string contentType) => contentType switch
     {
         "image/jpeg" => ".jpg",

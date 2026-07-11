@@ -219,16 +219,59 @@ public class PersonaManager
         Save();
     }
 
-    // Установить сгенерированный/загруженный аватар-картинку
+    // Установить сгенерированный аватар-картинку. Оригинал/кроп загруженного файла
+    // при этом теряют смысл — чистим (и файл оригинала тоже).
     public Persona SetAvatarImage(string id, string userId, string imageFile)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        DeleteAsset(id, persona.Avatar.OriginalFile, keep: null);
         persona.Avatar.Kind = PersonaAvatarKind.Image;
         persona.Avatar.ImageFile = imageFile;
+        persona.Avatar.OriginalFile = null;
+        persona.Avatar.Crop = null;
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
         return persona;
+    }
+
+    // Загруженный аватар: кропнутая картинка + оригинал (для перекропа) + параметры кропа.
+    // Прежние avatar-*/original-* файлы удаляются.
+    public Persona SetAvatarUploaded(string id, string userId, string imageFile, string originalFile,
+        AvatarCropState? crop)
+    {
+        var persona = Get(id, userId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        DeleteAsset(id, persona.Avatar.ImageFile, keep: imageFile);
+        DeleteAsset(id, persona.Avatar.OriginalFile, keep: originalFile);
+        persona.Avatar.Kind = PersonaAvatarKind.Image;
+        persona.Avatar.ImageFile = imageFile;
+        persona.Avatar.OriginalFile = originalFile;
+        persona.Avatar.Crop = crop;
+        persona.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return persona;
+    }
+
+    // Перекроп существующего оригинала: заменяется только кропнутая картинка и параметры.
+    public Persona SetAvatarRecropped(string id, string userId, string imageFile, AvatarCropState? crop)
+    {
+        var persona = Get(id, userId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        DeleteAsset(id, persona.Avatar.ImageFile, keep: imageFile);
+        persona.Avatar.Kind = PersonaAvatarKind.Image;
+        persona.Avatar.ImageFile = imageFile;
+        persona.Avatar.Crop = crop;
+        persona.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return persona;
+    }
+
+    // Удалить файл-ассет персоны (кроме keep); ошибки удаления не критичны
+    private void DeleteAsset(string personaId, string? file, string? keep)
+    {
+        if (string.IsNullOrEmpty(file) || file == keep) return;
+        try { File.Delete(Path.Combine(AssetsDir, personaId, file)); } catch { /* не критично */ }
     }
 
     public bool Delete(string id, string userId)

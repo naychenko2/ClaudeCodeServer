@@ -1,8 +1,8 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScheduleType, PersonaScope, PersonaWorkingFocus, Project } from '../../types';
 import { api } from '../../lib/api';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
-import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl } from '../../components/ui';
+import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem } from '../../components/ui';
 import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
 import { useModels, useModelCaps, modelProvider } from '../../lib/models';
@@ -12,6 +12,7 @@ import { bumpPersonas } from '../../lib/personas';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
+import { AvatarCropDialog, type AvatarCropResult } from './AvatarCropDialog';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -134,9 +135,14 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Галерея сгенерированных кандидатов (имена файлов) — выбор перекладывает картинку в аватар
   const [candidates, setCandidates] = useState<string[]>([]);
   const [selecting, setSelecting] = useState<string | null>(null);
-  // Инлайн-панель «Внешность» под hero (раскрывается по ✎ на аватаре)
+  // Инлайн-панель «Внешность» под hero (открывается из мини-меню ✎)
   const [showAppearance, setShowAppearance] = useState(false);
   const [avatarHover, setAvatarHover] = useState(false);
+  // Мини-меню ✎: сгенерировать / загрузить файл / перекроить / цвет и инициалы
+  const [avatarMenu, setAvatarMenu] = useState(false);
+  // Кроп: источник картинки (objectURL выбранного файла или URL оригинала) + режим
+  const [cropState, setCropState] = useState<null | { src: string; mode: 'upload' | 'recrop'; file?: File }>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // AI-редактирование характера: активное действие (генерация/улучшение), ошибка,
   // общий поповер с необязательным уточняющим промптом для обоих режимов.
@@ -214,6 +220,27 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     } finally {
       setSelecting(null);
     }
+  };
+
+  // Выбор файла для загрузки аватара → диалог кропа поверх objectURL
+  const onAvatarFileChosen = (file: File | null) => {
+    if (!file) return;
+    setCropState({ src: URL.createObjectURL(file), mode: 'upload', file });
+  };
+
+  // Применение кропа: загрузка (оригинал + квадрат) или перекроп сохранённого оригинала
+  const applyCrop = async (result: AvatarCropResult) => {
+    if (!persona || !cropState) return;
+    const updated = cropState.mode === 'upload' && cropState.file
+      ? await api.personas.uploadAvatar(persona.id, cropState.file, result.blob, result.crop)
+      : await api.personas.recropAvatar(persona.id, result.blob, result.crop);
+    setAvatar(updated.avatar);
+    bumpPersonas();
+  };
+
+  const closeCrop = () => {
+    if (cropState?.mode === 'upload') URL.revokeObjectURL(cropState.src);
+    setCropState(null);
   };
 
   // Разбор textarea «строка = пункт» в список правил
@@ -408,15 +435,15 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           <PersonaAvatar persona={previewPersona} size={80} />
           <button
             type="button"
-            onClick={() => setShowAppearance(v => !v)}
+            onClick={() => setAvatarMenu(v => !v)}
             aria-label="Изменить внешность"
             title="Изменить внешность"
             style={{
               position: 'absolute', right: -2, bottom: -2, width: 28, height: 28, borderRadius: R.full,
-              border: `2px solid ${C.bgMain}`, background: showAppearance ? accentColor : C.bgWhite,
-              color: showAppearance ? '#fff' : C.textSecondary, cursor: 'pointer',
+              border: `2px solid ${C.bgMain}`, background: avatarMenu || showAppearance ? accentColor : C.bgWhite,
+              color: avatarMenu || showAppearance ? '#fff' : C.textSecondary, cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              opacity: showAppearance || avatarHover || isMobile ? 1 : 0, transition: 'opacity 0.15s, background 0.15s',
+              opacity: avatarMenu || showAppearance || avatarHover || isMobile ? 1 : 0, transition: 'opacity 0.15s, background 0.15s',
               boxShadow: SHADOW.thumb,
             }}
           >
@@ -424,6 +451,47 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
             </svg>
           </button>
+
+          {/* Мини-меню внешности: генерация / загрузка файла / перекроп / цвет */}
+          {avatarMenu && (
+            <Menu onClose={() => setAvatarMenu(false)} align="left" top={82} minWidth={220}>
+              <MenuItem
+                label="✨ Сгенерировать"
+                onClick={() => { setAvatarMenu(false); setShowAppearance(true); }}
+              />
+              <MenuItem
+                label={isEdit ? 'Загрузить файл…' : 'Загрузить файл… (после сохранения)'}
+                disabled={!isEdit}
+                onClick={() => { setAvatarMenu(false); fileInputRef.current?.click(); }}
+              />
+              {isEdit && avatar.originalFile && persona && (
+                <MenuItem
+                  label="Перекроить"
+                  onClick={() => {
+                    setAvatarMenu(false);
+                    const src = api.personas.avatarOriginalUrl({ ...persona, avatar });
+                    if (src) setCropState({ src, mode: 'recrop' });
+                  }}
+                />
+              )}
+              <MenuItem
+                label="Цвет и инициалы"
+                onClick={() => { setAvatarMenu(false); setShowAppearance(true); }}
+              />
+            </Menu>
+          )}
+
+          {/* Скрытый input выбора файла аватара */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            style={{ display: 'none' }}
+            onChange={e => {
+              onAvatarFileChosen(e.target.files?.[0] ?? null);
+              e.target.value = '';   // повторный выбор того же файла снова даёт change
+            }}
+          />
         </div>
 
         {/* Роль (крупно, serif, в цвет персоны) / Имя / Описание */}
@@ -998,6 +1066,17 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>
         )}
       </div>
+
+      {/* Диалог кропа: загрузка нового файла или перекроп сохранённого оригинала */}
+      {cropState && (
+        <AvatarCropDialog
+          src={cropState.src}
+          initial={cropState.mode === 'recrop' ? avatar.crop : null}
+          title={cropState.mode === 'recrop' ? 'Перекроить аватар' : 'Кадрирование аватара'}
+          onApply={applyCrop}
+          onClose={closeCrop}
+        />
+      )}
     </div>
   );
 });

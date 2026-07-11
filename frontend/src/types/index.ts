@@ -554,12 +554,23 @@ export type PersonaScope = 'global' | 'project';
 // советует, но ничего не меняет; custom — свой список запрещённых инструментов
 export type PersonaAccess = 'full' | 'readOnly' | 'custom';
 
+// Параметры кропа загруженного аватара: масштаб + смещение центра окна
+// от центра картинки (в пикселях исходника)
+export interface AvatarCropStateDto {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+}
+
 // Аватар персоны: инициалы на цветном фоне или загруженная картинка (этап 4).
-// color — ключ палитры AGENT_COLORS; imageFile — имя файла в хранилище персоны.
+// color — ключ палитры AGENT_COLORS; imageFile — имя файла в хранилище персоны;
+// originalFile/crop — оригинал загруженного файла и параметры кропа (для «Перекроить»).
 export interface PersonaAvatar {
   kind: 'initials' | 'image';
   color?: string;
   imageFile?: string;
+  originalFile?: string | null;
+  crop?: AvatarCropStateDto | null;
 }
 
 // Тип расписания проактивности персоны

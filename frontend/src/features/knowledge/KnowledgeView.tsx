@@ -3,9 +3,10 @@ import type { KnowledgeBaseSummary, KnowledgeDocument, KnowledgeSearchHit } from
 import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { bumpKnowledge, useKnowledgeVersion } from '../../lib/knowledge';
-import { Toolbar, ToolbarIconButton } from '../../components/Toolbar';
+import { Toolbar, ToolbarIconButton, tbBtnPrimary } from '../../components/Toolbar';
 import { Menu, MenuItem } from '../../components/ui';
-import { typeIcon, IconBack, IconPlus, IconDots, IconFile, IconTrash, IconSearch, IconSparkles } from './shared';
+import { typeIcon, IconBack, IconPlus, IconDots, IconFile, IconTrash, IconSearch } from './shared';
+import { VisibilityBadge } from './KnowledgeList';
 
 // Детальная зона базы: тулбар (симметричный другим разделам) + описание + документы +
 // семантический/полнотекстовый поиск. Состав перезапрашивается по версии (realtime).
@@ -72,9 +73,9 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>{kb.title}</span>
           <TypeChip>{kb.type}</TypeChip>
-          <VisibilityBadge visibility={kb.visibility} />
+          <VisibilityBadge visibility={kb.visibility} variant="header" />
         </div>
-        <button onClick={() => onAddDocument(kb)} style={addBtn}><IconPlus size={15} />Добавить</button>
+        <button onClick={() => onAddDocument(kb)} style={tbBtnPrimary}><IconPlus size={15} />Добавить</button>
         <span style={{ position: 'relative' }}>
           <ToolbarIconButton onClick={() => setMenu(true)} title="Действия"><IconDots size={18} /></ToolbarIconButton>
           {menu && (
@@ -94,10 +95,10 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
         {/* Описание + статистика */}
         <div style={{ padding: '16px 18px 8px' }}>
           {kb.description && (
-            <div style={{ color: C.textSecondary, fontSize: 13.5, maxWidth: 680 }}>{kb.description}</div>
+            <div style={{ color: C.textSecondary, fontSize: 13.5, maxWidth: 680, lineHeight: 1.5 }}>{kb.description}</div>
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12, color: C.textMuted }}>
-            <span>{kb.documentCount} документов</span>
+            <span>{kb.documentCount} {pluralDocs(kb.documentCount)}</span>
             {!kb.deletable && (
               <>
                 <span>·</span>
@@ -107,7 +108,8 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
           </div>
         </div>
 
-        {/* Поиск + переключатель семантика/полнотекст */}
+        {/* Поиск + переключатель семантика/полнотекст.
+            «Пилюля» смысла — внутри поля, как в сайдбаре Заметок (компактный «смысл»). */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, padding: '8px 18px 10px',
           position: 'sticky', top: 0, background: C.bgMain, zIndex: 2,
@@ -118,18 +120,15 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
           }}>
             <IconSearch size={15} />
             <input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)}
-              placeholder={mode === 'semantic' ? 'Семантический поиск по базе…' : 'Полнотекстовый поиск…'}
+              placeholder={mode === 'semantic' ? 'Поиск по смыслу…' : 'Полнотекстовый поиск…'}
               style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: FONT.sans, fontSize: 13, color: C.textHeading }} />
+            <button
+              onClick={() => setMode(m => m === 'semantic' ? 'fulltext' : 'semantic')}
+              title={mode === 'semantic' ? 'Поиск по смыслу — включён; клик — точный' : 'Точный поиск — включён; клик — по смыслу'}
+              style={semanticPill(mode === 'semantic')}>
+              смысл
+            </button>
           </div>
-          <button onClick={() => setMode(m => m === 'semantic' ? 'fulltext' : 'semantic')}
-            title={mode === 'semantic' ? 'Поиск по смыслу — включён' : 'Полнотекстовый поиск — включён'}
-            style={{
-              flex: 'none', height: 34, padding: '0 12px', borderRadius: R.lg, cursor: 'pointer', fontFamily: FONT.sans,
-              fontSize: 12.5, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
-              border: `1px solid ${mode === 'semantic' ? C.accent : C.border}`,
-              background: mode === 'semantic' ? C.accent : C.bgCard,
-              color: mode === 'semantic' ? C.onAccent : C.textSecondary,
-            }}><IconSparkles size={14} />{mode === 'semantic' ? 'По смыслу' : 'Точно'}</button>
         </div>
 
         {query.trim() ? (
@@ -142,6 +141,16 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
   );
 }
 
+// Пилюля «смысл» — компактная, в стиле Notes: accent когда активна, приглушённая — нет.
+function semanticPill(active: boolean): React.CSSProperties {
+  return {
+    fontSize: 10, fontWeight: 600, border: 'none', borderRadius: R.sm, padding: '3px 7px',
+    cursor: 'pointer', fontFamily: FONT.sans, flex: 'none',
+    background: active ? C.accent : C.bgSelected,
+    color: active ? C.onAccent : C.textMuted,
+  };
+}
+
 function TypeChip({ children }: { children: React.ReactNode }) {
   return (
     <span style={{
@@ -151,23 +160,6 @@ function TypeChip({ children }: { children: React.ReactNode }) {
     }}>{children}</span>
   );
 }
-
-function VisibilityBadge({ visibility }: { visibility: 'personal' | 'public' }) {
-  const isPub = visibility === 'public';
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', height: 18, padding: '0 8px', borderRadius: 10,
-      fontSize: 10.5, fontWeight: 600, whiteSpace: 'nowrap',
-      background: isPub ? C.successBg : C.accentMuted, color: isPub ? C.successText : C.accent,
-    }}>{isPub ? 'Публичная' : 'Личная'}</span>
-  );
-}
-
-const addBtn: React.CSSProperties = {
-  flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 7, height: 32, padding: '0 13px',
-  borderRadius: R.md, background: C.accent, color: C.onAccent, border: 'none', cursor: 'pointer',
-  fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
-};
 
 function docStatus(status: string): { label: string; dot: string; pulse: boolean } {
   const s = (status || '').toLowerCase();
@@ -181,24 +173,22 @@ function DocumentsList({ docs, err, onRemove }: {
   err: string | null;
   onRemove: (docId: string) => void;
 }) {
-  if (err) return <div style={{ padding: '20px 18px', color: C.danger, fontSize: 13 }}>{err}</div>;
-  if (docs === null) return <div style={{ padding: '20px 18px', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>;
-  if (docs.length === 0) return <div style={{ padding: '24px 18px', color: C.textMuted, fontSize: 13 }}>В базе нет документов — добавьте первый</div>;
+  if (err) return <div style={{ padding: '20px 18px', color: C.danger, fontSize: 13, fontFamily: FONT.sans }}>{err}</div>;
+  if (docs === null) return <div style={{ padding: '20px 18px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans }}>Загрузка…</div>;
+  if (docs.length === 0) return <div style={{ padding: '24px 18px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans }}>В базе нет документов — добавьте первый.</div>;
   return (
     <div style={{ padding: '4px 12px 28px' }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted, padding: '10px 8px 6px' }}>
-        Документы · {docs.length}
-      </div>
+      <SectionLabel>Документы · {docs.length}</SectionLabel>
       {docs.map(d => {
         const st = docStatus(d.indexingStatus);
         return (
           <div key={d.id} style={{
-            display: 'flex', alignItems: 'center', gap: 12, padding: '10px 10px', borderRadius: R.lg,
+            display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', borderRadius: R.lg,
           }}
-            onMouseEnter={e => { e.currentTarget.style.background = C.bgCard; }}
+            onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
             <span style={{
-              width: 28, height: 28, borderRadius: 7, background: C.bgPanel, flex: 'none',
+              width: 28, height: 28, borderRadius: R.sm, background: C.bgPanel, flex: 'none',
               display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textSecondary,
             }}><IconFile size={14} /></span>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -207,14 +197,17 @@ function DocumentsList({ docs, err, onRemove }: {
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
               }}>{d.name}</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, fontSize: 11, color: C.textSecondary }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: st.dot, animation: st.pulse ? 'kb-pulse 1.2s infinite' : undefined }} />
+                <span style={{
+                  width: 7, height: 7, borderRadius: '50%', background: st.dot,
+                  animation: st.pulse ? 'kb-pulse 1.2s infinite' : undefined, flex: 'none',
+                }} />
                 {st.label}
               </div>
             </div>
             <button onClick={() => onRemove(d.id)} title="Удалить документ"
               style={{
-                width: 26, height: 26, borderRadius: 7, border: 'none', background: 'transparent', cursor: 'pointer',
-                color: C.textMuted, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 26, height: 26, borderRadius: R.sm, border: 'none', background: 'transparent', cursor: 'pointer',
+                color: C.textMuted, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none',
               }}
               onMouseEnter={e => { e.currentTarget.style.background = C.dangerBg; e.currentTarget.style.color = C.danger; }}
               onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.textMuted; }}>
@@ -242,11 +235,11 @@ function SearchResults({ hits, searching, query, mode }: {
   };
   return (
     <div style={{ padding: '4px 14px 28px' }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted, padding: '10px 8px 6px' }}>
+      <SectionLabel>
         {mode === 'semantic' ? 'По смыслу' : 'Полнотекстово'} · {searching ? '…' : (hits?.length ?? 0)}
-      </div>
+      </SectionLabel>
       {searching ? (
-        <div style={{ padding: '12px 8px', color: C.textMuted, fontSize: 13 }}>Ищу…</div>
+        <div style={{ padding: '12px 8px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans }}>Ищу…</div>
       ) : hits && hits.length > 0 ? (
         hits.map((h, i) => (
           <div key={i} style={{
@@ -261,8 +254,25 @@ function SearchResults({ hits, searching, query, mode }: {
           </div>
         ))
       ) : (
-        <div style={{ padding: '12px 8px', color: C.textMuted, fontSize: 13 }}>Ничего не найдено</div>
+        <div style={{ padding: '12px 8px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans }}>Ничего не найдено.</div>
       )}
     </div>
   );
+}
+
+// Единая подпись секции списка (как в NotesList/Files)
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+      color: C.textMuted, fontFamily: FONT.sans, padding: '10px 8px 6px',
+    }}>{children}</div>
+  );
+}
+
+function pluralDocs(n: number): string {
+  const last = n % 10, last2 = n % 100;
+  if (last === 1 && last2 !== 11) return 'документ';
+  if (last >= 2 && last <= 4 && (last2 < 10 || last2 >= 20)) return 'документа';
+  return 'документов';
 }

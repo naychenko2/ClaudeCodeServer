@@ -43,7 +43,7 @@ export function AddDocumentDialog({ kb, onClose, onAdded }: {
     <Modal
       width={MODAL_W.form}
       title="Добавить документ"
-      subtitle={<>В базу «<strong style={{ color: 'var(--c-text-primary)', fontWeight: 600 }}>{kb.title}</strong>»</>}
+      subtitle={<>В базу «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{kb.title}</strong>»</>}
       onClose={onClose}
       footer={
         <ModalActions
@@ -95,7 +95,7 @@ export function AddDocumentDialog({ kb, onClose, onAdded }: {
         </Field>
       )}
 
-      {err && <div style={{ color: 'var(--c-danger)', fontSize: 13 }}>{err}</div>}
+      {err && <div style={{ color: C.danger, fontSize: 13 }}>{err}</div>}
     </Modal>
   );
 }

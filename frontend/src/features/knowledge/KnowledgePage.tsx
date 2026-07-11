@@ -111,11 +111,11 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
   const sidebarControls = (
     <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 8, flex: 'none' }}>
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 6, background: C.bgCard, border: `1px solid ${C.border}`,
-        borderRadius: R.md, height: 32, padding: '0 9px', color: C.textMuted,
+        display: 'flex', alignItems: 'center', gap: 6, background: C.bgWhite, border: `1px solid ${C.border}`,
+        borderRadius: R.md, height: 30, padding: '0 8px', color: C.textMuted,
       }}>
         <IconSearch size={15} />
-        <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Поиск по базам…"
+        <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Поиск…"
           style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontFamily: FONT.sans, fontSize: 12.5, color: C.textHeading }} />
       </div>
       <button onClick={() => setNewDialog(true)} style={{ ...newBtn, flex: 1, justifyContent: 'center' }}>
@@ -239,7 +239,7 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
 }
 
 const newBtn: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 6, background: C.accent, color: C.onAccent,
-  border: 'none', borderRadius: R.md, padding: '7px 12px', fontSize: 13, fontWeight: 600,
+  display: 'flex', alignItems: 'center', gap: 5, background: C.accent, color: C.onAccent,
+  border: 'none', borderRadius: R.md, padding: '7px 12px', fontSize: 13, fontWeight: 500,
   cursor: 'pointer', fontFamily: FONT.sans, flex: 'none',
 };

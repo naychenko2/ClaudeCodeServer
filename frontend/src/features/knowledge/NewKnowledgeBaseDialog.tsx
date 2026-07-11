@@ -4,7 +4,7 @@ import { api } from '../../lib/api';
 import { bumpKnowledge } from '../../lib/knowledge';
 import { Modal, ModalActions, Field, TextField, TextArea } from '../../components/ui';
 import { PillSwitch } from '../../components/Toolbar';
-import { MODAL_W } from '../../lib/design';
+import { C, MODAL_W } from '../../lib/design';
 import { IconLock, IconGlobe } from './shared';
 
 // Диалог создания базы знаний: название, описание, видимость (личная/публичная).
@@ -59,7 +59,7 @@ export function NewKnowledgeBaseDialog({ onClose, onCreated }: {
       </Field>
       <Field label="Видимость" hint={visibility === 'personal'
         ? 'Только вы видите и управляете этой базой.'
-        : 'Видна всем пользователям, удалять может любой.'}>
+        : 'Видна всем пользователям; удалять может администратор.'}>
         <PillSwitch<KnowledgeVisibility>
           fill
           value={visibility}
@@ -70,7 +70,7 @@ export function NewKnowledgeBaseDialog({ onClose, onCreated }: {
           ]}
         />
       </Field>
-      {err && <div style={{ color: 'var(--c-danger)', fontSize: 13 }}>{err}</div>}
+      {err && <div style={{ color: C.danger, fontSize: 13 }}>{err}</div>}
     </Modal>
   );
 }

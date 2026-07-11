@@ -25,6 +25,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
     private string Username => User.FindFirstValue(ClaimTypes.Name) ?? UserId;
+    private bool IsAdmin => User.IsInRole("admin");
 
     private Task Broadcast(string action, string? datasetId = null) =>
         hub.Clients.Group("user_" + UserId).SendAsync("message", new KnowledgeChangedMessage(action, datasetId));
@@ -96,7 +97,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     {
         var d = await ResolveReadableAsync(id);
         if (d is null) return NotFound();
-        if (!IsDeletable(d, OtherUsers())) return StatusCode(403, new { error = "Эту базу нельзя удалить из раздела «Знания» — она принадлежит другому разделу" });
+        if (!IsDeletable(d, OtherUsers())) return StatusCode(403, new { error = "Удаление этой базы недоступно: она привязана к другому разделу, либо для публичной базы нужны права администратора" });
         try { await knowledge.DeleteDatasetAsync(id); }
         catch (HttpRequestException ex) { return StatusCode(502, new { error = $"Dify недоступен: {ex.Message}" }); }
         await Broadcast("deleted", id);
@@ -224,7 +225,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     {
         var name = d.Name ?? "";
         var owner = OwnerOf(name, Username, others);
-        if (owner is null) return true;                                                 // глобальная
+        if (owner is null) return IsAdmin;                                              // глобальная — только админ
         if (!owner.Equals(Username, StringComparison.OrdinalIgnoreCase)) return false;  // чужая (не видна)
         var rest = name[(Username.Length + 1)..];                                       // после "{user}:"
         return rest.StartsWith("kb:", StringComparison.Ordinal);                        // самостоятельная

@@ -202,8 +202,11 @@ export interface Session {
   id: string;
   // Отсутствует у чатов вне проекта (project-less)
   projectId?: string;
-  // Привязка чата к персоне, если он ведётся от её лица
+  // Привязка чата к персоне, если он ведётся от её лица.
+  // В групповом чате — активный спикер (входит в participants)
   personaId?: string;
+  // Участники группового чата (2-4 id персон; первый — ведущая). Отсутствует у обычного чата
+  participants?: string[] | null;
   // Владелец чата вне проекта
   ownerId?: string;
   // Закреплён в списке чатов
@@ -276,6 +279,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }
   | { type: 'personas_changed'; action: 'created' | 'updated' | 'deleted' | 'memory'; personaId?: string }
+  | { type: 'speaker_changed'; personaId: string; label: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' }
 );
 
@@ -360,8 +364,9 @@ export type ChatItem =
   | { kind: 'interrupted' }
   | { kind: 'resumed' }
   | { kind: 'session_ended' }
-  // Локальный разделитель «сменился собеседник» (client-side, не с сервера; не переживает перезагрузку)
-  | { kind: 'companion_switched'; label: string }
+  // Разделитель «сменился собеседник»: label задан явно (смена вручную / speaker_changed
+  // с сервера) либо резолвится по personaId (derived из истории группового чата)
+  | { kind: 'companion_switched'; label: string; personaId?: string }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 // Скиллы и агенты

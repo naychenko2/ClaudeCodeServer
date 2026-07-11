@@ -280,3 +280,41 @@ describe('normalizeHistory', () => {
     expect(normalizeHistory([])).toEqual([]);
   });
 });
+
+// --- Групповой чат: speaker_changed + derive разделителей из истории ---
+
+describe('групповой чат', () => {
+  it('speaker_changed добавляет разделитель companion_switched с label и personaId', () => {
+    const next = run([{ type: 'speaker_changed', personaId: 'p2', label: 'Дизайнер (Света)' }]);
+    expect(next.items).toEqual([
+      { kind: 'companion_switched', label: 'Дизайнер (Света)', personaId: 'p2' },
+    ]);
+  });
+
+  it('normalizeHistory с deriveSpeakers вставляет разделитель на смене personaId', () => {
+    const raw = [
+      { kind: 'user_message', text: 'привет' },
+      { kind: 'text', text: 'ответ первой', personaId: 'p1' },
+      { kind: 'user_message', text: '@vtoraya, а ты что думаешь?' },
+      { kind: 'text', text: 'ответ второй', personaId: 'p2' },
+      { kind: 'text', text: 'продолжение второй', personaId: 'p2' },
+    ];
+    const items = normalizeHistory(raw, { deriveSpeakers: true });
+    expect(items).toEqual([
+      { kind: 'user_message', text: 'привет' },
+      { kind: 'text', text: 'ответ первой', personaId: 'p1' },
+      { kind: 'user_message', text: '@vtoraya, а ты что думаешь?' },
+      { kind: 'companion_switched', label: '', personaId: 'p2' },
+      { kind: 'text', text: 'ответ второй', personaId: 'p2' },
+      { kind: 'text', text: 'продолжение второй', personaId: 'p2' },
+    ]);
+  });
+
+  it('без deriveSpeakers разделители не вставляются', () => {
+    const raw = [
+      { kind: 'text', text: 'a', personaId: 'p1' },
+      { kind: 'text', text: 'b', personaId: 'p2' },
+    ];
+    expect(normalizeHistory(raw)).toHaveLength(2);
+  });
+});

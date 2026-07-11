@@ -122,6 +122,11 @@ public record NotesChangedMessage(string Action, string? NoteId = null)
 public record PersonasChangedMessage(string Action, string? PersonaId = null)
     : ServerMessage("personas_changed");
 
+// Смена активного спикера группового чата (@упоминание переключило персону-собеседника).
+// Label — готовая подпись «Роль (Имя)» для разделителя «Теперь отвечает: …».
+public record SpeakerChangedMessage(string PersonaId, string Label)
+    : ServerMessage("speaker_changed");
+
 // Пользовательское уведомление (напоминание о задаче, событие Claude-исполнителя и т.п.) —
 // в группу user_{userId}: открытое приложение показывает тост, клик ведёт по Url (hash-диплинк).
 // Kind — семантика для иконки/цвета: reminder | claude | info

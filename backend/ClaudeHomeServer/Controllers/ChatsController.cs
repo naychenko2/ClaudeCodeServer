@@ -39,6 +39,35 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // Групповой чат (флаг persona-group-chats): 2-4 персоны, первая — ведущая.
+    // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
+    [HttpPost("group")]
+    public async Task<IActionResult> CreateGroup([FromBody] CreateGroupChatRequest req)
+    {
+        var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
+        try
+        {
+            var chat = await sessions.CreateGroupChatAsync(UserId, req.PersonaIds ?? [], mode, req.Name);
+            return Ok(chat);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    // Обновить состав участников группового чата (спикер сохраняется, если остался,
+    // иначе — новая ведущая). Работает и для проектной сессии группового чата.
+    [HttpPut("{id}/participants")]
+    public IActionResult SetParticipants(string id, [FromBody] SetParticipantsRequest req)
+    {
+        try
+        {
+            var updated = sessions.SetParticipants(id, UserId, req.PersonaIds ?? []);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
     [HttpPut("{id}")]
     public IActionResult Update(string id, [FromBody] UpdateChatRequest req)
     {
@@ -123,3 +152,7 @@ public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = 
 public record UpdateChatRequest(string? Name = null, string? Model = null, string? Effort = null, bool? Pinned = null, int? ExpiresAfterMinutes = -1);
 
 public record SetPersonaRequest(string? PersonaId = null, string? AgentName = null);
+
+public record CreateGroupChatRequest(List<string>? PersonaIds, string Mode = "auto", string? Name = null);
+
+public record SetParticipantsRequest(List<string>? PersonaIds);

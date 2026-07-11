@@ -37,6 +37,8 @@ public static class FeatureFlagKeys
     public const string PersonaMentions = "persona-mentions";
     // Проактивность персон: «пишет первой» по расписанию (утренний бриф и т.п.)
     public const string PersonaProactive = "persona-proactive";
+    // Групповые чаты персон (2-4 участника, роутинг спикера по @) + совещания cross-attack
+    public const string PersonaGroupChats = "persona-group-chats";
 }
 
 /// <summary>
@@ -134,6 +136,16 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.PersonaProactive,
             Title: "Проактивные персоны",
             Description: "Персона может писать первой по расписанию: в заданное время выполняет свою инструкцию (например, собирает утренний бриф) и присылает уведомление со ссылкой на чат.",
+            Default: false,
+            Stage: "dev"),
+
+        // Групповые чаты персон: 2-4 участника в одном чате, отвечает тот, к кому
+        // обращаются через @handle. Плюс режим «Совещание»: независимые позиции,
+        // перекрёстная критика и синтез итога от ведущей.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PersonaGroupChats,
+            Title: "Групповые чаты персон",
+            Description: "Чат сразу с несколькими персонами: отвечает та, к кому обращаешься через @, остальных она может спросить сама. Плюс «Совещание»: участники независимо высказываются, критикуют позиции друг друга, ведущая сводит итог.",
             Default: false,
             Stage: "dev"),
     ];

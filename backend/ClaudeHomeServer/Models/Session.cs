@@ -53,7 +53,10 @@ public class Session
     public string? AgentName { get; set; }
     // Персона, от лица которой ведётся чат: задаёт характер,
     // модель и зону контекста (см. Persona). null — обычная сессия.
+    // В групповом чате — АКТИВНЫЙ спикер (∈ Participants).
     public string? PersonaId { get; set; }
+    // Участники группового чата (2-4 id персон; первый — ведущая). null — обычный чат.
+    public List<string>? Participants { get; set; }
     // Собеседника меняли по ходу разговора: в персона-промпт добавляется оговорка,
     // что прошлые ответы в транскрипте могли быть от другого собеседника.
     public bool PersonaSwitched { get; set; }

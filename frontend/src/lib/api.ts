@@ -437,6 +437,19 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
+    // Групповой чат персон (флаг persona-group-chats): 2-4 участника, первый — ведущая.
+    // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
+    createGroup: (personaIds: string[], mode = 'auto', name?: string) =>
+      request<Session>('/chats/group', {
+        method: 'POST',
+        body: JSON.stringify({ personaIds, mode, name }),
+      }),
+    // Обновить состав участников группового чата (спикер сохраняется, если остался)
+    setParticipants: (id: string, personaIds: string[]) =>
+      request<Session>(`/chats/${id}/participants`, {
+        method: 'PUT',
+        body: JSON.stringify({ personaIds }),
+      }),
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
     uploadFile: async (id: string, file: File): Promise<{ path: string }> => {

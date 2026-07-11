@@ -29,14 +29,31 @@ interface StoredHistoryMessage {
 }
 
 // Приводит сырую историю к ChatItem[]: проставляет UI-поля дефолтами —
-// thinking свёрнут, error без кнопки повтора (повторять исторические ошибки нельзя)
-export function normalizeHistory(raw: unknown[]): ChatItem[] {
-  return raw.map((msg): ChatItem => {
+// thinking свёрнут, error без кнопки повтора (повторять исторические ошибки нельзя).
+// deriveSpeakers (групповой чат): между соседними text-сообщениями с разным personaId
+// вставляется разделитель «Теперь отвечает: …» (label резолвится по personaId при рендере).
+export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boolean }): ChatItem[] {
+  const items: ChatItem[] = [];
+  // Автор последней виденной text-реплики (undefined — реплик ещё не было)
+  let lastPersonaId: string | undefined;
+  let sawText = false;
+
+  for (const msg of raw) {
     const m = msg as StoredHistoryMessage;
-    if (m.kind === 'thinking') return { ...m, expanded: false } as unknown as ChatItem;
-    if (m.kind === 'error') return { ...m, canRetry: false } as unknown as ChatItem;
-    return m as unknown as ChatItem;
-  });
+
+    if (opts?.deriveSpeakers && m.kind === 'text') {
+      const pid = (m as { personaId?: string }).personaId;
+      if (sawText && pid && pid !== lastPersonaId)
+        items.push({ kind: 'companion_switched', label: '', personaId: pid });
+      if (pid !== undefined) lastPersonaId = pid;
+      sawText = true;
+    }
+
+    if (m.kind === 'thinking') items.push({ ...m, expanded: false } as unknown as ChatItem);
+    else if (m.kind === 'error') items.push({ ...m, canRetry: false } as unknown as ChatItem);
+    else items.push(m as unknown as ChatItem);
+  }
+  return items;
 }
 
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
@@ -216,6 +233,11 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           ? { ...item, workflowAgents: msg.agents, workflowDone: msg.isDone }
           : item
       ));
+
+    case 'speaker_changed':
+      // Групповой чат: сервер переключил активного спикера по @упоминанию —
+      // локальный разделитель тем же рендером, что и смена собеседника вручную
+      return withItems([...prev.items, { kind: 'companion_switched', label: msg.label, personaId: msg.personaId }]);
 
     case 'status_changed':
       // Синхронизируем isWaiting по статусу — работает для всех открытых вкладок/браузеров.

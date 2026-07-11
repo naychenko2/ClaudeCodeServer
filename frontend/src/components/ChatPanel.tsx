@@ -96,7 +96,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch } = useSession(session.id, project?.id);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
   const worstRate = useMemo(() => worstWindow(rateWindows), [rateWindows]);
@@ -121,6 +121,15 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     [session.personaId, personasVersion]
   );
   useEffect(() => { void ensurePersonasLoaded(); }, []);
+  // Участники группового чата (резолв из стора персон); < 2 — обычный чат
+  const participantPersonas = useMemo(
+    () => (session.participants ?? [])
+      .map(id => getPersonaById(id))
+      .filter((p): p is Persona => !!p),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [session.participants, personasVersion]
+  );
+  const isGroupChat = participantPersonas.length > 1;
   // Есть ли уже ходы — назначать/менять персону можно только у пустого чата (бэкенд иначе 400)
   const chatEmpty = items.length === 0;
   // Персоны, доступные в контексте чата (глобальные + этого проекта) — для селектора,
@@ -164,6 +173,25 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     (p: Persona | null) => handleCompanionChange({ persona: p, agent: null }),
     [handleCompanionChange]
   );
+
+  // Групповой чат (флаг persona-group-chats): создаём НОВЫЙ чат с 2-4 участниками
+  // и уводим пользователя в него. Ведущая проектная → сессия текущего проекта,
+  // глобальная → чат вне проекта (переход в раздел «Чаты»).
+  const groupChatsOn = useFeature(FLAGS.personaGroupChats);
+  const handleCreateGroup = useCallback(async (personaIds: string[]) => {
+    try {
+      const chat = await api.chats.createGroup(personaIds);
+      if (chat.projectId) {
+        // Сессия в текущем проекте — WorkspacePage откроет её по событию
+        window.dispatchEvent(new CustomEvent('cc-open-project-session', { detail: { session: chat } }));
+      } else {
+        localStorage.setItem('cc_open_chat', chat.id);
+        window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
+      }
+    } catch (e) {
+      showToast('Групповой чат', e instanceof Error ? e.message : 'Не удалось создать групповой чат', 'info');
+    }
+  }, []);
 
   // Выбранный .md-агент чата (Session.agentName) — для селектора и индикации в шапке.
   // Если агента нет в списке (файл удалили/вне проекта) — показываем имя как есть.
@@ -749,6 +777,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         persona={persona}
         personaZoneName={project?.name ?? null}
         agent={persona ? null : chatAgent}
+        participants={isGroupChat ? participantPersonas : null}
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
@@ -888,6 +917,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onCompanionChange={handleCompanionChange}
             canPickCompanion={online}
             hasMessages={items.length > 0}
+            participantIds={session.participants}
+            onCreateGroup={groupChatsOn ? handleCreateGroup : undefined}
           />
           </div>
         </div>

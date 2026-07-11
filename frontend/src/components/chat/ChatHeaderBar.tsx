@@ -659,6 +659,9 @@ interface ChatHeaderBarProps {
   personaZoneName?: string | null;         // имя проекта для бейджа зоны проектной персоны
   // .md-агент чата (когда персоны нет) — компактная точка + имя в подзаголовке
   agent?: { name: string; color?: string } | null;
+  // Участники группового чата (2-4): стек аватаров вместо одиночного блока персоны;
+  // активный спикер (= persona) — с цветным кольцом
+  participants?: Persona[] | null;
 }
 
 // «Итог сессии в заметку» — теперь запускается ТОЛЬКО через AI-палитру (действие
@@ -767,7 +770,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants }: ChatHeaderBarProps) {
   const sessionModelLabel = useModelLabel(session.model);
   const asstName = assistantName(session.model);
   const providerKey = modelProvider(session.model);
@@ -795,7 +798,50 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   // При наличии персоны — её идентификация доминирует: аватар + роль (serif, цвет персоны)
   // и вторая строка «имя · зона · модель». session.name уходит в тултип, чтобы не потеряться.
-  const titleBlock = persona && personaAccent ? (
+  const titleBlock = participants && participants.length > 1 ? (
+    // Групповой чат: стек аватаров участников (активный спикер — с цветным кольцом)
+    // вместо одиночного блока персоны; вторая строка — «Отвечает: Роль (Имя)».
+    <div
+      title={participants.map(p => personaTitleLines(p).primary + (personaTitleLines(p).secondary ? ` (${personaTitleLines(p).secondary})` : '')).join(', ')}
+      style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}
+    >
+      <div style={{ display: 'flex', flexShrink: 0 }}>
+        {participants.map((p, i) => {
+          const active = p.id === persona?.id;
+          const ring = active
+            ? (AGENT_COLORS[p.avatar?.color ?? ''] ?? C.accent)
+            : C.bgMain;
+          return (
+            <div key={p.id} style={{
+              marginLeft: i === 0 ? 0 : -9,
+              borderRadius: '50%',
+              border: `2px solid ${ring}`,
+              zIndex: active ? participants.length + 1 : participants.length - i,
+              position: 'relative',
+              background: C.bgMain,
+            }}>
+              <PersonaAvatar persona={p} size={isMobile ? 24 : 26} />
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <span style={{ fontFamily: FONT.serif, fontSize: 16, fontWeight: 600, color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {session.name ?? 'Групповой чат'}
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: 1 }}>
+          <span style={{ fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            Отвечает: {persona ? personaTitleLines(persona).primary + (personaTitleLines(persona).secondary ? ` (${personaTitleLines(persona).secondary})` : '') : '—'}
+          </span>
+          {!isMobile && (
+            <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+              · {sessionModelLabel}{session.effort && ` · ${effortLabel(session.effort)}`}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  ) : persona && personaAccent ? (
     <div title={session.name ?? undefined} style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 9 }}>
       <PersonaAvatar persona={persona} size={28} />
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>

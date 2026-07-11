@@ -15,6 +15,9 @@ interface SessionState extends ChatState {
   isJoined: boolean;
   projectId?: string;
   isHistoryLoading: boolean;
+  // Групповой чат (participants > 1): в normalizeHistory включается derive
+  // разделителей «Теперь отвечает…» по смене personaId между репликами
+  isGroup?: boolean;
 }
 
 const _store = new Map<string, SessionState>();
@@ -24,6 +27,10 @@ const _joining = new Map<string, Promise<void>>();
 // История чата: у проектной сессии — через /projects/{id}/sessions, у чата вне проекта — через /chats
 const loadHistory = (sid: string, projectId?: string) =>
   projectId ? api.sessions.getHistory(projectId, sid) : api.chats.getHistory(sid);
+
+// Нормализация истории с опциями текущей сессии (derive разделителей в групповом чате)
+const normalizeFor = (sid: string, raw: unknown[]) =>
+  normalizeHistory(raw, { deriveSpeakers: getState(sid).isGroup });
 
 function getState(sid: string): SessionState {
   if (!_store.has(sid)) _store.set(sid, { ...initialChatState(), isJoined: false, isHistoryLoading: true });
@@ -73,7 +80,7 @@ function ensureHandler() {
         if (wasWaiting.has(sid)) {
           try {
             const raw = await loadHistory(sid, s.projectId);
-            const items = normalizeHistory(raw);
+            const items = normalizeFor(sid, raw);
             if (items.length > 0) {
               setState(sid, prev => ({
                 ...prev,
@@ -104,7 +111,7 @@ function ensureHandler() {
     if (msg.type === 'status_changed' && msg.status === 'active') {
       const projectId = getState(sid).projectId;
       loadHistory(sid, projectId).then(raw => {
-        const serverItems = normalizeHistory(raw);
+        const serverItems = normalizeFor(sid, raw);
         setState(sid, p => {
           if (serverItems.length <= p.items.length) return p;
           return { ...p, items: serverItems };
@@ -130,7 +137,7 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
   // может «зависнуть» в Reconnecting, поэтому join не должен блокировать историю.
   try {
     const raw = await loadHistory(sid, projectId);
-    const items = normalizeHistory(raw);
+    const items = normalizeFor(sid, raw);
     setState(sid, prev => {
       // Сервер — источник истины: используем его данные если их больше.
       // Иначе оставляем живые сообщения от стриминга (race condition при активном ходе).
@@ -151,7 +158,7 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
 
 // --- React-хук ---
 
-export function useSession(sessionId: string | null, projectId?: string) {
+export function useSession(sessionId: string | null, projectId?: string, isGroup?: boolean) {
   ensureHandler();
   const [, setTick] = useState(0);
 
@@ -163,6 +170,10 @@ export function useSession(sessionId: string | null, projectId?: string) {
     const notify = () => setTick(n => n + 1);
     listeners.add(notify);
 
+    // Признак группового чата — до загрузки истории (влияет на normalizeHistory)
+    if (getState(sessionId).isGroup !== !!isGroup)
+      setState(sessionId, prev => ({ ...prev, isGroup: !!isGroup }));
+
     ensureJoined(sessionId, projectId);
 
     // При переключении на уже-присоединённую сессию подтягиваем историю с сервера.
@@ -170,7 +181,7 @@ export function useSession(sessionId: string | null, projectId?: string) {
     const st = getState(sessionId);
     if (st.isJoined && !st.isWaiting) {
       loadHistory(sessionId, projectId).then(raw => {
-        const serverItems = normalizeHistory(raw);
+        const serverItems = normalizeFor(sessionId, raw);
         setState(sessionId, prev => {
           if (serverItems.length <= prev.items.length) return prev;
           return { ...prev, items: serverItems };
@@ -182,7 +193,7 @@ export function useSession(sessionId: string | null, projectId?: string) {
       listeners.delete(notify);
       // leaveSession не вызываем — сессия продолжает работать в фоне
     };
-  }, [sessionId, projectId]);
+  }, [sessionId, projectId, isGroup]);
 
   const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined };
 

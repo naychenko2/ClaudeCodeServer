@@ -122,6 +122,16 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     window.addEventListener('open-fal-stats', open);
     return () => window.removeEventListener('open-fal-stats', open);
   }, []);
+  // Открыть только что созданную сессию этого проекта (групповой чат из ChatPanel):
+  // проект уже открыт, событие приходит без ремоунта страницы
+  useEffect(() => {
+    const open = (e: Event) => {
+      const s = (e as CustomEvent<{ session?: Session }>).detail?.session;
+      if (s && s.projectId === project.id) setActiveSession(s);
+    };
+    window.addEventListener('cc-open-project-session', open);
+    return () => window.removeEventListener('cc-open-project-session', open);
+  }, [project.id]);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
   const activeSessionRef = useRef<Session | null>(null);

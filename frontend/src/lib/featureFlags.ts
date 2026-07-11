@@ -18,6 +18,7 @@ export const FLAGS = {
   personaMemoryConsolidation: 'persona-memory-consolidation',
   personaMentions: 'persona-mentions',
   personaProactive: 'persona-proactive',
+  personaGroupChats: 'persona-group-chats',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

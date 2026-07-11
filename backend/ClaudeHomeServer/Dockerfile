@@ -42,6 +42,11 @@ ENV DOTNET_ROOT=/usr/share/dotnet
 # CLI claude (реестр npm)
 RUN npm install -g @anthropic-ai/claude-code
 
+# CLI skills (github.com/vercel-labs/skills) — поиск и установка навыков из реестра.
+# Предустанавливаем глобально, чтобы не тянуть пакет через npx в рантайме: иначе первый
+# вызов скачивает пакет, и «шум» загрузки может исказить первый разбор вывода.
+RUN npm install -g skills
+
 # Непривилегированный пользователь; HOME под volume ~/.claude
 RUN useradd -m -u 1001 app
 WORKDIR /app
@@ -62,7 +67,10 @@ RUN mkdir -p /projects /data /home/app/.claude \
  && chown -R app:app /app /projects /data /home/app
 
 USER app
+# Локаль UTF-8 (базовый образ идёт с POSIX/C — некоторые инструменты чувствительны к ней)
 ENV HOME=/home/app \
-    DISABLE_AUTOUPDATER=1
+    DISABLE_AUTOUPDATER=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
 EXPOSE 5000
 ENTRYPOINT ["dotnet", "ClaudeHomeServer.dll"]

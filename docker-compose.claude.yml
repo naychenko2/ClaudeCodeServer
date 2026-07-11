@@ -57,6 +57,8 @@ services:
       # /projects смонтирован как 9p bind-mount (Windows-хост) — inotify там не работает,
       # FileSystemWatcher молчит. Включаем polling-обход дерева для авто-обновления файлов.
       FileWatcher__UsePolling: "true"
+      # CLI навыков предустановлен в образе (npm i -g skills) — зовём бинарь напрямую, без npx
+      Skills__Command: skills
       ReverseProxy__Clusters__onlyoffice__Destinations__default__Address: http://host.docker.internal:8090
       # draw.io self-hosted (контейнер drawio из docker-compose.yml) — YARP проксирует /drawio/*
       ReverseProxy__Clusters__drawio__Destinations__default__Address: http://host.docker.internal:8091

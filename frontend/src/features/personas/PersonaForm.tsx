@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
-import type { Persona, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, Project } from '../../types';
+import type { Persona, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaWorkingFocus, Project } from '../../types';
 import { api } from '../../lib/api';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl } from '../../components/ui';
 import { PillSwitch } from '../../components/Toolbar';
@@ -132,6 +132,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   // Сводка долгой памяти (для summary-карточки) — считаем из записей по типу
   const [memoryEntries, setMemoryEntries] = useState<PersonaMemoryEntry[] | null>(null);
+  // Рабочий фокус («что я сейчас делаю») — карточка в секции памяти
+  const [focus, setFocus] = useState<PersonaWorkingFocus | null>(null);
 
   // Возможности провайдера выбранной модели — показываем «Усилие рассуждения» только если поддерживается
   const caps = useModelCaps(model);
@@ -142,11 +144,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Один раз узнаём, доступна ли генерация аватара (fal настроен)
   useEffect(() => { api.personas.avatarCaps().then(c => setCanGenerate(c.generate)).catch(() => {}); }, []);
 
-  // Сводка памяти: грузим один раз при редактировании существующей персоны
+  // Сводка памяти + рабочий фокус: грузим при редактировании существующей персоны
   useEffect(() => {
-    if (!persona) { setMemoryEntries(null); return; }
+    if (!persona) { setMemoryEntries(null); setFocus(null); return; }
     let alive = true;
     api.personas.memory(persona.id).then(list => { if (alive) setMemoryEntries(list); }).catch(() => { if (alive) setMemoryEntries([]); });
+    api.personas.focus(persona.id).then(f => { if (alive) setFocus(f); }).catch(() => { if (alive) setFocus(null); });
     return () => { alive = false; };
   }, [persona]);
 
@@ -778,6 +781,33 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
       {isEdit ? (
         <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Рабочий фокус — «что я сейчас делаю» (рабочая память, вне записей) */}
+          {focus && (
+            <div style={focusCard}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: C.accent, fontFamily: FONT.sans }}>
+                  Текущий фокус · {timeAgo(focus.updatedAt)}
+                </span>
+                <button
+                  type="button"
+                  style={openMemoryBtn}
+                  onClick={() => {
+                    if (!persona) return;
+                    api.personas.clearFocus(persona.id).then(() => setFocus(null)).catch(() => {});
+                  }}
+                >
+                  Сбросить
+                </button>
+              </div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans, marginTop: 6 }}>
+                {focus.what}
+              </div>
+              <div style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, marginTop: 3, lineHeight: 1.5 }}>
+                Статус: {focus.status}
+                {focus.nextStep && <> · Следующий шаг: {focus.nextStep}</>}
+              </div>
+            </div>
+          )}
           {/* Счётчики по типам */}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             {MEMORY_TYPES.map(t => (
@@ -896,6 +926,25 @@ const memoryStat: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 7,
   background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '7px 12px',
 };
+
+// Карточка рабочего фокуса — в ряду memoryStat-карточек, но с акцентной рамкой
+const focusCard: React.CSSProperties = {
+  background: C.bgWhite, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.accent}`,
+  borderRadius: R.lg, padding: '10px 12px',
+};
+
+// Давность «N мин/ч/дн назад» для метки фокуса
+function timeAgo(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return 'только что';
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return 'только что';
+  if (min < 60) return `${min} мин назад`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} ч назад`;
+  const d = Math.floor(h / 24);
+  return `${d} дн назад`;
+}
 
 const openMemoryBtn: React.CSSProperties = {
   background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',

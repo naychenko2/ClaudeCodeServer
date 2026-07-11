@@ -479,17 +479,38 @@ public class PersonasController : ControllerBase
         return Ok(hits);
     }
 
-    // Запомнить (явный write-path)
+    // Запомнить (явный write-path); salience — важность 0..1 (опционально)
     [HttpPost("{id}/memory")]
     public async Task<ActionResult<PersonaMemoryEntry>> Remember(string id, [FromBody] RememberRequest req)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest("Пустой текст");
         if (!Enum.TryParse<PersonaMemoryType>(req.Type, true, out var type)) type = PersonaMemoryType.Semantic;
-        var entry = _memory.Remember(UserId, id, type, req.Text, req.Tags, req.SourceSessionId);
+        var entry = _memory.Remember(UserId, id, type, req.Text, req.Tags, req.SourceSessionId, req.Salience);
         if (entry is null) return NotFound();
         await Broadcast("memory", id);
         return Ok(entry);
+    }
+
+    // --- Рабочий фокус персоны (P3): «что я сейчас делаю» ---
+
+    // Текущий фокус; 204 — фокуса нет
+    [HttpGet("{id}/focus")]
+    public ActionResult<PersonaWorkingFocus> GetFocus(string id)
+    {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+        var focus = _memory.GetFocus(UserId, id);
+        return focus is null ? NoContent() : Ok(focus);
+    }
+
+    // Сбросить фокус (кнопка «Сбросить» в карточке памяти)
+    [HttpDelete("{id}/focus")]
+    public async Task<IActionResult> ClearFocus(string id)
+    {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+        _memory.ClearFocus(UserId, id);
+        await Broadcast("memory", id);
+        return NoContent();
     }
 
     // Забыть запись
@@ -526,7 +547,11 @@ public class PersonasController : ControllerBase
         {
             try
             {
-                var recall = await _memory.BuildRecallAsync(UserId, persona.Id, req.Question, topK: 5, minScore: 0.02);
+                // Шкала скоринга — взвешенная сумма (PersonaMemoryScorer), порог ~0.30
+                // (старый 0.02 был для шкалы произведения)
+                var minScore = double.TryParse(_config["Persona:RecallMinScore"],
+                    System.Globalization.CultureInfo.InvariantCulture, out var ms) ? ms : 0.30;
+                var recall = await _memory.BuildRecallAsync(UserId, persona.Id, req.Question, topK: 5, minScore);
                 if (!string.IsNullOrWhiteSpace(recall)) sb.AppendLine().AppendLine(recall);
             }
             catch (Exception ex) { _log.LogWarning(ex, "persona_ask: recall памяти {Persona}", persona.Id); }
@@ -598,7 +623,8 @@ public record UpdatePersonaRequest(
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null);
 
-public record RememberRequest(string Type, string Text, List<string>? Tags = null, string? SourceSessionId = null);
+public record RememberRequest(string Type, string Text, List<string>? Tags = null,
+    string? SourceSessionId = null, double? Salience = null);
 
 public record GenerateAvatarRequest(string? Prompt = null, int? Count = null);
 

@@ -88,6 +88,22 @@ public class Persona
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
 
+// Рабочий фокус персоны (P3) — «что я сейчас делаю»: одна ячейка рабочей памяти.
+// Живёт в persona-memory.json (MemState), НЕ является записью памяти и НЕ полем Persona;
+// в recall подмешивается первым блоком без скоринга.
+public class PersonaWorkingFocus
+{
+    // Чем занята персона (незавершённое дело)
+    public string What { get; set; } = "";
+    // Текущий статус дела
+    public string Status { get; set; } = "";
+    // Следующий шаг (опционально)
+    public string? NextStep { get; set; }
+    // Сессия, из которой фокус был выставлен (для трассировки)
+    public string? SourceSessionId { get; set; }
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
 // Запись долгой памяти персоны. Хранится в data/persona-memory-{personaId}.json;
 // семантическая часть дублируется в Dify-датасет для векторного retrieve.
 public class PersonaMemoryEntry

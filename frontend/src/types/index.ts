@@ -630,6 +630,16 @@ export interface PersonaMemoryEntry {
   lastAccessedAt: string;
 }
 
+// Рабочий фокус персоны — «что я сейчас делаю» (одна ячейка рабочей памяти,
+// живёт отдельно от записей; в recall подмешивается первым блоком)
+export interface PersonaWorkingFocus {
+  what: string;
+  status: string;
+  nextStep?: string;
+  sourceSessionId?: string;
+  updatedAt: string;
+}
+
 // Результат семантического поиска по памяти
 export interface PersonaMemoryHit {
   id: string;

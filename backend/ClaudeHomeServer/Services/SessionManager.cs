@@ -153,12 +153,15 @@ public class SessionManager
     }
 
     // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок релевантных
-    // записей (relevance × recency × typeWeight). Failsafe-таймаут; ошибки → null (ход без recall).
+    // записей (взвешенная сумма PersonaMemoryScorer) + рабочий фокус первым блоком.
+    // Failsafe-таймаут; ошибки → null (ход без recall).
     private Func<string, Task<string?>> BuildPersonaRecallProvider(string ownerId, string personaId)
     {
         var topK = int.TryParse(_config["Persona:RecallTopK"], out var k) ? k : 5;
+        // Шкала скоринга — взвешенная сумма (PersonaMemoryScorer), порог ~0.30;
+        // старый дефолт 0.02 относился к шкале произведения и больше не валиден
         var minScore = double.TryParse(_config["Persona:RecallMinScore"],
-            System.Globalization.CultureInfo.InvariantCulture, out var s) ? s : 0.02;
+            System.Globalization.CultureInfo.InvariantCulture, out var s) ? s : 0.30;
         var timeoutMs = int.TryParse(_config["Persona:RecallTimeoutMs"], out var t) ? t : 2500;
 
         return async text =>

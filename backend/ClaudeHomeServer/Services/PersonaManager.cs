@@ -232,33 +232,38 @@ public class PersonaManager
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
 
-        if (name is not null) persona.Name = string.IsNullOrWhiteSpace(name) ? persona.Name : name.Trim();
-        if (role is not null) persona.Role = role.Length == 0 ? null : role.Trim();
-        if (description is not null) persona.Description = description;
-        if (systemPrompt is not null) persona.SystemPrompt = systemPrompt;
-        // null — не менять; объект с пустыми слотами — сбросить контракт (нормализуется в null)
-        if (contract is not null) persona.Contract = NormalizeContract(contract);
-        if (model is not null) persona.Model = model.Length == 0 ? null : model;
-        if (effort is not null) persona.Effort = effort.Length == 0 ? null : effort;
-        if (scope is not null)
+        // Мутации полей — под _saveLock, чтобы параллельные читатели (Save/enumerate _personas)
+        // не видели полу-обновлённую персону. Save/OnPersonaChanged — вне лока (внешний код).
+        lock (_saveLock)
         {
-            persona.Scope = scope.Value;
-            persona.ProjectId = scope.Value == PersonaScope.Project ? projectId : null;
+            if (name is not null) persona.Name = string.IsNullOrWhiteSpace(name) ? persona.Name : name.Trim();
+            if (role is not null) persona.Role = role.Length == 0 ? null : role.Trim();
+            if (description is not null) persona.Description = description;
+            if (systemPrompt is not null) persona.SystemPrompt = systemPrompt;
+            // null — не менять; объект с пустыми слотами — сбросить контракт (нормализуется в null)
+            if (contract is not null) persona.Contract = NormalizeContract(contract);
+            if (model is not null) persona.Model = model.Length == 0 ? null : model;
+            if (effort is not null) persona.Effort = effort.Length == 0 ? null : effort;
+            if (scope is not null)
+            {
+                persona.Scope = scope.Value;
+                persona.ProjectId = scope.Value == PersonaScope.Project ? projectId : null;
+            }
+            else if (projectId is not null && persona.Scope == PersonaScope.Project)
+            {
+                persona.ProjectId = projectId;
+            }
+            if (color is not null) persona.Avatar.Color = color.Length == 0 ? null : color;
+            if (greeting is not null) persona.Greeting = greeting.Length == 0 ? null : greeting;
+            if (memoryEnabled is not null) persona.MemoryEnabled = memoryEnabled.Value;
+            // null — не менять; список — установить (полный набор нормализуется в null)
+            if (tools is not null) persona.Tools = NormalizeTools(tools);
+            // Профиль доступа: null — не менять; свой список запретов живёт только при Custom
+            if (access is not null) persona.Access = access.Value;
+            if (disallowedTools is not null) persona.DisallowedTools = NormalizeDisallowed(disallowedTools);
+            if (persona.Access != PersonaAccess.Custom) persona.DisallowedTools = null;
+            persona.UpdatedAt = DateTime.UtcNow;
         }
-        else if (projectId is not null && persona.Scope == PersonaScope.Project)
-        {
-            persona.ProjectId = projectId;
-        }
-        if (color is not null) persona.Avatar.Color = color.Length == 0 ? null : color;
-        if (greeting is not null) persona.Greeting = greeting.Length == 0 ? null : greeting;
-        if (memoryEnabled is not null) persona.MemoryEnabled = memoryEnabled.Value;
-        // null — не менять; список — установить (полный набор нормализуется в null)
-        if (tools is not null) persona.Tools = NormalizeTools(tools);
-        // Профиль доступа: null — не менять; свой список запретов живёт только при Custom
-        if (access is not null) persona.Access = access.Value;
-        if (disallowedTools is not null) persona.DisallowedTools = NormalizeDisallowed(disallowedTools);
-        if (persona.Access != PersonaAccess.Custom) persona.DisallowedTools = null;
-        persona.UpdatedAt = DateTime.UtcNow;
         Save();
         OnPersonaChanged?.Invoke(persona);
         return persona;
@@ -270,8 +275,11 @@ public class PersonaManager
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
-        persona.Bindings = bindings is { Count: > 0 } ? bindings : null;
-        persona.UpdatedAt = DateTime.UtcNow;
+        lock (_saveLock)
+        {
+            persona.Bindings = bindings is { Count: > 0 } ? bindings : null;
+            persona.UpdatedAt = DateTime.UtcNow;
+        }
         Save();
         OnPersonaChanged?.Invoke(persona);
         return persona;
@@ -334,9 +342,14 @@ public class PersonaManager
 
     public bool Delete(string id, string userId)
     {
-        var persona = Get(id, userId);
-        if (persona is null) return false;
-        _personas.TryRemove(id, out _);
+        // Проверка владельца + удаление из словаря — атомарно под _saveLock (консистентно
+        // с генерацией handle в Create и снапшотом в Save). Чистка ассетов/Save — вне лока.
+        lock (_saveLock)
+        {
+            var persona = Get(id, userId);
+            if (persona is null) return false;
+            _personas.TryRemove(id, out _);
+        }
         // Чистим ассеты персоны (аватар)
         try
         {

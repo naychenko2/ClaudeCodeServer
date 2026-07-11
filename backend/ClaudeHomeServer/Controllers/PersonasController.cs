@@ -796,7 +796,8 @@ public class PersonasController : ControllerBase
         var chunks = await _knowledge.RetrieveAsync(req.DatasetId, req.Query, topK);
         return Ok(new
         {
-            hits = chunks.Select(c => new { document = c.DocumentName, score = c.Score, content = c.Content }),
+            // metadata — структурные поля документа (дата встречи, id, источник и т.п.), если есть
+            hits = chunks.Select(c => new { document = c.DocumentName, score = c.Score, content = c.Content, metadata = c.Metadata }),
         });
     }
 

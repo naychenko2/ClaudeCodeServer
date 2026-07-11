@@ -375,7 +375,11 @@ public class PersonaBindingsService
         return string.Join("\n", chunks.Select(c =>
         {
             var content = c.Content.Replace('\n', ' ').Trim();
-            return $"— [{c.DocumentName}] {content}";
+            // Метка документа + его метаданные (дата встречи/источник и т.п.), если есть
+            var meta = c.Metadata is { Count: > 0 }
+                ? " · " + string.Join(", ", c.Metadata.Select(kv => $"{kv.Key}: {kv.Value}"))
+                : "";
+            return $"— [{c.DocumentName}{meta}] {content}";
         }));
     }
 

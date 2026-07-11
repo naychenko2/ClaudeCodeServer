@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using Microsoft.Extensions.Options;
@@ -47,7 +48,10 @@ public record DifyDocumentCreateResponse(
 
 public record DifyRetrieveDocument(
     [property: JsonPropertyName("id")] string Id,
-    [property: JsonPropertyName("name")] string Name);
+    [property: JsonPropertyName("name")] string Name,
+    // Структурные метаданные документа (напр. meeting_date/meeting_id/meeting_source) —
+    // значения произвольных типов, приводятся к строке при маппинге в чанк.
+    [property: JsonPropertyName("doc_metadata")] Dictionary<string, JsonElement>? DocMetadata = null);
 
 public record DifyRetrieveSegment(
     [property: JsonPropertyName("content")] string Content,
@@ -60,8 +64,10 @@ public record DifyRetrieveRecord(
 public record DifyRetrieveResponse(
     [property: JsonPropertyName("records")] List<DifyRetrieveRecord> Records);
 
-// Чанк результата семантического поиска
-public record DifyRetrieveChunk(string Content, double Score, string DocumentId, string DocumentName);
+// Чанк результата поиска. Metadata — структурные метаданные документа-источника
+// (дата встречи, id, источник и т.п.), приведённые к строкам; null/пусто — их нет.
+public record DifyRetrieveChunk(string Content, double Score, string DocumentId, string DocumentName,
+    IReadOnlyDictionary<string, string>? Metadata = null);
 
 public class KnowledgeService
 {
@@ -173,8 +179,28 @@ public class KnowledgeService
         var body = await resp.Content.ReadFromJsonAsync<DifyRetrieveResponse>()
             ?? throw new InvalidOperationException("Пустой ответ от Dify при поиске");
         return body.Records
-            .Select(r => new DifyRetrieveChunk(r.Segment.Content, r.Score, r.Segment.Document.Id, r.Segment.Document.Name))
+            .Select(r => new DifyRetrieveChunk(r.Segment.Content, r.Score,
+                r.Segment.Document.Id, r.Segment.Document.Name,
+                MapMetadata(r.Segment.Document.DocMetadata)))
             .ToList();
+    }
+
+    // Метаданные документа → строковый словарь (пустые/null значения отбрасываем).
+    private static IReadOnlyDictionary<string, string>? MapMetadata(Dictionary<string, JsonElement>? meta)
+    {
+        if (meta is null || meta.Count == 0) return null;
+        var result = new Dictionary<string, string>();
+        foreach (var (key, value) in meta)
+        {
+            var s = value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString(),
+                JsonValueKind.Null or JsonValueKind.Undefined => null,
+                _ => value.GetRawText(),
+            };
+            if (!string.IsNullOrWhiteSpace(s)) result[key] = s;
+        }
+        return result.Count == 0 ? null : result;
     }
 
     // Lazy-создание датасета при первом обращении; SemaphoreSlim с double-check защищает от гонки.

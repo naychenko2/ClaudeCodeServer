@@ -222,7 +222,16 @@ WorkingDirectory = `project.RootPath`
 - **Шаблоны ролей** ([personaTemplates.ts](frontend/src/features/personas/personaTemplates.ts)):
   6 готовых ролей с промптами-контрактами (Ревьюер, Планировщик, Аналитик, Ментор, Секретарь,
   Дизайнер) — сетка карточек на экране создания (PersonaQuickCreate), выбор предзаполняет
-  PersonaForm (`initial`), включая дефолтные возможности.
+  PersonaForm (`initial`), включая дефолтные возможности, модель и усилие.
+- **Пантеон OmO** ([omoPantheonTemplates.ts](frontend/src/features/personas/omoPantheonTemplates.ts)):
+  вторая секция шаблонов — 8 ролей с ПОЛНЫМИ переведёнными промптами oh-my-openagent
+  (по договорённости с авторами, соответствие — [docs/omo-adoption.md](docs/omo-adoption.md)):
+  Оркестратор (Сизиф), Мастер (Гефест), Планировщик (Прометей), Координатор (Атлант),
+  Аналитик (Метида), Ревьюер (Мом), Консультант (Оракул), Библиотекарь (Клио). Полный
+  регламент — в слоте `contract.instructions` (raw-импорт `omo/*.md`), модуль грузится
+  лениво (dynamic import, ~280 КБ отдельным чанком); советникам — `access: readOnly`.
+  Переводы-первоисточники: docs/omo/translations (правишь → перегенерируй
+  docs/omo/gen-omo-prompts.ps1 и перекопируй тела в frontend/…/omo/).
 - **Возможности per-persona** (`Persona.Tools`: ключи `tasks`/`notes`/`web`; null = без
   ограничений, полный набор нормализуется в null): гейт tasks/notes MCP при сборке
   LlmSessionContext; выключенный `web` добавляет WebSearch/WebFetch в
@@ -245,11 +254,14 @@ WorkingDirectory = `project.RootPath`
   итог. Бэкенд и протокол не участвуют. При включённом `persona-group-chats` в диалоге есть
   второй режим — «Совещание» (см. ниже).
 - **Контракт характера (P1) + дисциплина (P2)**: `Persona.Contract` (character/tone/mustDo/
-  mustNot/outputFormat/speechExamples — слоты вместо единого текста; legacy `SystemPrompt`
-  остаётся у персон без контракта). Единый сборщик промпта —
-  [PersonaPromptBuilder.cs](backend/ClaudeHomeServer/Services/PersonaPromptBuilder.cs):
-  идентичность + секции контракта + дисциплинарная обвязка по провайдеру модели
-  (Claude — только краткость; DeepSeek — полный набор; GLM — без секции достоверности).
+  mustNot/outputFormat/speechExamples/instructions — слоты вместо единого текста; legacy
+  `SystemPrompt` остаётся у персон без контракта; `instructions` — длинный регламент роли
+  отдельной секцией «## Инструкция», в PersonaForm свёрнут при пустом). Единый сборщик
+  промпта — [PersonaPromptBuilder.cs](backend/ClaudeHomeServer/Services/PersonaPromptBuilder.cs):
+  идентичность + секции контракта + дисциплинарная обвязка по провайдеру модели секциями
+  из model-веток OmO (Claude — краткость + прагматизм наименьшего изменения; DeepSeek —
+  полный набор + самопроверка и намерение хода; GLM — калибровка пяти сбоев + outcome-first,
+  без секции достоверности).
 - **Память v2 (P3)**: скоринг взвешенной суммой ([PersonaMemoryScorer.cs](backend/ClaudeHomeServer/Services/PersonaMemoryScorer.cs)),
   reinforcement (Touch при recall) и **рабочий фокус** «что я сейчас делаю» (одна ячейка,
   в recall первым блоком; `GET/DELETE {id}/focus`). Autolearn выставляет salience и фокус;
@@ -342,6 +354,29 @@ WorkingDirectory = `project.RootPath`
   (@упоминания + persona_ask + дискуссия), `persona-proactive` (пишет первой по расписанию),
   `persona-group-chats` (групповые чаты + совещания P7).
 
+## Механики OmO в чатах (флаги `ultrawork-keyword`, `work-loop`)
+
+Тексты — переводы oh-my-openagent ([docs/omo-adoption.md](docs/omo-adoption.md)); рантайм-константы —
+[Services/Prompts/OmoPrompts*.cs](backend/ClaudeHomeServer/Services/Prompts/OmoPrompts.cs)
+(Ultrawork/Categories генерируются скриптом docs/omo/gen-omo-prompts.ps1 из переводов).
+
+- **Магическое слово ultrawork** (`ultrawork-keyword`): слово `ultrawork`/`ulw`/`ультра`/`ультраворк`
+  отдельным словом в сообщении → `SessionManager.BuildCliTurnText` дописывает переведённый режим
+  максимального усилия к тексту хода ТОЛЬКО для CLI (история/UI/LastMessage хранят исходное
+  сообщение). Фронт детектит то же правило сам ([lib/ultrawork.ts](frontend/src/lib/ultrawork.ts)) —
+  бейдж «⚡ ультра» на сообщении в ленте.
+- **Цикл «до готово»** (`work-loop`, по мотивам ralph/ulw-loop): тумблер в композере →
+  `PUT /api/chats/{id}/loop` → `Session.WorkLoop` {promise=«ГОТОВО», iteration, maxIterations
+  (конфиг `Loop:MaxIterations`, дефолт 20), phase working|verifying}. Пока цикл активен, к ходу
+  дописывается протокол «выведи `<promise>ГОТОВО</promise>` когда всё сделано»; на `exited`
+  штатного хода `ContinueWorkLoopAsync`: маркер не найден → автопродолжение (continuation-сообщение
+  видно в ленте как обычное), найден → фаза verifying (один верификационный ход со свидетельствами;
+  без рабочего протокола), после — стоп; стоп также по лимиту, ошибке хода и Interrupt (снимается
+  синхронно до exited). Событие `work_loop` (active/iteration/max/phase) → бейдж «Цикл: итерация N/M»
+  в композере. Текст хода агрегируется в `SessionEntry.LoopTurnText` (поиск маркера).
+- Справочник категорий делегирования (`OmoPrompts.DelegationCategories`) — секция «ДЕЛЕГИРОВАНИЕ»
+  в промпте персоны-исполнителя задач (TaskExecutionService).
+
 ## REST API
 
 Все эндпоинты (кроме `/api/auth/ping`) и SignalR-хаб защищены `[Authorize]` —
@@ -384,6 +419,7 @@ POST                /api/chats/group                   { personaIds[], mode?, na
 PUT                 /api/chats/{id}/participants       { personaIds[] } → Session  (состав группы; спикер сохраняется, иначе ведущая)
 POST                /api/chats/{id}/meeting            { question, personaIds? } → { meetingId }  (совещание P7; дефолт — participants чата)
 POST                /api/chats/{id}/meeting/cancel     → 204  (отмена идущего совещания)
+PUT                 /api/chats/{id}/loop               { enabled } → Session  (цикл «до готово», флаг work-loop; работает и для проектных сессий)
 ```
 
 Эффективные значения флагов также возвращаются в `GET /api/auth/me` (поле `featureFlags`),

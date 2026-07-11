@@ -169,7 +169,10 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
                     onMouseEnter={e => { e.currentTarget.style.borderColor = agentDotColor(t.avatarColor); e.currentTarget.style.background = C.bgWhite; }}
                     onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.bgWhite; }}
                     style={{
-                      display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left',
+                      // minWidth:0 обязателен: грид-элемент по умолчанию min-width:auto —
+                      // тогда трек 1fr разворачивается до min-content карточки (шире экрана)
+                      // и карточка уезжает за край. С 0 трек ужимается до ширины контейнера.
+                      display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', minWidth: 0,
                       background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
                       padding: '11px 13px', cursor: 'pointer', fontFamily: FONT.sans,
                       transition: 'border-color 0.15s',

@@ -792,14 +792,51 @@ public class PersonasController : ControllerBase
         if ((await _bindings.KnowledgeTargetsAsync(UserId)).All(d => d.Id != req.DatasetId))
             return NotFound(new { error = "База знаний не найдена или недоступна" });
 
+        // Доступные поля метаданных базы — для валидации фильтра и подсказки персоне
+        IReadOnlyList<KnowledgeMetadataFieldInfo> fields;
+        try { fields = await _knowledge.ListMetadataFieldsAsync(req.DatasetId); }
+        catch { fields = []; }
+
+        // Валидация фильтров: оператор из разрешённого набора + поле есть в базе.
+        // Иначе Dify молча вернул бы 0 (по несуществующему полю) — вместо этого
+        // честно говорим персоне, что не так и по каким полям можно фильтровать.
+        List<KnowledgeMetadataFilter>? filters = null;
+        if (req.Filters is { Count: > 0 })
+        {
+            filters = [];
+            foreach (var f in req.Filters)
+            {
+                if (string.IsNullOrWhiteSpace(f.Name) || string.IsNullOrWhiteSpace(f.Operator))
+                    return BadRequest(new { error = "У фильтра нужны name и operator" });
+                if (!MetadataFilterOperators.Contains(f.Operator))
+                    return BadRequest(new { error = $"Недопустимый оператор «{f.Operator}»", allowedOperators = MetadataFilterOperators });
+                if (fields.All(x => !string.Equals(x.Name, f.Name, StringComparison.OrdinalIgnoreCase)))
+                    return BadRequest(new
+                    {
+                        error = $"В этой базе знаний нет поля метаданных «{f.Name}» — фильтровать по нему нельзя",
+                        availableFields = fields.Select(x => new { x.Name, x.Type }),
+                    });
+                filters.Add(new KnowledgeMetadataFilter(f.Name, f.Operator, f.Value));
+            }
+        }
+
         var topK = req.TopK is > 0 and <= 20 ? req.TopK.Value : 6;
-        var chunks = await _knowledge.RetrieveAsync(req.DatasetId, req.Query, topK);
+        var chunks = await _knowledge.RetrieveAsync(req.DatasetId, req.Query, topK, filters, req.Logic ?? "and");
         return Ok(new
         {
-            // metadata — структурные поля документа (дата встречи, id, источник и т.п.), если есть
+            // metadataFields — по каким полям можно фильтровать (имя+тип); может быть пусто
+            metadataFields = fields.Select(x => new { x.Name, x.Type }),
+            // metadata у выдержки — структурные поля документа (дата встречи, id, источник), если есть
             hits = chunks.Select(c => new { document = c.DocumentName, score = c.Score, content = c.Content, metadata = c.Metadata }),
         });
     }
+
+    // Разрешённые операторы фильтра метаданных Dify (строковые поля; диапазоны дат не
+    // поддерживаются — meeting_date хранится строкой, только contains/start with и т.п.)
+    private static readonly HashSet<string> MetadataFilterOperators = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "contains", "not contains", "start with", "end with", "is", "is not", "empty", "not empty",
+    };
 
     // AI-формулировка условия «когда персоне применять источник» по превью его содержимого
     [HttpPost("bindings/ai-condition")]
@@ -1272,7 +1309,11 @@ public record PersonaBindingsSetRequest(List<PersonaBindingRequest>? Bindings);
 
 public record AiConditionRequest(string Type, string Target, string? Path = null);
 
-public record KnowledgeSearchRequest(string DatasetId, string Query, int? TopK = null);
+public record KnowledgeSearchRequest(string DatasetId, string Query, int? TopK = null,
+    List<KnowledgeSearchFilter>? Filters = null, string? Logic = null);
+
+// Условие фильтра по метаданным от MCP-инструмента (operator — строковый оператор Dify)
+public record KnowledgeSearchFilter(string Name, string Operator, string? Value = null);
 
 public record SelectAvatarRequest(string File);
 

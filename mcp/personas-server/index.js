@@ -198,8 +198,11 @@ const TOOLS = [
         'базе знаний (Dify) по её datasetId. Используй, когда выполняется условие привязки-«базы ' +
         'знаний» из твоего контекста: подставь datasetId из строки привязки и запрос по смыслу ' +
         'вопроса пользователя (можно включать точные термины/имена — их найдёт полнотекстовая часть). ' +
-        'Возвращает релевантные выдержки: документ, score, текст и метаданные (напр. дата встречи, ' +
-        'источник) — используй их, чтобы датировать и атрибутировать факты.',
+        'Возвращает: metadataFields (по каким полям можно фильтровать) и hits — выдержки (документ, ' +
+        'score, текст, metadata: напр. дата встречи/источник) — используй их, чтобы датировать и ' +
+        'атрибутировать факты. Фильтровать можно ТОЛЬКО по полям из metadataFields; если поля нет — ' +
+        'вернётся ошибка со списком доступных. Диапазоны дат не поддерживаются (дата хранится строкой) — ' +
+        'для периода используй contains/start with по году или году-месяцу («2025-09», «2026»).',
       inputSchema: {
         type: 'object',
         required: ['datasetId', 'query'],
@@ -207,6 +210,25 @@ const TOOLS = [
           datasetId: { type: 'string', description: 'ID датасета из строки привязки (mcp__personas__knowledge_search datasetId "…")' },
           query: { type: 'string', description: 'Поисковый запрос на естественном языке (по смыслу вопроса)' },
           topK: { type: 'integer', minimum: 1, maximum: 20, description: 'Сколько выдержек вернуть (по умолчанию 6)' },
+          filters: {
+            type: 'array',
+            description: 'Необязательные фильтры по метаданным документов. Фильтруй только по полям из ' +
+              'metadataFields (сделай сначала поиск без фильтра, чтобы их увидеть).',
+            items: {
+              type: 'object',
+              required: ['name', 'operator'],
+              properties: {
+                name: { type: 'string', description: 'Имя поля метаданных (напр. meeting_date, meeting_source, meeting_id)' },
+                operator: {
+                  type: 'string',
+                  enum: ['contains', 'not contains', 'start with', 'end with', 'is', 'is not', 'empty', 'not empty'],
+                  description: 'Строковый оператор. Для периода дат — contains/start with по «2025-09»/«2026»',
+                },
+                value: { type: 'string', description: 'Значение (не нужно для empty/not empty)' },
+              },
+            },
+          },
+          logic: { type: 'string', enum: ['and', 'or'], description: 'Как объединять несколько фильтров (по умолчанию and)' },
         },
       },
     },
@@ -379,6 +401,8 @@ async function callTool(name, args) {
           datasetId: args.datasetId,
           query: args.query,
           topK: args.topK ?? null,
+          filters: Array.isArray(args.filters) ? args.filters : null,
+          logic: args.logic ?? null,
         }),
       }));
 

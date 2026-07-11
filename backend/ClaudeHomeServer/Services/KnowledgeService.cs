@@ -69,6 +69,13 @@ public record DifyRetrieveResponse(
 public record DifyRetrieveChunk(string Content, double Score, string DocumentId, string DocumentName,
     IReadOnlyDictionary<string, string>? Metadata = null);
 
+// Условие фильтрации по метаданным. Op — строковый оператор Dify (contains, not contains,
+// start with, end with, is, is not, empty, not empty). Value не нужен для empty/not empty.
+public record KnowledgeMetadataFilter(string Name, string Op, string? Value);
+
+// Поле метаданных датасета (имя + тип: string/number/time).
+public record KnowledgeMetadataFieldInfo(string Name, string Type);
+
 public class KnowledgeService
 {
     // Расширения, которые индексируем как текст (прямая отправка содержимого)
@@ -154,27 +161,41 @@ public class KnowledgeService
     // в одном запросе; Dify объединяет результаты. Работает без reranking-модели
     // (reranking_enable=false). Если датасет не поддерживает гибрид (напр. economy-
     // индексация без полнотекста) — тихий фолбэк на чисто смысловой поиск.
-    public async Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8)
+    // filters — необязательная фильтрация по метаданным документов (дата встречи,
+    // источник и т.п.); logic — как объединять условия ("and"/"or").
+    public async Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8,
+        IReadOnlyList<KnowledgeMetadataFilter>? filters = null, string logic = "and")
     {
-        try { return await RetrieveWithMethodAsync(datasetId, query, topK, "hybrid_search"); }
-        catch { return await RetrieveWithMethodAsync(datasetId, query, topK, "semantic_search"); }
+        try { return await RetrieveWithMethodAsync(datasetId, query, topK, "hybrid_search", filters, logic); }
+        catch { return await RetrieveWithMethodAsync(datasetId, query, topK, "semantic_search", filters, logic); }
     }
 
     private async Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveWithMethodAsync(
-        string datasetId, string query, int topK, string searchMethod)
+        string datasetId, string query, int topK, string searchMethod,
+        IReadOnlyList<KnowledgeMetadataFilter>? filters, string logic)
     {
         var client = CreateClient();
-        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/retrieve", new
+        // retrieval_model строим словарём: metadata_filtering_conditions добавляется
+        // только при наличии фильтров (внутри retrieval_model — top-level Dify игнорирует)
+        var retrievalModel = new Dictionary<string, object?>
         {
-            query,
-            retrieval_model = new
+            ["search_method"] = searchMethod,
+            ["reranking_enable"] = false,
+            ["top_k"] = topK,
+            ["score_threshold_enabled"] = false,
+        };
+        if (filters is { Count: > 0 })
+            retrievalModel["metadata_filtering_conditions"] = new
             {
-                search_method = searchMethod,
-                reranking_enable = false,
-                top_k = topK,
-                score_threshold_enabled = false,
-            },
-        });
+                logical_operator = logic is "or" ? "or" : "and",
+                conditions = filters.Select(f => new
+                {
+                    name = f.Name,
+                    comparison_operator = f.Op,
+                    value = f.Value ?? "",
+                }),
+            };
+        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/retrieve", new { query, retrieval_model = retrievalModel });
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<DifyRetrieveResponse>()
             ?? throw new InvalidOperationException("Пустой ответ от Dify при поиске");
@@ -183,6 +204,20 @@ public class KnowledgeService
                 r.Segment.Document.Id, r.Segment.Document.Name,
                 MapMetadata(r.Segment.Document.DocMetadata)))
             .ToList();
+    }
+
+    // Поля метаданных датасета (имя + тип) — для валидации фильтра и подсказки персоне,
+    // по каким полям вообще можно фильтровать. Пусто — метаданных у датасета нет.
+    public async Task<IReadOnlyList<KnowledgeMetadataFieldInfo>> ListMetadataFieldsAsync(string datasetId)
+    {
+        if (!IsConfigured) return [];
+        var client = CreateClient();
+        var resp = await client.GetAsync($"datasets/{datasetId}/metadata");
+        resp.EnsureSuccessStatusCode();
+        var meta = await resp.Content.ReadFromJsonAsync<DifyDatasetMetadataResponse>();
+        return meta?.DocMetadata
+            .Select(f => new KnowledgeMetadataFieldInfo(f.Name, f.Type))
+            .ToList() ?? [];
     }
 
     // Метаданные документа → строковый словарь (пустые/null значения отбрасываем).

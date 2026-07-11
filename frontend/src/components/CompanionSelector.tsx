@@ -129,6 +129,48 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
     </button>
   );
 
+  // Пункт-чекбокс персоны в групповом мультивыборе (общий для всех подгрупп)
+  const groupCheckboxItem = (p: Persona) => {
+    const idx = groupSelected.indexOf(p.id);
+    const checked = idx >= 0;
+    const disabled = !checked && groupSelected.length >= 4;
+    return (
+      <button
+        key={`g-${p.id}`}
+        onClick={() => setGroupSelected(prev => checked
+          ? prev.filter(x => x !== p.id)
+          : prev.length >= 4 ? prev : [...prev, p.id])}
+        disabled={disabled}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '7px 10px',
+          borderRadius: R.md, border: 'none', background: checked ? C.accentLight : 'transparent',
+          cursor: disabled ? 'default' : 'pointer', textAlign: 'left', opacity: disabled ? 0.5 : 1,
+        }}
+      >
+        <input type="checkbox" readOnly checked={checked} style={{ accentColor: C.accent, pointerEvents: 'none' }} />
+        <PersonaAvatar persona={p} size={26} />
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: FONT.sans }}>
+          {personaLabel(p)}
+        </span>
+        {idx === 0 && (
+          <span style={{
+            flexShrink: 0, fontSize: 10, fontWeight: 700, padding: '1px 7px',
+            borderRadius: R.pill, background: C.accentLight, color: C.accent, fontFamily: FONT.sans,
+          }}>
+            ведущая
+          </span>
+        )}
+      </button>
+    );
+  };
+
+  // Подгруппы персон в порядке отображения: проектные → обычные глобальные →
+  // пантеонные (из каталога OmO, с templateKey). Пантеон всегда идёт последним.
+  const projectPersonas = personas.filter(p => p.scope === 'project');
+  const regularGlobals = personas.filter(p => p.scope === 'global' && !p.templateKey);
+  const pantheonPersonas = personas.filter(p => p.scope === 'global' && p.templateKey);
+  const hasPantheonGroup = pantheonPersonas.length > 0 || virtualPantheon.length > 0;
+
   // Выбранный .md-агент: резолвим по имени; если агент из списка пропал (файл удалили),
   // показываем имя как есть с нейтральной точкой
   const selectedAgent = selectedAgentName
@@ -299,41 +341,23 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
           <div style={{ padding: '0 10px 6px', fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.4 }}>
             Выберите 2–4 участников. Первая выбранная — ведущая: её зона и модель задают чат.
           </div>
-          {personas.map(p => {
-            const idx = groupSelected.indexOf(p.id);
-            const checked = idx >= 0;
-            const disabled = !checked && groupSelected.length >= 4;
+          {/* Подгруппы участников: проектные → глобальные → пантеон (с разделителями) */}
+          {(() => {
+            const personaGroups = (projectPersonas.length > 0 ? 1 : 0)
+              + (regularGlobals.length > 0 ? 1 : 0) + (hasPantheonGroup ? 1 : 0);
+            const showHeaders = personaGroups > 1;
             return (
-              <button
-                key={`g-${p.id}`}
-                onClick={() => setGroupSelected(prev => checked
-                  ? prev.filter(x => x !== p.id)
-                  : prev.length >= 4 ? prev : [...prev, p.id])}
-                disabled={disabled}
-                style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '7px 10px',
-                  borderRadius: R.md, border: 'none', background: checked ? C.accentLight : 'transparent',
-                  cursor: disabled ? 'default' : 'pointer', textAlign: 'left', opacity: disabled ? 0.5 : 1,
-                }}
-              >
-                <input type="checkbox" readOnly checked={checked} style={{ accentColor: C.accent, pointerEvents: 'none' }} />
-                <PersonaAvatar persona={p} size={26} />
-                <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: FONT.sans }}>
-                  {personaLabel(p)}
-                </span>
-                {idx === 0 && (
-                  <span style={{
-                    flexShrink: 0, fontSize: 10, fontWeight: 700, padding: '1px 7px',
-                    borderRadius: R.pill, background: C.accentLight, color: C.accent, fontFamily: FONT.sans,
-                  }}>
-                    ведущая
-                  </span>
-                )}
-              </button>
+              <>
+                {showHeaders && projectPersonas.length > 0 && groupHeader('Команда проекта')}
+                {projectPersonas.map(groupCheckboxItem)}
+                {showHeaders && regularGlobals.length > 0 && groupHeader('Глобальные')}
+                {regularGlobals.map(groupCheckboxItem)}
+                {hasPantheonGroup && showHeaders && groupHeader('Пантеон OmO')}
+                {pantheonPersonas.map(groupCheckboxItem)}
+              </>
             );
-          })}
-          {/* Пантеон OmO в групповом мультивыборе: клик материализует роль и добавляет её */}
-          {virtualPantheon.length > 0 && groupHeader('Пантеон OmO')}
+          })()}
+          {/* Виртуальные роли пантеона: клик материализует роль и добавляет её */}
           {virtualPantheon.map(t => {
             const disabled = materializing !== null || groupSelected.length >= 4;
             return (
@@ -427,24 +451,23 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
             </button>
           )}
 
-          {/* Группа «Персоны»: подгруппы «Команда проекта» / «Глобальные» (как в PersonaSelector).
-              Заголовок верхней группы — только когда есть и агенты (иначе он избыточен). */}
+          {/* Персоны подгруппами: Команда проекта → Глобальные → Пантеон OmO (внизу),
+              затем .md-агенты. Заголовки-разделители показываем, когда групп больше одной. */}
           {(() => {
-            const projectPersonas = personas.filter(p => p.scope === 'project');
-            const globalPersonas = personas.filter(p => p.scope === 'global');
-            const showTopHeaders = personas.length > 0 && agents.length > 0;
-            const showSubHeaders = projectPersonas.length > 0 && globalPersonas.length > 0;
+            const personaGroups = (projectPersonas.length > 0 ? 1 : 0)
+              + (regularGlobals.length > 0 ? 1 : 0) + (hasPantheonGroup ? 1 : 0);
+            const showHeaders = personaGroups > 1 || agents.length > 0;
             return (
               <>
-                {showTopHeaders && groupHeader('Персоны')}
-                {showSubHeaders && projectPersonas.length > 0 && groupHeader('Команда проекта')}
+                {showHeaders && projectPersonas.length > 0 && groupHeader('Команда проекта')}
                 {projectPersonas.map(personaItem)}
-                {showSubHeaders && globalPersonas.length > 0 && groupHeader('Глобальные')}
-                {globalPersonas.map(personaItem)}
-                {/* Пантеон OmO — виртуальные роли, доступны всегда */}
-                {virtualPantheon.length > 0 && groupHeader('Пантеон OmO')}
+                {showHeaders && regularGlobals.length > 0 && groupHeader('Глобальные')}
+                {regularGlobals.map(personaItem)}
+                {/* Пантеон OmO — материализованные персоны каталога + виртуальные роли */}
+                {hasPantheonGroup && showHeaders && groupHeader('Пантеон OmO')}
+                {pantheonPersonas.map(personaItem)}
                 {virtualPantheon.map(virtualItem)}
-                {showTopHeaders && groupHeader('Агенты Claude')}
+                {agents.length > 0 && groupHeader('Агенты Claude')}
                 {agents.map(agentItem)}
               </>
             );

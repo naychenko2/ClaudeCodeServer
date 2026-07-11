@@ -32,8 +32,12 @@ export function PersonaList({ personas, selectedId, onSelect, onNew }: {
           <div style={{ padding: '20px 12px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans, lineHeight: 1.5 }}>
             Пока нет персон. Создай первую — задай ей имя, характер и аватар.
           </div>
-        ) : (
-          personas.map(p => {
+        ) : (() => {
+          // Пантеонные персоны (из каталога OmO — с templateKey) идут отдельной группой
+          // внизу, под разделителем; обычные — выше.
+          const own = personas.filter(p => !p.templateKey);
+          const pantheon = personas.filter(p => p.templateKey);
+          const row = (p: Persona) => {
             const active = p.id === selectedId;
             return (
               <button
@@ -76,8 +80,28 @@ export function PersonaList({ personas, selectedId, onSelect, onNew }: {
                 </span>
               </button>
             );
-          })
-        )}
+          };
+          return (
+            <>
+              {own.map(row)}
+              {pantheon.length > 0 && (
+                <>
+                  {/* Разделитель + заголовок группы пантеона */}
+                  <div style={{
+                    margin: own.length > 0 ? '8px 8px 4px' : '2px 8px 4px',
+                    borderTop: own.length > 0 ? `1px solid ${C.border}` : 'none',
+                    paddingTop: own.length > 0 ? 8 : 0,
+                    fontSize: 10.5, fontWeight: 700, color: C.textMuted,
+                    textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
+                  }}>
+                    Пантеон OmO
+                  </div>
+                  {pantheon.map(row)}
+                </>
+              )}
+            </>
+          );
+        })()}
       </div>
     </>
   );

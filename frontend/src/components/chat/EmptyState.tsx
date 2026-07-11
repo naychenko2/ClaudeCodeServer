@@ -198,12 +198,20 @@ function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
   selectedPersonaId?: string;
   onPick: (p: Persona) => void;
 }) {
-  const [showGlobals, setShowGlobals] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const projectPersonas = personas.filter(p => p.scope === 'project');
-  const globalPersonas = personas.filter(p => p.scope === 'global');
-  // Скрываем глобальные персоны только в проекте и только когда есть своя команда
-  const collapseGlobals = hasProject && projectPersonas.length > 0 && !showGlobals;
-  const visible = collapseGlobals ? projectPersonas : [...projectPersonas, ...globalPersonas];
+  // Пантеонные персоны (каталог OmO, с templateKey) — всегда под раскрывашкой,
+  // как и обычные глобальные в проекте с командой; по умолчанию не предлагаются.
+  const regularGlobals = personas.filter(p => p.scope === 'global' && !p.templateKey);
+  const pantheonPersonas = personas.filter(p => p.templateKey);
+  // Обычные глобальные прячем только в проекте с собственной командой
+  const collapseGlobals = hasProject && projectPersonas.length > 0;
+  const visible = expanded
+    ? [...projectPersonas, ...regularGlobals, ...pantheonPersonas]
+    : [...projectPersonas, ...(collapseGlobals ? [] : regularGlobals)];
+  // Скрытых по умолчанию: свёрнутые глобальные + всегда весь пантеон
+  const hiddenCount = expanded ? 0
+    : (collapseGlobals ? regularGlobals.length : 0) + pantheonPersonas.length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 6 }}>
@@ -214,10 +222,10 @@ function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
         {visible.map(p => (
           <PersonaPill key={p.id} p={p} active={p.id === selectedPersonaId} onPick={onPick} />
         ))}
-        {collapseGlobals && globalPersonas.length > 0 && (
+        {hiddenCount > 0 && (
           <button
-            onClick={() => setShowGlobals(true)}
-            title="Показать глобальные персоны"
+            onClick={() => setExpanded(true)}
+            title="Показать глобальные персоны и пантеон"
             style={{
               display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
               border: 'none', background: 'none', cursor: 'pointer', padding: 2, width: 64,
@@ -229,7 +237,7 @@ function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
               background: C.bgWhite, border: `1px dashed ${C.border}`,
               fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textMuted,
             }}>
-              +{globalPersonas.length}
+              +{hiddenCount}
             </span>
             <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted }}>ещё</span>
           </button>

@@ -27,6 +27,8 @@ public class PersonasController : ControllerBase
     private readonly FalImageService _falImage;
     private readonly Services.Llm.OneShotClaudeRunner _oneShot;
     private readonly FeatureFlagService _flags;
+    private readonly PersonaPromptBuilder _promptBuilder;
+    private readonly PersonaAskService _ask;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonasController> _log;
     private readonly IHubContext<SessionHub> _hub;
@@ -35,7 +37,8 @@ public class PersonasController : ControllerBase
         SessionManager sessions, PersonaMemoryService memory, PersonaBindingsService bindings,
         NotesService notes, SkillsService skills, KnowledgeService knowledge,
         FalImageService falImage,
-        Services.Llm.OneShotClaudeRunner oneShot, FeatureFlagService flags, IConfiguration config,
+        Services.Llm.OneShotClaudeRunner oneShot, FeatureFlagService flags,
+        PersonaPromptBuilder promptBuilder, PersonaAskService ask, IConfiguration config,
         ILogger<PersonasController> log, IHubContext<SessionHub> hub)
     {
         _personas = personas;
@@ -49,6 +52,8 @@ public class PersonasController : ControllerBase
         _falImage = falImage;
         _oneShot = oneShot;
         _flags = flags;
+        _promptBuilder = promptBuilder;
+        _ask = ask;
         _config = config;
         _log = log;
         _hub = hub;
@@ -94,6 +99,10 @@ public class PersonasController : ControllerBase
         var scope = req.Scope ?? PersonaScope.Global;
         if (scope == PersonaScope.Project && !ValidProject(req.ProjectId))
             return BadRequest("Для проектной персоны нужен корректный projectId");
+        if (!TryParseAccess(req.Access, out var access))
+            return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
+        if (!TryParseProactive(req.Proactive, out var proactive, out var proactiveError))
+            return BadRequest(proactiveError);
 
         // Явные привязки валидируем ДО создания персоны — ошибка не оставляет полусозданную
         var bindings = new List<PersonaBinding>();
@@ -111,7 +120,8 @@ public class PersonasController : ControllerBase
 
         var persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled ?? true, req.Tools);
+            req.MemoryEnabled ?? true, req.Tools, req.Contract,
+            access ?? PersonaAccess.Full, req.DisallowedTools, proactive);
         if (bindings.Count > 0)
             persona = _personas.UpdateBindings(persona.Id, UserId, bindings);
         // Авто-подбор привязок (autoBindings, за флагом persona-bindings) — best-effort:
@@ -131,10 +141,14 @@ public class PersonasController : ControllerBase
         // Любой непустой projectId (в т.ч. при partial-update без scope) — только свой проект
         if (!string.IsNullOrEmpty(req.ProjectId) && !ValidProject(req.ProjectId))
             return BadRequest("Проект не найден или недоступен");
+        if (!TryParseAccess(req.Access, out var access))
+            return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
+        if (!TryParseProactive(req.Proactive, out var proactive, out var proactiveError))
+            return BadRequest(proactiveError);
 
         var persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled, req.Tools);
+            req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, proactive);
         await Broadcast("updated", id);
         return Ok(persona);
     }
@@ -260,6 +274,125 @@ public class PersonasController : ControllerBase
         return System.IO.File.Exists(full) ? PhysicalFileByExt(full) : NotFound();
     }
 
+    // Оригинал загруженного аватара (для перекропа). access_token в query — как GET avatar.
+    [HttpGet("{id}/avatar/original")]
+    public IActionResult AvatarOriginal(string id)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null || string.IsNullOrEmpty(persona.Avatar.OriginalFile))
+            return NotFound();
+
+        var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.OriginalFile);
+        return System.IO.File.Exists(full) ? PhysicalFileByExt(full) : NotFound();
+    }
+
+    // Загрузка своего аватара: оригинал + кропнутый квадрат + параметры кропа (JSON).
+    // Валидация: заявленный ContentType из белого списка И настоящие magic bytes;
+    // расширение файла — по фактическому типу, а не по имени от клиента.
+    [HttpPost("{id}/avatar/upload")]
+    [RequestSizeLimit(15_000_000)]
+    public async Task<ActionResult<Persona>> UploadAvatar(string id,
+        [FromForm] IFormFile? original, [FromForm] IFormFile? cropped, [FromForm] string? crop)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        if (original is null || cropped is null)
+            return BadRequest(new { error = "Нужны файлы original и cropped" });
+
+        var originalCheck = await ValidateImageAsync(original);
+        if (originalCheck.Error is not null) return BadRequest(new { error = originalCheck.Error });
+        var croppedCheck = await ValidateImageAsync(cropped);
+        if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
+
+        var cropState = ParseCrop(crop);
+
+        var dir = Path.Combine(_personas.AssetsDir, id);
+        Directory.CreateDirectory(dir);
+        var originalName = $"original-{Guid.NewGuid():N}{originalCheck.Ext}";
+        var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
+        await SaveFormFileAsync(original, Path.Combine(dir, originalName));
+        await SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+
+        var updated = _personas.SetAvatarUploaded(id, UserId, imageName, originalName, cropState);
+        await Broadcast("updated", id);
+        return Ok(updated);
+    }
+
+    // Перекроп сохранённого оригинала: новая кропнутая картинка + параметры.
+    [HttpPost("{id}/avatar/recrop")]
+    [RequestSizeLimit(5_000_000)]
+    public async Task<ActionResult<Persona>> RecropAvatar(string id,
+        [FromForm] IFormFile? cropped, [FromForm] string? crop)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        if (string.IsNullOrEmpty(persona.Avatar.OriginalFile))
+            return BadRequest(new { error = "У персоны нет оригинала для перекропа" });
+        if (cropped is null) return BadRequest(new { error = "Нужен файл cropped" });
+
+        var croppedCheck = await ValidateImageAsync(cropped);
+        if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
+
+        var dir = Path.Combine(_personas.AssetsDir, id);
+        Directory.CreateDirectory(dir);
+        var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
+        await SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+
+        var updated = _personas.SetAvatarRecropped(id, UserId, imageName, ParseCrop(crop));
+        await Broadcast("updated", id);
+        return Ok(updated);
+    }
+
+    private static readonly string[] AllowedImageTypes = ["image/jpeg", "image/png", "image/webp"];
+
+    // Проверка загружаемой картинки: заявленный ContentType из белого списка
+    // И настоящие magic bytes (FF D8 FF / PNG / RIFF..WEBP). Ext — по фактическому типу.
+    private static async Task<(string? Error, string Ext)> ValidateImageAsync(IFormFile file)
+    {
+        if (!AllowedImageTypes.Contains(file.ContentType, StringComparer.OrdinalIgnoreCase))
+            return ("Допустимы только изображения JPEG, PNG или WebP", "");
+
+        var head = new byte[12];
+        await using (var stream = file.OpenReadStream())
+        {
+            var read = await stream.ReadAtLeastAsync(head, 12, throwOnEndOfStream: false);
+            if (read < 12) return ("Файл не похож на изображение", "");
+        }
+
+        var ext = DetectImageExt(head);
+        return ext is null ? ("Файл не похож на изображение (сигнатура не совпадает)", "") : (null, ext);
+    }
+
+    // Определение типа по magic bytes; null — не картинка из белого списка
+    private static string? DetectImageExt(byte[] head)
+    {
+        if (head is [0xFF, 0xD8, 0xFF, ..]) return ".jpg";
+        if (head is [0x89, 0x50, 0x4E, 0x47, ..]) return ".png";
+        if (head.Length >= 12
+            && head[0] == (byte)'R' && head[1] == (byte)'I' && head[2] == (byte)'F' && head[3] == (byte)'F'
+            && head[8] == (byte)'W' && head[9] == (byte)'E' && head[10] == (byte)'B' && head[11] == (byte)'P')
+            return ".webp";
+        return null;
+    }
+
+    private static async Task SaveFormFileAsync(IFormFile file, string path)
+    {
+        await using var target = System.IO.File.Create(path);
+        await file.CopyToAsync(target);
+    }
+
+    // Параметры кропа из multipart-поля (JSON {scale, offsetX, offsetY}); мусор → null
+    private static AvatarCropState? ParseCrop(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<AvatarCropState>(raw,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
     private static string ExtFor(string contentType) => contentType switch
     {
         "image/jpeg" => ".jpg",
@@ -287,7 +420,7 @@ public class PersonasController : ControllerBase
     }
 
     // AI-помощь с характером персоны: сгенерировать с нуля или улучшить/дополнить существующий
-    // (one-shot LLM). Возвращает готовый текст характера для подстановки в форму.
+    // (one-shot LLM). Возвращает структурированный контракт (P1) для подстановки в форму.
     [HttpPost("ai/character")]
     public async Task<ActionResult> AiCharacter([FromBody] AiCharacterRequest req)
     {
@@ -295,11 +428,15 @@ public class PersonasController : ControllerBase
         var prompt = BuildCharacterPrompt(req);
         try
         {
-            var text = await _oneShot.RunAsync(prompt, model, TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
-            var character = text.Trim();
-            if (string.IsNullOrWhiteSpace(character))
-                return StatusCode(502, new { error = "Пустой ответ модели" });
-            return Ok(new { character });
+            var raw = await _oneShot.RunAsync(prompt, model, TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
+            var contract = PersonaManager.NormalizeContract(ParseJsonObject<PersonaContract>(raw));
+            if (contract is null)
+            {
+                _log.LogWarning("ai/character: контракт не распознан; сырой ответ: {Raw}",
+                    raw.Length > 600 ? raw[..600] + "…" : raw);
+                return StatusCode(502, new { error = "Модель не вернула корректный контракт — попробуйте ещё раз" });
+            }
+            return Ok(new { contract });
         }
         catch (Exception ex)
         {
@@ -311,20 +448,25 @@ public class PersonasController : ControllerBase
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("Ты помогаешь описать характер и стиль общения персоны-ассистента. " +
-                      "Составь ТЕЛО системного промпта персоны — как она общается и действует.");
+                      "Составь структурированный контракт персоны — как она общается и действует.");
         if (!string.IsNullOrWhiteSpace(req.Role)) sb.AppendLine($"Роль персоны: {req.Role.Trim()}.");
         if (!string.IsNullOrWhiteSpace(req.Name)) sb.AppendLine($"Имя персоны: {req.Name.Trim()}.");
         if (!string.IsNullOrWhiteSpace(req.Description)) sb.AppendLine($"Кратко: {req.Description.Trim()}.");
         if (!string.IsNullOrWhiteSpace(req.Current))
         {
-            sb.AppendLine($"\nТекущий характер (переработай/улучши его):\n{req.Current.Trim()}");
+            // Current — либо legacy-текст характера, либо сериализованный контракт (JSON)
+            sb.AppendLine($"\nТекущий характер (текст или JSON-контракт — переработай/улучши его):\n{req.Current.Trim()}");
         }
         if (!string.IsNullOrWhiteSpace(req.Instruction))
             sb.AppendLine($"\nПожелание пользователя: {req.Instruction.Trim()}");
-        sb.AppendLine("\nТребования к ответу:");
-        sb.AppendLine("- обращение на «ты» к персоне («Ты …»), описывай её манеру, ценности, стиль ответов;");
-        sb.AppendLine("- по-русски, живо и конкретно, 2–5 предложений;");
-        sb.AppendLine("- НЕ упоминай имя модели, не пиши преамбул и пояснений — только сам текст характера.");
+        sb.AppendLine("\nВерни ТОЛЬКО JSON-объект (без пояснений и markdown) с полями:");
+        sb.AppendLine("  character — характер и манера общения: обращение на «ты» («Ты …»), живо и конкретно, 2-4 предложения;");
+        sb.AppendLine("  tone — тон одной короткой фразой (напр. «тепло и на равных», «сухо и по делу»);");
+        sb.AppendLine("  mustDo — массив из 2-4 правил «что делать всегда», каждое — короткое предложение;");
+        sb.AppendLine("  mustNot — массив из 2-4 правил «чего не делать никогда»;");
+        sb.AppendLine("  outputFormat — требования к формату ответов, 1-2 предложения;");
+        sb.AppendLine("  speechExamples — массив из 1-2 характерных реплик персоны от её лица.");
+        sb.AppendLine("Всё по-русски. НЕ упоминай имя модели.");
         return sb.ToString();
     }
 
@@ -371,11 +513,20 @@ public class PersonasController : ControllerBase
         if (draft is null)
             return StatusCode(502, new { error = "Модель не вернула корректный черновик — попробуйте ещё раз" });
 
-        // 2. Создаём персону с заполненными полями
+        // 2. Создаём персону с заполненными полями; характер — сразу контрактом (P1)
         var color = ValidColor(draft.Color) ? draft.Color : "orange";
+        var contract = new PersonaContract
+        {
+            Character = draft.Character,
+            Tone = draft.Tone,
+            MustDo = draft.MustDo,
+            MustNot = draft.MustNot,
+            OutputFormat = draft.OutputFormat,
+            SpeechExamples = draft.SpeechExamples,
+        };
         var persona = _personas.Create(UserId, draft.Name!, draft.Role, draft.Description,
-            draft.Character, model: null, effort: null, scope, req.ProjectId,
-            color, draft.Greeting, memoryEnabled: true);
+            systemPrompt: null, model: null, effort: null, scope, req.ProjectId,
+            color, draft.Greeting, memoryEnabled: true, tools: null, contract: contract);
 
         // 3. Фото-аватар — автоматически (не критично: при сбое остаются инициалы)
         if (_falImage.Enabled)
@@ -418,14 +569,22 @@ public class PersonasController : ControllerBase
         sb.AppendLine("  name — русское имя-человека (одно слово, подходит персоне);");
         sb.AppendLine("  description — краткое «кто это», 3-8 слов, по-русски;");
         sb.AppendLine("  character — характер и стиль общения: обращение на «ты» («Ты …»), живо, 2-5 предложений, по-русски;");
+        sb.AppendLine("  tone — тон одной короткой фразой по-русски (напр. «тепло и на равных», «сухо и по делу»);");
+        sb.AppendLine("  mustDo — массив из 2-4 правил «что делать всегда», по-русски, короткими предложениями;");
+        sb.AppendLine("  mustNot — массив из 2-4 правил «чего не делать никогда», по-русски;");
+        sb.AppendLine("  outputFormat — требования к формату ответов, 1-2 предложения, по-русски;");
+        sb.AppendLine("  speechExamples — массив из 1-2 характерных реплик персоны от её лица, по-русски;");
         sb.AppendLine("  greeting — первое приветственное сообщение персоны пользователю, 1-2 предложения, по-русски, в её характере;");
         sb.AppendLine("  color — один из: yellow, orange, blue, green, purple, red, brown, cyan, pink (подходит образу);");
         sb.AppendLine("  avatarPrompt — описание внешности для фотопортрета, по-английски, 5-15 слов (пол, возраст, стиль, настроение, фон).");
         return sb.ToString();
     }
 
-    // Парс JSON-объекта из ответа модели (устойчиво к преамбуле/markdown-fence)
-    private static DraftRaw? ParseDraft(string raw)
+    private static DraftRaw? ParseDraft(string raw) => ParseJsonObject<DraftRaw>(raw);
+
+    // Парс первого сбалансированного JSON-объекта из ответа модели
+    // (устойчиво к преамбуле/markdown-fence). Общий для quick-create и ai/character.
+    private static T? ParseJsonObject<T>(string raw) where T : class
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
         var start = raw.IndexOf('{');
@@ -447,7 +606,7 @@ public class PersonasController : ControllerBase
             {
                 try
                 {
-                    return System.Text.Json.JsonSerializer.Deserialize<DraftRaw>(raw[start..(i + 1)],
+                    return System.Text.Json.JsonSerializer.Deserialize<T>(raw[start..(i + 1)],
                         new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 }
                 catch (System.Text.Json.JsonException) { return null; }
@@ -460,7 +619,9 @@ public class PersonasController : ControllerBase
         c is "yellow" or "orange" or "blue" or "green" or "purple" or "red" or "brown" or "cyan" or "pink";
 
     private sealed record DraftRaw(string? Role, string? Name, string? Description,
-        string? Character, string? Greeting, string? Color, string? AvatarPrompt);
+        string? Character, string? Tone, List<string>? MustDo, List<string>? MustNot,
+        string? OutputFormat, List<string>? SpeechExamples,
+        string? Greeting, string? Color, string? AvatarPrompt);
 
     // --- Привязки персоны: источники знаний и правила (фича persona-bindings) ---
     // CRUD работает независимо от флага (данные безвредны и переживают выключение);
@@ -751,9 +912,12 @@ public class PersonasController : ControllerBase
         sb.AppendLine($"\nПерсона: {persona.Role ?? "без роли"} ({persona.Name}).");
         if (!string.IsNullOrWhiteSpace(persona.Description))
             sb.AppendLine($"Кто это: {persona.Description.Trim()}");
-        if (!string.IsNullOrWhiteSpace(persona.SystemPrompt))
+        // Характер: у персон с контрактом (P1) источник правды — Contract.Character,
+        // SystemPrompt — legacy-фолбэк
+        var personaCharacter = persona.Contract?.Character ?? persona.SystemPrompt;
+        if (!string.IsNullOrWhiteSpace(personaCharacter))
         {
-            var character = persona.SystemPrompt.Trim();
+            var character = personaCharacter.Trim();
             if (character.Length > 800) character = character[..800] + "…";
             sb.AppendLine($"Характер: {character}");
         }
@@ -927,17 +1091,38 @@ public class PersonasController : ControllerBase
         return Ok(hits);
     }
 
-    // Запомнить (явный write-path)
+    // Запомнить (явный write-path); salience — важность 0..1 (опционально)
     [HttpPost("{id}/memory")]
     public async Task<ActionResult<PersonaMemoryEntry>> Remember(string id, [FromBody] RememberRequest req)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest("Пустой текст");
         if (!Enum.TryParse<PersonaMemoryType>(req.Type, true, out var type)) type = PersonaMemoryType.Semantic;
-        var entry = _memory.Remember(UserId, id, type, req.Text, req.Tags, req.SourceSessionId);
+        var entry = _memory.Remember(UserId, id, type, req.Text, req.Tags, req.SourceSessionId, req.Salience);
         if (entry is null) return NotFound();
         await Broadcast("memory", id);
         return Ok(entry);
+    }
+
+    // --- Рабочий фокус персоны (P3): «что я сейчас делаю» ---
+
+    // Текущий фокус; 204 — фокуса нет
+    [HttpGet("{id}/focus")]
+    public ActionResult<PersonaWorkingFocus> GetFocus(string id)
+    {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+        var focus = _memory.GetFocus(UserId, id);
+        return focus is null ? NoContent() : Ok(focus);
+    }
+
+    // Сбросить фокус (кнопка «Сбросить» в карточке памяти)
+    [HttpDelete("{id}/focus")]
+    public async Task<IActionResult> ClearFocus(string id)
+    {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+        _memory.ClearFocus(UserId, id);
+        await Broadcast("memory", id);
+        return NoContent();
     }
 
     // Забыть запись
@@ -952,9 +1137,8 @@ public class PersonasController : ControllerBase
 
     // --- @упоминания: спросить персону (persona_ask из MCP personas-server) ---
 
-    // One-shot ответ персоны от своего лица: слой персоны (роль+характер) + recall её долгой
-    // памяти + вопрос. Модель — модель персоны. Анти-рекурсия по построению: one-shot идёт
-    // без MCP-серверов, «спросить третью персону» изнутри ответа невозможно.
+    // One-shot ответ персоны от своего лица (PersonaAskService): слой персоны + recall
+    // долгой памяти + вопрос; модель — модель персоны. Поведение эндпоинта прежнее.
     [HttpPost("ask")]
     public async Task<ActionResult> Ask([FromBody] PersonaAskRequest req)
     {
@@ -967,33 +1151,10 @@ public class PersonasController : ControllerBase
         var persona = _personas.GetByHandle(UserId, req.Handle.Trim().TrimStart('@'));
         if (persona is null) return NotFound(new { error = $"Персона @{req.Handle} не найдена" });
 
-        // Слой персоны + релевантная память (best-effort: без памяти ответ всё равно валиден)
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine(SessionManager.BuildPersonaPrompt(persona));
-        if (persona.MemoryEnabled)
-        {
-            try
-            {
-                var recall = await _memory.BuildRecallAsync(UserId, persona.Id, req.Question, topK: 5, minScore: 0.02);
-                if (!string.IsNullOrWhiteSpace(recall)) sb.AppendLine().AppendLine(recall);
-            }
-            catch (Exception ex) { _log.LogWarning(ex, "persona_ask: recall памяти {Persona}", persona.Id); }
-        }
-        sb.AppendLine();
-        sb.AppendLine("Тебя спрашивает ассистент пользователя из другого разговора. Этот разговор ты не видишь — " +
-                      "отвечай по вопросу и переданному контексту, от своего лица и в своём характере, по существу.");
-        if (!string.IsNullOrWhiteSpace(req.Context))
-            sb.AppendLine($"\nКонтекст: {req.Context.Trim()}");
-        sb.AppendLine($"\nВопрос: {req.Question.Trim()}");
-
-        var timeout = TimeSpan.FromMilliseconds(
-            int.TryParse(_config["Persona:AskTimeoutMs"], out var t) ? t : 120_000);
         try
         {
-            var answer = await _oneShot.RunAsync(sb.ToString(), _oneShot.NormalizeModel(persona.Model),
-                timeout, HttpContext.RequestAborted);
-            if (string.IsNullOrWhiteSpace(answer))
-                return StatusCode(502, new { error = "Персона не ответила (пустой ответ модели)" });
+            var answer = await _ask.AskAsync(UserId, persona, req.Question, req.Context,
+                HttpContext.RequestAborted);
             return Ok(new { handle = persona.Handle, name = persona.Name, role = persona.Role, answer });
         }
         catch (Exception ex)
@@ -1001,6 +1162,47 @@ public class PersonasController : ControllerBase
             _log.LogWarning(ex, "persona_ask: one-shot ответа @{Handle} не удался", persona.Handle);
             return StatusCode(502, new { error = $"Не удалось получить ответ персоны: {ex.Message}" });
         }
+    }
+
+    // Парс профиля доступа из запроса: null/пусто → «не менять» (out null),
+    // валидная строка → значение, мусор → false (400 у вызывающего)
+    private static bool TryParseAccess(string? raw, out PersonaAccess? access)
+    {
+        access = null;
+        if (string.IsNullOrWhiteSpace(raw)) return true;
+        if (!Enum.TryParse<PersonaAccess>(raw, ignoreCase: true, out var parsed)) return false;
+        access = parsed;
+        return true;
+    }
+
+    // Парс DTO проактивности: null — не менять (out null); валидация типа расписания
+    // и времени "HH:mm". Служебные поля (LastFiredAt/SessionId) клиент не задаёт.
+    private static bool TryParseProactive(PersonaProactiveDto? dto,
+        out PersonaProactiveConfig? config, out string error)
+    {
+        config = null;
+        error = "";
+        if (dto is null) return true;
+        if (!Enum.TryParse<PersonaScheduleType>(dto.Type ?? "daily", ignoreCase: true, out var type))
+        {
+            error = "Неверный тип расписания (ожидается daily | weekdays | weekly)";
+            return false;
+        }
+        var time = string.IsNullOrWhiteSpace(dto.Time) ? "09:00" : dto.Time.Trim();
+        if (!TimeOnly.TryParseExact(time, "HH:mm", out _))
+        {
+            error = "Неверное время расписания (ожидается HH:mm)";
+            return false;
+        }
+        config = new PersonaProactiveConfig
+        {
+            Enabled = dto.Enabled,
+            Type = type,
+            Weekdays = dto.Weekdays,
+            Time = time,
+            Instruction = dto.Instruction ?? "",
+        };
+        return true;
     }
 
     // Проект существует и принадлежит владельцу
@@ -1025,6 +1227,14 @@ public record CreatePersonaRequest(
     string? Greeting,
     bool? MemoryEnabled,
     List<string>? Tools = null,
+    // Структурированный контракт характера (P1); null — не задан
+    PersonaContract? Contract = null,
+    // Профиль доступа (P6): full | readOnly | custom; null — дефолт (full)
+    string? Access = null,
+    // Свой список запрещённых инструментов (для custom)
+    List<string>? DisallowedTools = null,
+    // Проактивность «пишет первой» (флаг persona-proactive); null — не задана
+    PersonaProactiveDto? Proactive = null,
     // Явные привязки при создании (валидируются до создания персоны)
     List<PersonaBindingRequest>? Bindings = null,
     // true — после создания подобрать привязки AI (за флагом persona-bindings, best-effort)
@@ -1042,11 +1252,28 @@ public record UpdatePersonaRequest(
     string? Color,
     string? Greeting,
     bool? MemoryEnabled,
-    List<string>? Tools = null);
+    List<string>? Tools = null,
+    // null — не менять; объект с пустыми слотами — сбросить контракт
+    PersonaContract? Contract = null,
+    // Профиль доступа (P6): full | readOnly | custom; null — не менять
+    string? Access = null,
+    // Свой список запрещённых инструментов (для custom); null — не менять
+    List<string>? DisallowedTools = null,
+    // Проактивность: null — не менять; служебные поля не затираются (partial-merge)
+    PersonaProactiveDto? Proactive = null);
+
+// Пользовательские поля проактивности (без служебных LastFiredAt/SessionId)
+public record PersonaProactiveDto(
+    bool Enabled,
+    string? Type = null,        // daily | weekdays | weekly
+    List<int>? Weekdays = null, // ISO 1=Пн … 7=Вс (для weekly)
+    string? Time = null,        // "HH:mm" в таймзоне владельца
+    string? Instruction = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null);
 
-public record RememberRequest(string Type, string Text, List<string>? Tags = null, string? SourceSessionId = null);
+public record RememberRequest(string Type, string Text, List<string>? Tags = null,
+    string? SourceSessionId = null, double? Salience = null);
 
 public record GenerateAvatarRequest(string? Prompt = null, int? Count = null);
 

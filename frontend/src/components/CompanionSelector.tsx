@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import type { Persona, AgentInfo } from '../types';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { personaLabel } from '../lib/personas';
+import { modelProvider } from '../lib/models';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { agentDotColor } from './AgentSelector';
 
@@ -23,13 +24,20 @@ interface Props {
   // Направление раскрытия: по умолчанию вверх (composer прижат к низу).
   // dropUp=false — раскрытие вниз (для триггера у верха панели, напр. список чатов).
   dropUp?: boolean;
+  // Групповой чат (флаг persona-group-chats): мультивыбор 2-4 персон,
+  // первая выбранная — ведущая; подтверждение создаёт новый групповой чат.
+  onCreateGroup?: (personaIds: string[]) => void;
 }
 
 // Единый селектор «собеседника» чата: персоны (наша фича) и стандартные .md-агенты
 // Claude в одном дропдауне. Заменяет пару PersonaSelector + AgentSelector в композере.
 // Раскрытие/мобильное позиционирование — по образцу PersonaSelector.
-export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true }: Props) {
+export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup }: Props) {
   const [open, setOpen] = useState(false);
+  // Режим мультивыбора участников группового чата (внутри того же дропдауна)
+  const [groupMode, setGroupMode] = useState(false);
+  // Порядок выбора важен: первая выбранная — ведущая
+  const [groupSelected, setGroupSelected] = useState<string[]>([]);
   const rootRef = useRef<HTMLDivElement>(null);
   // На мобиле dropdown позиционируется через fixed с вычисленными координатами
   const [fixedPos, setFixedPos] = useState<{ bottom: number; top: number; left: number; right: number } | null>(null);
@@ -41,6 +49,11 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  // Закрытие дропдауна сбрасывает мультивыбор группы
+  useEffect(() => {
+    if (!open) { setGroupMode(false); setGroupSelected([]); }
   }, [open]);
 
   useLayoutEffect(() => {
@@ -213,7 +226,101 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
         </button>
       )}
 
-      {open && (
+      {open && groupMode && (
+        <div style={dropdownStyle}>
+          <div style={{
+            padding: '8px 10px 4px', fontSize: 13, fontWeight: 700, color: C.textHeading,
+            fontFamily: FONT.sans,
+          }}>
+            Групповой чат
+          </div>
+          <div style={{ padding: '0 10px 6px', fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.4 }}>
+            Выберите 2–4 участников. Первая выбранная — ведущая: её зона и модель задают чат.
+          </div>
+          {personas.map(p => {
+            const idx = groupSelected.indexOf(p.id);
+            const checked = idx >= 0;
+            const disabled = !checked && groupSelected.length >= 4;
+            return (
+              <button
+                key={`g-${p.id}`}
+                onClick={() => setGroupSelected(prev => checked
+                  ? prev.filter(x => x !== p.id)
+                  : prev.length >= 4 ? prev : [...prev, p.id])}
+                disabled={disabled}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '7px 10px',
+                  borderRadius: R.md, border: 'none', background: checked ? C.accentLight : 'transparent',
+                  cursor: disabled ? 'default' : 'pointer', textAlign: 'left', opacity: disabled ? 0.5 : 1,
+                }}
+              >
+                <input type="checkbox" readOnly checked={checked} style={{ accentColor: C.accent, pointerEvents: 'none' }} />
+                <PersonaAvatar persona={p} size={26} />
+                <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: FONT.sans }}>
+                  {personaLabel(p)}
+                </span>
+                {idx === 0 && (
+                  <span style={{
+                    flexShrink: 0, fontSize: 10, fontWeight: 700, padding: '1px 7px',
+                    borderRadius: R.pill, background: C.accentLight, color: C.accent, fontFamily: FONT.sans,
+                  }}>
+                    ведущая
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          {/* Предупреждение о разных провайдерах моделей участников: транскрипт живёт
+              у провайдера, чужая модель не применится при смене спикера */}
+          {(() => {
+            const providers = new Set(groupSelected
+              .map(id => personas.find(p => p.id === id))
+              .filter(Boolean)
+              .map(p => modelProvider(p!.model)));
+            return providers.size > 1 ? (
+              <div style={{
+                margin: '6px 8px', padding: '6px 9px', borderRadius: R.md,
+                background: C.warningBg, border: `1px solid ${C.warning}`,
+                fontSize: 11.5, color: C.warningText, fontFamily: FONT.sans, lineHeight: 1.4,
+              }}>
+                У участников модели разных провайдеров — чат пойдёт на провайдере ведущей,
+                чужие модели участников применяться не будут.
+              </div>
+            ) : null;
+          })()}
+          <div style={{ display: 'flex', gap: 6, padding: '8px 8px 4px' }}>
+            <button
+              onClick={() => { setGroupMode(false); setGroupSelected([]); }}
+              style={{
+                padding: '6px 12px', borderRadius: R.md, border: `1px solid ${C.border}`,
+                background: C.bgWhite, color: C.textSecondary, fontSize: 12.5, fontWeight: 600,
+                cursor: 'pointer', fontFamily: FONT.sans,
+              }}
+            >
+              Назад
+            </button>
+            <button
+              onClick={() => {
+                if (groupSelected.length < 2) return;
+                onCreateGroup?.(groupSelected);
+                setOpen(false);
+              }}
+              disabled={groupSelected.length < 2}
+              style={{
+                flex: 1, padding: '6px 12px', borderRadius: R.md, border: 'none',
+                background: groupSelected.length >= 2 ? C.accent : C.bgSelected,
+                color: groupSelected.length >= 2 ? C.onAccent : C.textMuted,
+                fontSize: 12.5, fontWeight: 700, cursor: groupSelected.length >= 2 ? 'pointer' : 'default',
+                fontFamily: FONT.sans,
+              }}
+            >
+              Создать групповой чат{groupSelected.length > 0 ? ` (${groupSelected.length})` : ''}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {open && !groupMode && (
         <div style={dropdownStyle}>
           {hasSelection && (
             <button
@@ -250,6 +357,29 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
               </>
             );
           })()}
+
+          {/* Вход в мультивыбор группового чата (флаг persona-group-chats, нужно ≥2 персон) */}
+          {onCreateGroup && personas.length >= 2 && (
+            <button
+              onClick={() => setGroupMode(true)}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.accentLight; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
+                marginTop: 2, borderTop: `1px solid ${C.divider}`, borderRadius: R.md,
+                border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
+                color: C.textSecondary, fontSize: 12.5, fontWeight: 600, fontFamily: FONT.sans,
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+              Групповой чат…
+            </button>
+          )}
         </div>
       )}
     </div>

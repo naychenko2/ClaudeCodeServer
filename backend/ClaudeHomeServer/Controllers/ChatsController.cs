@@ -11,7 +11,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/chats")]
-public class ChatsController(SessionManager sessions, FileService files) : ControllerBase
+public class ChatsController(SessionManager sessions, FileService files,
+    PersonaMeetingService meetings, FeatureFlagService flags) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -34,6 +35,35 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
         {
             var chat = await sessions.CreateChatAsync(UserId, mode, req.ResumeSessionId, req.Name, req.Model, req.Effort);
             return CreatedAtAction(nameof(GetAll), new { }, chat);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    // Групповой чат (флаг persona-group-chats): 2-4 персоны, первая — ведущая.
+    // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
+    [HttpPost("group")]
+    public async Task<IActionResult> CreateGroup([FromBody] CreateGroupChatRequest req)
+    {
+        var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
+        try
+        {
+            var chat = await sessions.CreateGroupChatAsync(UserId, req.PersonaIds ?? [], mode, req.Name);
+            return Ok(chat);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    // Обновить состав участников группового чата (спикер сохраняется, если остался,
+    // иначе — новая ведущая). Работает и для проектной сессии группового чата.
+    [HttpPut("{id}/participants")]
+    public IActionResult SetParticipants(string id, [FromBody] SetParticipantsRequest req)
+    {
+        try
+        {
+            var updated = sessions.SetParticipants(id, UserId, req.PersonaIds ?? []);
+            return updated is null ? NotFound() : Ok(updated);
         }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
@@ -71,6 +101,40 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
         }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    // Совещание персон (P7, тот же флаг persona-group-chats): три фазы one-shot —
+    // независимые позиции → перекрёстная критика → синтез от ведущей. Дефолтные
+    // участники — participants группового чата; в обычном чате персоны personaIds обязателен.
+    [HttpPost("{id}/meeting")]
+    public IActionResult StartMeeting(string id, [FromBody] StartMeetingRequest req)
+    {
+        if (!flags.IsEnabled(UserId, FeatureFlagKeys.PersonaGroupChats))
+            return BadRequest(new { error = "Совещания персон выключены (флаг persona-group-chats)" });
+        var session = sessions.GetOwned(id, UserId);
+        if (session is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(req.Question))
+            return BadRequest(new { error = "Пустой вопрос совещания" });
+
+        var personaIds = req.PersonaIds is { Count: > 0 } ? req.PersonaIds : session.Participants;
+        if (personaIds is null || personaIds.Count < 2)
+            return BadRequest(new { error = "Укажите 2-4 персоны-участника совещания" });
+
+        try
+        {
+            var meetingId = meetings.Start(UserId, id, req.Question, personaIds);
+            return Ok(new { meetingId });
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    [HttpPost("{id}/meeting/cancel")]
+    public IActionResult CancelMeeting(string id)
+    {
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        meetings.Cancel(id);
+        return NoContent();
     }
 
     [HttpGet("{id}/history")]
@@ -123,3 +187,9 @@ public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = 
 public record UpdateChatRequest(string? Name = null, string? Model = null, string? Effort = null, bool? Pinned = null, int? ExpiresAfterMinutes = -1);
 
 public record SetPersonaRequest(string? PersonaId = null, string? AgentName = null);
+
+public record CreateGroupChatRequest(List<string>? PersonaIds, string Mode = "auto", string? Name = null);
+
+public record SetParticipantsRequest(List<string>? PersonaIds);
+
+public record StartMeetingRequest(string Question, List<string>? PersonaIds = null);

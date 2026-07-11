@@ -14,6 +14,7 @@ public class TaskExecutionService
 {
     private readonly TaskManager _tasks;
     private readonly SessionManager _sessions;
+    private readonly PersonaManager _personas;
     private readonly IHubContext<SessionHub> _hub;
     private readonly PushService _push;
     private readonly NotesKnowledgeService _kb;
@@ -24,13 +25,14 @@ public class TaskExecutionService
     private readonly string? _executorModel;
 
     public TaskExecutionService(
-        TaskManager tasks, SessionManager sessions,
+        TaskManager tasks, SessionManager sessions, PersonaManager personas,
         IHubContext<SessionHub> hub, PushService push,
         NotesKnowledgeService kb, FeatureFlagService flags,
         ILogger<TaskExecutionService> log, IConfiguration config)
     {
         _tasks = tasks;
         _sessions = sessions;
+        _personas = personas;
         _hub = hub;
         _push = push;
         _kb = kb;
@@ -58,16 +60,29 @@ public class TaskExecutionService
             linked.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting)
             throw new InvalidOperationException("По задаче уже работает сессия");
 
+        // Персона-исполнитель: чужая/удалённая — мягкая деградация в обычный режим
+        Persona? persona = null;
+        if (task.PersonaId is not null)
+        {
+            persona = _personas.Get(task.PersonaId, task.OwnerId);
+            if (persona is null)
+                _log.LogWarning("Персона {PersonaId} задачи {TaskId} не найдена или чужая — выполняю обычным Claude",
+                    task.PersonaId, task.Id);
+        }
+
         var name = "Задача: " + (task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title);
+        var model = persona?.Model ?? _executorModel;
         var session = task.ProjectId is not null
-            ? await _sessions.CreateAsync(task.ProjectId, ClaudeMode.AcceptEdits, name: name, model: _executorModel)
-            : await _sessions.CreateChatAsync(task.OwnerId, ClaudeMode.AcceptEdits, name: name, model: _executorModel);
+            ? await _sessions.CreateAsync(task.ProjectId, ClaudeMode.AcceptEdits, name: name, model: model,
+                personaId: persona?.Id)
+            : await _sessions.CreateChatAsync(task.OwnerId, ClaudeMode.AcceptEdits, name: name, model: model,
+                personaId: persona?.Id);
 
         var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow)
             ?? throw new InvalidOperationException("Задача удалена");
         await _hub.BroadcastTaskChangedAsync(task.OwnerId, "updated", updated);
 
-        var prompt = BuildPrompt(updated);
+        var prompt = BuildPrompt(updated, persona);
         // Обогащение контекста семантически близкими заметками (флаг task-exec-context)
         if (_flags.IsEnabled(updated.OwnerId!, FeatureFlagKeys.AiAssist))
             prompt += await BuildNotesContextAsync(updated);
@@ -75,7 +90,7 @@ public class TaskExecutionService
 
         if (auto)
             await NotifyAsync(updated, new NotificationMessage(
-                Title: "Claude взял задачу в работу",
+                Title: persona is null ? "Claude взял задачу в работу" : $"{PersonaLabel(persona)} взяла задачу в работу",
                 Body: updated.Title,
                 Url: TaskSchedulerService.TaskUrl(updated),
                 Kind: "claude"));
@@ -85,9 +100,13 @@ public class TaskExecutionService
         return updated;
     }
 
-    // Постановка задачи для Claude: контекст + правила ведения статуса через MCP tasks_*
-    internal static string BuildPrompt(TaskItem task)
+    // Постановка задачи для Claude: контекст + правила ведения статуса через MCP tasks_*.
+    // С персоной — структурированный 6-секционный контракт (персона-исполнитель);
+    // без персоны — прежний формат (обратная совместимость).
+    internal static string BuildPrompt(TaskItem task, Persona? persona = null)
     {
+        if (persona is not null) return BuildPersonaPrompt(task);
+
         var sb = new StringBuilder();
         sb.AppendLine($"Выполни задачу из трекера (id задачи: {task.Id}).");
         sb.AppendLine();
@@ -120,6 +139,62 @@ public class TaskExecutionService
         sb.AppendLine("- В конце подведи короткий итог сделанного.");
         return sb.ToString();
     }
+
+    // 6-секционный контракт постановки для персоны-исполнителя. Характер персоны
+    // инжектится системным промптом сессии (персона-слой) — здесь только постановка.
+    // Секция КОНТЕКСТ идёт последней: блок заметок (BuildNotesContextAsync)
+    // дописывается после и попадает в неё же.
+    private static string BuildPersonaPrompt(TaskItem task)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## ЗАДАЧА");
+        sb.AppendLine($"Выполни задачу из трекера (id задачи: {task.Id}).");
+        sb.AppendLine();
+        sb.AppendLine($"# {task.Title}");
+        if (!string.IsNullOrWhiteSpace(task.Description))
+        {
+            sb.AppendLine();
+            sb.AppendLine(task.Description);
+        }
+        sb.AppendLine();
+        sb.AppendLine("## ОЖИДАЕМЫЙ РЕЗУЛЬТАТ");
+        sb.AppendLine("- Задача выполнена, проверена и завершена в трекере.");
+        sb.AppendLine("- В конце — короткий итог сделанного от твоего лица.");
+        sb.AppendLine();
+        sb.AppendLine("## ИНСТРУМЕНТЫ");
+        sb.AppendLine("- Статус задачи веди через MCP-инструменты tasks_*.");
+        sb.AppendLine("- Выполненные подзадачи отмечай через tasks_toggle_subtask.");
+        sb.AppendLine();
+        sb.AppendLine("## ОБЯЗАТЕЛЬНО");
+        sb.AppendLine("- Задача уже переведена в статус inProgress — поддерживай статус актуальным.");
+        sb.AppendLine("- Когда всё сделано и проверено — заверши задачу через tasks_complete.");
+        sb.AppendLine("- В конце подведи короткий итог сделанного.");
+        sb.AppendLine();
+        sb.AppendLine("## НЕЛЬЗЯ");
+        sb.AppendLine("- Не выходи за рамки задачи и не трогай несвязанное.");
+        sb.AppendLine("- Если выполнить невозможно — не завершай задачу, а кратко опиши причину.");
+        sb.AppendLine();
+        sb.AppendLine("## КОНТЕКСТ");
+        if (task.Subtasks.Count > 0)
+        {
+            sb.AppendLine("Подзадачи:");
+            foreach (var s in task.Subtasks)
+                sb.AppendLine($"- [{(s.IsDone ? "x" : " ")}] {s.Title} (id: {s.Id})");
+        }
+        if (task.LinkedFiles.Count > 0)
+        {
+            sb.AppendLine("Связанные файлы:");
+            foreach (var f in task.LinkedFiles)
+                sb.AppendLine($"- {f}");
+        }
+        if (task.Subtasks.Count == 0 && task.LinkedFiles.Count == 0)
+            sb.AppendLine("Дополнительного контекста нет.");
+        return sb.ToString();
+    }
+
+    // Подпись персоны «Роль (Имя)» — единый формат отображения
+    internal static string PersonaLabel(Persona persona) =>
+        string.IsNullOrWhiteSpace(persona.Role) ? persona.Name : $"{persona.Role} ({persona.Name})";
 
     // Блок «релевантные заметки» — семантический поиск по базе знаний владельца
     // (флаг task-exec-context). Тихо пусто, если Dify не настроен или ничего не нашлось.
@@ -161,6 +236,9 @@ public class TaskExecutionService
         var task = FindTracked(session.Id);
         if (task is null) return;
 
+        // Уведомления от лица персоны-исполнителя (если назначена и всё ещё своя)
+        var persona = task.PersonaId is not null ? _personas.Get(task.PersonaId, task.OwnerId!) : null;
+
         switch (msg)
         {
             case ResultMessage result:
@@ -169,11 +247,11 @@ public class TaskExecutionService
                 var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
                 if (updated is null) return;
                 await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
-                await NotifyAsync(updated, BuildResultNotification(updated, ok));
+                await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
                 break;
             }
             case PermissionRequestMessage or AskQuestionMessage:
-                await NotifyAsync(task, BuildWaitingNotification(task));
+                await NotifyAsync(task, BuildWaitingNotification(task, persona));
                 break;
         }
     }
@@ -188,22 +266,30 @@ public class TaskExecutionService
         task.ClaudeStartedAt is not null && task.ClaudeResult is null;
 
     // Уведомление о завершении хода. Claude завершает задачу сам через tasks_complete;
-    // если статус не done — результат требует внимания пользователя
-    internal static NotificationMessage BuildResultNotification(TaskItem updated, bool ok)
+    // если статус не done — результат требует внимания пользователя.
+    // С персоной-исполнителем — уведомление от её лица («Роль (Имя)»).
+    internal static NotificationMessage BuildResultNotification(TaskItem updated, bool ok, Persona? persona = null)
     {
         var body = updated.Status == TaskItemStatus.Done
             ? updated.Title
             : $"{updated.Title} — проверь результат в чате";
+        var title = (ok, persona) switch
+        {
+            (true, null) => "Claude завершил работу над задачей",
+            (false, null) => "Claude не смог выполнить задачу",
+            (true, not null) => $"{PersonaLabel(persona)} завершила работу над задачей",
+            (false, not null) => $"{PersonaLabel(persona)} не смогла выполнить задачу",
+        };
         return new NotificationMessage(
-            Title: ok ? "Claude завершил работу над задачей" : "Claude не смог выполнить задачу",
+            Title: title,
             Body: body,
             Url: TaskSchedulerService.TaskUrl(updated),
             Kind: "claude");
     }
 
     // Уведомление «ждёт ответа» (permission_request / AskUserQuestion)
-    internal static NotificationMessage BuildWaitingNotification(TaskItem task) => new(
-        Title: "Claude ждёт ответа по задаче",
+    internal static NotificationMessage BuildWaitingNotification(TaskItem task, Persona? persona = null) => new(
+        Title: persona is null ? "Claude ждёт ответа по задаче" : $"{PersonaLabel(persona)} ждёт ответа по задаче",
         Body: task.Title,
         Url: TaskSchedulerService.TaskUrl(task),
         Kind: "claude");

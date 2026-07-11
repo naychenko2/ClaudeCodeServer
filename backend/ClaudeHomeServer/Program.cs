@@ -63,10 +63,17 @@ builder.Services.AddSingleton<AppSettingsService>();
 builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<PersonaManager>();
+builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
 builder.Services.AddSingleton<FalImageService>();
+// Консолидация памяти — singleton + hosted: autolearn ставит заявки через RequestConsolidation
+builder.Services.AddSingleton<PersonaMemoryConsolidationService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PersonaMemoryConsolidationService>());
 builder.Services.AddHostedService<PersonaMemoryAutolearnService>();
+// Проактивность персон («пишет первой» по расписанию, флаг persona-proactive)
+builder.Services.AddSingleton<PersonaProactiveService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PersonaProactiveService>());
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();
@@ -76,6 +83,12 @@ builder.Services.AddSingleton<NotesAiService>();
 builder.Services.AddSingleton<NoteTaskSyncService>();
 builder.Services.AddSingleton<UnifiedSearchService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
+// Интерфейс one-shot раннера → тот же singleton (мокируется в тестах совещаний)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IOneShotRunner>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>());
+// Совещания персон (P7): one-shot ответы персон + оркестратор фаз
+builder.Services.AddSingleton<PersonaAskService>();
+builder.Services.AddSingleton<PersonaMeetingService>();
 builder.Services.AddSingleton<ChangelogService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();

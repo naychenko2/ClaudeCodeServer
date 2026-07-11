@@ -19,7 +19,7 @@ export interface NavSnapshot {
 // Hash-представление снапшота для адресной строки
 function toHash(s: NavSnapshot): string {
   switch (s.screen) {
-    case 'chats': return '#/chats';
+    case 'chats': return s.chatId ? `#/chats/${encodeURIComponent(s.chatId)}` : '#/chats';
     case 'calendar': return s.board ? '#/calendar/board' : '#/calendar';
     case 'notes': return s.note ? `#/notes/${encodeURIComponent(s.note)}` : '#/notes';
     case 'personas': return s.persona ? `#/personas/${encodeURIComponent(s.persona)}` : '#/personas';
@@ -44,13 +44,19 @@ export interface HashTarget {
   board?: boolean;
   noteId?: string;
   personaId?: string;
+  chatId?: string;   // #/chats/{id} — диплинк на конкретный чат вне проекта
 }
 
 export function parseHash(hash: string = window.location.hash): HashTarget | null {
   const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   if (parts.length === 0) return null;
   switch (parts[0]) {
-    case 'chats': return { screen: 'chats' };
+    case 'chats': {
+      const target: HashTarget = { screen: 'chats' };
+      // #/chats/{id} — диплинк на конкретный чат (уведомления проактивных персон)
+      if (parts[1]) target.chatId = decodeURIComponent(parts[1]);
+      return target;
+    }
     case 'calendar': {
       const target: HashTarget = { screen: 'calendar' };
       // #/calendar/task/{id} — диплинк на личную задачу (модал в календаре)

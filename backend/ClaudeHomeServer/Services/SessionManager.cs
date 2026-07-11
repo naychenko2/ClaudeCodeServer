@@ -64,6 +64,7 @@ public class SessionManager
     private readonly PersonaManager _personas;
     private readonly PersonaMemoryService _personaMemory;
     private readonly PersonaBindingsService _bindings;
+    private readonly PersonaPromptBuilder _promptBuilder;
     private readonly ILogger<SessionManager> _log;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
@@ -74,6 +75,7 @@ public class SessionManager
         LlmProviderRegistry llmProviders,
         NotesKnowledgeService notesKb, FeatureFlagService flags, PersonaManager personas,
         PersonaMemoryService personaMemory, PersonaBindingsService bindings,
+        PersonaPromptBuilder promptBuilder,
         ILogger<SessionManager> log)
     {
         _projects = projects;
@@ -93,6 +95,7 @@ public class SessionManager
         _personas = personas;
         _personaMemory = personaMemory;
         _bindings = bindings;
+        _promptBuilder = promptBuilder;
         _log = log;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
         _falCost.OnCostResolved = PublishFalCostAsync;
@@ -161,12 +164,15 @@ public class SessionManager
     }
 
     // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок релевантных
-    // записей (relevance × recency × typeWeight). Failsafe-таймаут; ошибки → null (ход без recall).
+    // записей (взвешенная сумма PersonaMemoryScorer) + рабочий фокус первым блоком.
+    // Failsafe-таймаут; ошибки → null (ход без recall).
     private Func<string, Task<string?>> BuildPersonaRecallProvider(string ownerId, string personaId)
     {
         var topK = int.TryParse(_config["Persona:RecallTopK"], out var k) ? k : 5;
+        // Шкала скоринга — взвешенная сумма (PersonaMemoryScorer), порог ~0.30;
+        // старый дефолт 0.02 относился к шкале произведения и больше не валиден
         var minScore = double.TryParse(_config["Persona:RecallMinScore"],
-            System.Globalization.CultureInfo.InvariantCulture, out var s) ? s : 0.02;
+            System.Globalization.CultureInfo.InvariantCulture, out var s) ? s : 0.30;
         var timeoutMs = int.TryParse(_config["Persona:RecallTimeoutMs"], out var t) ? t : 2500;
 
         return async text =>
@@ -343,7 +349,7 @@ public class SessionManager
 
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
-        string? effort = null)
+        string? effort = null, string? personaId = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -357,6 +363,9 @@ public class SessionManager
             Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
             AgentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim(),
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
+            // Персона-слой подхватится общим механизмом (BuildPersonaLayer).
+            // Маршрутизация остаётся по вызывающему коду (задача), не по зоне персоны.
+            PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
         };
 
         await StartNewSessionAsync(session, project.RootPath, project.SystemPrompt,
@@ -367,7 +376,8 @@ public class SessionManager
     // Создание чата вне проекта: рабочая папка — {DefaultProjectsPath}/{username}/Chats,
     // системный промпт — только встроенная часть (rawSystemPrompt=null), без проектных правил.
     public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
-        string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null)
+        string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,
+        string? personaId = null)
     {
         var rootPath = ResolveChatRoot(ownerId);
 
@@ -380,6 +390,8 @@ public class SessionManager
             Name = name,
             Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
+            // Персона-слой подхватится общим механизмом (BuildPersonaLayer)
+            PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
         };
 
         await StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);
@@ -431,6 +443,83 @@ public class SessionManager
         return session;
     }
 
+    // Создание группового чата (флаг persona-group-chats): 2-4 персоны владельца,
+    // первая — ведущая (стартовый активный спикер). Зона — по ведущей, как в
+    // CreatePersonaChatAsync: проектная персона → сессия её проекта, глобальная → чат вне проекта.
+    public async Task<Session> CreateGroupChatAsync(string ownerId, IReadOnlyList<string> personaIds,
+        ClaudeMode mode, string? name = null)
+    {
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaGroupChats))
+            throw new InvalidOperationException("Групповые чаты персон выключены (флаг persona-group-chats)");
+
+        var participants = ValidateParticipants(ownerId, personaIds);
+        var leader = participants[0];
+        var participantIds = participants.Select(p => p.Id).ToList();
+
+        if (leader.Scope == PersonaScope.Project && !string.IsNullOrEmpty(leader.ProjectId)
+            && _projects.GetById(leader.ProjectId) is { } project && project.OwnerId == ownerId)
+        {
+            var projectSession = new Session
+            {
+                ProjectId = project.Id,
+                OwnerId = ownerId,
+                PersonaId = leader.Id,
+                Participants = participantIds,
+                Mode = mode,
+                Name = name,
+                Model = leader.Model,
+                Effort = leader.Effort,
+            };
+            await StartNewSessionAsync(projectSession, project.RootPath, project.SystemPrompt,
+                () => _projects.GetById(project.Id)?.PermissionRules
+                    ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>());
+            return projectSession;
+        }
+
+        var rootPath = ResolveChatRoot(ownerId);
+        var session = new Session
+        {
+            ProjectId = null,
+            OwnerId = ownerId,
+            PersonaId = leader.Id,
+            Participants = participantIds,
+            Mode = mode,
+            Name = name,
+            Model = leader.Model,
+            Effort = leader.Effort,
+        };
+        await StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);
+        return session;
+    }
+
+    // Обновить состав участников группового чата. Активный спикер сохраняется,
+    // если остался в составе, иначе — новая ведущая. Адаптер пересоздаётся
+    // (состав участников зашит в подсказку @упоминаний и групповой слой промпта).
+    public Session? SetParticipants(string sessionId, string ownerId, IReadOnlyList<string> personaIds)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        if (SessionOwner(entry.Info) != ownerId) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaGroupChats))
+            throw new InvalidOperationException("Групповые чаты персон выключены (флаг persona-group-chats)");
+
+        var participants = ValidateParticipants(ownerId, personaIds);
+        entry.Info.Participants = participants.Select(p => p.Id).ToList();
+        var speaker = participants.FirstOrDefault(p => p.Id == entry.Info.PersonaId) ?? participants[0];
+        SwitchSpeaker(entry, speaker);
+        return entry.Info;
+    }
+
+    // Участники группового чата: 2-4 уникальные персоны, все принадлежат владельцу
+    private List<Persona> ValidateParticipants(string ownerId, IReadOnlyList<string> personaIds)
+    {
+        var ids = (personaIds ?? Array.Empty<string>())
+            .Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
+        if (ids.Count is < 2 or > 4)
+            throw new InvalidOperationException("В групповом чате участвуют от 2 до 4 персон");
+        return ids.Select(id => _personas.Get(id, ownerId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}")).ToList();
+    }
+
     // Чаты владельца, ведущиеся от лица конкретной персоны (для раздела «Персоны»)
     public IReadOnlyList<Session> GetPersonaChats(string ownerId, string personaId) =>
         _sessions.Values
@@ -444,15 +533,30 @@ public class SessionManager
         s.ProjectId is not null ? _projects.GetById(s.ProjectId)?.OwnerId : s.OwnerId;
 
     // Персона-слой сессии (промпт характера + контекст памяти + auto-recall + сама персона
-    // для гейтов возможностей). Строится одинаково при первом старте и при восстановлении
-    // процесса. Пусто, если персоны нет.
-    private (string? Prompt, MemoryMcpContext? Memory, Func<string, Task<string?>>? Recall, Persona? Persona)
+    // для гейтов возможностей). Строится одинаково при первом старте и при восстановлении процесса.
+    // Промпт — замыкание: адаптер зовёт его на каждый ход, поэтому правки персоны
+    // (контракт/характер), смена модели сессии и флаг PersonaSwitched применяются сразу.
+    private (Func<string?>? Prompt, MemoryMcpContext? Memory, Func<string, Task<string?>>? Recall, Persona? Persona)
         BuildPersonaLayer(Session session, string? ownerId)
     {
         if (session.PersonaId is null || ownerId is null) return (null, null, null, null);
         var persona = _personas.Get(session.PersonaId, ownerId);
         if (persona is null) return (null, null, null, null);
-        var prompt = BuildPersonaPrompt(persona, session.PersonaSwitched);
+        Func<string?> prompt = () =>
+        {
+            var p = session.PersonaId is { } pid ? _personas.Get(pid, ownerId) : null;
+            if (p is null) return null;
+            var built = _promptBuilder.Build(p, session.Model, session.PersonaSwitched,
+                greeted: !string.IsNullOrWhiteSpace(p.Greeting));
+            // Групповой чат: надстройка со списком участников и правилом «говори только за себя»
+            if (session.Participants is { Count: > 1 } memberIds)
+            {
+                var members = memberIds.Select(id => _personas.Get(id, ownerId))
+                    .OfType<Persona>().ToList();
+                if (members.Count > 1) built += "\n\n" + BuildGroupChatHint(p, members);
+            }
+            return built;
+        };
         // Долгая память — только если включена у персоны и владелец имеет доступ к фиче
         if (persona.MemoryEnabled && _flags.IsEnabled(ownerId, FeatureFlagKeys.Personas))
             return (prompt, BuildMemoryContext(ownerId, persona.Id), BuildPersonaRecallProvider(ownerId, persona.Id), persona);
@@ -495,17 +599,43 @@ public class SessionManager
         }
     }
 
+    // Групповая надстройка промпта: участники чата + дисциплина «отвечай только от своего
+    // лица». Добавляется к персона-слою активного спикера на каждый ход.
+    internal static string BuildGroupChatHint(Persona self, IReadOnlyList<Persona> participants)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Это ГРУППОВОЙ чат: пользователь общается сразу с несколькими персонами, " +
+                      "отвечает та, к кому обращаются (@handle). Участники:");
+        foreach (var p in participants)
+        {
+            var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
+            sb.AppendLine($"- @{p.Handle} — {title}{(p.Id == self.Id ? " (это ты)" : "")}");
+        }
+        sb.AppendLine("Сейчас отвечаешь ты. Отвечай ТОЛЬКО от своего лица и в своём характере — " +
+                      "НЕ сочиняй и не пиши реплики за других участников.");
+        sb.Append("Если пользователь обращается ко всем или просит мнение другого участника — " +
+                  "спроси его инструментом persona_ask и передай суть ответа своими словами, " +
+                  "явно указав автора.");
+        return sb.ToString();
+    }
+
     // Контекст MCP-сервера персон: CRUD персон из любого чата (за флагом personas);
     // при включённом persona-mentions и наличии других персон в контексте — плюс
     // @упоминания: MentionsHint (блок «@handle — Роль (Имя)» для промпта) и persona_ask.
-    private PersonasMcpContext? BuildPersonasContext(string? ownerId, string? projectId, string? selfPersonaId)
+    // В групповом чате mentions-режим (persona_ask + подсказка по УЧАСТНИКАМ) включён
+    // всегда, независимо от флага persona-mentions — иначе спикер не сможет спросить коллег.
+    private PersonasMcpContext? BuildPersonasContext(string? ownerId, string? projectId, Session session)
     {
         if (ownerId is null || !_flags.IsEnabled(ownerId, FeatureFlagKeys.Personas)) return null;
 
+        var selfPersonaId = session.PersonaId;
+        var isGroup = session.Participants is { Count: > 1 };
         string? mentionsHint = null;
-        if (_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaMentions))
+        if (isGroup || _flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaMentions))
         {
-            var others = _personas.GetForContext(ownerId, projectId)
+            var others = (isGroup
+                    ? session.Participants!.Select(id => _personas.Get(id, ownerId)).OfType<Persona>()
+                    : _personas.GetForContext(ownerId, projectId))
                 .Where(p => p.Id != selfPersonaId)
                 .ToList();
             if (others.Count > 0)
@@ -561,7 +691,9 @@ public class SessionManager
         // Разрушающие операции (files_delete/chats_delete) — за отдельным флагом
         // workspace-destructive; персоне дополнительно нужен tool-ключ destructive
         // (Tool-привязка или Persona.Tools). Одна destructive без базовых секций не монтируется.
+        // Профиль «Только чтение» строже любых привязок — секцию не монтируем вовсе.
         if (_flags.IsEnabled(ownerId, FeatureFlagKeys.WorkspaceDestructive)
+            && persona?.Access != PersonaAccess.ReadOnly
             && _bindings.EffectiveToolEnabled(ownerId, persona, "destructive"))
             sections.Add("destructive");
         sections.Add("search");
@@ -584,12 +716,15 @@ public class SessionManager
             sections, allowedIds, selfSessionId);
     }
 
-    // Ограничение «web»: у персоны с выключенным веб-поиском запрещаем встроенные
-    // тулы CLI (не MCP) поверх конфига Claude:DisallowedTools
+    // Дополнительные запреты сессии персоны: профиль доступа (PersonaAccessPolicy — «пол»
+    // запретов: ReadOnly/Custom) + capability-решение «web» через привязки
+    // (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools). Web-решение передаём
+    // в policy параметром, чтобы не дублировать логику; запреты складываются — побеждает
+    // более строгий (ReadOnly режет мутации, даже если binding разрешил инструмент).
     private IReadOnlyList<string>? BuildExtraDisallowed(string? ownerId, Persona? persona) =>
-        persona is not null && !_bindings.EffectiveToolEnabled(ownerId, persona, "web")
-            ? new[] { "WebSearch", "WebFetch" }
-            : null;
+        PersonaAccessPolicy.BuildExtraDisallowed(persona,
+            webAllowed: _bindings.EffectiveToolEnabled(ownerId, persona, "web"));
+
 
     // Назначить/сменить собеседника чату (единый селектор): персону (personaId) ИЛИ
     // стандартного .md-агента Claude (agentName) — взаимоисключающе. Оба пустые = снять.
@@ -609,6 +744,15 @@ public class SessionManager
                 ?? throw new KeyNotFoundException("Персона не найдена");
         }
 
+        SwitchSpeaker(entry, persona, agentName);
+        return entry.Info;
+    }
+
+    // Общее ядро смены собеседника/спикера (SetPersona и роутинг группового чата):
+    // PersonaId и модель/усилие персоны (у начатой сессии — только при том же провайдере),
+    // флаг PersonaSwitched, сброс адаптера (новый слой подхватится при следующем ходе), Save.
+    private void SwitchSpeaker(SessionEntry entry, Persona? persona, string? agentName = null)
+    {
         var started = entry.Info.ClaudeSessionId is not null;
         var switching = started &&
             (entry.Info.PersonaId != persona?.Id || entry.Info.AgentName is not null || persona is not null);
@@ -641,31 +785,37 @@ public class SessionManager
         {
             entry.Process = null;
             FireAndForget(old.DisposeAsync().AsTask(),
-                $"остановка адаптера при смене собеседника ({sessionId})");
+                $"остановка адаптера при смене собеседника ({entry.Info.Id})");
         }
         SaveSessions();
-        return entry.Info;
     }
 
-    // Системный промпт персоны: имя + роль/описание + характер (тело systemPrompt).
-    // Public static: переиспользуется PersonasController при one-shot ответе persona_ask.
-    // switched — собеседника меняли по ходу разговора (в транскрипте есть чужие ответы).
-    public static string BuildPersonaPrompt(Persona persona, bool switched = false)
+    // Роутинг спикера группового чата перед ходом: @упоминание участника переключает
+    // активного спикера (SwitchSpeaker + speaker_changed клиентам). Во время активного
+    // хода (Working/Waiting) состав не трогаем — переключение подействует со следующего.
+    private async Task RouteGroupSpeakerAsync(string sessionId, SessionEntry entry, string text)
     {
-        var sb = new System.Text.StringBuilder();
-        // Роль — главная («Ты — Дизайнер по имени Светлана»); без роли — просто имя
-        if (!string.IsNullOrWhiteSpace(persona.Role))
-            sb.Append($"Ты — {persona.Role.Trim()} по имени {persona.Name}");
-        else
-            sb.Append($"Ты — {persona.Name}");
-        if (!string.IsNullOrWhiteSpace(persona.Description))
-            sb.Append($", {persona.Description.Trim()}");
-        sb.Append(". Отвечай и действуй от своего лица, в своём характере, оставаясь собой на протяжении всего разговора.");
-        if (switched)
-            sb.Append(" Ранее в этом разговоре мог отвечать другой собеседник — продолжай диалог от своего лица, не переписывай и не комментируй прошлые ответы.");
-        if (!string.IsNullOrWhiteSpace(persona.SystemPrompt))
-            sb.Append("\n\n").Append(persona.SystemPrompt.Trim());
-        return sb.ToString();
+        if (entry.Info.Participants is not { Count: > 1 } participantIds) return;
+        if (entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting) return;
+        var ownerId = SessionOwner(entry.Info);
+        if (ownerId is null) return;
+
+        var participants = participantIds
+            .Select(id => _personas.Get(id, ownerId))
+            .OfType<Persona>()
+            .ToList();
+        if (participants.Count == 0) return;
+
+        var route = GroupChatRouter.Resolve(text, participants, entry.Info.PersonaId);
+        if (!route.Switched) return;
+
+        var speaker = participants.First(p => p.Id == route.SpeakerPersonaId);
+        SwitchSpeaker(entry, speaker);
+
+        var label = string.IsNullOrWhiteSpace(speaker.Role) ? speaker.Name : $"{speaker.Role} ({speaker.Name})";
+        // Только в session-группу: клиент открытого чата состоит и в user_/project_-группе,
+        // рассылка в обе дублировала разделитель «Теперь отвечает» в ленте
+        await BroadcastAsync(sessionId, new SpeakerChangedMessage(speaker.Id, label));
     }
 
     // Общий запуск новой сессии: аккумулятор истории, регистрация в реестре, старт процесса claude.
@@ -694,16 +844,16 @@ public class SessionManager
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
             rawSystemPrompt, permissionRules,
-            _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "tasks") ? BuildTasksContext(ownerId, session.ProjectId) : null,
-            _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes") ? BuildNotesContext(ownerId, session.ProjectId) : null,
-            BuildRecallProvider(ownerId),
-            persona.Prompt,
-            persona.Memory,
-            persona.Recall,
-            BuildExtraDisallowed(ownerId, persona.Persona),
-            BuildPersonasContext(ownerId, session.ProjectId, session.PersonaId),
-            workspace,
-            BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections)));
+            TasksMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "tasks") ? BuildTasksContext(ownerId, session.ProjectId) : null,
+            NotesMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes") ? BuildNotesContext(ownerId, session.ProjectId) : null,
+            RecallProvider: BuildRecallProvider(ownerId),
+            PersonaPromptProvider: persona.Prompt,
+            MemoryMcp: persona.Memory,
+            PersonaRecallProvider: persona.Recall,
+            ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona),
+            PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session),
+            WorkspaceMcp: workspace,
+            BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -726,6 +876,10 @@ public class SessionManager
             entry.Info.Mode = parsedMode;
             SaveSessions();
         }
+
+        // Групповой чат: @упоминание участника в тексте переключает активного спикера
+        // ДО пересоздания процесса — новый персона-слой применяется уже к этому ходу
+        await RouteGroupSpeakerAsync(sessionId, entry, text);
 
         await EnsureProcessAsync(sessionId, entry);
 
@@ -838,14 +992,16 @@ public class SessionManager
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 RawSystemPrompt: null, PermissionRules: null,
-                _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "tasks") ? BuildTasksContext(entry.Info.OwnerId, null) : null,
-                _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes") ? BuildNotesContext(entry.Info.OwnerId, null) : null,
-                BuildRecallProvider(entry.Info.OwnerId),
-                persona.Prompt, persona.Memory, persona.Recall,
-                BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona),
-                BuildPersonasContext(entry.Info.OwnerId, null, entry.Info.PersonaId),
-                workspace,
-                BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections));
+                TasksMcp: _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "tasks") ? BuildTasksContext(entry.Info.OwnerId, null) : null,
+                NotesMcp: _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes") ? BuildNotesContext(entry.Info.OwnerId, null) : null,
+                RecallProvider: BuildRecallProvider(entry.Info.OwnerId),
+                PersonaPromptProvider: persona.Prompt,
+                MemoryMcp: persona.Memory,
+                PersonaRecallProvider: persona.Recall,
+                ExtraDisallowedTools: BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona),
+                PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info),
+                WorkspaceMcp: workspace,
+                BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections));
         }
         else
         {
@@ -857,14 +1013,16 @@ public class SessionManager
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "tasks") ? BuildTasksContext(project.OwnerId, project.Id) : null,
-                _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
-                BuildRecallProvider(project.OwnerId),
-                persona.Prompt, persona.Memory, persona.Recall,
-                BuildExtraDisallowed(project.OwnerId, persona.Persona),
-                BuildPersonasContext(project.OwnerId, project.Id, entry.Info.PersonaId),
-                workspace,
-                BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections));
+                TasksMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "tasks") ? BuildTasksContext(project.OwnerId, project.Id) : null,
+                NotesMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
+                RecallProvider: BuildRecallProvider(project.OwnerId),
+                PersonaPromptProvider: persona.Prompt,
+                MemoryMcp: persona.Memory,
+                PersonaRecallProvider: persona.Recall,
+                ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona),
+                PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info),
+                WorkspaceMcp: workspace,
+                BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;
@@ -1221,6 +1379,41 @@ public class SessionManager
         await BroadcastAsync(sessionId, msg);
     }
 
+    // Запись StoredMessage в историю сессии ВНЕ хода + broadcast (обобщение паттерна
+    // PublishFalCostAsync): активная сессия → через Accumulator + SaveSnapshot;
+    // неактивная → LoadAsync + append + SaveAsync под локом. Используется совещаниями.
+    public async Task AppendStoredAsync(string sessionId, StoredMessage stored, ServerMessage broadcast)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+
+        if (entry.Accumulator is { } acc)
+        {
+            acc.Append(stored);
+            try { await acc.SaveSnapshotAsync(_history); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Сохранение истории ({sessionId}) после внеходовой записи: {ex.Message}");
+            }
+        }
+        else if (entry.Info.ClaudeSessionId is string key)
+        {
+            await _falPersistLock.WaitAsync();
+            try
+            {
+                var stored0 = await _history.LoadAsync(key);
+                stored0.Add(stored);
+                await _history.SaveAsync(key, stored0);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Прямая внеходовая запись истории ({sessionId}): {ex.Message}");
+            }
+            finally { _falPersistLock.Release(); }
+        }
+
+        await BroadcastSessionMessageAsync(sessionId, broadcast);
+    }
+
     // Единая точка перехода статуса сессии: обновить Info → сохранить на диск → разослать клиентам
     private async Task ApplyStatusAsync(string sessionId, SessionEntry entry, SessionStatus status)
     {
@@ -1261,6 +1454,28 @@ public class SessionManager
 
     private Task BroadcastAsync(string sessionId, ServerMessage msg) =>
         _hub.Clients.Group(sessionId).SendAsync("message", msg with { SessionId = sessionId });
+
+    // Публичный broadcast внеходового сообщения сессии: session-группа + project_/user_-группа
+    // (по образцу BroadcastStatusChangeAsync). Используется роутингом группового чата и совещаниями.
+    public async Task BroadcastSessionMessageAsync(string sessionId, ServerMessage msg)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        var wired = msg with { SessionId = sessionId };
+        var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", wired) };
+        if (entry.Info.ProjectId is string pid)
+            tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", wired));
+        else if (entry.Info.OwnerId is string oid)
+            tasks.Add(_hub.Clients.Group("user_" + oid).SendAsync("message", wired));
+        await Task.WhenAll(tasks);
+    }
+
+    // Сессия, принадлежащая пользователю (и проектная, и чат вне проекта) — для
+    // эндпоинтов, работающих с любым типом сессии (участники группы, совещания).
+    public Session? GetOwned(string sessionId, string ownerId)
+    {
+        var s = GetById(sessionId);
+        return s is not null && SessionOwner(s) == ownerId ? s : null;
+    }
 
     // Рассылаем в session-группу (сам чат) всегда, плюс в project-группу (все вкладки проекта)
     // для проектной сессии ЛИБО в user-группу (список чатов) для чата вне проекта —

@@ -31,8 +31,14 @@ public static class FeatureFlagKeys
     public const string Offline = "offline";
     public const string Personas = "personas";
     public const string PersonaMemoryAutolearn = "persona-memory-autolearn";
+    // Консолидация памяти персон: периодический LLM-merge дублей + вытеснение при переполнении
+    public const string PersonaMemoryConsolidation = "persona-memory-consolidation";
     // @упоминания персон в чатах: MCP persona_ask, автокомплит @ в композере
     public const string PersonaMentions = "persona-mentions";
+    // Проактивность персон: «пишет первой» по расписанию (утренний бриф и т.п.)
+    public const string PersonaProactive = "persona-proactive";
+    // Групповые чаты персон (2-4 участника, роутинг спикера по @) + совещания cross-attack
+    public const string PersonaGroupChats = "persona-group-chats";
     // Привязки персон: источники знаний и правила с условиями применения (индекс в промпте)
     public const string PersonaBindings = "persona-bindings";
     // MCP workspace-server: доступ сессии к проектам/файлам/знаниям/поиску владельца
@@ -113,12 +119,41 @@ public static class FeatureFlagCatalog
             Default: false,
             Stage: "dev"),
 
+        // Консолидация памяти персон: фоновый сервис периодически схлопывает дубли
+        // (LLM-merge с детерминированными гейтами) и вытесняет наименее ценные записи
+        // при переполнении памяти.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PersonaMemoryConsolidation,
+            Title: "Консолидация памяти персон",
+            Description: "Фоновая уборка долгой памяти: похожие записи схлопываются в одну, а при переполнении наименее ценные забываются — память не разрастается бесконечно.",
+            Default: false,
+            Stage: "dev"),
+
         // @упоминания персон: в любом чате можно позвать другую персону (@handle) —
         // она ответит от своего лица через persona_ask, со своим характером и памятью.
         new FeatureFlagDefinition(
             Key: FeatureFlagKeys.PersonaMentions,
             Title: "@упоминания персон",
             Description: "Упомяни персону через @ в любом чате — ассистент спросит её, и она ответит в своём характере, со своей моделью и долгой памятью. Плюс кнопка «Обсудить с командой» в чате персоны.",
+            Default: false,
+            Stage: "dev"),
+
+        // Проактивность персон: персона сама пишет первой по расписанию —
+        // выполняет свою инструкцию (напр. утренний бриф) и присылает уведомление.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PersonaProactive,
+            Title: "Проактивные персоны",
+            Description: "Персона может писать первой по расписанию: в заданное время выполняет свою инструкцию (например, собирает утренний бриф) и присылает уведомление со ссылкой на чат.",
+            Default: false,
+            Stage: "dev"),
+
+        // Групповые чаты персон: 2-4 участника в одном чате, отвечает тот, к кому
+        // обращаются через @handle. Плюс режим «Совещание»: независимые позиции,
+        // перекрёстная критика и синтез итога от ведущей.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PersonaGroupChats,
+            Title: "Групповые чаты персон",
+            Description: "Чат сразу с несколькими персонами: отвечает та, к кому обращаешься через @, остальных она может спросить сама. Плюс «Совещание»: участники независимо высказываются, критикуют позиции друг друга, ведущая сводит итог.",
             Default: false,
             Stage: "dev"),
 

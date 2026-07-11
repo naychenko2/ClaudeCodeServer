@@ -1,17 +1,18 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
-import type { Persona, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, Project } from '../../types';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScheduleType, PersonaScope, PersonaWorkingFocus, Project } from '../../types';
 import { api } from '../../lib/api';
-import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl } from '../../components/ui';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem } from '../../components/ui';
 import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
 import { useModels, useModelCaps, modelProvider } from '../../lib/models';
 import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { bumpPersonas } from '../../lib/personas';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
+import { AvatarCropDialog, type AvatarCropResult } from './AvatarCropDialog';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -41,10 +42,12 @@ export interface PersonaFormStatus {
 export interface PersonaFormInitial {
   role?: string;
   description?: string;
-  systemPrompt?: string;
+  contract?: PersonaContract;
   greeting?: string;
   color?: string;
   tools?: string[];
+  // Профиль доступа из шаблона (напр. Ревьюер — только чтение)
+  access?: PersonaAccess;
 }
 
 interface PersonaFormProps {
@@ -87,7 +90,21 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [name, setName] = useState(persona?.name ?? '');
   const [role, setRole] = useState(persona?.role ?? initial?.role ?? '');
   const [description, setDescription] = useState(persona?.description ?? initial?.description ?? '');
-  const [systemPrompt, setSystemPrompt] = useState(persona?.systemPrompt ?? initial?.systemPrompt ?? '');
+  // Контракт характера (P1) по слотам. Legacy-персона (без contract) — её systemPrompt
+  // предзаполняет слот «Характер» и при сохранении переезжает в контракт.
+  const legacyMigrated = !!persona && !persona.contract && !!(persona.systemPrompt ?? '').trim();
+  const [character, setCharacter] = useState(
+    persona ? (persona.contract?.character ?? persona.systemPrompt ?? '') : (initial?.contract?.character ?? ''));
+  const [tone, setTone] = useState(persona ? (persona.contract?.tone ?? '') : (initial?.contract?.tone ?? ''));
+  // «Всегда»/«Никогда» — textarea «строка = пункт»
+  const [mustDo, setMustDo] = useState(
+    ((persona ? persona.contract?.mustDo : initial?.contract?.mustDo) ?? []).join('\n'));
+  const [mustNot, setMustNot] = useState(
+    ((persona ? persona.contract?.mustNot : initial?.contract?.mustNot) ?? []).join('\n'));
+  const [outputFormat, setOutputFormat] = useState(
+    persona ? (persona.contract?.outputFormat ?? '') : (initial?.contract?.outputFormat ?? ''));
+  const [speechExamples, setSpeechExamples] = useState<string[]>(
+    (persona ? persona.contract?.speechExamples : initial?.contract?.speechExamples) ?? []);
   const [model, setModel] = useState(persona?.model ?? '');
   const [effort, setEffort] = useState(persona?.effort ?? '');
   const [scope, setScope] = useState<PersonaScope>(persona?.scope ?? defaultScope ?? 'global');
@@ -97,6 +114,18 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Возможности персоны: массив включённых ключей. null у персоны = все включены.
   const [tools, setTools] = useState<string[]>(
     persona ? (persona.tools ?? ALL_TOOL_KEYS) : (initial?.tools ?? ALL_TOOL_KEYS));
+  // Профиль доступа (P6) + свой список запретов (для custom, через запятую)
+  const [access, setAccess] = useState<PersonaAccess>(
+    persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'));
+  const [disallowedText, setDisallowedText] = useState(
+    (persona?.disallowedTools ?? []).join(', '));
+  // Проактивность «пишет первой» (флаг persona-proactive) — пользовательские поля
+  const proactiveEnabled = useFeature(FLAGS.personaProactive);
+  const [proEnabled, setProEnabled] = useState(persona?.proactive?.enabled ?? false);
+  const [proType, setProType] = useState<PersonaScheduleType>(persona?.proactive?.type ?? 'daily');
+  const [proWeekdays, setProWeekdays] = useState<number[]>(persona?.proactive?.weekdays ?? []);
+  const [proTime, setProTime] = useState(persona?.proactive?.time ?? '09:00');
+  const [proInstruction, setProInstruction] = useState(persona?.proactive?.instruction ?? '');
   const [memoryEnabled, setMemoryEnabled] = useState(persona?.memoryEnabled ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -111,9 +140,14 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Галерея сгенерированных кандидатов (имена файлов) — выбор перекладывает картинку в аватар
   const [candidates, setCandidates] = useState<string[]>([]);
   const [selecting, setSelecting] = useState<string | null>(null);
-  // Инлайн-панель «Внешность» под hero (раскрывается по ✎ на аватаре)
+  // Инлайн-панель «Внешность» под hero (открывается из мини-меню ✎)
   const [showAppearance, setShowAppearance] = useState(false);
   const [avatarHover, setAvatarHover] = useState(false);
+  // Мини-меню ✎: сгенерировать / загрузить файл / перекроить / цвет и инициалы
+  const [avatarMenu, setAvatarMenu] = useState(false);
+  // Кроп: источник картинки (objectURL выбранного файла или URL оригинала) + режим
+  const [cropState, setCropState] = useState<null | { src: string; mode: 'upload' | 'recrop'; file?: File }>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // AI-редактирование характера: активное действие (генерация/улучшение), ошибка,
   // общий поповер с необязательным уточняющим промптом для обоих режимов.
@@ -124,6 +158,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   // Сводка долгой памяти (для summary-карточки) — считаем из записей по типу
   const [memoryEntries, setMemoryEntries] = useState<PersonaMemoryEntry[] | null>(null);
+  // Рабочий фокус («что я сейчас делаю») — карточка в секции памяти
+  const [focus, setFocus] = useState<PersonaWorkingFocus | null>(null);
 
   // Возможности провайдера выбранной модели — показываем «Усилие рассуждения» только если поддерживается
   const caps = useModelCaps(model);
@@ -134,11 +170,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Один раз узнаём, доступна ли генерация аватара (fal настроен)
   useEffect(() => { api.personas.avatarCaps().then(c => setCanGenerate(c.generate)).catch(() => {}); }, []);
 
-  // Сводка памяти: грузим один раз при редактировании существующей персоны
+  // Сводка памяти + рабочий фокус: грузим при редактировании существующей персоны
   useEffect(() => {
-    if (!persona) { setMemoryEntries(null); return; }
+    if (!persona) { setMemoryEntries(null); setFocus(null); return; }
     let alive = true;
     api.personas.memory(persona.id).then(list => { if (alive) setMemoryEntries(list); }).catch(() => { if (alive) setMemoryEntries([]); });
+    api.personas.focus(persona.id).then(f => { if (alive) setFocus(f); }).catch(() => { if (alive) setFocus(null); });
     return () => { alive = false; };
   }, [persona]);
 
@@ -190,30 +227,69 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     }
   };
 
-  // Дополнение системного промпта заготовкой тона (не дублируем уже добавленную)
-  const appendTone = (text: string) => {
-    setSystemPrompt(prev => {
-      const cur = prev.trimEnd();
-      if (cur.includes(text)) return prev;
-      return cur ? `${cur}\n${text}` : text;
-    });
+  // Выбор файла для загрузки аватара → диалог кропа поверх objectURL
+  const onAvatarFileChosen = (file: File | null) => {
+    if (!file) return;
+    setCropState({ src: URL.createObjectURL(file), mode: 'upload', file });
   };
 
-  // AI-характер: генерация с нуля (по роли/имени/описанию) или улучшение текущего.
-  // В обоих режимах поддерживается необязательный уточняющий промпт из поповера.
+  // Применение кропа: загрузка (оригинал + квадрат) или перекроп сохранённого оригинала
+  const applyCrop = async (result: AvatarCropResult) => {
+    if (!persona || !cropState) return;
+    const updated = cropState.mode === 'upload' && cropState.file
+      ? await api.personas.uploadAvatar(persona.id, cropState.file, result.blob, result.crop)
+      : await api.personas.recropAvatar(persona.id, result.blob, result.crop);
+    setAvatar(updated.avatar);
+    bumpPersonas();
+  };
+
+  const closeCrop = () => {
+    if (cropState?.mode === 'upload') URL.revokeObjectURL(cropState.src);
+    setCropState(null);
+  };
+
+  // Разбор textarea «строка = пункт» в список правил
+  const parseLines = (s: string) => s.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // Текущий контракт из стейтов формы — для сохранения и как current при AI-улучшении
+  const buildContract = (): PersonaContract => ({
+    character: character.trim() || undefined,
+    tone: tone.trim() || undefined,
+    mustDo: parseLines(mustDo),
+    mustNot: parseLines(mustNot),
+    outputFormat: outputFormat.trim() || undefined,
+    speechExamples: speechExamples.map(s => s.trim()).filter(Boolean),
+  });
+
+  // Заполнен ли хоть один слот контракта — от этого зависит доступность «Улучшить»
+  const contractFilled = !!(character.trim() || tone.trim() || mustDo.trim() || mustNot.trim()
+    || outputFormat.trim() || speechExamples.some(s => s.trim()));
+
+  // Ответ AI заполняет ВСЕ слоты контракта (перезаписывает текущие)
+  const applyContract = (c: PersonaContract) => {
+    setCharacter(c.character ?? '');
+    setTone(c.tone ?? '');
+    setMustDo((c.mustDo ?? []).join('\n'));
+    setMustNot((c.mustNot ?? []).join('\n'));
+    setOutputFormat(c.outputFormat ?? '');
+    setSpeechExamples((c.speechExamples ?? []).slice(0, 3));
+  };
+
+  // AI-характер: генерация с нуля (по роли/имени/описанию) или улучшение текущего
+  // контракта (уходит сериализованным JSON). Необязательный уточняющий промпт — в обоих режимах.
   const runAiCharacter = async (mode: 'generate' | 'improve') => {
     if (aiAction) return;
     setAiAction(mode);
     setAiError(null);
     try {
-      const { character } = await api.personas.aiCharacter({
+      const { contract } = await api.personas.aiCharacter({
         name: name.trim() || undefined,
         role: role.trim() || undefined,
         description: description.trim() || undefined,
-        current: mode === 'improve' ? systemPrompt : undefined,
+        current: mode === 'improve' ? JSON.stringify(buildContract()) : undefined,
         instruction: aiInstruction.trim() || undefined,
       });
-      setSystemPrompt(character);
+      applyContract(contract);
       setAiInstruction('');
       setAiPopover(null);
     } catch (e) {
@@ -235,18 +311,36 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Снимок редактируемых полей — для вычисления «есть несохранённые правки» (dirty)
   const snapshot = JSON.stringify({
     name: name.trim(), role: role.trim(), description: description.trim(),
-    systemPrompt: systemPrompt.trim(), model, effort, scope,
+    contract: {
+      character: character.trim(), tone: tone.trim(),
+      mustDo: parseLines(mustDo), mustNot: parseLines(mustNot),
+      outputFormat: outputFormat.trim(),
+      speechExamples: speechExamples.map(s => s.trim()).filter(Boolean),
+    },
+    model, effort, scope,
     projectId: scope === 'project' ? projectId : '',
     color, greeting: greeting.trim(), memoryEnabled,
     tools: [...tools].sort(),
+    access,
+    disallowed: access === 'custom' ? parseDisallowed(disallowedText) : [],
+    proactive: { enabled: proEnabled, type: proType, weekdays: [...proWeekdays].sort(), time: proTime, instruction: proInstruction.trim() },
   });
+  // Исходный снимок считается от предзаполненного состояния: у legacy-персоны
+  // слот «Характер» = systemPrompt, поэтому сама миграция не делает форму dirty.
   const initialSnapshot = useMemo(() => {
     const s = persona?.scope ?? defaultScope ?? 'global';
     return JSON.stringify({
       name: (persona?.name ?? '').trim(),
       role: (persona?.role ?? '').trim(),
       description: (persona?.description ?? '').trim(),
-      systemPrompt: (persona?.systemPrompt ?? '').trim(),
+      contract: {
+        character: (persona?.contract?.character ?? persona?.systemPrompt ?? '').trim(),
+        tone: (persona?.contract?.tone ?? '').trim(),
+        mustDo: persona?.contract?.mustDo ?? [],
+        mustNot: persona?.contract?.mustNot ?? [],
+        outputFormat: (persona?.contract?.outputFormat ?? '').trim(),
+        speechExamples: (persona?.contract?.speechExamples ?? []).map(x => x.trim()).filter(Boolean),
+      },
       model: persona?.model ?? '',
       effort: persona?.effort ?? '',
       scope: s,
@@ -255,8 +349,17 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       greeting: (persona?.greeting ?? '').trim(),
       memoryEnabled: persona?.memoryEnabled ?? false,
       tools: [...(persona ? (persona.tools ?? ALL_TOOL_KEYS) : ALL_TOOL_KEYS)].sort(),
+      access: persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'),
+      disallowed: (persona?.access ?? 'full') === 'custom' ? (persona?.disallowedTools ?? []) : [],
+      proactive: {
+        enabled: persona?.proactive?.enabled ?? false,
+        type: persona?.proactive?.type ?? 'daily',
+        weekdays: [...(persona?.proactive?.weekdays ?? [])].sort(),
+        time: persona?.proactive?.time ?? '09:00',
+        instruction: (persona?.proactive?.instruction ?? '').trim(),
+      },
     });
-  }, [persona, defaultScope, defaultProjectId]);
+  }, [persona, defaultScope, defaultProjectId, initial?.access]);
   const dirty = snapshot !== initialSnapshot;
 
   const save = async () => {
@@ -267,7 +370,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       name: name.trim(),
       role: role.trim() || undefined,
       description: description.trim() || undefined,
-      systemPrompt: systemPrompt.trim() || undefined,
+      // Характер — только контрактом; legacy-поле systemPrompt чистим при каждом сохранении
+      contract: buildContract(),
+      systemPrompt: '',
       model: model || undefined,
       effort: effort || undefined,
       scope,
@@ -277,6 +382,17 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       memoryEnabled,
       // Всегда явный список: полный набор бэкенд нормализует в «без ограничений»
       tools,
+      // Профиль доступа: свой список запретов уходит только при custom
+      access,
+      disallowedTools: access === 'custom' ? parseDisallowed(disallowedText) : [],
+      // Проактивность — только пользовательские поля (служебные бэкенд сохраняет сам)
+      proactive: {
+        enabled: proEnabled,
+        type: proType,
+        weekdays: proType === 'weekly' ? proWeekdays : undefined,
+        time: proTime,
+        instruction: proInstruction.trim(),
+      },
     };
     try {
       const saved = isEdit
@@ -309,7 +425,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     borderTop: `1px solid ${C.borderLight}`, paddingTop: 22,
   };
 
-  const wordCount = systemPrompt.trim() ? systemPrompt.trim().split(/\s+/).length : 0;
+  const wordCount = character.trim() ? character.trim().split(/\s+/).length : 0;
 
   // === Секция 1 — Идентичность (hero) ===
   const heroSection = (
@@ -324,15 +440,15 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           <PersonaAvatar persona={previewPersona} size={80} />
           <button
             type="button"
-            onClick={() => setShowAppearance(v => !v)}
+            onClick={() => setAvatarMenu(v => !v)}
             aria-label="Изменить внешность"
             title="Изменить внешность"
             style={{
               position: 'absolute', right: -2, bottom: -2, width: 28, height: 28, borderRadius: R.full,
-              border: `2px solid ${C.bgMain}`, background: showAppearance ? accentColor : C.bgWhite,
-              color: showAppearance ? '#fff' : C.textSecondary, cursor: 'pointer',
+              border: `2px solid ${C.bgMain}`, background: avatarMenu || showAppearance ? accentColor : C.bgWhite,
+              color: avatarMenu || showAppearance ? '#fff' : C.textSecondary, cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              opacity: showAppearance || avatarHover || isMobile ? 1 : 0, transition: 'opacity 0.15s, background 0.15s',
+              opacity: avatarMenu || showAppearance || avatarHover || isMobile ? 1 : 0, transition: 'opacity 0.15s, background 0.15s',
               boxShadow: SHADOW.thumb,
             }}
           >
@@ -340,6 +456,47 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
             </svg>
           </button>
+
+          {/* Мини-меню внешности: генерация / загрузка файла / перекроп / цвет */}
+          {avatarMenu && (
+            <Menu onClose={() => setAvatarMenu(false)} align="left" top={82} minWidth={220}>
+              <MenuItem
+                label="✨ Сгенерировать"
+                onClick={() => { setAvatarMenu(false); setShowAppearance(true); }}
+              />
+              <MenuItem
+                label={isEdit ? 'Загрузить файл…' : 'Загрузить файл… (после сохранения)'}
+                disabled={!isEdit}
+                onClick={() => { setAvatarMenu(false); fileInputRef.current?.click(); }}
+              />
+              {isEdit && avatar.originalFile && persona && (
+                <MenuItem
+                  label="Перекроить"
+                  onClick={() => {
+                    setAvatarMenu(false);
+                    const src = api.personas.avatarOriginalUrl({ ...persona, avatar });
+                    if (src) setCropState({ src, mode: 'recrop' });
+                  }}
+                />
+              )}
+              <MenuItem
+                label="Цвет и инициалы"
+                onClick={() => { setAvatarMenu(false); setShowAppearance(true); }}
+              />
+            </Menu>
+          )}
+
+          {/* Скрытый input выбора файла аватара */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            style={{ display: 'none' }}
+            onChange={e => {
+              onAvatarFileChosen(e.target.files?.[0] ?? null);
+              e.target.value = '';   // повторный выбор того же файла снова даёт change
+            }}
+          />
         </div>
 
         {/* Роль (крупно, serif, в цвет персоны) / Имя / Описание */}
@@ -473,43 +630,38 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     </div>
   );
 
-  // === Секция 2 — Характер (во всю ширину, доминирует) ===
+  // === Секция 2 — Характер: контракт по слотам (P1) ===
   const characterSection = (
     <div style={section}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 4 }}>
-        <SectionLabel>Характер</SectionLabel>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
+          <SectionLabel>Характер</SectionLabel>
+          {legacyMigrated && (
+            <span
+              style={legacyBadge}
+              title="Текст характера перенесён из старого единого промпта — при сохранении он станет структурированным контрактом"
+            >
+              перенесено из старого формата
+            </span>
+          )}
+        </div>
         <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>
           {wordCount} {wordPlural(wordCount)}
         </span>
       </div>
 
-      {/* Липкая мини-панель: тон-чипы слева, AI-действия справа */}
+      {/* Липкая мини-панель AI-действий: заполняют все слоты контракта разом */}
       <div style={{
         position: 'sticky', top: 0, zIndex: 2, background: C.bgMain,
         margin: '0 0 12px', padding: '8px 0', borderBottom: `1px solid ${C.borderLight}`,
-        display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+        display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end',
       }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1, minWidth: 0 }}>
-          {TONE_PRESETS.map(p => (
-            <button
-              key={p.label}
-              type="button"
-              onClick={() => appendTone(p.text)}
-              title={p.text}
-              style={presetChip}
-              onMouseEnter={e => { e.currentTarget.style.background = C.accentLight; e.currentTarget.style.borderColor = C.accent; }}
-              onMouseLeave={e => { e.currentTarget.style.background = C.bgWhite; e.currentTarget.style.borderColor = C.border; }}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, position: 'relative' }}>
           <Button variant="ghostAccent" size="sm" loading={aiAction === 'generate'} disabled={!!aiAction}
             onClick={() => setAiPopover(v => v === 'generate' ? null : 'generate')}>
             {aiAction === 'generate' ? 'Генерирую…' : '✨ Сгенерировать'}
           </Button>
-          {systemPrompt.trim().length > 0 && (
+          {contractFilled && (
             <Button variant="ghostAccent" size="sm" loading={aiAction === 'improve'} disabled={!!aiAction}
               onClick={() => setAiPopover(v => v === 'improve' ? null : 'improve')}>
               {aiAction === 'improve' ? 'Улучшаю…' : '✨ Улучшить'}
@@ -546,13 +698,13 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         </div>
       </div>
 
-      {/* Крупная textarea без внутреннего скролла + плейсхолдер-скелет при пустом */}
+      {/* Слот «Характер»: манера общения свободным текстом + плейсхолдер-скелет при пустом */}
       <div style={{ position: 'relative' }}>
-        <TextArea value={systemPrompt} onChange={setSystemPrompt}
+        <TextArea value={character} onChange={setCharacter}
           autoGrow
-          minHeight={isMobile ? 240 : 320}
+          minHeight={isMobile ? 160 : 200}
           style={{ fontSize: 14.5, lineHeight: 1.6 }} />
-        {!systemPrompt && (
+        {!character && (
           <div style={{
             position: 'absolute', top: 10, left: 13, right: 13, pointerEvents: 'none',
             fontSize: 14.5, lineHeight: 1.6, color: C.textMuted, fontFamily: FONT.sans,
@@ -560,13 +712,100 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           }}>
             <span>Ты — …</span>
             <span style={{ opacity: 0.75 }}>Общаешься …</span>
-            <span style={{ opacity: 0.55 }}>Никогда не …</span>
           </div>
         )}
       </div>
       {aiError && (
         <span style={{ display: 'block', marginTop: 8, fontSize: 12, color: C.dangerText, fontFamily: FONT.sans }}>{aiError}</span>
       )}
+
+      {/* Слот «Тон»: пресеты как single-select — выбор пишет текст в редактируемое поле */}
+      <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <FieldLabel>Тон</FieldLabel>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {TONE_PRESETS.map(p => {
+            const active = tone === p.text;
+            return (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => setTone(active ? '' : p.text)}
+                title={p.text}
+                style={{
+                  ...presetChip,
+                  background: active ? C.accentLight : C.bgWhite,
+                  borderColor: active ? C.accent : C.border,
+                  color: active ? C.accent : C.textSecondary,
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = C.accentLight; e.currentTarget.style.borderColor = C.accent; }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.background = active ? C.accentLight : C.bgWhite;
+                  e.currentTarget.style.borderColor = active ? C.accent : C.border;
+                }}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+        <TextField value={tone} onChange={setTone} placeholder="Например: тепло и на равных" />
+      </div>
+
+      {/* Слоты «Всегда»/«Никогда»: textarea «строка = пункт» */}
+      <div style={{ marginTop: 18, display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
+        <Field label="Всегда" hint="Каждая строка — отдельное правило">
+          <TextArea value={mustDo} onChange={setMustDo} autoGrow minHeight={88}
+            placeholder={'Выноси вывод первым\nУточняй при неясности'} />
+        </Field>
+        <Field label="Никогда" hint="Каждая строка — отдельное правило">
+          <TextArea value={mustNot} onChange={setMustNot} autoGrow minHeight={88}
+            placeholder={'Не отвечай наугад\nНе хвали из вежливости'} />
+        </Field>
+      </div>
+
+      {/* Слот «Формат ответов» */}
+      <div style={{ marginTop: 18 }}>
+        <Field label="Формат ответов" hint="Структура и объём типового ответа">
+          <TextArea value={outputFormat} onChange={setOutputFormat} autoGrow minHeight={56}
+            placeholder="Краткий вывод, затем аргументы; списки — только где они уместны" />
+        </Field>
+      </div>
+
+      {/* Слот «Примеры реплик»: до 3 образцов стиля */}
+      <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <FieldLabel>Примеры реплик</FieldLabel>
+        {speechExamples.map((example, i) => (
+          <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <TextField
+                value={example}
+                onChange={v => setSpeechExamples(prev => prev.map((p, j) => (j === i ? v : p)))}
+                placeholder="Реплика от лица персоны"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setSpeechExamples(prev => prev.filter((_, j) => j !== i))}
+              aria-label="Убрать пример"
+              title="Убрать пример"
+              style={exampleRemoveBtn}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        {speechExamples.length < 3 && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setSpeechExamples(prev => [...prev, ''])}
+              style={addExampleBtn}
+            >
+              + пример
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 
@@ -655,6 +894,33 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       <div style={{ fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans, marginBottom: 14 }}>
         Какими инструментами персона может пользоваться в чате
       </div>
+
+      {/* Профиль доступа (P6): full / readOnly / custom */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
+        <FieldLabel>Профиль доступа</FieldLabel>
+        <SegmentedControl<PersonaAccess>
+          value={access}
+          onChange={setAccess}
+          columns={3}
+          options={[
+            { value: 'full', label: 'Полный' },
+            { value: 'readOnly', label: 'Только чтение' },
+            { value: 'custom', label: 'Свой' },
+          ]}
+        />
+        {access === 'readOnly' && (
+          <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
+            Смотрит и советует, но ничего не меняет: без правок файлов, Bash и мутаций задач/заметок
+          </span>
+        )}
+        {access === 'custom' && (
+          <Field hint="Имена инструментов через запятую, напр. Bash, Edit, mcp__tasks__tasks_delete">
+            <TextArea value={disallowedText} onChange={setDisallowedText} autoGrow minHeight={56}
+              placeholder="Bash, Edit, Write" />
+          </Field>
+        )}
+      </div>
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {TOOL_OPTIONS.map(t => (
           <div key={t.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -668,6 +934,78 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       </div>
     </div>
   );
+
+  // === Секция 3.7 — Проактивность (флаг persona-proactive): «пишет первой» по расписанию ===
+  const toggleWeekday = (d: number) =>
+    setProWeekdays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
+
+  const proactiveSection = proactiveEnabled ? (
+    <div style={section}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div>
+          <SectionLabel style={{ marginBottom: 10 }}>Проактивность</SectionLabel>
+          <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans }}>
+            {proEnabled ? 'Персона пишет первой по расписанию' : 'Пишет первой'}
+          </span>
+        </div>
+        <Toggle checked={proEnabled} onChange={setProEnabled} />
+      </div>
+
+      {proEnabled && (
+        <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <SegmentedControl<PersonaScheduleType>
+            value={proType}
+            onChange={setProType}
+            columns={3}
+            options={[
+              { value: 'daily', label: 'Каждый день' },
+              { value: 'weekdays', label: 'По будням' },
+              { value: 'weekly', label: 'Дни недели' },
+            ]}
+          />
+
+          {proType === 'weekly' && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {WEEKDAY_CHIPS.map(w => {
+                const active = proWeekdays.includes(w.day);
+                return (
+                  <button
+                    key={w.day}
+                    type="button"
+                    onClick={() => toggleWeekday(w.day)}
+                    style={{
+                      ...presetChip,
+                      background: active ? C.accentLight : C.bgWhite,
+                      borderColor: active ? C.accent : C.border,
+                      color: active ? C.accent : C.textSecondary,
+                      fontWeight: active ? 600 : 500,
+                    }}
+                  >
+                    {w.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <Field label="Время" hint="Локальное время вашего устройства">
+            <input
+              type="time"
+              value={proTime}
+              onChange={e => setProTime(e.target.value || '09:00')}
+              aria-label="Время срабатывания"
+              style={{ ...selectStyle, maxWidth: 160 }}
+            />
+          </Field>
+
+          <Field label="Что сделать при срабатывании" hint="Без инструкции триггер не срабатывает">
+            <TextArea value={proInstruction} onChange={setProInstruction} autoGrow minHeight={72}
+              placeholder="Например: собери утренний бриф — мои задачи на сегодня, просроченные и вчерашние итоги" />
+          </Field>
+        </div>
+      )}
+    </div>
+  ) : null;
 
   // === Секция 4 — Долгая память (summary) ===
   const memorySection = (
@@ -684,6 +1022,33 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
       {isEdit ? (
         <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Рабочий фокус — «что я сейчас делаю» (рабочая память, вне записей) */}
+          {focus && (
+            <div style={focusCard}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: C.accent, fontFamily: FONT.sans }}>
+                  Текущий фокус · {timeAgo(focus.updatedAt)}
+                </span>
+                <button
+                  type="button"
+                  style={openMemoryBtn}
+                  onClick={() => {
+                    if (!persona) return;
+                    api.personas.clearFocus(persona.id).then(() => setFocus(null)).catch(() => {});
+                  }}
+                >
+                  Сбросить
+                </button>
+              </div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans, marginTop: 6 }}>
+                {focus.what}
+              </div>
+              <div style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, marginTop: 3, lineHeight: 1.5 }}>
+                Статус: {focus.status}
+                {focus.nextStep && <> · Следующий шаг: {focus.nextStep}</>}
+              </div>
+            </div>
+          )}
           {/* Счётчики по типам */}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             {MEMORY_TYPES.map(t => (
@@ -731,14 +1096,31 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         {characterSection}
         {behaviorSection}
         {toolsSection}
+        {proactiveSection}
         {memorySection}
         {error && (
           <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>
         )}
       </div>
+
+      {/* Диалог кропа: загрузка нового файла или перекроп сохранённого оригинала */}
+      {cropState && (
+        <AvatarCropDialog
+          src={cropState.src}
+          initial={cropState.mode === 'recrop' ? avatar.crop : null}
+          title={cropState.mode === 'recrop' ? 'Перекроить аватар' : 'Кадрирование аватара'}
+          onApply={applyCrop}
+          onClose={closeCrop}
+        />
+      )}
     </div>
   );
 });
+
+// Разбор списка запретов «через запятую» (custom-профиль) — пустые куски выбрасываются
+function parseDisallowed(s: string): string[] {
+  return Array.from(new Set(s.split(',').map(t => t.trim()).filter(Boolean)));
+}
 
 // Возможности персоны: ключи и подписи тумблеров. Полный набор = «без ограничений».
 const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];
@@ -748,7 +1130,13 @@ const TOOL_OPTIONS: { key: string; title: string; hint: string }[] = [
   { key: 'web', title: 'Веб', hint: 'Ищет и читает страницы в интернете' },
 ];
 
-// Пресеты тона характера — клик добавляет заготовку в системный промпт
+// Чипы дней недели (ISO: 1=Пн … 7=Вс) — для расписания «Дни недели»
+const WEEKDAY_CHIPS: { day: number; label: string }[] = [
+  { day: 1, label: 'Пн' }, { day: 2, label: 'Вт' }, { day: 3, label: 'Ср' },
+  { day: 4, label: 'Чт' }, { day: 5, label: 'Пт' }, { day: 6, label: 'Сб' }, { day: 7, label: 'Вс' },
+];
+
+// Пресеты тона — single-select: выбор записывает текст в редактируемый слот «Тон»
 const TONE_PRESETS: { label: string; text: string }[] = [
   { label: 'Дружелюбный', text: 'Общайся тепло и дружелюбно, на равных.' },
   { label: 'Деловой', text: 'Держи деловой, профессиональный тон. Формулируй чётко и по существу.' },
@@ -771,6 +1159,27 @@ function wordPlural(n: number): string {
   return 'слов';
 }
 
+// Бейдж legacy-персоны: характер перенесён из старого единого промпта
+const legacyBadge: React.CSSProperties = {
+  fontSize: 11, color: C.textMuted, fontFamily: FONT.sans,
+  background: C.bgPanel, border: `1px solid ${C.borderLight}`, borderRadius: R.pill,
+  padding: '2px 8px', whiteSpace: 'nowrap',
+};
+
+// «×» у примера реплики
+const exampleRemoveBtn: React.CSSProperties = {
+  flexShrink: 0, width: 28, height: 28, borderRadius: R.full,
+  background: 'transparent', border: `1px solid ${C.border}`, color: C.textMuted,
+  cursor: 'pointer', fontSize: 15, lineHeight: 1, fontFamily: FONT.sans,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+};
+
+// «+ пример» под списком реплик
+const addExampleBtn: React.CSSProperties = {
+  background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
+  fontSize: 13, fontWeight: 600, fontFamily: FONT.sans, padding: 0,
+};
+
 const presetChip: React.CSSProperties = {
   background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.pill,
   padding: '4px 11px', fontSize: 12, cursor: 'pointer', fontFamily: FONT.sans,
@@ -781,6 +1190,25 @@ const memoryStat: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 7,
   background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '7px 12px',
 };
+
+// Карточка рабочего фокуса — в ряду memoryStat-карточек, но с акцентной рамкой
+const focusCard: React.CSSProperties = {
+  background: C.bgWhite, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.accent}`,
+  borderRadius: R.lg, padding: '10px 12px',
+};
+
+// Давность «N мин/ч/дн назад» для метки фокуса
+function timeAgo(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return 'только что';
+  const min = Math.floor(ms / 60_000);
+  if (min < 1) return 'только что';
+  if (min < 60) return `${min} мин назад`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} ч назад`;
+  const d = Math.floor(h / 24);
+  return `${d} дн назад`;
+}
 
 const openMemoryBtn: React.CSSProperties = {
   background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',

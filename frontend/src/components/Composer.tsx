@@ -40,6 +40,11 @@ export interface ComposerProps {
   onCompanionChange?: (sel: CompanionSelection) => void;
   canPickCompanion?: boolean;
   hasMessages?: boolean;
+  // Групповой чат: id участников (упоминаются первыми в @автокомплите; в группе
+  // @упоминания работают независимо от флага persona-mentions)
+  participantIds?: string[] | null;
+  // Создание нового группового чата из селектора собеседника (флаг persona-group-chats)
+  onCreateGroup?: (personaIds: string[]) => void;
 }
 
 // Получить имя файла из пути
@@ -135,6 +140,8 @@ export function Composer({
   selectedAgentName = null,
   onCompanionChange,
   canPickCompanion,
+  participantIds = null,
+  onCreateGroup,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
@@ -173,18 +180,27 @@ export function Composer({
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
   const [skillQuery, setSkillQuery] = useState('');
   const skillWordStartRef = useRef(0);
-  // Autocomplete @упоминаний персон (флаг persona-mentions)
+  // Autocomplete @упоминаний персон (флаг persona-mentions; в групповом чате — всегда)
   const mentionsOn = useFeature(FLAGS.personaMentions);
+  // Совещания P7 — по флагу групповых чатов (переключатель в DiscussTeamDialog)
+  const groupChatsOn = useFeature(FLAGS.personaGroupChats);
+  const isGroupChat = (participantIds?.length ?? 0) > 1;
+  const mentionsActive = mentionsOn || isGroupChat;
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const mentionWordStartRef = useRef(0);
-  // Кого можно упомянуть: персоны контекста, кроме персоны самого чата
-  const mentionable = mentionsOn
-    ? personas.filter(p => p.id !== selectedPersona?.id)
-    : [];
+  // Кого можно упомянуть: персоны контекста, кроме персоны самого чата;
+  // в групповом чате участники группы идут первыми
+  const mentionable = (() => {
+    if (!mentionsActive) return [];
+    const base = personas.filter(p => p.id !== selectedPersona?.id);
+    if (!isGroupChat) return base;
+    const rank = (p: Persona) => participantIds!.includes(p.id) ? 0 : 1;
+    return [...base].sort((a, b) => rank(a) - rank(b));
+  })();
   // Мультиперсонная дискуссия: доступна в чате персоны, когда есть кого позвать
   const [showDiscuss, setShowDiscuss] = useState(false);
-  const canDiscuss = mentionsOn && !!selectedPersona && mentionable.length > 0;
+  const canDiscuss = mentionsActive && !!selectedPersona && mentionable.length > 0;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
   const recCancelRef = useRef(false);
@@ -726,6 +742,7 @@ export function Composer({
       selectedAgentName={selectedAgentName ?? null}
       onSelect={onCompanionChange}
       isMobile={isMobile}
+      onCreateGroup={onCreateGroup}
     />
   ) : null;
 
@@ -847,6 +864,9 @@ export function Composer({
       {showDiscuss && (
         <DiscussTeamDialog
           candidates={mentionable}
+          chatPersona={selectedPersona}
+          sessionId={sessionId}
+          meetingEnabled={groupChatsOn}
           onSend={t => onSend(t, [])}
           onClose={() => setShowDiscuss(false)}
         />

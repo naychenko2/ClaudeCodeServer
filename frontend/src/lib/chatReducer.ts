@@ -3,7 +3,9 @@
 // тестировать без рендера React. Побочные эффекты (загрузка истории, SignalR)
 // остаются в хуке; редьюсер только считает следующее состояние.
 
-import type { ChatItem, ServerMessage, RateLimitInfo } from '../types';
+import type { ChatItem, ServerMessage, RateLimitInfo, MeetingEntryItem, MeetingPhaseKey } from '../types';
+
+type MeetingItem = Extract<ChatItem, { kind: 'meeting' }>;
 
 // Часть состояния сессии, которой управляет редьюсер
 export interface ChatState {
@@ -29,14 +31,54 @@ interface StoredHistoryMessage {
 }
 
 // Приводит сырую историю к ChatItem[]: проставляет UI-поля дефолтами —
-// thinking свёрнут, error без кнопки повтора (повторять исторические ошибки нельзя)
-export function normalizeHistory(raw: unknown[]): ChatItem[] {
-  return raw.map((msg): ChatItem => {
+// thinking свёрнут, error без кнопки повтора (повторять исторические ошибки нельзя).
+// deriveSpeakers (групповой чат): между соседними text-сообщениями с разным personaId
+// вставляется разделитель «Теперь отвечает: …» (label резолвится по personaId при рендере).
+export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boolean }): ChatItem[] {
+  const items: ChatItem[] = [];
+  // Автор последней виденной text-реплики (undefined — реплик ещё не было)
+  let lastPersonaId: string | undefined;
+  let sawText = false;
+
+  // Карточки совещаний: фазы одного meetingId из истории склеиваются в один элемент
+  const meetings = new Map<string, MeetingItem>();
+
+  for (const msg of raw) {
     const m = msg as StoredHistoryMessage;
-    if (m.kind === 'thinking') return { ...m, expanded: false } as unknown as ChatItem;
-    if (m.kind === 'error') return { ...m, canRetry: false } as unknown as ChatItem;
-    return m as unknown as ChatItem;
-  });
+
+    if (m.kind === 'meeting') {
+      // StoredMeetingPhaseMessage приходит с kind "meeting_phase", но на случай
+      // уже нормализованных данных — пропускаем как есть
+      items.push(m as unknown as ChatItem);
+      continue;
+    }
+    if ((m.kind as string) === 'meeting_phase') {
+      const mp = m as unknown as { meetingId: string; phase: MeetingPhaseKey; question: string; entries: MeetingEntryItem[] };
+      let it = meetings.get(mp.meetingId);
+      if (!it) {
+        it = { kind: 'meeting', meetingId: mp.meetingId, question: mp.question, phases: {} };
+        meetings.set(mp.meetingId, it);
+        items.push(it);
+      }
+      it.phases[mp.phase] = mp.entries;
+      if (!it.question) it.question = mp.question;
+      if (mp.phase === 'synthesis') it.status = 'done';
+      continue;
+    }
+
+    if (opts?.deriveSpeakers && m.kind === 'text') {
+      const pid = (m as { personaId?: string }).personaId;
+      if (sawText && pid && pid !== lastPersonaId)
+        items.push({ kind: 'companion_switched', label: '', personaId: pid });
+      if (pid !== undefined) lastPersonaId = pid;
+      sawText = true;
+    }
+
+    if (m.kind === 'thinking') items.push({ ...m, expanded: false } as unknown as ChatItem);
+    else if (m.kind === 'error') items.push({ ...m, canRetry: false } as unknown as ChatItem);
+    else items.push(m as unknown as ChatItem);
+  }
+  return items;
 }
 
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
@@ -216,6 +258,65 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           ? { ...item, workflowAgents: msg.agents, workflowDone: msg.isDone }
           : item
       ));
+
+    case 'meeting_phase': {
+      // Фаза совещания завершена — вливаем её в карточку совещания (или создаём)
+      const idx = prev.items.findIndex(it => it.kind === 'meeting' && it.meetingId === msg.meetingId);
+      if (idx >= 0) {
+        const ex = prev.items[idx] as MeetingItem;
+        const updated: MeetingItem = {
+          ...ex,
+          question: ex.question || msg.question,
+          phases: { ...ex.phases, [msg.phase]: msg.entries },
+          // Завершение фазы снимает построчные спиннеры этой фазы
+          running: ex.running?.phase === msg.phase ? undefined : ex.running,
+          status: msg.phase === 'synthesis' ? 'done' : ex.status,
+        };
+        return withItems(prev.items.map((it, i) => i === idx ? updated : it));
+      }
+      return withItems([...prev.items, {
+        kind: 'meeting', meetingId: msg.meetingId, question: msg.question,
+        phases: { [msg.phase]: msg.entries },
+        status: msg.phase === 'synthesis' ? 'done' : 'running',
+      }]);
+    }
+
+    case 'meeting_progress': {
+      const idx = prev.items.findIndex(it => it.kind === 'meeting' && it.meetingId === msg.meetingId);
+      // Финальные статусы совещания
+      if (msg.phase === 'done' || msg.phase === 'error') {
+        if (idx < 0) return prev;
+        const ex = prev.items[idx] as MeetingItem;
+        const updated: MeetingItem = {
+          ...ex, running: undefined,
+          status: msg.phase === 'done' ? 'done' : 'error',
+          error: msg.phase === 'error' ? (msg.error ?? 'Совещание прервано') : undefined,
+        };
+        return withItems(prev.items.map((it, i) => i === idx ? updated : it));
+      }
+      // Прогресс по персоне внутри фазы (running/done/error) либо «фаза done» (без personaId)
+      const base: MeetingItem = idx >= 0
+        ? prev.items[idx] as MeetingItem
+        : { kind: 'meeting', meetingId: msg.meetingId, question: '', phases: {}, status: 'running' };
+      const running = msg.personaId
+        ? {
+            phase: msg.phase,
+            persona: {
+              ...(base.running?.phase === msg.phase ? base.running.persona : {}),
+              [msg.personaId]: (msg.status ?? 'running') as 'running' | 'done' | 'error',
+            },
+          }
+        : base.running?.phase === msg.phase ? undefined : base.running;
+      const updated: MeetingItem = { ...base, running, status: base.status ?? 'running' };
+      return idx >= 0
+        ? withItems(prev.items.map((it, i) => i === idx ? updated : it))
+        : withItems([...prev.items, updated]);
+    }
+
+    case 'speaker_changed':
+      // Групповой чат: сервер переключил активного спикера по @упоминанию —
+      // локальный разделитель тем же рендером, что и смена собеседника вручную
+      return withItems([...prev.items, { kind: 'companion_switched', label: msg.label, personaId: msg.personaId }]);
 
     case 'status_changed':
       // Синхронизируем isWaiting по статусу — работает для всех открытых вкладок/браузеров.

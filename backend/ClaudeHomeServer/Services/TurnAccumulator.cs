@@ -186,6 +186,13 @@ internal class TurnAccumulator
         }
     }
 
+    // Внеходовая запись (карточка фазы совещания и т.п.) — сразу в _history,
+    // минуя текущий ход (как OnFalCost, но без дедупа — он на вызывающей стороне)
+    public void Append(StoredMessage message)
+    {
+        lock (_lock) _history.Add(message);
+    }
+
     // Снапшот: новый список; элементы разделяются (StoredToolUseMessage и карточки
     // вопроса/плана мутируются позже), но их поля — атомарные ссылки/bool,
     // поэтому глубокая копия не нужна.

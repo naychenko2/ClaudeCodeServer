@@ -27,6 +27,67 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         return await response.Content.ReadFromJsonAsync<JsonElement>();
     }
 
+    // ─── Персона-исполнитель ─────────────────────────────────────────────────
+
+    private async Task<string> CreatePersonaAsync(HttpClient client, object body)
+    {
+        var response = await client.PostAsJsonAsync("/api/personas", body);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var persona = await response.Content.ReadFromJsonAsync<JsonElement>();
+        return persona.GetProperty("id").GetString()!;
+    }
+
+    [Fact]
+    public async Task Create_СЧужойПерсоной_400()
+    {
+        var foreignPersona = await CreatePersonaAsync(_stranger, new { name = "Чужая" });
+
+        var response = await _client.PostAsJsonAsync("/api/tasks",
+            new { title = "задача", assignee = "claude", personaId = foreignPersona });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Create_ЛичнаяЗадачаСПроектнойПерсоной_400()
+    {
+        // Проект и проектная персона владельца
+        var projectResponse = await _client.PostAsJsonAsync("/api/projects", new
+        {
+            name = "ПроектПерсоны",
+            rootPath = Path.Combine(_factory.TempDir, "persona-proj"),
+            createDirectory = true,
+        });
+        projectResponse.IsSuccessStatusCode.Should().BeTrue();
+        var projectId = (await projectResponse.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("id").GetString();
+        var personaId = await CreatePersonaAsync(_client,
+            new { name = "Проектная", scope = "project", projectId });
+
+        // Личная задача (вне проекта) — проектная персона недопустима
+        var response = await _client.PostAsJsonAsync("/api/tasks",
+            new { title = "личная", assignee = "claude", personaId });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Contain("своего проекта");
+    }
+
+    [Fact]
+    public async Task Update_ПустаяСтрокаPersonaId_УбираетПерсону()
+    {
+        var personaId = await CreatePersonaAsync(_client, new { name = "Глобальная" });
+        var task = await CreateTaskAsync(new { title = "с персоной", assignee = "claude", personaId });
+        var id = task.GetProperty("id").GetString();
+        task.GetProperty("personaId").GetString().Should().Be(personaId);
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/{id}", new { personaId = "" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("personaId").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
     // ─── CRUD ────────────────────────────────────────────────────────────────
 
     [Fact]

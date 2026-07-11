@@ -122,4 +122,70 @@ public class TaskExecutionServiceTests
         prompt.Should().Contain("tasks_complete");
         prompt.Should().Contain("tasks_toggle_subtask");
     }
+
+    [Fact]
+    public void BuildPrompt_БезПерсоны_ПрежнийФормат()
+    {
+        var prompt = TaskExecutionService.BuildPrompt(new TaskItem { Title = "t" });
+
+        // Обратная совместимость: без персоны — прежний формат с блоком «Правила», без секций
+        prompt.Should().Contain("Правила:");
+        prompt.Should().NotContain("## ЗАДАЧА");
+    }
+
+    [Fact]
+    public void BuildPrompt_СПерсоной_ШестьСекцийКонтракта()
+    {
+        var task = new TaskItem
+        {
+            Title = "Починить сборку",
+            Description = "Падает на CI",
+            LinkedFiles = ["src/Program.cs"],
+            Subtasks = [new TaskSubtask { Title = "Найти причину" }],
+        };
+        var persona = new Persona { Name = "Вера", Role = "Планировщик" };
+
+        var prompt = TaskExecutionService.BuildPrompt(task, persona);
+
+        // Все 6 секций контракта, в порядке следования (КОНТЕКСТ — последняя:
+        // блок заметок дописывается после и попадает в неё)
+        string[] sections = ["## ЗАДАЧА", "## ОЖИДАЕМЫЙ РЕЗУЛЬТАТ", "## ИНСТРУМЕНТЫ",
+            "## ОБЯЗАТЕЛЬНО", "## НЕЛЬЗЯ", "## КОНТЕКСТ"];
+        var positions = sections.Select(s => prompt.IndexOf(s, StringComparison.Ordinal)).ToList();
+        positions.Should().OnlyContain(p => p >= 0);
+        positions.Should().BeInAscendingOrder();
+
+        prompt.Should().Contain(task.Id);
+        prompt.Should().Contain("Падает на CI");
+        prompt.Should().Contain("Найти причину").And.Contain(task.Subtasks[0].Id);
+        prompt.Should().Contain("src/Program.cs");
+        prompt.Should().Contain("tasks_complete").And.Contain("tasks_toggle_subtask");
+        // Дисциплина: не выходить за рамки, при невозможности — не завершать
+        prompt.Should().Contain("Не выходи за рамки задачи");
+        prompt.Should().Contain("не завершай задачу");
+    }
+
+    // ─── Уведомления от лица персоны ─────────────────────────────────────────
+
+    [Fact]
+    public void BuildResultNotification_СПерсоной_ОтЕёЛица()
+    {
+        var task = new TaskItem { Title = "Задача", Status = TaskItemStatus.Done };
+        var persona = new Persona { Name = "Вера", Role = "Планировщик" };
+
+        var n = TaskExecutionService.BuildResultNotification(task, ok: true, persona);
+
+        n.Title.Should().Be("Планировщик (Вера) завершила работу над задачей");
+    }
+
+    [Fact]
+    public void BuildWaitingNotification_СПерсоной_ОтЕёЛица()
+    {
+        var task = new TaskItem { Title = "Задача" };
+        var persona = new Persona { Name = "Вера" };   // без роли — просто имя
+
+        var n = TaskExecutionService.BuildWaitingNotification(task, persona);
+
+        n.Title.Should().Be("Вера ждёт ответа по задаче");
+    }
 }

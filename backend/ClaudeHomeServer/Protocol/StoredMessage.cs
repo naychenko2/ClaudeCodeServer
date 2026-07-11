@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredResultMessage), "result")]
 [JsonDerivedType(typeof(StoredFalCostMessage), "fal_cost")]
 [JsonDerivedType(typeof(StoredCompactBoundaryMessage), "compact_boundary")]
+[JsonDerivedType(typeof(StoredMeetingPhaseMessage), "meeting_phase")]
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
 public abstract class StoredMessage { }
 
@@ -75,6 +76,25 @@ public class StoredCompactBoundaryMessage(string trigger, int? preTokens, int? p
     public string Trigger { get; init; } = trigger;
     public int? PreTokens { get; init; } = preTokens;
     public int? PostTokens { get; init; } = postTokens;
+}
+
+// Реплика участника совещания (позиция/критика/синтез). IsError — ответить не удалось,
+// Text тогда содержит текст ошибки.
+public class MeetingEntry
+{
+    public string PersonaId { get; init; } = "";
+    public string Text { get; init; } = "";
+    public bool IsError { get; init; }
+}
+
+// Завершённая фаза совещания персон (P7): independent | attack | synthesis.
+// Пишется вне хода (AppendStoredAsync) после каждой фазы — переживает перезагрузку.
+public class StoredMeetingPhaseMessage : StoredMessage
+{
+    public string MeetingId { get; init; } = "";
+    public string Phase { get; init; } = "";
+    public string Question { get; init; } = "";
+    public List<MeetingEntry> Entries { get; init; } = [];
 }
 
 // Стоимость генерации fal.ai (фактически списанная), приходит вне хода — хранится отдельной записью

@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -290,6 +290,13 @@ export const api = {
         method: 'DELETE',
       }),
 
+    // Рабочий фокус персоны («что я сейчас делаю»): 204 без фокуса → null
+    focus: (id: string) =>
+      request<PersonaWorkingFocus | undefined>(`/personas/${encodeURIComponent(id)}/focus`)
+        .then(f => f ?? null),
+    clearFocus: (id: string) =>
+      request<void>(`/personas/${encodeURIComponent(id)}/focus`, { method: 'DELETE' }),
+
     // Аватар (этап 4): можно ли генерировать (настроен ли fal),
     // генерация картинки и построение URL для <img>.
     avatarCaps: () => request<{ generate: boolean }>('/personas/avatar/caps'),
@@ -323,6 +330,37 @@ export const api = {
       params.set('v', persona.avatar.imageFile);
       return `/api/personas/${encodeURIComponent(persona.id)}/avatar?${params}`;
     },
+    // Загрузка своего аватара: оригинал + кропнутый квадрат + параметры кропа.
+    // Multipart — request() не ставит Content-Type для FormData (boundary от браузера).
+    uploadAvatar: (id: string, original: File, cropped: Blob, crop: { scale: number; offsetX: number; offsetY: number }) => {
+      const form = new FormData();
+      form.append('original', original, original.name || 'original');
+      form.append('cropped', cropped, 'avatar.jpg');
+      form.append('crop', JSON.stringify(crop));
+      return request<Persona>(`/personas/${encodeURIComponent(id)}/avatar/upload`, {
+        method: 'POST', body: form, timeoutMs: 60_000,
+      });
+    },
+    // Перекроп сохранённого оригинала (без повторной загрузки файла)
+    recropAvatar: (id: string, cropped: Blob, crop: { scale: number; offsetX: number; offsetY: number }) => {
+      const form = new FormData();
+      form.append('cropped', cropped, 'avatar.jpg');
+      form.append('crop', JSON.stringify(crop));
+      return request<Persona>(`/personas/${encodeURIComponent(id)}/avatar/recrop`, {
+        method: 'POST', body: form, timeoutMs: 60_000,
+      });
+    },
+    // URL оригинала загруженного аватара (для перекропа) — токен через ?access_token=
+    avatarOriginalUrl: (persona: Persona): string | null => {
+      if (!persona.avatar?.originalFile) return null;
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const params = new URLSearchParams();
+      if (token) params.set('access_token', token);
+      params.set('v', persona.avatar.originalFile);
+      return `/api/personas/${encodeURIComponent(persona.id)}/avatar/original?${params}`;
+    },
     // URL картинки-кандидата (галерея генерации) для <img>: токен через ?access_token=
     avatarCandidateUrl: (id: string, file: string): string => {
       const token = typeof localStorage !== 'undefined'
@@ -341,11 +379,11 @@ export const api = {
         body: JSON.stringify(body),
         timeoutMs: 150_000,
       }),
-    // AI-редактирование «характера» (system-промпта): без current — генерация с нуля
-    // по имени/роли/описанию; с current (+ опц. instruction) — улучшение текущего текста.
-    // Может занять до ~30с; 502 при ошибке.
+    // AI-редактирование характера: без current — генерация с нуля по имени/роли/описанию;
+    // с current (legacy-текст или сериализованный контракт, + опц. instruction) — улучшение.
+    // Возвращает структурированный контракт (P1). Может занять до ~30с; 502 при ошибке.
     aiCharacter: (body: { name?: string; role?: string; description?: string; current?: string; instruction?: string }) =>
-      request<{ character: string }>('/personas/ai/character', {
+      request<{ contract: PersonaContract }>('/personas/ai/character', {
         method: 'POST',
         body: JSON.stringify(body),
       }),
@@ -433,6 +471,28 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
+    // Групповой чат персон (флаг persona-group-chats): 2-4 участника, первый — ведущая.
+    // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
+    createGroup: (personaIds: string[], mode = 'auto', name?: string) =>
+      request<Session>('/chats/group', {
+        method: 'POST',
+        body: JSON.stringify({ personaIds, mode, name }),
+      }),
+    // Обновить состав участников группового чата (спикер сохраняется, если остался)
+    setParticipants: (id: string, personaIds: string[]) =>
+      request<Session>(`/chats/${id}/participants`, {
+        method: 'PUT',
+        body: JSON.stringify({ personaIds }),
+      }),
+    // Совещание персон (P7): независимые позиции → перекрёстная критика → синтез ведущей.
+    // personaIds опциональны в групповом чате (дефолт — его участники)
+    startMeeting: (id: string, question: string, personaIds?: string[]) =>
+      request<{ meetingId: string }>(`/chats/${id}/meeting`, {
+        method: 'POST',
+        body: JSON.stringify({ question, personaIds }),
+      }),
+    cancelMeeting: (id: string) =>
+      request<void>(`/chats/${id}/meeting/cancel`, { method: 'POST' }),
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
     uploadFile: async (id: string, file: File): Promise<{ path: string }> => {

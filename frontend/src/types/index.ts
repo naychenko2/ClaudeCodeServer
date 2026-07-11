@@ -87,6 +87,7 @@ export interface Task {
   recurrence?: TaskRecurrence;
   seriesId?: string;         // общий id серии регулярной задачи
   linkedSessionId?: string;
+  personaId?: string;        // исполнение от лица персоны (assignee=claude)
   claudeStartedAt?: string;  // отметка запуска Claude-исполнителя
   claudeResult?: 'success' | 'error';  // итог последнего запуска (null — выполняется/не запускалась)
   linkedFiles: string[];
@@ -151,6 +152,7 @@ export interface CreateTaskDto {
   assignee?: TaskAssignee;
   recurrence?: TaskRecurrence;
   linkedSessionId?: string;
+  personaId?: string;        // исполнение от лица персоны
   linkedFiles?: string[];
   subtasks?: { title: string }[];
   labels?: string[];
@@ -170,6 +172,8 @@ export interface UpdateTaskDto {
   // type 'none' = убрать повторение, undefined = не менять
   recurrence?: TaskRecurrence;
   linkedSessionId?: string;
+  // Персона-исполнитель: '' = убрать, undefined = не менять
+  personaId?: string;
   linkedFiles?: string[];
   subtasks?: TaskSubtask[];
   labels?: string[];
@@ -198,8 +202,11 @@ export interface Session {
   id: string;
   // Отсутствует у чатов вне проекта (project-less)
   projectId?: string;
-  // Привязка чата к персоне, если он ведётся от её лица
+  // Привязка чата к персоне, если он ведётся от её лица.
+  // В групповом чате — активный спикер (входит в participants)
   personaId?: string;
+  // Участники группового чата (2-4 id персон; первый — ведущая). Отсутствует у обычного чата
+  participants?: string[] | null;
   // Владелец чата вне проекта
   ownerId?: string;
   // Закреплён в списке чатов
@@ -272,6 +279,9 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }
   | { type: 'personas_changed'; action: 'created' | 'updated' | 'deleted' | 'memory'; personaId?: string }
+  | { type: 'speaker_changed'; personaId: string; label: string }
+  | { type: 'meeting_progress'; meetingId: string; phase: string; personaId?: string; status?: string; error?: string }
+  | { type: 'meeting_phase'; meetingId: string; phase: MeetingPhaseKey; question: string; entries: MeetingEntryItem[] }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' }
 );
 
@@ -334,6 +344,24 @@ export interface FalAccountResponse {
   usage?: FalUsageSummary | null;
 }
 
+// === Совещание персон (P7, флаг persona-group-chats) ===
+
+// Фазы совещания: независимые позиции → перекрёстная критика → синтез ведущей
+export type MeetingPhaseKey = 'independent' | 'attack' | 'synthesis';
+
+// Реплика участника фазы; isError — персона не ответила (text = текст ошибки)
+export interface MeetingEntryItem {
+  personaId: string;
+  text: string;
+  isError: boolean;
+}
+
+// Live-статусы участников текущей фазы (из meeting_progress)
+export interface MeetingRunningState {
+  phase: string;
+  persona: Record<string, 'running' | 'done' | 'error'>;
+}
+
 // Элементы чата
 export type ChatItem =
   // viaAgent — сообщение прислано не человеком, а агентом из другой сессии (chats_send)
@@ -357,8 +385,14 @@ export type ChatItem =
   | { kind: 'interrupted' }
   | { kind: 'resumed' }
   | { kind: 'session_ended' }
-  // Локальный разделитель «сменился собеседник» (client-side, не с сервера; не переживает перезагрузку)
-  | { kind: 'companion_switched'; label: string }
+  // Разделитель «сменился собеседник»: label задан явно (смена вручную / speaker_changed
+  // с сервера) либо резолвится по personaId (derived из истории группового чата)
+  | { kind: 'companion_switched'; label: string; personaId?: string }
+  // Карточка совещания персон: агрегат всех фаз одного meetingId (собирается из
+  // meeting_phase/meeting_progress и из истории — StoredMeetingPhaseMessage)
+  | { kind: 'meeting'; meetingId: string; question: string;
+      phases: Partial<Record<MeetingPhaseKey, MeetingEntryItem[]>>;
+      running?: MeetingRunningState; status?: 'running' | 'done' | 'error'; error?: string }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 // Скиллы и агенты
@@ -547,12 +581,63 @@ export interface UpdateNoteDto {
 // Зона контекста персоны: глобально (личное пространство) или в рамках проекта
 export type PersonaScope = 'global' | 'project';
 
+// Профиль доступа персоны (P6): full — без ограничений; readOnly — смотрит и
+// советует, но ничего не меняет; custom — свой список запрещённых инструментов
+export type PersonaAccess = 'full' | 'readOnly' | 'custom';
+
+// Параметры кропа загруженного аватара: масштаб + смещение центра окна
+// от центра картинки (в пикселях исходника)
+export interface AvatarCropStateDto {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+}
+
 // Аватар персоны: инициалы на цветном фоне или загруженная картинка (этап 4).
-// color — ключ палитры AGENT_COLORS; imageFile — имя файла в хранилище персоны.
+// color — ключ палитры AGENT_COLORS; imageFile — имя файла в хранилище персоны;
+// originalFile/crop — оригинал загруженного файла и параметры кропа (для «Перекроить»).
 export interface PersonaAvatar {
   kind: 'initials' | 'image';
   color?: string;
   imageFile?: string;
+  originalFile?: string | null;
+  crop?: AvatarCropStateDto | null;
+}
+
+// Тип расписания проактивности персоны
+export type PersonaScheduleType = 'daily' | 'weekdays' | 'weekly';
+
+// Проактивность «пишет первой» (флаг persona-proactive). lastFiredAt/sessionId —
+// служебные (бэкенд не даёт их затирать через API).
+export interface PersonaProactiveConfig {
+  enabled: boolean;
+  type: PersonaScheduleType;
+  weekdays?: number[] | null;   // ISO 1=Пн … 7=Вс (для weekly)
+  time: string;                 // "HH:mm" в таймзоне владельца
+  instruction: string;          // что сделать при срабатывании
+  lastFiredAt?: string | null;
+  sessionId?: string | null;
+}
+
+// Пользовательские поля проактивности для create/update DTO
+export interface PersonaProactiveDto {
+  enabled: boolean;
+  type?: PersonaScheduleType;
+  weekdays?: number[];
+  time?: string;
+  instruction?: string;
+}
+
+// Структурированный контракт персоны (P1): характер разложен по слотам,
+// каждый слот попадает в свою секцию системного промпта. Отсутствие контракта —
+// legacy-режим: весь характер живёт единым текстом в systemPrompt.
+export interface PersonaContract {
+  character?: string;         // характер и манера общения (свободный текст)
+  tone?: string;              // тон одной фразой («тепло и на равных»)
+  mustDo?: string[];          // правила «всегда …»
+  mustNot?: string[];         // правила «никогда …»
+  outputFormat?: string;      // требования к формату ответов
+  speechExamples?: string[];  // примеры реплик (образцы стиля)
 }
 
 export interface Persona {
@@ -562,16 +647,23 @@ export interface Persona {
   role?: string;              // роль персоны (главная подпись: «Роль (Имя)»)
   handle: string;             // машинное имя (@handle) — уникально у владельца
   description?: string;
-  systemPrompt?: string;      // «характер» — системный промпт персоны
+  systemPrompt?: string;      // «характер» — legacy-текст (у персон без contract)
+  contract?: PersonaContract | null; // структурированный контракт (P1)
   model?: string;
   effort?: string;
   scope: PersonaScope;
   projectId?: string;         // задан только для scope === 'project'
   avatar: PersonaAvatar;
   greeting?: string;          // приветствие персоны в начале чата
+  // Проактивность «пишет первой» (флаг persona-proactive); null — выключена
+  proactive?: PersonaProactiveConfig | null;
   memoryEnabled: boolean;     // долгая память (этап 2)
   // Возможности персоны (ключи tasks/notes/web); null/отсутствие — без ограничений
   tools?: string[] | null;
+  // Профиль доступа (P6); отсутствие — full
+  access?: PersonaAccess;
+  // Свой список запрещённых инструментов (только при access === 'custom')
+  disallowedTools?: string[] | null;
   // Привязки к источникам знаний и правилам (фича persona-bindings); null — нет
   bindings?: PersonaBinding[] | null;
   createdAt: string;
@@ -625,6 +717,8 @@ export interface CreatePersonaDto {
   role?: string;
   description?: string;
   systemPrompt?: string;
+  // Контракт характера; при обновлении: undefined — не менять, пустые слоты — сбросить
+  contract?: PersonaContract;
   model?: string;
   effort?: string;
   scope?: PersonaScope;
@@ -634,6 +728,12 @@ export interface CreatePersonaDto {
   memoryEnabled?: boolean;
   // Возможности (tasks/notes/web); полный набор бэкенд нормализует в «без ограничений»
   tools?: string[];
+  // Профиль доступа (P6): full | readOnly | custom
+  access?: PersonaAccess;
+  // Свой список запрещённых инструментов (для custom)
+  disallowedTools?: string[];
+  // Проактивность (только пользовательские поля); undefined — не менять
+  proactive?: PersonaProactiveDto;
 }
 
 // Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны
@@ -657,6 +757,16 @@ export interface PersonaMemoryEntry {
   sourceSessionId?: string;   // чат, из которого запомнилось
   createdAt: string;
   lastAccessedAt: string;
+}
+
+// Рабочий фокус персоны — «что я сейчас делаю» (одна ячейка рабочей памяти,
+// живёт отдельно от записей; в recall подмешивается первым блоком)
+export interface PersonaWorkingFocus {
+  what: string;
+  status: string;
+  nextStep?: string;
+  sourceSessionId?: string;
+  updatedAt: string;
 }
 
 // Результат семантического поиска по памяти

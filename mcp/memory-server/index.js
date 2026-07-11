@@ -48,6 +48,10 @@ const TOOLS = [
         type: { type: 'string', enum: ['semantic', 'episodic', 'procedural'], description: 'Тип памяти' },
         text: { type: 'string', description: 'Что запомнить (кратко, одна мысль)' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Необязательные теги для группировки' },
+        salience: {
+          type: 'number', minimum: 0, maximum: 1,
+          description: 'Важность записи 0..1 (1 — критично помнить, 0.3 — мелочь); по умолчанию 1',
+        },
       },
     },
   },
@@ -94,6 +98,7 @@ async function callTool(name, args) {
     case 'memory_remember': {
       const body = { type: args.type, text: args.text };
       if (Array.isArray(args.tags) && args.tags.length) body.tags = args.tags;
+      if (typeof args.salience === 'number') body.salience = args.salience;
       return json(await api(base, { method: 'POST', body: JSON.stringify(body) }));
     }
 

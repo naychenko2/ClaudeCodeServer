@@ -58,6 +58,10 @@ public class PersonaManager
     // где владелец берётся из самой персоны. Не использовать в обработчиках запросов.
     public Persona? GetByIdInternal(string id) => _personas.GetValueOrDefault(id);
 
+    // Все персоны всех владельцев — ТОЛЬКО для фоновых сервисов (консолидация памяти),
+    // где гейт по владельцу делается через саму персону. Не использовать в обработчиках запросов.
+    public IReadOnlyCollection<Persona> GetAllInternal() => _personas.Values.ToList();
+
     // Персона владельца по handle (@упоминания). Handle уникален per-owner.
     public Persona? GetByHandle(string userId, string handle) =>
         _personas.Values.FirstOrDefault(p => p.OwnerId == userId
@@ -75,9 +79,46 @@ public class PersonaManager
         return AllTools.All(clean.Contains) ? null : clean;
     }
 
+    // Нормализация контракта (P1): трим слотов, выброс пустых элементов списков;
+    // полностью пустой контракт эквивалентен отсутствию → null (legacy-режим).
+    internal static PersonaContract? NormalizeContract(PersonaContract? contract)
+    {
+        if (contract is null) return null;
+        var clean = new PersonaContract
+        {
+            Character = TrimToNull(contract.Character),
+            Tone = TrimToNull(contract.Tone),
+            MustDo = CleanList(contract.MustDo),
+            MustNot = CleanList(contract.MustNot),
+            OutputFormat = TrimToNull(contract.OutputFormat),
+            SpeechExamples = CleanList(contract.SpeechExamples),
+        };
+        return clean.IsEmpty ? null : clean;
+    }
+
+    private static string? TrimToNull(string? s) =>
+        string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    // Нормализация пользовательского списка запретов (Custom-профиль):
+    // трим, выброс пустых, дедуп; пустой список → null
+    internal static List<string>? NormalizeDisallowed(List<string>? tools)
+    {
+        var clean = tools?.Select(t => t.Trim()).Where(t => t.Length > 0)
+            .Distinct(StringComparer.Ordinal).ToList();
+        return clean is { Count: > 0 } ? clean : null;
+    }
+
+    private static List<string>? CleanList(List<string>? items)
+    {
+        var clean = items?.Where(i => !string.IsNullOrWhiteSpace(i)).Select(i => i.Trim()).ToList();
+        return clean is { Count: > 0 } ? clean : null;
+    }
+
     public Persona Create(string userId, string name, string? role, string? description, string? systemPrompt,
         string? model, string? effort, PersonaScope scope, string? projectId,
-        string? color, string? greeting, bool memoryEnabled, List<string>? tools = null)
+        string? color, string? greeting, bool memoryEnabled, List<string>? tools = null,
+        PersonaContract? contract = null, PersonaAccess access = PersonaAccess.Full,
+        List<string>? disallowedTools = null, PersonaProactiveConfig? proactive = null)
     {
         var persona = new Persona
         {
@@ -86,6 +127,7 @@ public class PersonaManager
             Role = string.IsNullOrWhiteSpace(role) ? null : role.Trim(),
             Description = description,
             SystemPrompt = systemPrompt,
+            Contract = NormalizeContract(contract),
             Model = model,
             Effort = effort,
             Scope = scope,
@@ -93,7 +135,11 @@ public class PersonaManager
             Greeting = greeting,
             MemoryEnabled = memoryEnabled,
             Tools = NormalizeTools(tools),
+            Access = access,
+            // Свой список запретов имеет смысл только при Custom-профиле
+            DisallowedTools = access == PersonaAccess.Custom ? NormalizeDisallowed(disallowedTools) : null,
             Avatar = new PersonaAvatar { Kind = PersonaAvatarKind.Initials, Color = color },
+            Proactive = proactive is null ? null : MergeProactive(current: null, proactive),
         };
         persona.Handle = MakeUniqueHandle(persona.Name, userId);
         _personas[persona.Id] = persona;
@@ -103,7 +149,9 @@ public class PersonaManager
 
     public Persona Update(string id, string userId, string? name, string? role, string? description,
         string? systemPrompt, string? model, string? effort, PersonaScope? scope, string? projectId,
-        string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null)
+        string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null,
+        PersonaContract? contract = null, PersonaAccess? access = null,
+        List<string>? disallowedTools = null, PersonaProactiveConfig? proactive = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -112,6 +160,8 @@ public class PersonaManager
         if (role is not null) persona.Role = role.Length == 0 ? null : role.Trim();
         if (description is not null) persona.Description = description;
         if (systemPrompt is not null) persona.SystemPrompt = systemPrompt;
+        // null — не менять; объект с пустыми слотами — сбросить контракт (нормализуется в null)
+        if (contract is not null) persona.Contract = NormalizeContract(contract);
         if (model is not null) persona.Model = model.Length == 0 ? null : model;
         if (effort is not null) persona.Effort = effort.Length == 0 ? null : effort;
         if (scope is not null)
@@ -128,6 +178,13 @@ public class PersonaManager
         if (memoryEnabled is not null) persona.MemoryEnabled = memoryEnabled.Value;
         // null — не менять; список — установить (полный набор нормализуется в null)
         if (tools is not null) persona.Tools = NormalizeTools(tools);
+        // Профиль доступа: null — не менять; свой список запретов живёт только при Custom
+        if (access is not null) persona.Access = access.Value;
+        if (disallowedTools is not null) persona.DisallowedTools = NormalizeDisallowed(disallowedTools);
+        if (persona.Access != PersonaAccess.Custom) persona.DisallowedTools = null;
+        // Проактивность: null — не менять; иначе partial-merge пользовательских полей
+        // (служебные LastFiredAt/SessionId НЕ затираются)
+        if (proactive is not null) persona.Proactive = MergeProactive(persona.Proactive, proactive);
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
         OnPersonaChanged?.Invoke(persona);
@@ -147,16 +204,92 @@ public class PersonaManager
         return persona;
     }
 
-    // Установить сгенерированный/загруженный аватар-картинку
+    // Слияние конфига проактивности: пользовательские поля — из запроса,
+    // служебные (LastFiredAt/SessionId) — сохраняются от текущего состояния
+    private static PersonaProactiveConfig MergeProactive(
+        PersonaProactiveConfig? current, PersonaProactiveConfig incoming) => new()
+    {
+        Enabled = incoming.Enabled,
+        Type = incoming.Type,
+        Weekdays = incoming.Weekdays?.Where(d => d is >= 1 and <= 7).Distinct().Order().ToList() is { Count: > 0 } days
+            ? days : null,
+        Time = string.IsNullOrWhiteSpace(incoming.Time) ? "09:00" : incoming.Time.Trim(),
+        Instruction = incoming.Instruction?.Trim() ?? "",
+        LastFiredAt = current?.LastFiredAt,
+        SessionId = current?.SessionId,
+    };
+
+    // Отметка срабатывания проактивности (идемпотентность планировщика)
+    public void MarkProactiveFired(string id, DateTime nowUtc)
+    {
+        var persona = GetByIdInternal(id);
+        if (persona?.Proactive is null) return;
+        persona.Proactive.LastFiredAt = nowUtc;
+        Save();
+    }
+
+    // Закрепить чат проактивности за персоной (создан при первом срабатывании)
+    public void SetProactiveSession(string id, string sessionId)
+    {
+        var persona = GetByIdInternal(id);
+        if (persona?.Proactive is null) return;
+        persona.Proactive.SessionId = sessionId;
+        Save();
+    }
+
+    // Установить сгенерированный аватар-картинку. Оригинал/кроп загруженного файла
+    // при этом теряют смысл — чистим (и файл оригинала тоже).
     public Persona SetAvatarImage(string id, string userId, string imageFile)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        DeleteAsset(id, persona.Avatar.OriginalFile, keep: null);
         persona.Avatar.Kind = PersonaAvatarKind.Image;
         persona.Avatar.ImageFile = imageFile;
+        persona.Avatar.OriginalFile = null;
+        persona.Avatar.Crop = null;
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
         return persona;
+    }
+
+    // Загруженный аватар: кропнутая картинка + оригинал (для перекропа) + параметры кропа.
+    // Прежние avatar-*/original-* файлы удаляются.
+    public Persona SetAvatarUploaded(string id, string userId, string imageFile, string originalFile,
+        AvatarCropState? crop)
+    {
+        var persona = Get(id, userId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        DeleteAsset(id, persona.Avatar.ImageFile, keep: imageFile);
+        DeleteAsset(id, persona.Avatar.OriginalFile, keep: originalFile);
+        persona.Avatar.Kind = PersonaAvatarKind.Image;
+        persona.Avatar.ImageFile = imageFile;
+        persona.Avatar.OriginalFile = originalFile;
+        persona.Avatar.Crop = crop;
+        persona.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return persona;
+    }
+
+    // Перекроп существующего оригинала: заменяется только кропнутая картинка и параметры.
+    public Persona SetAvatarRecropped(string id, string userId, string imageFile, AvatarCropState? crop)
+    {
+        var persona = Get(id, userId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        DeleteAsset(id, persona.Avatar.ImageFile, keep: imageFile);
+        persona.Avatar.Kind = PersonaAvatarKind.Image;
+        persona.Avatar.ImageFile = imageFile;
+        persona.Avatar.Crop = crop;
+        persona.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return persona;
+    }
+
+    // Удалить файл-ассет персоны (кроме keep); ошибки удаления не критичны
+    private void DeleteAsset(string personaId, string? file, string? keep)
+    {
+        if (string.IsNullOrEmpty(file) || file == keep) return;
+        try { File.Delete(Path.Combine(AssetsDir, personaId, file)); } catch { /* не критично */ }
     }
 
     public bool Delete(string id, string userId)

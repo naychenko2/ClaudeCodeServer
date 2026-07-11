@@ -2,12 +2,14 @@
 // шапка «Редактирование задачи» с Отмена / ✓ Готово / корзина, ниже поля формы.
 
 import { useEffect, useState } from 'react';
-import type { Task, TaskAssignee, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskSubtask, UpdateTaskDto } from '../../types';
+import type { Persona, Task, TaskAssignee, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskSubtask, UpdateTaskDto } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { IconButton } from '../../components/ui';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { personaLabel } from '../../lib/personas';
 import { PRIORITY_LABEL, PRIORITY_ORDER, RECURRENCE_TYPE_LABEL, REMINDER_PRESETS, reminderLabel } from '../../lib/tasks';
 import { ClaudeBadge, MeBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
@@ -59,6 +61,10 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   // Повторение: null — не повторяется
   const [recurrence, setRecurrence] = useState<TaskRecurrence | null>(task.recurrence ?? null);
   const [assignee, setAssignee] = useState<TaskAssignee>(task.assignee ?? 'me');
+  // Персона-исполнитель ('' — обычный Claude); список доступных в контексте задачи
+  const [personaId, setPersonaId] = useState(task.personaId ?? '');
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const personasEnabled = useFeature(FLAGS.personas);
   const [description, setDescription] = useState(task.description);
   const [descEditing, setDescEditing] = useState(!task.description);
   const [subtasks, setSubtasks] = useState<TaskSubtask[]>(task.subtasks);
@@ -112,6 +118,16 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAi]);
 
+  // Персоны, доступные в контексте задачи (глобальные + её проекта) — для селекта исполнителя
+  useEffect(() => {
+    if (!personasEnabled || assignee !== 'claude') return;
+    let alive = true;
+    api.personas.list({ scope: 'context', projectId: task.projectId })
+      .then(list => { if (alive) setPersonas(list); })
+      .catch(() => { if (alive) setPersonas([]); });
+    return () => { alive = false; };
+  }, [personasEnabled, assignee, task.projectId]);
+
   const addSubtask = () => {
     const t = newSubtask.trim();
     if (!t) return;
@@ -140,6 +156,8 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
         // Повторение тоже требует срока; type 'none' = убрать на бэке
         recurrence: dueDate && recurrence ? recurrence : { type: 'none', interval: 1 },
         assignee,
+        // Персона-исполнитель имеет смысл только у Claude; '' = убрать на бэке
+        personaId: assignee === 'claude' && personaId ? personaId : '',
         description,
         subtasks: subtasks.filter(s => s.title.trim()),
         labels,
@@ -444,10 +462,31 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
 
           {/* Исполнитель */}
           <div style={fieldLabelStyle()}>Исполнитель</div>
-          <div style={{ display: 'flex', gap: 10, marginBottom: 22 }}>
+          <div style={{ display: 'flex', gap: 10, marginBottom: assignee === 'claude' && personasEnabled ? 12 : 22 }}>
             {assigneeCard('me', 'Я', <MeBadge size={22} />)}
             {assigneeCard('claude', 'Claude', <ClaudeBadge size={22} />)}
           </div>
+
+          {/* От лица персоны (флаг personas): пусто — обычный Claude */}
+          {assignee === 'claude' && personasEnabled && (
+            <div style={{ marginBottom: 22 }}>
+              <div style={fieldLabelStyle()}>От лица персоны</div>
+              <select
+                value={personaId}
+                onChange={e => setPersonaId(e.target.value)}
+                aria-label="От лица персоны"
+                style={{
+                  width: '100%', boxSizing: 'border-box', background: C.bgWhite,
+                  border: `1px solid ${C.border}`, borderRadius: R.xl, padding: '10px 13px',
+                  fontSize: 14, fontFamily: FONT.sans, color: C.textHeading,
+                  outline: 'none', cursor: 'pointer',
+                }}
+              >
+                <option value="">Обычный Claude</option>
+                {personas.map(p => <option key={p.id} value={p.id}>{personaLabel(p)}</option>)}
+              </select>
+            </div>
+          )}
 
           {/* Описание */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 9 }}>

@@ -27,6 +27,9 @@ public class TaskItem
     // Общий id серии повторяющейся задачи (= id первого экземпляра)
     public string? SeriesId { get; set; }
     public string? LinkedSessionId { get; set; }
+    // Исполнение от лица персоны: сессия-исполнитель ведётся с её характером,
+    // моделью и памятью (null — обычный Claude)
+    public string? PersonaId { get; set; }
     // Claude-исполнитель: отметка запуска (идемпотентность автозапуска, переживает рестарт)
     public DateTime? ClaudeStartedAt { get; set; }
     // Итог последнего запуска: success | error; null — ещё выполняется или не запускалась

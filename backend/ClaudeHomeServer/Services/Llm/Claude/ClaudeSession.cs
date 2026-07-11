@@ -69,8 +69,9 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly NotesMcpContext? _notesMcp;
     // Auto-recall заметок: по тексту хода возвращает markdown-блок для системного промпта
     private readonly Func<string, Task<string?>>? _recallProvider;
-    // Системный промпт персоны: её имя/роль/характер
-    private readonly string? _personaPrompt;
+    // Провайдер системного промпта персоны — вызывается на каждый ход
+    // (свежие контракт/модель/PersonaSwitched без пересоздания адаптера)
+    private readonly Func<string?>? _personaPromptProvider;
     // MCP-сервер долгой памяти персоны + auto-recall её памяти
     private readonly MemoryMcpContext? _memoryMcp;
     private readonly Func<string, Task<string?>>? _personaRecallProvider;
@@ -101,7 +102,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _tasksMcp = context.TasksMcp;
         _notesMcp = context.NotesMcp;
         _recallProvider = context.RecallProvider;
-        _personaPrompt = context.PersonaSystemPrompt;
+        _personaPromptProvider = context.PersonaPromptProvider;
         _memoryMcp = context.MemoryMcp;
         _personaRecallProvider = context.PersonaRecallProvider;
         _bindingsProvider = context.BindingsProvider;
@@ -766,7 +767,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // Привязанные знания и правила персоны (флаг persona-bindings): индекс источников
             // «когда → откуда» + выжимки режима «всегда». Только у персонных сессий;
             // провайдер сам гейтит по флагу, ошибки не роняют ход.
-            if (_bindingsProvider is not null && _personaPrompt is not null)
+            if (_bindingsProvider is not null && _personaPromptProvider is not null)
             {
                 string? bindingsBlock = null;
                 try { bindingsBlock = await _bindingsProvider(text); }
@@ -779,7 +780,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             // Персональный слой: промпт персоны имеет приоритет
             // над .md-агентом — чат ведётся от её лица, характер задаёт именно персона.
-            string? agentPrompt = _personaPrompt;
+            string? agentPrompt = _personaPromptProvider?.Invoke();
             if (agentPrompt is null && !string.IsNullOrEmpty(Info.AgentName) && _skills is not null)
                 agentPrompt = _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName);
 

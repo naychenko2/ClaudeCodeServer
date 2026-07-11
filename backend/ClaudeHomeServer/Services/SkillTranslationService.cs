@@ -75,23 +75,27 @@ public class SkillTranslationService(
         }
         if (toTranslate.Count == 0) return result;
 
+        // Нумеруем описания (простые числовые id надёжнее для LLM, чем ключи с «/» и «@»)
         var sb = new StringBuilder();
         sb.AppendLine("Переведи описания навыков (skills) на русский язык — сохрани смысл, естественно и кратко.");
-        sb.AppendLine("Ответь ТОЛЬКО JSON-объектом вида {\"<id>\":\"<перевод>\"} без markdown и пояснений.");
+        sb.AppendLine("Ответь ТОЛЬКО JSON-объектом {\"<номер>\":\"<перевод>\"} без markdown и пояснений.");
         sb.AppendLine();
-        foreach (var (key, text) in toTranslate)
-            sb.AppendLine($"[{key}] {text}");
+        for (var i = 0; i < toTranslate.Count; i++)
+            sb.AppendLine($"[{i + 1}] {toTranslate[i].Text}");
 
         try
         {
             var ans = await runner.RunAsync(sb.ToString(), runner.NormalizeModel(AiModel), Timeout, ct);
             var map = ParseTranslations(ans);
-            foreach (var (key, text) in toTranslate)
-                if (map.TryGetValue(key, out var ru) && !string.IsNullOrWhiteSpace(ru))
+            for (var i = 0; i < toTranslate.Count; i++)
+            {
+                var (key, text) = toTranslate[i];
+                if (map.TryGetValue((i + 1).ToString(), out var ru) && !string.IsNullOrWhiteSpace(ru))
                 {
                     result[key] = ru;
                     _descCache[key] = (text.GetHashCode(), ru);
                 }
+            }
         }
         catch (Exception ex)
         {

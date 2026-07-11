@@ -805,6 +805,8 @@ public class SessionManager
         // Обвязки хода (OmO) дописываются только к тексту для CLI —
         // история и UI хранят исходное сообщение пользователя
         await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths);
+        // Превью чата (LastMessage выставляет адаптер из текста для CLI) — исходным сообщением
+        entry.Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
     }
 
     // Текст хода для CLI: исходное сообщение + обвязки OmO.

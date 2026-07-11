@@ -13,13 +13,15 @@ namespace ClaudeHomeServer.Controllers;
 // Раздел «Знания»: единый менеджер баз знаний Dify, релевантных пользователю
 // (его личные + публичные). Dify — источник истины (отдельного JSON-стора нет):
 // список берём из KnowledgeService.ListDatasetsAsync(), классифицируем по имени
-// и permission. Самостоятельные/публичные БЗ можно создавать и удалять; привязанные
+// (префиксу пользователя). «Помеченные» ({user}:…) — личные; «без префикса» — публичные/
+// глобальные (видны всем); чужие ({otheruser}:…) — скрыты через список пользователей.
+// Самостоятельные ({user}:kb:…) и публичные можно создавать и удалять; привязанные
 // (заметок/проектов/памяти персон) — только управлять документами. Не путать с
 // проектным KnowledgeController'ом (маршрут /api/projects/{id}/knowledge).
 [ApiController]
 [Authorize]
 [Route("api/knowledge")]
-public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<SessionHub> hub) : ControllerBase
+public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<SessionHub> hub, UserStore userStore) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
     private string Username => User.FindFirstValue(ClaimTypes.Name) ?? UserId;
@@ -37,7 +39,8 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
         try
         {
             var all = await knowledge.ListDatasetsAsync();
-            var items = all.Select(Classify)
+            var others = OtherUsers();
+            var items = all.Select(d => Classify(d, others))
                 .Where(x => x is not null)
                 .Cast<KnowledgeBaseSummary>()
                 .OrderByDescending(x => x.CreatedAt ?? DateTime.MinValue)
@@ -53,7 +56,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     {
         var d = await ResolveReadableAsync(id);
         if (d is null) return NotFound();
-        var c = Classify(d)!;
+        var c = Classify(d, OtherUsers())!;
         try
         {
             var docs = await knowledge.ListAllDocumentsAsync(id);
@@ -93,7 +96,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     {
         var d = await ResolveReadableAsync(id);
         if (d is null) return NotFound();
-        if (!IsDeletable(d)) return StatusCode(403, new { error = "Эту базу нельзя удалить из раздела «Знания» — она принадлежит другому разделу" });
+        if (!IsDeletable(d, OtherUsers())) return StatusCode(403, new { error = "Эту базу нельзя удалить из раздела «Знания» — она принадлежит другому разделу" });
         try { await knowledge.DeleteDatasetAsync(id); }
         catch (HttpRequestException ex) { return StatusCode(502, new { error = $"Dify недоступен: {ex.Message}" }); }
         await Broadcast("deleted", id);
@@ -171,49 +174,86 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     }
 
     // --- Классификация датасетов Dify под пользователя ---
+    // Модель: «помеченные» (с префиксом {username}:) — личные; «без префикса» —
+    // публичные/глобальные (видны всем). Личные делятся по префиксу:
+    // {user}:notes / {user}:persona:{handle} / {user}:kb:{Title} / {user}:{project}.
+    // Чужие личные ({otheruser}:…) — скрыты (изоляция per-owner). Permission Dify
+    // здесь ни при чём: «публичность» определяется отсутствием префикса, а не all_team_members.
 
-    // Резолв датасета по id с проверкой доступности текущему пользователю (relevant).
-    // Обязательно: с общим Dify-ключом нельзя оперировать по произвольному id — иначе
-    // можно читать/менять чужую only_me базу.
+    // Имена других пользователей — чтобы отличить «без префикса = глобальная»
+    // от «чужая {otheruser}:…» (иначе чужие утекли бы в публичные).
+    private HashSet<string> OtherUsers() =>
+        userStore.GetAll()
+            .Select(u => u.Username)
+            .Where(u => u.Length > 0 && !u.Equals(Username, StringComparison.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    // Владелец датасета по префиксу имени ({username}:), или null — глобальная (без префикса).
+    private static string? OwnerOf(string name, string username, HashSet<string> others)
+    {
+        if (name.StartsWith(username + ":", StringComparison.OrdinalIgnoreCase)) return username;
+        foreach (var u in others)
+            if (name.StartsWith(u + ":", StringComparison.OrdinalIgnoreCase)) return u;
+        return null;
+    }
+
+    // Резолв датасета по id с проверкой доступности (relevant): своя или глобальная —
+    // доступна; чужая помеченная — нет. Обязательно с общим Dify-ключом: иначе по
+    // произвольному id можно читать/менять чужую базу.
     private async Task<DifyDatasetListItem?> ResolveReadableAsync(string id)
     {
         if (!knowledge.IsConfigured || string.IsNullOrEmpty(id)) return null;
         try
         {
+            var others = OtherUsers();
             return (await knowledge.ListDatasetsAsync()).FirstOrDefault(d => d.Id == id)
-                is { } found && IsRelevant(found) ? found : null;
+                is { } found && IsRelevant(found, others) ? found : null;
         }
         catch (HttpRequestException) { return null; }
     }
 
-    private bool IsPublic(DifyDatasetListItem d) => d.Permission == "all_team_members";
-    private bool IsMine(DifyDatasetListItem d) => (d.Name ?? "").StartsWith(Username + ":", StringComparison.Ordinal);
-    private bool IsRelevant(DifyDatasetListItem d) => IsMine(d) || IsPublic(d);
-    // Удалять здесь можно самостоятельные ({username}:kb:…) и публичные. Привязанные — нет.
-    private bool IsDeletable(DifyDatasetListItem d)
+    private bool IsRelevant(DifyDatasetListItem d, HashSet<string> others)
     {
-        var rest = IsMine(d) ? d.Name![(Username.Length + 1)..] : "";
-        return IsPublic(d) || rest.StartsWith("kb:", StringComparison.Ordinal);
+        var owner = OwnerOf(d.Name ?? "", Username, others);
+        return owner is null || owner.Equals(Username, StringComparison.OrdinalIgnoreCase);
     }
 
-    // Сводка с производными полями (заголовок/тип/видимость/deletable) или null, если
-    // датасет не релевантен пользователю (чужой only_me) — такие в списке не показываем.
-    private KnowledgeBaseSummary? Classify(DifyDatasetListItem d)
+    // Удалять здесь можно самостоятельные ({user}:kb:…) и публичные (без префикса);
+    // привязанные (заметок/проектов/персон) — нельзя.
+    private bool IsDeletable(DifyDatasetListItem d, HashSet<string> others)
     {
         var name = d.Name ?? "";
-        var isPublic = IsPublic(d);
-        var mine = IsMine(d);
-        if (!mine && !isPublic) return null;
+        var owner = OwnerOf(name, Username, others);
+        if (owner is null) return true;                                                 // глобальная
+        if (!owner.Equals(Username, StringComparison.OrdinalIgnoreCase)) return false;  // чужая (не видна)
+        var rest = name[(Username.Length + 1)..];                                       // после "{user}:"
+        return rest.StartsWith("kb:", StringComparison.Ordinal);                        // самостоятельная
+    }
 
-        string type; string title; bool deletable;
-        var rest = mine ? name[(Username.Length + 1)..] : name;
-        if (mine && rest == "notes") { type = "Заметки"; title = "Заметки"; deletable = false; }
-        else if (mine && rest.StartsWith("persona:", StringComparison.Ordinal)) { type = "Память персоны"; title = rest["persona:".Length..]; deletable = false; }
-        else if (mine && rest.StartsWith("kb:", StringComparison.Ordinal)) { type = "Самостоятельная"; title = rest["kb:".Length..]; deletable = true; }
-        else if (mine) { type = "Проект"; title = rest; deletable = false; } // {username}:{projectName}
-        else { type = "Публичная"; title = name; deletable = true; }         // all_team_members без префикса
+    // Сводка с производными полями или null, если датасет чужой (скрытый).
+    private KnowledgeBaseSummary? Classify(DifyDatasetListItem d, HashSet<string> others)
+    {
+        var name = d.Name ?? "";
+        var owner = OwnerOf(name, Username, others);
+        if (owner is not null && !owner.Equals(Username, StringComparison.OrdinalIgnoreCase))
+            return null; // чужая помеченная — не показываем
 
-        return new KnowledgeBaseSummary(d.Id, title, type, isPublic ? "public" : "personal",
+        string type; string title; bool deletable; string visibility;
+        if (owner is null)
+        {
+            type = "Публичная"; title = name; deletable = true; visibility = "public";
+        }
+        else
+        {
+            var rest = name[(Username.Length + 1)..];
+            if (rest == "notes") { type = "Заметки"; title = "Заметки"; deletable = false; }
+            else if (rest.StartsWith("persona:", StringComparison.Ordinal)) { type = "Память персоны"; title = rest["persona:".Length..]; deletable = false; }
+            else if (rest.StartsWith("kb:", StringComparison.Ordinal)) { type = "Самостоятельная"; title = rest["kb:".Length..]; deletable = true; }
+            else { type = "Проект"; title = rest; deletable = false; } // {username}:{projectName}
+            visibility = "personal";
+        }
+
+        return new KnowledgeBaseSummary(d.Id, title, type, visibility,
             d.DocumentCount, ToDate(d.CreatedAt), deletable, d.Description);
     }
 

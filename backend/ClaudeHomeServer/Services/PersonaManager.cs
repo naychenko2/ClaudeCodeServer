@@ -22,8 +22,13 @@ public class PersonaManager
 
     public PersonaManager(IConfiguration config)
     {
-        _storePath = config["PersonasPath"]
-            ?? Path.Combine(AppContext.BaseDirectory, "data", "personas.json");
+        // Стор — в каталоге DataPath (как у всех сервисов): в контейнере это /data (volume).
+        // Прежний фолбэк AppContext.BaseDirectory/data жил ВНУТРИ контейнера, и персоны
+        // с аватарами пропадали при каждом его пересоздании (деплое).
+        var dataDir = Path.GetDirectoryName(
+            config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
+            ?? Path.Combine(AppContext.BaseDirectory, "data");
+        _storePath = config["PersonasPath"] ?? Path.Combine(dataDir, "personas.json");
         Load();
     }
 

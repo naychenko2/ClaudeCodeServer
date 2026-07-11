@@ -161,6 +161,11 @@ body {
 .cc-modal-card { animation: cc-modal-in 0.2s cubic-bezier(0.22, 1, 0.36, 1); }
 .cc-sheet-card { animation: cc-sheet-in 0.26s cubic-bezier(0.22, 1, 0.36, 1); }
 
+/* Markdown в пузыре пользователя: гасим крайние отступы блоков — пузырь остаётся плотным
+   для коротких сообщений, но авто-публикуемый MD (итог совещания, план конвейера) форматируется */
+.cc-user-md > :first-child { margin-top: 0; }
+.cc-user-md > :last-child { margin-bottom: 0; }
+
 /* === Действия под ответом Claude (TextMessageView) === */
 /* Десктоп с точным указателем: скрыты, проявляются по hover на сообщении */
 @media (hover: hover) and (pointer: fine) {

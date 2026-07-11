@@ -335,7 +335,12 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
                 </span>
               </div>
             )}
-            {item.text}
+            {/* Markdown и в пузыре пользователя: авто-публикуемые сообщения (итог совещания,
+                план конвейера, обвязка «Обсудить с командой») приходят в MD — форматируем их;
+                обычный текст рендерится идентично */}
+            <div className="cc-user-md">
+              <MarkdownContent text={item.text} />
+            </div>
             {item.attachedPaths && item.attachedPaths.length > 0 && (
               <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                 {item.attachedPaths.map(p => (

@@ -629,12 +629,17 @@ public class ClaudeSession : ILlmSessionAdapter
                 var executeHint = _currentTurnAgentDepth < 1
                     ? " tasks_execute запускает Claude-исполнителя задачи (отдельная сессия, работает в фоне)."
                     : "";
+                // Поручение задачи персоне — только когда доступен и personas-server (есть personas_list)
+                var personaExecHint = _personasMcp is not null
+                    ? " Чтобы поручить задачу персоне-исполнителю, передай её personaId в tasks_create/tasks_update — " +
+                      "задачу выполнит Claude от её лица; список персон и их id — personas_list."
+                    : "";
                 var tasksHint =
                     "У пользователя есть встроенная система задач (вкладка «Задачи» в проекте и раздел «Календарь»). " +
                     "Управляй ею через MCP-инструменты mcp__tasks__* (tasks_list, tasks_search, tasks_get, tasks_create, " +
                     "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
-                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint;
+                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint;
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? tasksHint
                     : basePrompt + "\n\n" + tasksHint;

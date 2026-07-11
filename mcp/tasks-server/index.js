@@ -46,6 +46,8 @@ function brief(t) {
     // Правило повторения показываем, только если оно активно
     recurrence: t.recurrence && t.recurrence.type !== 'none' ? t.recurrence : null,
     assignee: t.assignee ?? null,
+    // Исполнитель-персона (id): задача выполняется силами Claude от её лица
+    personaId: t.personaId ?? null,
     projectId: t.projectId ?? null,
     columnId: t.columnId ?? null,
     labels: t.labels,
@@ -107,6 +109,14 @@ const REMINDER_MINUTES_SCHEMA = {
   description: 'Напоминание: за сколько минут до срока уведомить (0 = в момент срока). Требует dueDate.',
 };
 
+// Персона-исполнитель: id персоны, которая выполнит задачу от своего лица (с её
+// характером, моделью и памятью). Список доступных персон и их id — personas_list
+// (MCP personas-server). Назначение персоны автоматически ставит исполнителя Claude.
+const PERSONA_ID_SCHEMA = {
+  type: 'string',
+  description: 'ID персоны-исполнителя (см. personas_list). Задачу выполнит Claude от её лица. "" — снять персону.',
+};
+
 const TOOLS = [
   {
     name: 'tasks_list',
@@ -156,6 +166,7 @@ const TOOLS = [
         reminderMinutes: REMINDER_MINUTES_SCHEMA,
         recurrence: RECURRENCE_SCHEMA,
         assignee: { type: 'string', enum: ENUMS.assignee, description: 'Исполнитель' },
+        personaId: PERSONA_ID_SCHEMA,
         subtasks: { type: 'array', items: { type: 'string' }, description: 'Названия подзадач' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки' },
         columnId: COLUMN_ID_SCHEMA,
@@ -179,6 +190,7 @@ const TOOLS = [
         reminderMinutes: { ...REMINDER_MINUTES_SCHEMA, description: REMINDER_MINUTES_SCHEMA.description + ' Отрицательное значение — убрать напоминание.' },
         recurrence: RECURRENCE_SCHEMA,
         assignee: { type: 'string', enum: ENUMS.assignee },
+        personaId: PERSONA_ID_SCHEMA,
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки (заменяют список целиком)' },
         columnId: { ...COLUMN_ID_SCHEMA, description: COLUMN_ID_SCHEMA.description + ' Пустая строка — сброс на дефолтную колонку категории.' },
       },
@@ -290,7 +302,7 @@ async function callTool(name, args) {
 
     case 'tasks_create': {
       const body = { title: args.title };
-      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'labels', 'columnId'])
+      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'labels', 'columnId'])
         if (args[k] !== undefined) body[k] = args[k];
       if (Array.isArray(args.subtasks) && args.subtasks.length)
         body.subtasks = args.subtasks.map(t => ({ title: String(t) }));

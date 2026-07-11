@@ -9,7 +9,9 @@ import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { showToast } from '../../lib/toast';
-import { ConfirmDialog } from '../../components/ui';
+import { ConfirmDialog, Splitter, IconButton } from '../../components/ui';
+import { useSidebarDrag } from '../../lib/sidebarWidth';
+import { useIsMobile } from '../../lib/breakpoints';
 import { PersonaList } from './PersonaList';
 import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './PersonaForm';
 import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
@@ -19,17 +21,6 @@ import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
 import type { PersonaTemplate } from './personaTemplates';
-
-function useIsMobile(): boolean {
-  const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const h = (e: MediaQueryListEvent) => setM(e.matches);
-    mq.addEventListener('change', h);
-    return () => mq.removeEventListener('change', h);
-  }, []);
-  return m;
-}
 
 // Иконка раздела для пустого состояния (персона)
 function IconPersonas() {
@@ -48,6 +39,12 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   onHubTab: (t: HubTab) => void;
 }) {
   const isMobile = useIsMobile();
+  // Ширина сайдбара — общая со всеми разделами (cc_sidebar_width) + перетаскиваемый сплиттер
+  const { width: listWidth, dragging: listDragging, startDrag: startListDrag } = useSidebarDrag();
+  // Режим сайдбара: pinned | collapsed | open (как в «Заметках»/«Чатах»/воркспейсе)
+  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed' | 'open'>(() =>
+    localStorage.getItem('cc_personas_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
+  useEffect(() => { if (sidebarMode !== 'open') localStorage.setItem('cc_personas_sidebar_mode', sidebarMode); }, [sidebarMode]);
   // Глобальный раздел показывает только глобальные персоны — проектные живут в своих проектах
   const allPersonas = usePersonas();
   const personas = useMemo(() => allPersonas.filter(p => p.scope === 'global'), [allPersonas]);
@@ -96,6 +93,8 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     setCreating(false);
     setSelectedId(id); setMobileView('card');
     navPush({ screen: 'personas', persona: id });
+    // В режиме drawer после выбора — закрываем оверлей (как в «Заметках»)
+    setSidebarMode(m => m === 'open' ? 'collapsed' : m);
   };
   const clearSelection = () => {
     setCreating(false);
@@ -163,8 +162,26 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     }
   };
 
+  // Строка управления панелью (только десктоп): свернуть (◀◀) + «Закрепить» (📌) в режиме drawer
+  const sidebarHeader = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px 0', minHeight: 28, flex: 'none' }}>
+      <IconButton onClick={() => setSidebarMode('collapsed')} title="Свернуть панель" size="sm" style={{ marginLeft: -2 }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 18l-6-6 6-6M18 18l-6-6 6-6" /></svg>
+      </IconButton>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Персоны</span>
+      {sidebarMode === 'open' && (
+        <IconButton onClick={() => setSidebarMode('pinned')} title="Закрепить панель" size="sm">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="17" x2="12" y2="22" /><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" /></svg>
+        </IconButton>
+      )}
+    </div>
+  );
+
   const sidebar = (
-    <PersonaList personas={personas} selectedId={selectedId} onSelect={selectPersona} onNew={startCreate} />
+    <>
+      {!isMobile && sidebarHeader}
+      <PersonaList personas={personas} selectedId={selectedId} onSelect={selectPersona} onNew={startCreate} />
+    </>
   );
 
   const centerPane = creating
@@ -197,11 +214,46 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
       : <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
   ) : (
-    <div style={{ height: '100%', display: 'flex' }}>
-      <div style={{ width: 280, flex: 'none', background: C.bgPanel, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column' }}>
-        {sidebar}
+    <div style={{ height: '100%', display: 'flex', position: 'relative' }}>
+      {/* Pinned: в потоке + перетаскиваемый сплиттер (ширина общая со всеми разделами) */}
+      {sidebarMode === 'pinned' && (
+        <>
+          <div style={{ width: listWidth, flex: 'none', background: C.bgPanel, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            {sidebar}
+          </div>
+          <Splitter active={listDragging} onMouseDown={startListDrag} />
+        </>
+      )}
+
+      {/* Collapsed/Open: drawer поверх контента */}
+      {sidebarMode !== 'pinned' && (
+        <div style={{
+          position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10, width: Math.min(listWidth, 320),
+          background: C.bgPanel, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column',
+          transform: sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-110%)',
+          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+          boxShadow: sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
+        }}>
+          {sidebar}
+        </div>
+      )}
+
+      {/* Backdrop — только когда drawer открыт */}
+      {sidebarMode === 'open' && (
+        <div onClick={() => setSidebarMode('collapsed')} style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }} />
+      )}
+
+      {/* Центр: в свёрнутом режиме — тонкая шапка с гамбургером «открыть панель» */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        {sidebarMode === 'collapsed' && (
+          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48, borderBottom: `1px solid ${C.divider}` }}>
+            <IconButton onClick={() => setSidebarMode('open')} title="Открыть панель" size="md" variant="soft">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+            </IconButton>
+          </div>
+        )}
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>{centerPane}</div>
     </div>
   );
 

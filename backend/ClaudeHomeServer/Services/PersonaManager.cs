@@ -49,9 +49,26 @@ public class PersonaManager
     // где владелец берётся из самой персоны. Не использовать в обработчиках запросов.
     public Persona? GetByIdInternal(string id) => _personas.GetValueOrDefault(id);
 
+    // Персона владельца по handle (@упоминания). Handle уникален per-owner.
+    public Persona? GetByHandle(string userId, string handle) =>
+        _personas.Values.FirstOrDefault(p => p.OwnerId == userId
+            && string.Equals(p.Handle, handle, StringComparison.OrdinalIgnoreCase));
+
+    // Известные ключи возможностей персоны. Полный набор эквивалентен «без ограничений»
+    // и нормализуется в null (поведение как раньше, по фич-флагам владельца).
+    private static readonly string[] AllTools = ["tasks", "notes", "web"];
+
+    private static List<string>? NormalizeTools(List<string>? tools)
+    {
+        if (tools is null) return null;
+        var clean = tools.Select(t => t.Trim().ToLowerInvariant())
+            .Where(t => AllTools.Contains(t)).Distinct().ToList();
+        return AllTools.All(clean.Contains) ? null : clean;
+    }
+
     public Persona Create(string userId, string name, string? role, string? description, string? systemPrompt,
         string? model, string? effort, PersonaScope scope, string? projectId,
-        string? color, string? greeting, bool memoryEnabled)
+        string? color, string? greeting, bool memoryEnabled, List<string>? tools = null)
     {
         var persona = new Persona
         {
@@ -66,6 +83,7 @@ public class PersonaManager
             ProjectId = scope == PersonaScope.Project ? projectId : null,
             Greeting = greeting,
             MemoryEnabled = memoryEnabled,
+            Tools = NormalizeTools(tools),
             Avatar = new PersonaAvatar { Kind = PersonaAvatarKind.Initials, Color = color },
         };
         persona.Handle = MakeUniqueHandle(persona.Name, userId);
@@ -76,7 +94,7 @@ public class PersonaManager
 
     public Persona Update(string id, string userId, string? name, string? role, string? description,
         string? systemPrompt, string? model, string? effort, PersonaScope? scope, string? projectId,
-        string? color, string? greeting, bool? memoryEnabled)
+        string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -99,6 +117,8 @@ public class PersonaManager
         if (color is not null) persona.Avatar.Color = color.Length == 0 ? null : color;
         if (greeting is not null) persona.Greeting = greeting.Length == 0 ? null : greeting;
         if (memoryEnabled is not null) persona.MemoryEnabled = memoryEnabled.Value;
+        // null — не менять; список — установить (полный набор нормализуется в null)
+        if (tools is not null) persona.Tools = NormalizeTools(tools);
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
         return persona;
@@ -149,6 +169,17 @@ public class PersonaManager
         }
     }
 
+    // Транслитерация кириллицы для slug: без неё русские имена давали handle «agent»,
+    // и @упоминания превращались в безликие @agent-2
+    private static readonly Dictionary<char, string> Translit = new()
+    {
+        ['а'] = "a", ['б'] = "b", ['в'] = "v", ['г'] = "g", ['д'] = "d", ['е'] = "e", ['ё'] = "e",
+        ['ж'] = "zh", ['з'] = "z", ['и'] = "i", ['й'] = "y", ['к'] = "k", ['л'] = "l", ['м'] = "m",
+        ['н'] = "n", ['о'] = "o", ['п'] = "p", ['р'] = "r", ['с'] = "s", ['т'] = "t", ['у'] = "u",
+        ['ф'] = "f", ['х'] = "h", ['ц'] = "ts", ['ч'] = "ch", ['ш'] = "sh", ['щ'] = "sch",
+        ['ъ'] = "", ['ы'] = "y", ['ь'] = "", ['э'] = "e", ['ю'] = "yu", ['я'] = "ya",
+    };
+
     private static string Slugify(string s)
     {
         var sb = new StringBuilder();
@@ -159,6 +190,10 @@ public class PersonaManager
             {
                 sb.Append(ch);
                 prevDash = false;
+            }
+            else if (Translit.TryGetValue(ch, out var tr))
+            {
+                if (tr.Length > 0) { sb.Append(tr); prevDash = false; }
             }
             else if (!prevDash && sb.Length > 0)
             {

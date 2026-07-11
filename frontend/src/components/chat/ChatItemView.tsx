@@ -6,11 +6,13 @@ import { C, FONT, SHADOW } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView } from './ToolUseView';
+import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { AskQuestionView } from './AskQuestionView';
 import { PlanReviewView } from './PlanReviewView';
 
@@ -224,6 +226,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   const project = useContext(ChatProjectContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
+  // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
+  usePersonasVersion();
   switch (item.kind) {
     case 'user_message':
       return (
@@ -255,11 +259,14 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
 
     case 'text': {
       const msg = <TextMessageView text={item.text} online={online} onRetry={onRetry} streaming={streaming} />;
-      // В персон-чате слева от реплики ассистента — её аватар (главный сигнал «говорит она»)
-      if (persona) {
+      // В персон-чате слева от реплики ассистента — её аватар (главный сигнал «говорит она»).
+      // Авторство реплики (personaId из истории) главнее текущей персоны чата: после
+      // смены собеседника старые реплики сохраняют аватар прежней персоны.
+      const author = item.personaId ? (getPersonaById(item.personaId) ?? persona) : persona;
+      if (author) {
         return (
           <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
-            <div style={{ flexShrink: 0, marginTop: 1 }}><PersonaAvatar persona={persona} size={28} /></div>
+            <div style={{ flexShrink: 0, marginTop: 1 }}><PersonaAvatar persona={author} size={28} /></div>
             <div style={{ flex: 1, minWidth: 0 }}>{msg}</div>
           </div>
         );
@@ -356,6 +363,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // дочерних вызовов субагента (parentToolUseId) рисует renderItems — единой полосой.
       if (item.name === 'TodoWrite') return <TodoPlanView todos={parseTodoWriteInput(item.input)} />;
       if (taskPlan) return <TodoPlanView todos={taskPlan} />;
+      // Вопрос другой персоне (persona_ask) — фирменная карточка с идентичностью персоны
+      if (isPersonaAsk(item.name)) return <PersonaAskView item={item} />;
       return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
 
     case 'ask_question':
@@ -677,6 +686,22 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
     case 'resumed':
       // Разделитель «продолжение чата» убран — декоративный, без полезной нагрузки
       return null;
+
+    case 'companion_switched':
+      // Локальный разделитель смены собеседника по ходу разговора
+      return (
+        <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+          <span style={{
+            fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+            textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+            background: C.bgSelected, border: `1px solid ${C.border}`,
+          }}>
+            Теперь отвечает: {item.label}
+          </span>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+        </div>
+      );
 
     case 'interrupted':
       return (

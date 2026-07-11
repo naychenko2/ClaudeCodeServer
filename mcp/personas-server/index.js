@@ -5,6 +5,9 @@
 //   PERSONAS_API_URL    — базовый URL бэкенда (http://127.0.0.1:5000)
 //   PERSONAS_API_TOKEN  — сервисный JWT владельца сессии
 //   PERSONAS_PROJECT_ID — id проекта сессии; пусто = чат вне проекта (глобальный контекст)
+//   PERSONAS_SELF_ID    — id персоны текущего чата (для persona_ask: себя не спрашивают)
+//   PERSONAS_MENTIONS   — "1" = включены @упоминания (флаг persona-mentions): добавляется
+//                         инструмент persona_ask — спросить другую персону от её лица
 //
 // Персона — AI-собеседник с именем, ролью, характером и аватаром; бывает глобальной
 // или привязанной к проекту. Изоляция per-owner — на стороне backend (токен определяет
@@ -15,6 +18,8 @@ import { createInterface } from 'node:readline';
 const API_URL = (process.env.PERSONAS_API_URL ?? 'http://localhost:5000').replace(/\/$/, '');
 const API_TOKEN = process.env.PERSONAS_API_TOKEN ?? '';
 const PROJECT_ID = process.env.PERSONAS_PROJECT_ID || null;
+const SELF_ID = process.env.PERSONAS_SELF_ID || null;
+const MENTIONS = process.env.PERSONAS_MENTIONS === '1';
 
 // --- HTTP к бэкенду ---
 
@@ -134,6 +139,26 @@ const TOOLS = [
       },
     },
   },
+  // @упоминания (флаг persona-mentions): спросить другую персону — она ответит one-shot'ом
+  // от своего лица, со своим характером, памятью и моделью. Глубина делегирования строго 1:
+  // one-shot, запущенный persona_ask, этот сервер уже не получает.
+  ...(MENTIONS ? [{
+    name: 'persona_ask',
+    description: 'Спросить другую персону: она ответит от своего лица, в своём характере и со своей ' +
+      'долгой памятью. Используй, когда пользователь упоминает @handle персоны или когда нужна её ' +
+      'экспертиза (например, мнение ревьюера о плане). handle персоны есть в personas_list. ' +
+      'Вопрос формулируй самодостаточно — персона не видит этот разговор; важный контекст передай ' +
+      'в поле context.',
+    inputSchema: {
+      type: 'object',
+      required: ['handle', 'question'],
+      properties: {
+        handle: { type: 'string', description: 'handle персоны (без @), см. personas_list' },
+        question: { type: 'string', description: 'Самодостаточный вопрос к персоне' },
+        context: { type: 'string', description: 'Необязательный контекст разговора (кратко, только нужное для ответа)' },
+      },
+    },
+  }] : []),
 ];
 
 function json(data) {
@@ -211,6 +236,23 @@ async function callTool(name, args) {
           throw new Error('Сервис генерации изображений не ответил — попробуй позже.');
         throw err;
       }
+    }
+
+    case 'persona_ask': {
+      if (!MENTIONS) throw new Error('Инструмент persona_ask выключен (флаг persona-mentions).');
+      const body = {
+        handle: String(args.handle ?? '').replace(/^@/, ''),
+        question: String(args.question ?? ''),
+      };
+      if (SELF_ID && body.handle) {
+        // Себя не спрашивают — подсказка вместо бессмысленного one-shot
+        const self = await api(`/api/personas/${encodeURIComponent(SELF_ID)}`).catch(() => null);
+        if (self && String(self.handle).toLowerCase() === body.handle.toLowerCase())
+          throw new Error('Это твой собственный handle — отвечай сам, спрашивать себя не нужно.');
+      }
+      if (args.context) body.context = String(args.context);
+      const res = await api('/api/personas/ask', { method: 'POST', body: JSON.stringify(body) });
+      return { content: [{ type: 'text', text: res?.answer ?? '' }] };
     }
 
     default:

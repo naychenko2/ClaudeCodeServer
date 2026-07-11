@@ -44,6 +44,9 @@ public class Persona
     // Для Scope == Project — id проекта, к которому привязана персона
     public string? ProjectId { get; set; }
     public PersonaAvatar Avatar { get; set; } = new();
+    // Возможности персоны (ключи: tasks, notes, web). null — без ограничений
+    // (как раньше, по фич-флагам владельца); список — только перечисленные.
+    public List<string>? Tools { get; set; }
     // Первое приветственное сообщение при открытии чата (опционально)
     public string? Greeting { get; set; }
     public bool MemoryEnabled { get; set; } = true;

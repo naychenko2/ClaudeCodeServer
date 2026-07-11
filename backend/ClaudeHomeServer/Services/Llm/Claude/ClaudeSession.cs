@@ -70,7 +70,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // MCP-сервер долгой памяти персоны + auto-recall её памяти
     private readonly MemoryMcpContext? _memoryMcp;
     private readonly Func<string, Task<string?>>? _personaRecallProvider;
-    // MCP-сервер персон: CRUD персон из чата
+    // MCP-сервер персон: CRUD из любого чата + @упоминания/persona_ask
     private readonly PersonasMcpContext? _personasMcp;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
@@ -97,7 +97,10 @@ public class ClaudeSession : ILlmSessionAdapter
         _memoryMcp = context.MemoryMcp;
         _personaRecallProvider = context.PersonaRecallProvider;
         _personasMcp = context.PersonasMcp;
-        _disallowedTools = disallowedTools ?? [];
+        // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
+        _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
+            ? [.. (disallowedTools ?? []), .. extra]
+            : disallowedTools ?? [];
         _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage);
     }
 
@@ -186,6 +189,10 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     ["command"] = "node",
                     ["args"] = new System.Text.Json.Nodes.JsonArray { memoryServerPath! },
+                    // MCP подключается лениво (claude-code#19282): без alwaysLoad первый вызов
+                    // инструмента в ходе падает «No such tool available». Память/персон модель
+                    // зовёт первым же действием — ждём подключения до старта хода.
+                    ["alwaysLoad"] = true,
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["MEMORY_API_URL"] = _memoryMcp!.ApiUrl,
@@ -201,11 +208,15 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     ["command"] = "node",
                     ["args"] = new System.Text.Json.Nodes.JsonArray { personasServerPath! },
+                    ["alwaysLoad"] = true,
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["PERSONAS_API_URL"] = _personasMcp!.ApiUrl,
                         ["PERSONAS_API_TOKEN"] = _personasMcp.Token,
                         ["PERSONAS_PROJECT_ID"] = _personasMcp.ProjectId ?? "",
+                        ["PERSONAS_SELF_ID"] = _personasMcp.SelfPersonaId ?? "",
+                        // Инструмент persona_ask регистрируется только при включённых @упоминаниях
+                        ["PERSONAS_MENTIONS"] = _personasMcp.MentionsHint is not null ? "1" : "0",
                     },
                 };
             }
@@ -639,6 +650,15 @@ public class ClaudeSession : ILlmSessionAdapter
                     : basePrompt + "\n\n" + memoryHint;
             }
 
+            // Подсказка про @упоминания (список «@handle — Роль (Имя)» + persona_ask) —
+            // только при включённом флаге persona-mentions и наличии других персон
+            if (_personasMcp?.MentionsHint is { } mentionsHint)
+            {
+                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                    ? mentionsHint
+                    : basePrompt + "\n\n" + mentionsHint;
+            }
+
             // Auto-recall долгой памяти персоны: релевантные записи по тексту хода.
             // Независим от заметок; провайдер сам гейтит по MemoryEnabled/флагу, ошибки не роняют ход.
             if (_personaRecallProvider is not null && _memoryMcp is not null)
@@ -694,6 +714,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // Из-за этого длинные workflow обрывались на 10-й минуте, не доходя до конца. 0 = ждать без
         // ограничения по времени; нас страхует watchdog IdleTimeout (если claude замолчит дольше — прервём сами).
         psi.Environment["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] = "0";
+
+        // Даём MCP-серверам больше времени на подключение при старте хода: с дефолтным
+        // таймаутом медленно стартующий node-сервер (personas и др.) не успевал
+        // зарегистрировать тулы, и первый же вызов падал «No such tool available»
+        // (модель ретраила, но карточка ошибки засоряла ленту).
+        psi.Environment["MCP_TIMEOUT"] = "30000";
 
         // Сторонний провайдер (DeepSeek/GLM): перенаправляем CLI на его Anthropic-совместимый
         // эндпоинт. Env считаются каждый ход — модель сессии могла смениться между ходами.

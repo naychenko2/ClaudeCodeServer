@@ -212,6 +212,22 @@ export function useSession(sessionId: string | null, projectId?: string) {
     }
   }, [sessionId]);
 
+  // Локальный разделитель «Теперь отвечает: …» при смене собеседника по ходу разговора.
+  // Client-side сахар: не с сервера, не переживает перезагрузку (после неё авторство
+  // реплик приходит из истории — personaId в text-сообщениях). prevPersonaId «замораживает»
+  // прежнего автора у live-реплик без personaId, чтобы их аватар не сменился на нового.
+  const noteCompanionSwitch = useCallback((label: string, prevPersonaId?: string | null) => {
+    if (!sessionId) return;
+    setState(sessionId, prev => ({
+      ...prev,
+      items: [
+        ...prev.items.map(it =>
+          prevPersonaId && it.kind === 'text' && !it.personaId ? { ...it, personaId: prevPersonaId } : it),
+        { kind: 'companion_switched', label },
+      ],
+    }));
+  }, [sessionId]);
+
   const allowPermission = useCallback(async (requestId: string) => {
     if (!sessionId) return;
     setState(sessionId, prev => ({
@@ -329,5 +345,5 @@ export function useSession(sessionId: string | null, projectId?: string) {
     ));
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch };
 }

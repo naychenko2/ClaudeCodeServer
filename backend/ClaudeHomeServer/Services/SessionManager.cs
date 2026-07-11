@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
@@ -147,18 +147,6 @@ public class SessionManager
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
         return new MemoryMcpContext(ResolveTasksApiUrl(), entry.Token, personaId);
-    }
-
-    // Контекст MCP-сервера персон; null — нет владельца или фича personas выключена
-    private PersonasMcpContext? BuildPersonasContext(string? ownerId, string? projectId)
-    {
-        if (ownerId is null || !_flags.IsEnabled(ownerId, FeatureFlagKeys.Personas)) return null;
-        var entry = _notesTokens.AddOrUpdate(ownerId,
-            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
-            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
-                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
-                : old);
-        return new PersonasMcpContext(ResolveTasksApiUrl(), entry.Token, projectId);
     }
 
     // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок релевантных
@@ -444,31 +432,83 @@ public class SessionManager
     private string? SessionOwner(Session s) =>
         s.ProjectId is not null ? _projects.GetById(s.ProjectId)?.OwnerId : s.OwnerId;
 
-    // Персона-слой сессии (промпт характера + контекст памяти + auto-recall). Строится
-    // одинаково при первом старте и при восстановлении процесса. Пусто, если персоны нет.
-    private (string? Prompt, MemoryMcpContext? Memory, Func<string, Task<string?>>? Recall)
+    // Персона-слой сессии (промпт характера + контекст памяти + auto-recall + возможности).
+    // Строится одинаково при первом старте и при восстановлении процесса. Пусто, если персоны нет.
+    private (string? Prompt, MemoryMcpContext? Memory, Func<string, Task<string?>>? Recall, List<string>? Tools)
         BuildPersonaLayer(Session session, string? ownerId)
     {
-        if (session.PersonaId is null || ownerId is null) return (null, null, null);
+        if (session.PersonaId is null || ownerId is null) return (null, null, null, null);
         var persona = _personas.Get(session.PersonaId, ownerId);
-        if (persona is null) return (null, null, null);
-        var prompt = BuildPersonaPrompt(persona);
+        if (persona is null) return (null, null, null, null);
+        var prompt = BuildPersonaPrompt(persona, session.PersonaSwitched);
         // Долгая память — только если включена у персоны и владелец имеет доступ к фиче
         if (persona.MemoryEnabled && _flags.IsEnabled(ownerId, FeatureFlagKeys.Personas))
-            return (prompt, BuildMemoryContext(ownerId, persona.Id), BuildPersonaRecallProvider(ownerId, persona.Id));
-        return (prompt, null, null);
+            return (prompt, BuildMemoryContext(ownerId, persona.Id), BuildPersonaRecallProvider(ownerId, persona.Id), persona.Tools);
+        return (prompt, null, null, persona.Tools);
     }
 
-    // Назначить/сменить собеседника чату ДО первого хода (единый селектор в пустом чате):
-    // персону (personaId) ИЛИ стандартного .md-агента Claude (agentName) — взаимоисключающе.
-    // Оба пустые = снять собеседника. Модель/усилие подтягиваются из персоны.
-    // Начатую сессию не трогаем (клиент делает форк).
+    // Возможность персоны (tasks/notes/web): null-список — без ограничений (как раньше)
+    private static bool PersonaToolEnabled(List<string>? tools, string key) =>
+        tools is null || tools.Contains(key, StringComparer.OrdinalIgnoreCase);
+
+    // Контекст MCP-сервера персон: CRUD персон из любого чата (за флагом personas);
+    // при включённом persona-mentions и наличии других персон в контексте — плюс
+    // @упоминания: MentionsHint (блок «@handle — Роль (Имя)» для промпта) и persona_ask.
+    private PersonasMcpContext? BuildPersonasContext(string? ownerId, string? projectId, string? selfPersonaId)
+    {
+        if (ownerId is null || !_flags.IsEnabled(ownerId, FeatureFlagKeys.Personas)) return null;
+
+        string? mentionsHint = null;
+        if (_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaMentions))
+        {
+            var others = _personas.GetForContext(ownerId, projectId)
+                .Where(p => p.Id != selfPersonaId)
+                .ToList();
+            if (others.Count > 0)
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("Любую персону можно спросить инструментом persona_ask (параметры: handle, " +
+                    "question, context?) — она ответит от своего лица, со своим характером и памятью. " +
+                    "Когда пользователь упоминает персону через @handle — обязательно обратись к ней " +
+                    "через persona_ask и учти её ответ. Вопрос формулируй самодостаточно: персона не " +
+                    "видит этот разговор. Если вызов вернул «No such tool available» — сервер персон ещё " +
+                    "подключается: подожди мгновение и повтори тот же вызов. Доступные собеседники:");
+                foreach (var p in others)
+                {
+                    var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
+                    sb.Append($"- @{p.Handle} — {title}");
+                    if (!string.IsNullOrWhiteSpace(p.Description)) sb.Append($": {p.Description.Trim()}");
+                    sb.AppendLine();
+                }
+                mentionsHint = sb.ToString().TrimEnd();
+            }
+        }
+
+        var entry = _notesTokens.AddOrUpdate(ownerId,
+            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
+            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
+                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
+                : old);
+        return new PersonasMcpContext(ResolveTasksApiUrl(), entry.Token, projectId, selfPersonaId, mentionsHint);
+    }
+
+    // Ограничение «web»: у персоны с выключенным веб-поиском запрещаем встроенные
+    // тулы CLI (не MCP) поверх конфига Claude:DisallowedTools
+    private static IReadOnlyList<string>? BuildExtraDisallowed(List<string>? tools) =>
+        tools is not null && !PersonaToolEnabled(tools, "web")
+            ? new[] { "WebSearch", "WebFetch" }
+            : null;
+
+    // Назначить/сменить собеседника чату (единый селектор): персону (personaId) ИЛИ
+    // стандартного .md-агента Claude (agentName) — взаимоисключающе. Оба пустые = снять.
+    // Разрешено и ПО ХОДУ разговора: персона-слой строится на каждый ход, транскрипт
+    // продолжается через --resume с новым системным слоем. Модель/усилие подтягиваются
+    // из персоны; у начатой сессии — только при том же провайдере (guard «смена
+    // провайдера у начатой сессии — 400» нерушим: транскрипт живёт у эндпоинта).
     public Session? SetPersona(string sessionId, string ownerId, string? personaId, string? agentName = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (SessionOwner(entry.Info) != ownerId) return null;
-        if (entry.Info.ClaudeSessionId is not null)
-            throw new InvalidOperationException("Нельзя сменить собеседника у начатой сессии — создайте новый чат");
 
         Persona? persona = null;
         if (!string.IsNullOrEmpty(personaId))
@@ -477,6 +517,10 @@ public class SessionManager
                 ?? throw new KeyNotFoundException("Персона не найдена");
         }
 
+        var started = entry.Info.ClaudeSessionId is not null;
+        var switching = started &&
+            (entry.Info.PersonaId != persona?.Id || entry.Info.AgentName is not null || persona is not null);
+
         entry.Info.PersonaId = persona?.Id;
         // .md-агент и персона взаимоисключающие: назначение одного сбрасывает другого
         entry.Info.AgentName = persona is null && !string.IsNullOrWhiteSpace(agentName)
@@ -484,9 +528,20 @@ public class SessionManager
             : null;
         if (persona is not null)
         {
-            entry.Info.Model = persona.Model;
-            entry.Info.Effort = persona.Effort;
+            if (!started)
+            {
+                entry.Info.Model = persona.Model;
+                entry.Info.Effort = persona.Effort;
+            }
+            else if (_llmProviders.ProviderKey(persona.Model) == _llmProviders.ProviderKey(entry.Info.Model))
+            {
+                // Тот же провайдер — модель персоны применяется со следующего хода;
+                // другой провайдер — оставляем модель сессии (характер всё равно её)
+                entry.Info.Model = persona.Model ?? entry.Info.Model;
+                entry.Info.Effort = persona.Effort ?? entry.Info.Effort;
+            }
         }
+        if (switching) entry.Info.PersonaSwitched = true;
         entry.Info.UpdatedAt = DateTime.UtcNow;
 
         // Ходов не было — пересоздаём адаптер с новым контекстом при следующем сообщении
@@ -501,7 +556,9 @@ public class SessionManager
     }
 
     // Системный промпт персоны: имя + роль/описание + характер (тело systemPrompt).
-    private static string BuildPersonaPrompt(Persona persona)
+    // Public static: переиспользуется PersonasController при one-shot ответе persona_ask.
+    // switched — собеседника меняли по ходу разговора (в транскрипте есть чужие ответы).
+    public static string BuildPersonaPrompt(Persona persona, bool switched = false)
     {
         var sb = new System.Text.StringBuilder();
         // Роль — главная («Ты — Дизайнер по имени Светлана»); без роли — просто имя
@@ -512,6 +569,8 @@ public class SessionManager
         if (!string.IsNullOrWhiteSpace(persona.Description))
             sb.Append($", {persona.Description.Trim()}");
         sb.Append(". Отвечай и действуй от своего лица, в своём характере, оставаясь собой на протяжении всего разговора.");
+        if (switched)
+            sb.Append(" Ранее в этом разговоре мог отвечать другой собеседник — продолжай диалог от своего лица, не переписывай и не комментируй прошлые ответы.");
         if (!string.IsNullOrWhiteSpace(persona.SystemPrompt))
             sb.Append("\n\n").Append(persona.SystemPrompt.Trim());
         return sb.ToString();
@@ -542,13 +601,14 @@ public class SessionManager
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
             rawSystemPrompt, permissionRules,
-            BuildTasksContext(ownerId, session.ProjectId),
-            BuildNotesContext(ownerId, session.ProjectId),
+            PersonaToolEnabled(persona.Tools, "tasks") ? BuildTasksContext(ownerId, session.ProjectId) : null,
+            PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(ownerId, session.ProjectId) : null,
             BuildRecallProvider(ownerId),
             persona.Prompt,
             persona.Memory,
             persona.Recall,
-            BuildPersonasContext(ownerId, session.ProjectId)));
+            BuildExtraDisallowed(persona.Tools),
+            BuildPersonasContext(ownerId, session.ProjectId, session.PersonaId)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -573,6 +633,10 @@ public class SessionManager
         }
 
         await EnsureProcessAsync(sessionId, entry);
+
+        // Авторство реплик хода: text-сообщения истории получают персону на момент хода
+        // (после смены собеседника старые реплики сохраняют прежний аватар)
+        entry.Accumulator?.SetPersona(entry.Info.PersonaId);
 
         // Авто-имя сессии по первому сообщению (Claude в --print не отдаёт title/summary).
         // Ставим только если имя ещё не задано — последующие сообщения название не меняют.
@@ -603,6 +667,7 @@ public class SessionManager
             return; // провайдер не умеет compact — защита от рассинхрона UI
 
         await EnsureProcessAsync(sessionId, entry);
+        entry.Accumulator?.SetPersona(entry.Info.PersonaId);
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
@@ -633,11 +698,12 @@ public class SessionManager
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 RawSystemPrompt: null, PermissionRules: null,
-                BuildTasksContext(entry.Info.OwnerId, null),
-                BuildNotesContext(entry.Info.OwnerId, null),
+                PersonaToolEnabled(persona.Tools, "tasks") ? BuildTasksContext(entry.Info.OwnerId, null) : null,
+                PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(entry.Info.OwnerId, null) : null,
                 BuildRecallProvider(entry.Info.OwnerId),
                 persona.Prompt, persona.Memory, persona.Recall,
-                BuildPersonasContext(entry.Info.OwnerId, null));
+                BuildExtraDisallowed(persona.Tools),
+                BuildPersonasContext(entry.Info.OwnerId, null, entry.Info.PersonaId));
         }
         else
         {
@@ -648,11 +714,12 @@ public class SessionManager
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                BuildTasksContext(project.OwnerId, project.Id),
-                BuildNotesContext(project.OwnerId, project.Id),
+                PersonaToolEnabled(persona.Tools, "tasks") ? BuildTasksContext(project.OwnerId, project.Id) : null,
+                PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
                 BuildRecallProvider(project.OwnerId),
                 persona.Prompt, persona.Memory, persona.Recall,
-                BuildPersonasContext(project.OwnerId, project.Id));
+                BuildExtraDisallowed(persona.Tools),
+                BuildPersonasContext(project.OwnerId, project.Id, entry.Info.PersonaId));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

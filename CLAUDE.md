@@ -212,10 +212,37 @@ WorkingDirectory = `project.RootPath`
   в tasks/notes MCP), **проектная** → сессия в её проекте (scope = только проект). Характер персоны
   инжектится в системный промпт как персональный слой ([ClaudeSession.cs](backend/ClaudeHomeServer/Services/Llm/Claude/ClaudeSession.cs),
   приоритет над .md-агентом); персона-слой (промпт+память) восстанавливается и после рестарта
-  (`BuildPersonaLayer` в `EnsureProcessAsync`). Назначение агента пустому чату —
-  `SessionManager.SetPersona` (`POST /chats/{id}/persona`, `POST .../sessions/{sid}/persona`;
-  400 после первого хода — смена агента = новый чат). Scope НЕ требует спец-логики — он
+  (`BuildPersonaLayer` в `EnsureProcessAsync`). Назначение/смена собеседника —
+  `SessionManager.SetPersona` (`POST /chats/{id}/persona`, `POST .../sessions/{sid}/persona`),
+  разрешена и ПО ХОДУ разговора: слой пересобирается каждый ход, транскрипт продолжается
+  через `--resume`; модель персоны применяется только при том же провайдере;
+  `Session.PersonaSwitched` добавляет в промпт оговорку про чужие прошлые ответы, на фронте
+  локальный разделитель «Теперь отвечает: …». Scope НЕ требует спец-логики — он
   предопределён типом сессии.
+- **Шаблоны ролей** ([personaTemplates.ts](frontend/src/features/personas/personaTemplates.ts)):
+  6 готовых ролей с промптами-контрактами (Ревьюер, Планировщик, Аналитик, Ментор, Секретарь,
+  Дизайнер) — сетка карточек на экране создания (PersonaQuickCreate), выбор предзаполняет
+  PersonaForm (`initial`), включая дефолтные возможности.
+- **Возможности per-persona** (`Persona.Tools`: ключи `tasks`/`notes`/`web`; null = без
+  ограничений, полный набор нормализуется в null): гейт tasks/notes MCP при сборке
+  LlmSessionContext; выключенный `web` добавляет WebSearch/WebFetch в
+  `ExtraDisallowedTools` (поверх `Claude:DisallowedTools`). UI — секция «Возможности»
+  (3 тумблера) в PersonaForm.
+- **@упоминания (флаг `persona-mentions`)**: надстройка над MCP персон — при включённом
+  флаге и наличии других персон в контексте personas-server получает env `PERSONAS_MENTIONS=1`
+  (регистрирует инструмент `persona_ask`) и `PERSONAS_SELF_ID`, а в промпт добавляется
+  подсказка со списком «@handle — Роль (Имя)» (`BuildPersonasContext.MentionsHint`).
+  `POST /api/personas/ask` — one-shot
+  ответ персоны от её лица (слой `BuildPersonaPrompt` + recall памяти + модель персоны,
+  `OneShotClaudeRunner`; таймаут `Persona:AskTimeoutMs`, дефолт 120с). Анти-рекурсия по
+  построению: one-shot без MCP, глубина делегирования 1. Фронт: автокомплит `@` в Composer
+  ([MentionsDropdown.tsx](frontend/src/components/MentionsDropdown.tsx)). Handle персон
+  транслитерируется из кириллицы (PersonaManager.Slugify).
+- **Дискуссия «Обсудить с командой»** (поверх @упоминаний, тот же флаг): кнопка в композере
+  чата персоны → [DiscussTeamDialog.tsx](frontend/src/features/personas/DiscussTeamDialog.tsx)
+  (выбор 1-2 участников + вопрос) → обычное сообщение с промпт-обвязкой: ведущая персона
+  опрашивает участников через persona_ask, возражает при разногласиях (один раунд) и сводит
+  итог. Бэкенд и протокол не участвуют.
 - **Долгая память** (типизация 2026 semantic/episodic/procedural):
   [PersonaMemoryService.cs](backend/ClaudeHomeServer/Services/PersonaMemoryService.cs) — записи в
   `data/persona-memory.json` (источник правды) + семантический слой в Dify-датасет
@@ -296,6 +323,8 @@ GET                 /api/personas/{id}/memory/search  ?q=&topK=  → hits (relev
 DELETE              /api/personas/{id}/memory/{entryId}
 POST                /api/personas/{id}/avatar/generate { prompt? } → Persona  (AI-аватар через fal)
 GET                 /api/personas/{id}/avatar          → картинка (access_token в query для <img>)
+POST                /api/personas/ask                  { handle, question, context? } → { handle, name, role, answer }
+                                                       (one-shot ответ персоны от её лица; флаг persona-mentions; дёргается MCP personas-server)
 ```
 
 Эффективные значения флагов также возвращаются в `GET /api/auth/me` (поле `featureFlags`),

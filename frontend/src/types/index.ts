@@ -338,7 +338,9 @@ export interface FalAccountResponse {
 export type ChatItem =
   | { kind: 'user_message'; text: string; attachedPaths?: string[] }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
-  | { kind: 'text'; text: string }
+  // personaId — авторство реплики (персона на момент хода); после смены собеседника
+  // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
+  | { kind: 'text'; text: string; personaId?: string }
   | { kind: 'thinking'; text: string; expanded: boolean }
   | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean }
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean }
@@ -354,6 +356,8 @@ export type ChatItem =
   | { kind: 'interrupted' }
   | { kind: 'resumed' }
   | { kind: 'session_ended' }
+  // Локальный разделитель «сменился собеседник» (client-side, не с сервера; не переживает перезагрузку)
+  | { kind: 'companion_switched'; label: string }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 // Скиллы и агенты
@@ -565,6 +569,8 @@ export interface Persona {
   avatar: PersonaAvatar;
   greeting?: string;          // приветствие персоны в начале чата
   memoryEnabled: boolean;     // долгая память (этап 2)
+  // Возможности персоны (ключи tasks/notes/web); null/отсутствие — без ограничений
+  tools?: string[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -582,6 +588,8 @@ export interface CreatePersonaDto {
   color?: string;             // ключ палитры AGENT_COLORS для аватара-инициалов
   greeting?: string;
   memoryEnabled?: boolean;
+  // Возможности (tasks/notes/web); полный набор бэкенд нормализует в «без ограничений»
+  tools?: string[];
 }
 
 // Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны

@@ -18,8 +18,12 @@ public record MemoryMcpContext(string ApiUrl, string Token, string PersonaId);
 
 // Контекст MCP-сервера персон: адрес API, сервисный токен владельца и проект сессии
 // (дефолтный projectId для создания проектных персон; null — глобальный контекст).
+// MentionsHint != null — включены @упоминания (флаг persona-mentions): сервер получает
+// инструмент persona_ask, SelfPersonaId — персона самого чата (исключается из списка
+// собеседников), а MentionsHint — готовый блок-подсказка для системного промпта.
 // Не Claude-специфичен, как и остальные контексты.
-public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId);
+public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId,
+    string? SelfPersonaId = null, string? MentionsHint = null);
 
 // Per-session контекст, общий для всех адаптеров — то, что SessionManager передаёт
 // при создании сессии независимо от провайдера. Claude-специфичные зависимости
@@ -43,5 +47,9 @@ public sealed record LlmSessionContext(
     // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок
     // релевантных записей памяти. Подмешивается независимо от заметок. Ошибки → null.
     Func<string, Task<string?>>? PersonaRecallProvider = null,
-    // MCP-сервер персон: CRUD персон из чата (null — фича выключена или нет владельца).
+    // Дополнительные запрещённые инструменты сессии (поверх конфига Claude:DisallowedTools) —
+    // например, WebSearch/WebFetch у персоны с выключенной возможностью «web».
+    IReadOnlyList<string>? ExtraDisallowedTools = null,
+    // MCP-сервер персон: CRUD из любого чата + @упоминания/persona_ask
+    // (null — фича выключена или нет владельца).
     PersonasMcpContext? PersonasMcp = null);

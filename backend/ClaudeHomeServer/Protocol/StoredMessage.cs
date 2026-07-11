@@ -29,9 +29,12 @@ public class StoredSessionStartedMessage(string model, string mode) : StoredMess
     public string Mode { get; init; } = mode;
 }
 
-public class StoredTextMessage(string text) : StoredMessage
+public class StoredTextMessage(string text, string? personaId = null) : StoredMessage
 {
     public string Text { get; init; } = text;
+    // Персона, от лица которой написан ответ (на момент хода) — чтобы после смены
+    // собеседника у старых реплик оставался прежний аватар. null — обычный ассистент.
+    public string? PersonaId { get; init; } = personaId;
 }
 
 public class StoredThinkingMessage(string text) : StoredMessage

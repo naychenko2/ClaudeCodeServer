@@ -31,6 +31,8 @@ public static class FeatureFlagKeys
     public const string Offline = "offline";
     public const string Personas = "personas";
     public const string PersonaMemoryAutolearn = "persona-memory-autolearn";
+    // Консолидация памяти персон: периодический LLM-merge дублей + вытеснение при переполнении
+    public const string PersonaMemoryConsolidation = "persona-memory-consolidation";
     // @упоминания персон в чатах: MCP persona_ask, автокомплит @ в композере
     public const string PersonaMentions = "persona-mentions";
 }
@@ -102,6 +104,16 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.PersonaMemoryAutolearn,
             Title: "Авто-память персон",
             Description: "После разговора персона сама вычленяет из диалога факты и выводы и сохраняет их в свою долгую память — без явной команды «запомни».",
+            Default: false,
+            Stage: "dev"),
+
+        // Консолидация памяти персон: фоновый сервис периодически схлопывает дубли
+        // (LLM-merge с детерминированными гейтами) и вытесняет наименее ценные записи
+        // при переполнении памяти.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PersonaMemoryConsolidation,
+            Title: "Консолидация памяти персон",
+            Description: "Фоновая уборка долгой памяти: похожие записи схлопываются в одну, а при переполнении наименее ценные забываются — память не разрастается бесконечно.",
             Default: false,
             Stage: "dev"),
 

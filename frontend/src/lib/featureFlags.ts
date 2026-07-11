@@ -15,6 +15,7 @@ export const FLAGS = {
   offline: 'offline',
   personas: 'personas',
   personaMemoryAutolearn: 'persona-memory-autolearn',
+  personaMemoryConsolidation: 'persona-memory-consolidation',
   personaMentions: 'persona-mentions',
 } as const;
 

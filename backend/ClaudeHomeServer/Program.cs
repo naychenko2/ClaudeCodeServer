@@ -66,6 +66,9 @@ builder.Services.AddSingleton<PersonaManager>();
 builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<FalImageService>();
+// Консолидация памяти — singleton + hosted: autolearn ставит заявки через RequestConsolidation
+builder.Services.AddSingleton<PersonaMemoryConsolidationService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PersonaMemoryConsolidationService>());
 builder.Services.AddHostedService<PersonaMemoryAutolearnService>();
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();

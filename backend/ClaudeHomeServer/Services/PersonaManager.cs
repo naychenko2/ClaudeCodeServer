@@ -54,6 +54,10 @@ public class PersonaManager
     // где владелец берётся из самой персоны. Не использовать в обработчиках запросов.
     public Persona? GetByIdInternal(string id) => _personas.GetValueOrDefault(id);
 
+    // Все персоны всех владельцев — ТОЛЬКО для фоновых сервисов (консолидация памяти),
+    // где гейт по владельцу делается через саму персону. Не использовать в обработчиках запросов.
+    public IReadOnlyCollection<Persona> GetAllInternal() => _personas.Values.ToList();
+
     // Персона владельца по handle (@упоминания). Handle уникален per-owner.
     public Persona? GetByHandle(string userId, string handle) =>
         _personas.Values.FirstOrDefault(p => p.OwnerId == userId

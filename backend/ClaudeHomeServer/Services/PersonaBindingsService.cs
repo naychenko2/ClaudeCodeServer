@@ -200,7 +200,7 @@ public class PersonaBindingsService
                 var project = _projects.GetById(binding.Target);
                 if (project is null || project.OwnerId != ownerId) return null;
                 var path = string.IsNullOrWhiteSpace(binding.Path) ? "" : $", путь \"{binding.Path}\"";
-                return $"mcp__workspace__files_tree/files_read (projectId \"{project.Id}\"{path}, проект «{project.Name}»)";
+                return $"mcp__wsp__files_tree/files_read (projectId \"{project.Id}\"{path}, проект «{project.Name}»)";
             }
             case PersonaBindingType.Knowledge:
             {
@@ -210,7 +210,7 @@ public class PersonaBindingsService
                 // датасет заметок — семантическим поиском notes-сервера
                 if (ds.ProjectId is not null)
                     return mountedSections.Contains("knowledge")
-                        ? $"mcp__workspace__knowledge_search (projectId \"{ds.ProjectId}\", база «{ds.Label}»)"
+                        ? $"mcp__wsp__knowledge_search (projectId \"{ds.ProjectId}\", база «{ds.Label}»)"
                         : null;
                 return "mcp__notes__notes_semantic_search (база знаний заметок)";
             }

@@ -715,7 +715,7 @@ rl.on('line', async line => {
         reply(id, {
           protocolVersion: params?.protocolVersion ?? '2024-11-05',
           capabilities: { tools: {} },
-          serverInfo: { name: 'workspace', version: '1.0.0' },
+          serverInfo: { name: 'wsp', version: '1.0.0' },
         });
         break;
       case 'tools/list':

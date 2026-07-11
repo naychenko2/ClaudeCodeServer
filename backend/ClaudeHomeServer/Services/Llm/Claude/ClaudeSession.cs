@@ -248,7 +248,11 @@ public class ClaudeSession : ILlmSessionAdapter
                 var sections = _currentTurnAgentDepth >= 1
                     ? _workspaceMcp!.Sections.Where(s => s != "chats" && s != "destructive")
                     : _workspaceMcp!.Sections;
-                servers["workspace"] = new System.Text.Json.Nodes.JsonObject
+                // Ключ сервера — "wsp", НЕ "workspace": claude CLI молча отбрасывает
+                // MCP-сервер с зарезервированным именем "workspace" из --mcp-config
+                // (сервер не стартует, инструменты не появляются). Отсюда же префикс
+                // инструментов mcp__wsp__* в подсказках ниже и в PersonaBindingsService.
+                servers["wsp"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
                     ["args"] = new System.Text.Json.Nodes.JsonArray { workspaceServerPath! },
@@ -700,7 +704,7 @@ public class ClaudeSession : ILlmSessionAdapter
             if (_workspaceMcp is not null)
             {
                 var wsScope = _workspaceMcp.ProjectId is not null
-                    ? "Текущая сессия идёт в проекте — его файлы правь встроенными Read/Edit/Write, а не через mcp__workspace__files_*."
+                    ? "Текущая сессия идёт в проекте — его файлы правь встроенными Read/Edit/Write, а не через mcp__wsp__files_*."
                     : "Текущая сессия — чат вне проекта.";
                 // Подсказка про чаты — только когда секция chats реально подключена этим ходом
                 var chatsHint = _workspaceMcp.Sections.Contains("chats") && _currentTurnAgentDepth < 1
@@ -714,7 +718,7 @@ public class ClaudeSession : ILlmSessionAdapter
                       "по явной просьбе пользователя удалить конкретный файл или чат, никогда по своей инициативе."
                     : "";
                 var workspaceHint =
-                    "Тебе доступно всё рабочее пространство пользователя через MCP-инструменты mcp__workspace__*: " +
+                    "Тебе доступно всё рабочее пространство пользователя через MCP-инструменты mcp__wsp__*: " +
                     "список проектов и их карточки (projects_list → projects_get), создание и правка проектов " +
                     "(projects_create, projects_update), файлы любого проекта (files_tree, files_read, files_write, " +
                     "files_search, files_mkdir, files_rename), базы знаний проектов (knowledge_search, knowledge_status, " +

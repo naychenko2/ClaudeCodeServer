@@ -78,22 +78,39 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
             var saved = 0;
             foreach (var item in result.Items)
             {
-                if (_memory.Remember(persona.OwnerId, persona.Id, item.Type, item.Text,
+                // Семантический write-path: близкий факт усилит существующую запись, а не создаст дубль
+                if (await _memory.RememberAsync(persona.OwnerId, persona.Id, item.Type, item.Text,
                         null, sessionId, item.Salience) is not null)
                     saved++;
             }
-            // Рабочий фокус: null от модели = разговор не про дело, фокус НЕ трогаем
+            // Рабочий фокус: null от модели = разговор не про дело, фокус НЕ трогаем.
+            // P4: не затираем свежий фокус из ДРУГОЙ сессии (ручной/из параллельного диалога) —
+            // защитное окно Persona:FocusProtectMinutes; свой (та же сессия) и старый — обновляем.
             if (result.Focus is not null)
-                _memory.SetFocus(persona.OwnerId, persona.Id,
-                    result.Focus.What, result.Focus.Status, result.Focus.NextStep, sessionId);
+            {
+                var protectMin = double.TryParse(_config["Persona:FocusProtectMinutes"],
+                    System.Globalization.CultureInfo.InvariantCulture, out var pm) && pm > 0 ? pm : 30;
+                var current = _memory.GetFocus(persona.OwnerId, persona.Id);
+                var protectedFocus = current is not null
+                    && current.SourceSessionId != sessionId
+                    && (DateTime.UtcNow - current.UpdatedAt).TotalMinutes < protectMin;
+                if (!protectedFocus)
+                    _memory.SetFocus(persona.OwnerId, persona.Id,
+                        result.Focus.What, result.Focus.Status, result.Focus.NextStep, sessionId);
+            }
 
             if (saved > 0)
                 _log.LogInformation("autolearn: персона {Persona}, сессия {Session} — сохранено {Count} записей памяти",
                     persona.Id, sessionId, saved);
 
-            // Переполнение памяти → отметка «пора консолидировать» (сама уборка — фоном)
-            var maxEntries = int.TryParse(_config["Persona:MemoryMaxEntries"], out var max) ? max : 150;
-            if (_memory.List(persona.OwnerId, persona.Id, null).Count > maxEntries)
+            // Потолок памяти (P0/P3): механическое вытеснение хвоста — сразу, НЕ за флагом
+            // консолидации. Так память не растёт неограниченно при одном лишь autolearn.
+            _memory.EnforceCap(persona.OwnerId, persona.Id);
+
+            // LLM-merge (умная уборка дублей) — заявка «пора», если записей много и включён
+            // флаг persona-memory-consolidation (сама уборка гейтится в консолидаторе)
+            var softLimit = int.TryParse(_config["Persona:MemorySoftLimit"], out var soft) ? soft : 100;
+            if (_memory.List(persona.OwnerId, persona.Id, null).Count > softLimit)
                 _consolidation.RequestConsolidation(persona.OwnerId, persona.Id);
         }
         catch (Exception ex)

@@ -55,4 +55,40 @@ public static class PersonaMemoryScorer
              + o.SalienceWeight * salience
              + o.TypeWeight * TypeFactor(e.Type);
     }
+
+    // Retention-скоринг = скоринг без релевантности (она доступна только в контексте запроса).
+    // Используется для вытеснения: чем ниже — тем скорее запись «забывается».
+    public static double Retention(PersonaMemoryEntry e, DateTime nowUtc, MemoryScoringOptions o) =>
+        Score(e, 0, nowUtc, o with { RelevanceWeight = 0, MinRelevance = 0 });
+
+    // Выбор записей на вытеснение при переполнении. Два ограничения:
+    //  (1) под-лимит эпизодов maxEpisodic (≤0 — выключен): эпизоды растут линейно и не должны
+    //      вымывать semantic-факты, поэтому лишние эпизоды вытесняются в первую очередь;
+    //  (2) общий потолок maxEntries по оставшимся записям.
+    // В обоих случаях режем хвост с наименьшим retention-скорингом (при равенстве — старейшие).
+    // Рабочий фокус — не запись памяти и здесь не участвует.
+    public static List<string> SelectEvictionIds(IReadOnlyList<PersonaMemoryEntry> entries,
+        int maxEntries, int maxEpisodic, MemoryScoringOptions options, DateTime nowUtc)
+    {
+        var evict = new HashSet<string>();
+
+        if (maxEpisodic > 0)
+        {
+            var episodic = entries.Where(e => e.Type == PersonaMemoryType.Episodic).ToList();
+            if (episodic.Count > maxEpisodic)
+                foreach (var e in episodic
+                    .OrderBy(e => Retention(e, nowUtc, options)).ThenBy(e => e.CreatedAt)
+                    .Take(episodic.Count - maxEpisodic))
+                    evict.Add(e.Id);
+        }
+
+        var remaining = entries.Where(e => !evict.Contains(e.Id)).ToList();
+        if (maxEntries > 0 && remaining.Count > maxEntries)
+            foreach (var e in remaining
+                .OrderBy(e => Retention(e, nowUtc, options)).ThenBy(e => e.CreatedAt)
+                .Take(remaining.Count - maxEntries))
+                evict.Add(e.Id);
+
+        return evict.ToList();
+    }
 }

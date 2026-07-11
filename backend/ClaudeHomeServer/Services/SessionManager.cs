@@ -865,7 +865,7 @@ public class SessionManager
         SaveSessions();
     }
 
-    public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null)
+    public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -907,7 +907,7 @@ public class SessionManager
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
-        entry.Accumulator?.OnUserMessage(text, attachedPaths);
+        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective);
         // Обвязки хода (OmO) дописываются только к тексту для CLI —
         // история и UI хранят исходное сообщение пользователя
         await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths);
@@ -948,7 +948,7 @@ public class SessionManager
     // Занятую или ждущую человека сессию не трогаем (Busy). Таймаут НЕ отменяет ход:
     // вызывающий получает Running и позже читает результат через историю (chats_history).
     public async Task<SendAndWaitResult> SendMessageAndWaitAsync(string sessionId, string text,
-        TimeSpan timeout, int agentDepth = 0)
+        TimeSpan timeout, int agentDepth = 0, string? senderPersonaId = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -984,7 +984,7 @@ public class SessionManager
         entry.TurnWaiterBaseline = entry.Accumulator?.GetAll().Count ?? 0;
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
-        entry.Accumulator?.OnUserMessage(text, [], viaAgent: agentDepth >= 1);
+        entry.Accumulator?.OnUserMessage(text, [], viaAgent: agentDepth >= 1, senderPersonaId: senderPersonaId);
         await entry.Process!.SendMessageAsync(text, null, agentDepth);
 
         if (timeout <= TimeSpan.Zero) return new SendAndWaitResult.Running();
@@ -1202,7 +1202,7 @@ public class SessionManager
             loop.Phase = "verifying";
             SaveSessions();
             await BroadcastWorkLoopAsync(sessionId, entry);
-            await SendMessageAsync(sessionId, OmoPrompts.WorkLoopVerification, []);
+            await SendMessageAsync(sessionId, OmoPrompts.WorkLoopVerification, [], systemDirective: true);
             return;
         }
 
@@ -1216,7 +1216,7 @@ public class SessionManager
         SaveSessions();
         await BroadcastWorkLoopAsync(sessionId, entry);
         await SendMessageAsync(sessionId,
-            OmoPrompts.WorkLoopContinuation(loop.Promise, loop.Iteration, loop.MaxIterations), []);
+            OmoPrompts.WorkLoopContinuation(loop.Promise, loop.Iteration, loop.MaxIterations), [], systemDirective: true);
     }
 
     public void AnswerQuestion(string sessionId, string toolUseId, string answerText)

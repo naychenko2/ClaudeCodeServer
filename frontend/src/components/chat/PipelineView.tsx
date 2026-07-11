@@ -27,6 +27,10 @@ function PhaseRow({ entry, defaultOpen }: { entry: PipelinePhaseItem; defaultOpe
   const persona = getPersonaById(entry.personaId);
   const label = persona ? personaLabel(persona) : 'Роль';
   const title = PHASE_TITLES[entry.phase] + (entry.round > 1 ? ` · доработка ${entry.round}` : '');
+  // Вердикт ревью [OKAY]/[REJECT] первой строкой → цветной бейдж, из текста маркер убираем
+  const verdict = entry.phase === 'review' ? /^\s*\[(OKAY|REJECT)\]/i.exec(entry.text) : null;
+  const rejected = verdict?.[1].toUpperCase() === 'REJECT';
+  const bodyText = verdict ? entry.text.replace(/^\s*\[(OKAY|REJECT)\]\s*/i, '') : entry.text;
   return (
     <div style={{ borderTop: `1px solid ${C.divider}` }}>
       <button
@@ -45,6 +49,17 @@ function PhaseRow({ entry, defaultOpen }: { entry: PipelinePhaseItem; defaultOpe
         <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {label}
         </span>
+        {verdict && (
+          <span style={{
+            flexShrink: 0, fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
+            textTransform: 'uppercase', letterSpacing: '0.04em',
+            background: rejected ? C.dangerBg : C.successBg,
+            color: rejected ? C.dangerText : C.successText,
+            border: `1px solid ${rejected ? C.dangerBorder : C.success}`,
+          }}>
+            {rejected ? 'Отклонено' : 'Одобрено'}
+          </span>
+        )}
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.5"
           strokeLinecap="round" strokeLinejoin="round"
           style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
@@ -53,7 +68,7 @@ function PhaseRow({ entry, defaultOpen }: { entry: PipelinePhaseItem; defaultOpe
       </button>
       {open && (
         <div style={{ padding: '0 12px 10px 42px', fontSize: 13 }}>
-          <MarkdownContent text={entry.text} />
+          <MarkdownContent text={bodyText} />
         </div>
       )}
     </div>

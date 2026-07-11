@@ -19,12 +19,18 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
 public abstract class StoredMessage { }
 
-public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null) : StoredMessage
+public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
+    string? senderPersonaId = null, bool? systemDirective = null) : StoredMessage
 {
     public string Text { get; init; } = text;
     public string[]? AttachedPaths { get; init; } = attachedPaths;
     // Сообщение прислано не человеком, а агентом из другой сессии (chats_send) — для пометки в UI
     public bool? ViaAgent { get; init; } = viaAgent;
+    // Персона-отправитель (chats_send из чата персоны) — для рендера входящей реплики её лицом
+    public string? SenderPersonaId { get; init; } = senderPersonaId;
+    // Служебная директива механики цикла «до готово» (continuation/verification) — UI прячет
+    // сырой текст за компактной плашкой вместо пузыря пользователя
+    public bool? SystemDirective { get; init; } = systemDirective;
 }
 
 public class StoredSessionStartedMessage(string model, string mode) : StoredMessage

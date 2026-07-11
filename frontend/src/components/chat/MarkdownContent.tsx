@@ -48,6 +48,13 @@ function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   );
 }
 
+// Служебный маркер завершения цикла «до готово» (<promise>ГОТОВО</promise>) — протокол
+// детектора, не для глаз. Режем по тегу (слово-обещание конфигурируемо на бэкенде).
+const PROMISE_MARKER = /<promise>[\s\S]*?<\/promise>/gi;
+export function stripPromiseMarker(text: string): string {
+  return text.replace(PROMISE_MARKER, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // Рендер текста Claude с поддержкой Markdown
 export function MarkdownContent({ text }: { text: string }) {
   return (
@@ -137,7 +144,7 @@ export function MarkdownContent({ text }: { text: string }) {
         ),
       }}
     >
-      {text}
+      {stripPromiseMarker(text)}
     </ReactMarkdown>
   );
 }

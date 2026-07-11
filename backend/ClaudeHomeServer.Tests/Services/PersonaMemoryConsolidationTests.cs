@@ -165,8 +165,8 @@ public class PersonaMemoryConsolidationTests
     {
         var entries = Entries(5);
 
-        PersonaMemoryConsolidationService
-            .SelectEvictionIds(entries, 5, MemoryScoringOptions.Default, Now)
+        PersonaMemoryScorer
+            .SelectEvictionIds(entries, 5, 0, MemoryScoringOptions.Default, Now)
             .Should().BeEmpty();
     }
 
@@ -178,8 +178,8 @@ public class PersonaMemoryConsolidationTests
         var medium = Entry("m", salience: 0.5, ageDays: 30);
         var entries = new List<PersonaMemoryEntry> { valuable, stale, medium };
 
-        var evicted = PersonaMemoryConsolidationService
-            .SelectEvictionIds(entries, 2, MemoryScoringOptions.Default, Now);
+        var evicted = PersonaMemoryScorer
+            .SelectEvictionIds(entries, 2, 0, MemoryScoringOptions.Default, Now);
 
         evicted.Should().ContainSingle().Which.Should().Be(stale.Id);
     }
@@ -191,9 +191,51 @@ public class PersonaMemoryConsolidationTests
             .Select(i => Entry($"e{i}", salience: i / 10.0, ageDays: i))
             .ToList();
 
-        var evicted = PersonaMemoryConsolidationService
-            .SelectEvictionIds(entries, 7, MemoryScoringOptions.Default, Now);
+        var evicted = PersonaMemoryScorer
+            .SelectEvictionIds(entries, 7, 0, MemoryScoringOptions.Default, Now);
 
         evicted.Should().HaveCount(3);
+    }
+
+    // Под-лимит эпизодов (P3): лишние эпизоды вытесняются, semantic-факты не трогаются,
+    // даже если общий потолок не превышен
+    [Fact]
+    public void SelectEvictionIds_ПодЛимитЭпизодов_ВытесняетТолькоЭпизоды()
+    {
+        var facts = Enumerable.Range(1, 5)
+            .Select(i => Entry($"s{i}", PersonaMemoryType.Semantic, salience: 1.0, ageDays: i))
+            .ToList();
+        var episodes = Enumerable.Range(1, 5)
+            .Select(i => Entry($"ep{i}", PersonaMemoryType.Episodic, salience: 0.5, ageDays: i))
+            .ToList();
+        var entries = facts.Concat(episodes).ToList();   // 10 записей: общий потолок 100 не превышен
+
+        var evicted = PersonaMemoryScorer
+            .SelectEvictionIds(entries, 100, 2, MemoryScoringOptions.Default, Now);
+
+        evicted.Should().HaveCount(3);   // эпизодов 5, под-лимит 2 → 3 на выход
+        evicted.Should().OnlyContain(id => episodes.Any(e => e.Id == id));
+        // Вытесняются старейшие эпизоды (ep3, ep4, ep5), факты целы
+        evicted.Should().NotContain(facts.Select(f => f.Id));
+    }
+
+    // Общий потолок и под-лимит эпизодов складываются без двойного учёта
+    [Fact]
+    public void SelectEvictionIds_ЭпизодыИОбщийПотолок_НеДублируются()
+    {
+        var facts = Enumerable.Range(1, 6)
+            .Select(i => Entry($"s{i}", PersonaMemoryType.Semantic, salience: 1.0, ageDays: 1))
+            .ToList();
+        var episodes = Enumerable.Range(1, 6)
+            .Select(i => Entry($"ep{i}", PersonaMemoryType.Episodic, salience: 0.3, ageDays: i))
+            .ToList();
+        var entries = facts.Concat(episodes).ToList();   // 12 записей
+
+        // под-лимит эпизодов 2 → 4 эпизода; общий потолок 8 → ещё 0 (осталось 8)
+        var evicted = PersonaMemoryScorer
+            .SelectEvictionIds(entries, 8, 2, MemoryScoringOptions.Default, Now);
+
+        evicted.Distinct().Should().HaveCount(evicted.Count);   // без дублей
+        evicted.Should().HaveCount(4);
     }
 }

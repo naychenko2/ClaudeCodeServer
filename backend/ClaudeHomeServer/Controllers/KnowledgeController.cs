@@ -55,6 +55,31 @@ public class KnowledgeController(
         }
     }
 
+    // GET /api/projects/{id}/knowledge/search — семантический поиск по базе знаний проекта
+    [HttpGet("search")]
+    public async Task<IActionResult> Search(string projectId, [FromQuery] string q = "", [FromQuery] int topK = 8)
+    {
+        var p = GetOwnedProject(projectId);
+        if (p is null) return NotFound();
+
+        if (string.IsNullOrWhiteSpace(q))
+            return Ok(new { items = Array.Empty<object>() });
+
+        var wk = workspaceStore.GetByPath(p.RootPath);
+        if (string.IsNullOrEmpty(wk?.DifyDatasetId))
+            return Ok(new { items = Array.Empty<object>(), hint = "знания не проиндексированы" });
+
+        try
+        {
+            var chunks = await knowledge.RetrieveAsync(wk.DifyDatasetId, q.Trim(), Math.Clamp(topK, 1, 20));
+            return Ok(new
+            {
+                items = chunks.Select(c => new { content = c.Content, score = c.Score, documentName = c.DocumentName }),
+            });
+        }
+        catch (HttpRequestException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
+
     // POST /api/projects/{id}/knowledge/index — индексировать файл (lazy-создаёт датасет)
     [HttpPost("index")]
     public async Task<IActionResult> IndexFile(string projectId, [FromBody] IndexFileRequest req)

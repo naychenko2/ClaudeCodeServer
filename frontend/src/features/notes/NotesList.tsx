@@ -3,7 +3,7 @@ import type { NoteSummary } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNoteFolders } from '../../lib/notes';
 import { C, FONT, R, SHADOW } from '../../lib/design';
-import { IconButton } from '../../components/ui';
+import { ConfirmDialog, IconButton } from '../../components/ui';
 import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconTrash } from './shared';
 
 // Иконка «Новая папка» для меню (папка с плюсом)
@@ -266,7 +266,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
         {/* Действия — только при ховере на десктопе (на мобиле — long-press меню) */}
         {!isMobile && hovered && (
           <IconButton size="xs" tone="danger" title="Удалить заметку"
-            onClick={e => { e.stopPropagation(); void deleteNote(n); }}>
+            onClick={e => { e.stopPropagation(); deleteNote(n); }}>
             <IconTrash />
           </IconButton>
         )}
@@ -278,8 +278,16 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
   const notesUnder = (node: FolderNode): NoteSummary[] =>
     [...node.notes, ...node.children.flatMap(notesUnder)];
 
-  const deleteNote = async (n: NoteSummary) => {
-    if (!window.confirm(`Удалить заметку «${n.title}»?`)) return;
+  // Удаление (заметка/папка) в два шага: запрос подтверждения (диалог) → само удаление
+  const [confirmTarget, setConfirmTarget] = useState<
+    | { kind: 'note'; note: NoteSummary }
+    | { kind: 'folder'; source: string; node: FolderNode }
+    | null
+  >(null);
+
+  const deleteNote = (n: NoteSummary) => setConfirmTarget({ kind: 'note', note: n });
+  const doDeleteNote = async (n: NoteSummary) => {
+    setConfirmTarget(null);
     try {
       await api.notes.delete(n.id);
       bumpNotes();
@@ -298,12 +306,10 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
     ...folders.filter(f => f.source === source).map(f => f.path),
   ])].sort((a, b) => a.localeCompare(b, 'ru'));
 
-  const deleteFolder = async (source: string, node: FolderNode) => {
+  const deleteFolder = (source: string, node: FolderNode) => setConfirmTarget({ kind: 'folder', source, node });
+  const doDeleteFolder = async (source: string, node: FolderNode) => {
+    setConfirmTarget(null);
     const all = notesUnder(node);
-    const msg = all.length > 0
-      ? `Удалить папку «${node.name}» и ${all.length} замет${all.length === 1 ? 'ку' : all.length < 5 ? 'ки' : 'ок'} в ней?`
-      : `Удалить папку «${node.name}»?`;
-    if (!window.confirm(msg)) return;
     try { await api.notes.deleteFolder(source, node.path); }   // рекурсивно (пустая или с заметками)
     catch { /* уже удалена — реалтайм обновит */ }
     bumpNotes();
@@ -480,7 +486,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
               {menuItem(<IconPencil />, 'Открыть', () => onSelect(ctxMenu.note.id))}
               {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
               {menuDivider}
-              {menuItem(<IconTrash />, 'Удалить', () => void deleteNote(ctxMenu.note), true)}
+              {menuItem(<IconTrash />, 'Удалить', () => deleteNote(ctxMenu.note), true)}
             </>
           ) : (
             <>
@@ -493,11 +499,38 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
               {menuItem(<IconPencil />, 'Переименовать', () => { setRenaming(`${ctxMenu.source}|${ctxMenu.node.path}`); setRenameValue(ctxMenu.node.path); })}
               {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
               {menuDivider}
-              {menuItem(<IconTrash />, 'Удалить папку', () => void deleteFolder(ctxMenu.source, ctxMenu.node), true)}
+              {menuItem(<IconTrash />, 'Удалить папку', () => deleteFolder(ctxMenu.source, ctxMenu.node), true)}
             </>
           )}
         </div>
       )}
+
+      {/* Подтверждение удаления заметки/папки */}
+      {confirmTarget && (confirmTarget.kind === 'note' ? (
+        <ConfirmDialog
+          title="Удалить заметку?"
+          subtitle={<>Заметка «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{confirmTarget.note.title}</strong>» будет удалена без возможности восстановления.</>}
+          confirmLabel="Удалить"
+          confirmVariant="danger"
+          onConfirm={() => doDeleteNote(confirmTarget.note)}
+          onCancel={() => setConfirmTarget(null)}
+        />
+      ) : (
+        <ConfirmDialog
+          title="Удалить папку?"
+          subtitle={(() => {
+            const count = notesUnder(confirmTarget.node).length;
+            const name = <strong style={{ color: C.textPrimary, fontWeight: 600 }}>{confirmTarget.node.name}</strong>;
+            return count > 0
+              ? <>Папка «{name}» и {count} замет{count === 1 ? 'ка' : count < 5 ? 'ки' : 'ок'} в ней будут удалены без возможности восстановления.</>
+              : <>Папка «{name}» будет удалена.</>;
+          })()}
+          confirmLabel="Удалить"
+          confirmVariant="danger"
+          onConfirm={() => doDeleteFolder(confirmTarget.source, confirmTarget.node)}
+          onCancel={() => setConfirmTarget(null)}
+        />
+      ))}
     </div>
   );
 }

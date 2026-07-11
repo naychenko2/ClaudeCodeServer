@@ -31,6 +31,10 @@ public class ClaudeSession : ILlmSessionAdapter
     private volatile bool _sawToolSinceApprove;
     // Следующий ход запустить без --permission-mode plan (исполнение одобренного плана)
     private volatile bool _forceNonPlanNextTurn;
+    // Глубина делегирования текущего хода: > 0 — ход инициирован агентом из другой сессии
+    // (chats_send). Выставляется в начале RunTurnAsync и сбрасывается после хода;
+    // при глубине >= 1 BuildTurnMcpConfig урезает инструменты делегирования (анти-рекурсия)
+    private volatile int _currentTurnAgentDepth;
     // Стриминг tool_use: индекс content-блока → (id инструмента, накопленный partial_json).
     // Concurrent — для видимости между потоками пампа разных ходов
     private readonly ConcurrentDictionary<int, (string Id, System.Text.StringBuilder Sb)> _toolStream = new();
@@ -71,8 +75,12 @@ public class ClaudeSession : ILlmSessionAdapter
     // MCP-сервер долгой памяти персоны + auto-recall её памяти
     private readonly MemoryMcpContext? _memoryMcp;
     private readonly Func<string, Task<string?>>? _personaRecallProvider;
+    // Блок «Привязанные знания и правила» персоны (флаг persona-bindings)
+    private readonly Func<string, Task<string?>>? _bindingsProvider;
     // MCP-сервер персон: CRUD из любого чата + @упоминания/persona_ask
     private readonly PersonasMcpContext? _personasMcp;
+    // MCP-сервер рабочего пространства: проекты/файлы/знания/поиск владельца
+    private readonly WorkspaceMcpContext? _workspaceMcp;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -97,7 +105,9 @@ public class ClaudeSession : ILlmSessionAdapter
         _personaPromptProvider = context.PersonaPromptProvider;
         _memoryMcp = context.MemoryMcp;
         _personaRecallProvider = context.PersonaRecallProvider;
+        _bindingsProvider = context.BindingsProvider;
         _personasMcp = context.PersonasMcp;
+        _workspaceMcp = context.WorkspaceMcp;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
             ? [.. (disallowedTools ?? []), .. extra]
@@ -119,9 +129,11 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasMemory = memoryServerPath is not null;
         var personasServerPath = _personasMcp is not null ? PersonasServerLocator.FindPersonasServerPath() : null;
         var hasPersonas = personasServerPath is not null;
+        var workspaceServerPath = _workspaceMcp is not null ? WorkspaceServerLocator.FindWorkspaceServerPath() : null;
+        var hasWorkspace = workspaceServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var userServers = LoadUserScopeMcpServers();
-        if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasDataset && userServers is null) return null;
+        if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasDataset && userServers is null) return null;
 
         try
         {
@@ -165,6 +177,9 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["TASKS_API_URL"] = _tasksMcp!.ApiUrl,
                         ["TASKS_API_TOKEN"] = _tasksMcp.Token,
                         ["TASKS_PROJECT_ID"] = _tasksMcp.ProjectId ?? "",
+                        // tasks_execute порождает новую сессию Claude — на агентном ходу
+                        // (chats_send из другой сессии) не даём, та же анти-рекурсия, что у chats
+                        ["TASKS_EXECUTE"] = _currentTurnAgentDepth < 1 ? "1" : "0",
                     },
                 };
             }
@@ -216,9 +231,46 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["PERSONAS_API_TOKEN"] = _personasMcp.Token,
                         ["PERSONAS_PROJECT_ID"] = _personasMcp.ProjectId ?? "",
                         ["PERSONAS_SELF_ID"] = _personasMcp.SelfPersonaId ?? "",
-                        // Инструмент persona_ask регистрируется только при включённых @упоминаниях
-                        ["PERSONAS_MENTIONS"] = _personasMcp.MentionsHint is not null ? "1" : "0",
+                        // Инструмент persona_ask регистрируется только при включённых @упоминаниях;
+                        // на агентном ходу (chats_send из другой сессии) выключаем — анти-рекурсия
+                        ["PERSONAS_MENTIONS"] = _personasMcp.MentionsHint is not null && _currentTurnAgentDepth < 1 ? "1" : "0",
+                        // Инструменты привязок (personas_bindings_*) — за флагом persona-bindings
+                        ["PERSONAS_BINDINGS"] = _personasMcp.BindingsEnabled ? "1" : "0",
                     },
+                };
+            }
+
+            if (hasWorkspace)
+            {
+                // Анти-рекурсия делегирования: на агентном ходу (chats_send из другой сессии)
+                // секции chats и destructive не подключаются — агент не может писать в третьи
+                // чаты и удалять данные (удаление — только по явной просьбе пользователя)
+                var sections = _currentTurnAgentDepth >= 1
+                    ? _workspaceMcp!.Sections.Where(s => s != "chats" && s != "destructive")
+                    : _workspaceMcp!.Sections;
+                // Ключ сервера — "wsp", НЕ "workspace": claude CLI молча отбрасывает
+                // MCP-сервер с зарезервированным именем "workspace" из --mcp-config
+                // (сервер не стартует, инструменты не появляются). Отсюда же префикс
+                // инструментов mcp__wsp__* в подсказках ниже и в PersonaBindingsService.
+                servers["wsp"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["command"] = "node",
+                    ["args"] = new System.Text.Json.Nodes.JsonArray { workspaceServerPath! },
+                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["WORKSPACE_API_URL"] = _workspaceMcp!.ApiUrl,
+                        ["WORKSPACE_API_TOKEN"] = _workspaceMcp.Token,
+                        ["WORKSPACE_PROJECT_ID"] = _workspaceMcp.ProjectId ?? "",
+                        ["WORKSPACE_SECTIONS"] = string.Join(",", sections),
+                        ["WORKSPACE_PROJECT_IDS"] = _workspaceMcp.AllowedProjectIds is { Count: > 0 } allowed
+                            ? string.Join(",", allowed) : "",
+                        ["WORKSPACE_SELF_SESSION_ID"] = _workspaceMcp.SelfSessionId ?? "",
+                        ["WORKSPACE_AGENT_DEPTH"] = Math.Max(_workspaceMcp.AgentDepth, _currentTurnAgentDepth).ToString(),
+                    },
+                    // alwaysLoad как у memory/personas: аккаунт-коннекторы claude.ai переводят
+                    // CLI в режим deferred-tools, где ленивые серверы прячут инструменты от модели.
+                    // Персона-секретарь опирается на workspace-инструменты — держим их всегда видимыми.
+                    ["alwaysLoad"] = true,
                 };
             }
 
@@ -260,7 +312,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // Ничего не делаем при старте — процесс запускается при первом сообщении
     public Task StartAsync() => Task.CompletedTask;
 
-    public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null)
+    public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null, int agentDepth = 0)
     {
         Info.MessageCount++;
         Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
@@ -272,21 +324,21 @@ public class ClaudeSession : ILlmSessionAdapter
         var (imagePaths, otherPaths) = AttachmentInliner.SplitImagePaths(attachedPaths);
         var fullText = AttachmentInliner.BuildMessageText(_rootPath, effectiveText, otherPaths);
 
-        return QueueTurnAsync(fullText, imagePaths);
+        return QueueTurnAsync(fullText, imagePaths, agentDepth);
     }
 
     // Ручное сворачивание контекста: /compact как обычный ход,
     // минуя счётчики сообщений, авто-имя чата и разворачивание скиллов
-    public Task CompactAsync() => QueueTurnAsync("/compact", []);
+    public Task CompactAsync() => QueueTurnAsync("/compact", [], 0);
 
     // Ставит ход в очередь в фоне, чтобы не блокировать SignalR-соединение
-    private Task QueueTurnAsync(string fullText, List<string> imagePaths)
+    private Task QueueTurnAsync(string fullText, List<string> imagePaths, int agentDepth)
     {
         _ = Task.Run(async () =>
         {
             if (_cts.IsCancellationRequested) return;
             await _turnLock.WaitAsync(_cts.Token);
-            try { await RunTurnAsync(fullText, imagePaths, _cts.Token); }
+            try { await RunTurnAsync(fullText, imagePaths, agentDepth, _cts.Token); }
             catch (OperationCanceledException) { /* остановка сессии — штатно */ }
             catch (Exception ex)
             {
@@ -518,8 +570,12 @@ public class ClaudeSession : ILlmSessionAdapter
         _forceNonPlanNextTurn = false;
     }
 
-    private async Task RunTurnAsync(string text, IReadOnlyList<string> imagePaths, CancellationToken ct)
+    private async Task RunTurnAsync(string text, IReadOnlyList<string> imagePaths, int agentDepth, CancellationToken ct)
     {
+        // Глубина делегирования действует ровно на этот ход (внутри _turnLock):
+        // MCP-конфиг ниже собирается уже с учётом анти-рекурсии, сброс — в finally
+        _currentTurnAgentDepth = agentDepth;
+
         // --print обязателен: без него --output-format/--input-format/--include-partial-messages/--permission-prompt-tool не работают
         // --input-format stream-json нужен: мы посылаем JSON-объекты в stdin, а не plain text
         var args = new List<string>
@@ -577,12 +633,21 @@ public class ClaudeSession : ILlmSessionAdapter
                 var columnsHint = _tasksMcp.ProjectId is not null
                     ? " У проекта может быть Kanban-доска с кастомными колонками: получи их через tasks_board_columns и клади задачу в нужную колонку, передавая columnId в tasks_create/tasks_update (статус выставится по категории колонки)."
                     : "";
+                // tasks_execute доступен только на пользовательском ходу (см. TASKS_EXECUTE выше)
+                var executeHint = _currentTurnAgentDepth < 1
+                    ? " tasks_execute запускает Claude-исполнителя задачи (отдельная сессия, работает в фоне)."
+                    : "";
+                // Поручение задачи персоне — только когда доступен и personas-server (есть personas_list)
+                var personaExecHint = _personasMcp is not null
+                    ? " Чтобы поручить задачу персоне-исполнителю, передай её personaId в tasks_create/tasks_update — " +
+                      "задачу выполнит Claude от её лица; список персон и их id — personas_list."
+                    : "";
                 var tasksHint =
                     "У пользователя есть встроенная система задач (вкладка «Задачи» в проекте и раздел «Календарь»). " +
                     "Управляй ею через MCP-инструменты mcp__tasks__* (tasks_list, tasks_search, tasks_get, tasks_create, " +
                     "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
-                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint;
+                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint;
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? tasksHint
                     : basePrompt + "\n\n" + tasksHint;
@@ -630,11 +695,50 @@ public class ClaudeSession : ILlmSessionAdapter
                     "глобальные или привязанные к проекту. Управляй ими через MCP-инструменты mcp__personas__* " +
                     "(personas_list, personas_get, personas_create, personas_update, personas_delete, personas_generate_avatar). " +
                     scope + " Когда пользователь просит создать/изменить/удалить персону или сгенерировать ей аватар — " +
-                    "используй эти инструменты. Характер персоны пиши в systemPrompt на «ты» («Ты — …»), " +
-                    "приветствие — в greeting от её лица.";
+                    "используй эти инструменты. Создавая персону, заполняй ВСЕ слоты характера: character (на «ты», " +
+                    "«Ты — …»), tone, mustDo, mustNot, outputFormat, speechExamples; приветствие — в greeting от её лица.";
+                // Привязки персон (флаг persona-bindings) — кратко про инструменты работы с ними
+                if (_personasMcp.BindingsEnabled)
+                    personasHint +=
+                        " У персон есть «привязки» — источники знаний и правила с условиями применения: " +
+                        "personas_bindings_list — посмотреть, personas_suggest_bindings — предложить (не сохраняет), " +
+                        "personas_bindings_set — заменить набор; в personas_create — параметры bindings/autoBindings. " +
+                        "Свои собственные привязки персона менять не может.";
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? personasHint
                     : basePrompt + "\n\n" + personasHint;
+            }
+
+            // Подсказка про рабочее пространство — только когда workspace-server подключён
+            if (_workspaceMcp is not null)
+            {
+                var wsScope = _workspaceMcp.ProjectId is not null
+                    ? "Текущая сессия идёт в проекте — его файлы правь встроенными Read/Edit/Write, а не через mcp__wsp__files_*."
+                    : "Текущая сессия — чат вне проекта.";
+                // Подсказка про чаты — только когда секция chats реально подключена этим ходом
+                var chatsHint = _workspaceMcp.Sections.Contains("chats") && _currentTurnAgentDepth < 1
+                    ? " Плюс чаты пользователя: chats_list, chats_history, chats_create, chats_update " +
+                      "(переименование) и chats_send — полноценный ход в другом чате от имени пользователя " +
+                      "(результат виден ему в ленте)."
+                    : "";
+                // Предупреждение про разрушающие операции — только когда секция destructive смонтирована
+                var destructiveHint = _workspaceMcp.Sections.Contains("destructive") && _currentTurnAgentDepth < 1
+                    ? " Разрушающие операции files_delete и chats_delete НЕВОССТАНОВИМЫ: применяй их ТОЛЬКО " +
+                      "по явной просьбе пользователя удалить конкретный файл или чат, никогда по своей инициативе."
+                    : "";
+                var workspaceHint =
+                    "Тебе доступно всё рабочее пространство пользователя через MCP-инструменты mcp__wsp__*: " +
+                    "список проектов и их карточки (projects_list → projects_get), создание и правка проектов " +
+                    "(projects_create, projects_update), файлы любого проекта (files_tree, files_read, files_write, " +
+                    "files_search, files_mkdir, files_rename), базы знаний проектов (knowledge_search, knowledge_status, " +
+                    "knowledge_index — добавить файл в базу) и единый поиск по заметкам и задачам (search_unified)." +
+                    chatsHint + destructiveHint + " " + wsScope + " " +
+                    "files_* используй только для ДРУГИХ проектов. Когда пользователь спрашивает «где-то у меня было…» — " +
+                    "начинай с search_unified. Если вызов вернул «No such tool available» — сервер ещё подключается: " +
+                    "подожди мгновение и повтори тот же вызов.";
+                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                    ? workspaceHint
+                    : basePrompt + "\n\n" + workspaceHint;
             }
 
             // Подсказка про долгую память — только когда memory-server подключён (персонная сессия)
@@ -671,6 +775,20 @@ public class ClaudeSession : ILlmSessionAdapter
                     basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                         ? memRecall
                         : basePrompt + "\n\n" + memRecall;
+            }
+
+            // Привязанные знания и правила персоны (флаг persona-bindings): индекс источников
+            // «когда → откуда» + выжимки режима «всегда». Только у персонных сессий;
+            // провайдер сам гейтит по флагу, ошибки не роняют ход.
+            if (_bindingsProvider is not null && _personaPromptProvider is not null)
+            {
+                string? bindingsBlock = null;
+                try { bindingsBlock = await _bindingsProvider(text); }
+                catch { /* блок привязок не должен ронять ход */ }
+                if (!string.IsNullOrWhiteSpace(bindingsBlock))
+                    basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                        ? bindingsBlock
+                        : basePrompt + "\n\n" + bindingsBlock;
             }
 
             // Персональный слой: промпт персоны имеет приоритет
@@ -835,6 +953,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
             // Ватчеры завершившихся workflow задиспозились сами — убираем их из списка
             lock (_workflowWatchers) _workflowWatchers.RemoveAll(w => w.IsDisposed);
+
+            // Ход закончился — следующий (если его инициирует человек) идёт с полным набором инструментов
+            _currentTurnAgentDepth = 0;
 
             // Статусом владеет SessionManager: Finished/Active он выставит по ExitedMessage
             await _onMessage(new ExitedMessage());

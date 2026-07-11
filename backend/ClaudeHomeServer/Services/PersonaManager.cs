@@ -21,9 +21,11 @@ public class PersonaManager
     private readonly ConcurrentDictionary<string, Persona> _personas = new();
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
+    private readonly ILogger<PersonaManager>? _log;
 
-    public PersonaManager(IConfiguration config)
+    public PersonaManager(IConfiguration config, ILogger<PersonaManager>? log = null)
     {
+        _log = log;
         // Стор — в каталоге DataPath (как у всех сервисов): в контейнере это /data (volume).
         // Прежний фолбэк AppContext.BaseDirectory/data жил ВНУТРИ контейнера, и персоны
         // с аватарами пропадали при каждом его пересоздании (деплое).
@@ -38,6 +40,10 @@ public class PersonaManager
 
     // Папка с ассетами персон (аватары): data/personas/
     public string AssetsDir => Path.Combine(Path.GetDirectoryName(_storePath)!, "personas");
+
+    // Изменение персоны (профиль/возможности/привязки) — SessionManager сбрасывает адаптеры
+    // её живых сессий, чтобы Tool-рубильники и MCP-серверы перемонтировались со следующего хода
+    public event Action<Persona>? OnPersonaChanged;
 
     public IReadOnlyCollection<Persona> GetByOwner(string userId) =>
         _personas.Values.Where(p => p.OwnerId == userId)
@@ -119,7 +125,7 @@ public class PersonaManager
         string? model, string? effort, PersonaScope scope, string? projectId,
         string? color, string? greeting, bool memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess access = PersonaAccess.Full,
-        List<string>? disallowedTools = null, PersonaProactiveConfig? proactive = null)
+        List<string>? disallowedTools = null)
     {
         var persona = new Persona
         {
@@ -140,10 +146,14 @@ public class PersonaManager
             // Свой список запретов имеет смысл только при Custom-профиле
             DisallowedTools = access == PersonaAccess.Custom ? NormalizeDisallowed(disallowedTools) : null,
             Avatar = new PersonaAvatar { Kind = PersonaAvatarKind.Initials, Color = color },
-            Proactive = proactive is null ? null : MergeProactive(current: null, proactive),
         };
-        persona.Handle = MakeUniqueHandle(persona.Name, userId);
-        _personas[persona.Id] = persona;
+        // Генерация handle и вставка атомарны: без лока два одновременных Create
+        // с одинаковым именем вычислили бы один и тот же слаг (гонка TOCTOU)
+        lock (_saveLock)
+        {
+            persona.Handle = MakeUniqueHandle(persona.Name, userId);
+            _personas[persona.Id] = persona;
+        }
         Save();
         return persona;
     }
@@ -217,7 +227,7 @@ public class PersonaManager
         string? systemPrompt, string? model, string? effort, PersonaScope? scope, string? projectId,
         string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess? access = null,
-        List<string>? disallowedTools = null, PersonaProactiveConfig? proactive = null)
+        List<string>? disallowedTools = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -248,45 +258,23 @@ public class PersonaManager
         if (access is not null) persona.Access = access.Value;
         if (disallowedTools is not null) persona.DisallowedTools = NormalizeDisallowed(disallowedTools);
         if (persona.Access != PersonaAccess.Custom) persona.DisallowedTools = null;
-        // Проактивность: null — не менять; иначе partial-merge пользовательских полей
-        // (служебные LastFiredAt/SessionId НЕ затираются)
-        if (proactive is not null) persona.Proactive = MergeProactive(persona.Proactive, proactive);
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
+        OnPersonaChanged?.Invoke(persona);
         return persona;
     }
 
-    // Слияние конфига проактивности: пользовательские поля — из запроса,
-    // служебные (LastFiredAt/SessionId) — сохраняются от текущего состояния
-    private static PersonaProactiveConfig MergeProactive(
-        PersonaProactiveConfig? current, PersonaProactiveConfig incoming) => new()
+    // Полная замена привязок персоны (фича persona-bindings); сохранение мгновенное.
+    // Пустой список нормализуется в null (поведение как без привязок).
+    public Persona UpdateBindings(string id, string userId, List<PersonaBinding>? bindings)
     {
-        Enabled = incoming.Enabled,
-        Type = incoming.Type,
-        Weekdays = incoming.Weekdays?.Where(d => d is >= 1 and <= 7).Distinct().Order().ToList() is { Count: > 0 } days
-            ? days : null,
-        Time = string.IsNullOrWhiteSpace(incoming.Time) ? "09:00" : incoming.Time.Trim(),
-        Instruction = incoming.Instruction?.Trim() ?? "",
-        LastFiredAt = current?.LastFiredAt,
-        SessionId = current?.SessionId,
-    };
-
-    // Отметка срабатывания проактивности (идемпотентность планировщика)
-    public void MarkProactiveFired(string id, DateTime nowUtc)
-    {
-        var persona = GetByIdInternal(id);
-        if (persona?.Proactive is null) return;
-        persona.Proactive.LastFiredAt = nowUtc;
+        var persona = Get(id, userId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        persona.Bindings = bindings is { Count: > 0 } ? bindings : null;
+        persona.UpdatedAt = DateTime.UtcNow;
         Save();
-    }
-
-    // Закрепить чат проактивности за персоной (создан при первом срабатывании)
-    public void SetProactiveSession(string id, string sessionId)
-    {
-        var persona = GetByIdInternal(id);
-        if (persona?.Proactive is null) return;
-        persona.Proactive.SessionId = sessionId;
-        Save();
+        OnPersonaChanged?.Invoke(persona);
+        return persona;
     }
 
     // Установить сгенерированный аватар-картинку. Оригинал/кроп загруженного файла
@@ -415,13 +403,42 @@ public class PersonaManager
     private void Load()
     {
         var list = JsonFileStore.Load<List<Persona>>(_storePath, JsonOpts);
-        if (list is not null)
-            foreach (var p in list)
+        if (list is null) return;
+
+        // Проход 1: вставить всех как есть — генерация handle ниже должна видеть
+        // ВСЕ занятые handle, иначе legacy-персона без handle могла занять чужой
+        foreach (var p in list)
+        {
+            p.Avatar ??= new PersonaAvatar();
+            _personas[p.Id] = p;
+        }
+
+        var changed = false;
+
+        // Проход 2: миграция legacy-персон без handle
+        foreach (var p in _personas.Values.Where(p => string.IsNullOrEmpty(p.Handle)))
+        {
+            p.Handle = MakeUniqueHandle(p.Name, p.OwnerId);
+            changed = true;
+        }
+
+        // Проход 3: самолечение дублей handle (могли появиться до фикса миграции и гонки
+        // Create): handle остаётся у самой старой персоны, остальным перегенерируется
+        foreach (var group in _personas.Values
+                     .GroupBy(p => (p.OwnerId, Handle: p.Handle.ToLowerInvariant()))
+                     .Where(g => g.Count() > 1).ToList())
+        {
+            foreach (var p in group.OrderBy(p => p.CreatedAt).Skip(1))
             {
-                p.Avatar ??= new PersonaAvatar();
-                if (string.IsNullOrEmpty(p.Handle)) p.Handle = MakeUniqueHandle(p.Name, p.OwnerId);
-                _personas[p.Id] = p;
+                var old = p.Handle;
+                p.Handle = MakeUniqueHandle(p.Name, p.OwnerId);
+                _log?.LogWarning("Дубль handle у персон владельца {OwnerId}: «{Name}» переименована @{Old} → @{New}",
+                    p.OwnerId, p.Name, old, p.Handle);
+                changed = true;
             }
+        }
+
+        if (changed) Save();
     }
 
     private void Save()

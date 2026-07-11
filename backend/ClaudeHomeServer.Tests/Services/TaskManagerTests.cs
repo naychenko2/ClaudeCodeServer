@@ -254,6 +254,62 @@ public class TaskManagerTests : IDisposable
         _sut.SpawnNextOccurrence(task).Should().BeNull();
     }
 
+    [Fact]
+    public void SpawnNext_СПерсонойИсполнителем_ПереноситPersonaId()
+    {
+        var task = _sut.Create("proj-1", "u", new CreateTaskRequest("регулярная от персоны",
+            DueDate: "2026-07-01",
+            Assignee: TaskItemAssignee.Claude,
+            Recurrence: new TaskRecurrence { Type = TaskRecurrenceType.Daily },
+            PersonaId: "prs-1"));
+
+        var next = _sut.SpawnNextOccurrence(task);
+
+        next.Should().NotBeNull();
+        next!.PersonaId.Should().Be("prs-1");           // исполнитель-персона не теряется
+        next.Assignee.Should().Be(TaskItemAssignee.Claude);
+        // Отметки исполнителя у нового экземпляра сброшены — отработает заново
+        next.ClaudeStartedAt.Should().BeNull();
+        next.ClaudeResult.Should().BeNull();
+        next.LinkedSessionId.Should().BeNull();
+    }
+
+    // ─── Инвариант «персона ⇒ Claude» ────────────────────────────────────────
+
+    [Fact]
+    public void Create_СПерсоной_ПринудительноСтавитAssigneeClaude()
+    {
+        // Даже с Assignee=Me назначение персоны переводит исполнителя в Claude
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t",
+            Assignee: TaskItemAssignee.Me, PersonaId: "prs-1"));
+
+        task.Assignee.Should().Be(TaskItemAssignee.Claude);
+        task.PersonaId.Should().Be("prs-1");
+    }
+
+    [Fact]
+    public void Update_НазначениеПерсоны_СтавитAssigneeClaude()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t", Assignee: TaskItemAssignee.Me));
+
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(PersonaId: "prs-1"))!;
+
+        updated.Assignee.Should().Be(TaskItemAssignee.Claude);
+        updated.PersonaId.Should().Be("prs-1");
+    }
+
+    [Fact]
+    public void Update_СнятиеПерсоны_ОставляетAssigneeБезИзменений()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t", PersonaId: "prs-1"));
+
+        // "" — убрать персону; инвариант больше не форсит Claude
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(PersonaId: ""))!;
+
+        updated.PersonaId.Should().BeNull();
+        updated.Assignee.Should().Be(TaskItemAssignee.Claude); // явно не сбрасываем — задача уже была на Claude
+    }
+
     // ─── Отметки планировщика и исполнителя ──────────────────────────────────
 
     [Fact]

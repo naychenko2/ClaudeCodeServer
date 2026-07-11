@@ -108,9 +108,11 @@ public class PersonaMeetingServiceTests : IDisposable
         var personaMemory = new PersonaMemoryService(knowledge, _personas, _users, config,
             NullLogger<PersonaMemoryService>.Instance);
         var promptBuilder = new PersonaPromptBuilder(llmProviders);
+        var bindings = new PersonaBindingsService(_personas, _projects, wkStore, notesSvc, notesKb,
+            knowledge, new SkillsService(), flags, _users, config, NullLogger<PersonaBindingsService>.Instance);
         _sessions = new SessionManager(_projects, hub.Object, history, config, adapters, falCost,
             usage, appSettings, _users, jwt, server.Object, llmProviders, notesKb, flags,
-            _personas, personaMemory, promptBuilder, NullLogger<SessionManager>.Instance);
+            _personas, personaMemory, bindings, promptBuilder, NullLogger<SessionManager>.Instance);
 
         var ask = new PersonaAskService(personaMemory, promptBuilder, _runner, config,
             NullLogger<PersonaAskService>.Instance);

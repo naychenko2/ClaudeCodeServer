@@ -3,17 +3,19 @@ import type { Persona } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { Menu, MenuItem, IconButton } from '../../components/ui';
 import { Toolbar, PillSwitch, tbBtnPrimary, tbBtnGhost } from '../../components/Toolbar';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { PersonaAvatar } from './PersonaAvatar';
 import { personaTitleLines } from '../../lib/personas';
 import type { PersonaFormStatus } from './PersonaForm';
 
 // Единый тулбар студии персоны — общий для глобальной студии (PersonasPage) и
 // проектной панели (ProjectPersonaPane). Состав в режиме просмотра/редактирования:
-// [полоса цвета] аватар + Роль(Имя) + бейдж зоны | сегмент Обзор|Профиль|Память |
-// Поговорить | ⋯-меню (Удалить внутри) и Сохранить (+точка dirty) — только в «Профиль».
+// [полоса цвета] аватар + Роль(Имя) + бейдж зоны | сегмент Обзор|Профиль|Знания|Память
+// (Знания — за флагом persona-bindings) | Поговорить | ⋯-меню (Удалить внутри) и
+// Сохранить (+точка dirty) — только в «Профиль».
 // В режиме создания: «Новая персона» + [Отмена] [Создать].
 
-export type PersonaView = 'preview' | 'profile' | 'memory';
+export type PersonaView = 'preview' | 'profile' | 'knowledge' | 'memory' | 'tasks';
 
 // Иконки видов — на мобиле пилюли компактные (подпись только у активного)
 const viewIcon = (d: React.ReactNode) => (
@@ -26,8 +28,12 @@ const VIEW_OPTIONS: { value: PersonaView; label: string; icon: React.ReactNode }
   { value: 'preview', label: 'Обзор', icon: viewIcon(<><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></>) },
   // Профиль — карандаш
   { value: 'profile', label: 'Профиль', icon: viewIcon(<><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></>) },
+  // Умения — книга (фича persona-bindings): источники знаний, инструменты и правила
+  { value: 'knowledge', label: 'Умения', icon: viewIcon(<><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></>) },
   // Память — слои
   { value: 'memory', label: 'Память', icon: viewIcon(<><path d="M12 2 2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" /></>) },
+  // Задачи — чек-лист (поручения персоне-исполнителю)
+  { value: 'tasks', label: 'Задачи', icon: viewIcon(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>) },
 ];
 
 interface CommonProps {
@@ -57,6 +63,9 @@ interface CreateProps extends CommonProps {
 export function PersonaToolbar(props: EditProps | CreateProps) {
   const { accent, status, onSave, onBack, isMobile } = props;
   const creating = props.mode === 'create';
+  // Вкладка «Знания» — только при включённом флаге привязок
+  const bindingsEnabled = useFeature(FLAGS.personaBindings);
+  const viewOptions = bindingsEnabled ? VIEW_OPTIONS : VIEW_OPTIONS.filter(o => o.value !== 'knowledge');
 
   // Текст и доступность кнопки сохранения зависят от режима
   const saveLabel = status.saving
@@ -131,23 +140,25 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
         </div>
       </div>
 
-      {/* Сегмент Обзор | Профиль | Память (на мобиле — компактный, иконки) */}
+      {/* Сегмент Обзор | Профиль | [Знания] | Память (на мобиле — компактный, иконки) */}
       <PillSwitch<PersonaView>
         value={view}
         onChange={onView}
-        options={VIEW_OPTIONS}
+        options={viewOptions}
         compact={isMobile}
         isMobile={isMobile}
       />
 
-      {/* Поговорить — доступно в обоих видах */}
-      <button onClick={onTalk} disabled={talking} title="Поговорить"
-        style={{ ...talkBtn(accent), opacity: talking ? 0.6 : 1, cursor: talking ? 'default' : 'pointer' }}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 11.5a8.5 8.5 0 0 1-12 7.7L3 21l1.8-6A8.5 8.5 0 1 1 21 11.5z" />
-        </svg>
-        {!isMobile && (talking ? 'Создаём…' : 'Поговорить')}
-      </button>
+      {/* Поговорить — во всех видах, кроме «Профиль» (там тулбар занят Сохранить/Удалить) */}
+      {view !== 'profile' && (
+        <button onClick={onTalk} disabled={talking} title="Поговорить"
+          style={{ ...talkBtn(accent), opacity: talking ? 0.6 : 1, cursor: talking ? 'default' : 'pointer' }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 11.5a8.5 8.5 0 0 1-12 7.7L3 21l1.8-6A8.5 8.5 0 1 1 21 11.5z" />
+          </svg>
+          {!isMobile && (talking ? 'Создаём…' : 'Поговорить')}
+        </button>
+      )}
 
       {/* Действия профиля — только в виде «Профиль» */}
       {view === 'profile' && (

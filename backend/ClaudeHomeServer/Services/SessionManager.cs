@@ -22,6 +22,11 @@ public class SessionManager
         public System.Text.StringBuilder LoopTurnText = new();
         // Ход завершился ошибкой (result error / error) — цикл не продолжаем
         public bool LoopTurnFailed;
+        // Одиночный per-turn ожидатель хода (SendMessageAndWaitAsync): резолвится в
+        // OnMessageAsync на result/error/exited и безусловно обнуляется (Interlocked)
+        public TaskCompletionSource<TurnResult>? TurnWaiter;
+        // Число сообщений истории до хода — чтобы взять реплику ответа именно этого хода
+        public int TurnWaiterBaseline;
     }
 
     private readonly ConcurrentDictionary<string, SessionEntry> _sessions = new();
@@ -63,6 +68,7 @@ public class SessionManager
     private readonly FeatureFlagService _flags;
     private readonly PersonaManager _personas;
     private readonly PersonaMemoryService _personaMemory;
+    private readonly PersonaBindingsService _bindings;
     private readonly PersonaPromptBuilder _promptBuilder;
     private readonly ILogger<SessionManager> _log;
 
@@ -73,7 +79,8 @@ public class SessionManager
         Microsoft.AspNetCore.Hosting.Server.IServer server,
         LlmProviderRegistry llmProviders,
         NotesKnowledgeService notesKb, FeatureFlagService flags, PersonaManager personas,
-        PersonaMemoryService personaMemory, PersonaPromptBuilder promptBuilder,
+        PersonaMemoryService personaMemory, PersonaBindingsService bindings,
+        PersonaPromptBuilder promptBuilder,
         ILogger<SessionManager> log)
     {
         _projects = projects;
@@ -92,10 +99,14 @@ public class SessionManager
         _flags = flags;
         _personas = personas;
         _personaMemory = personaMemory;
+        _bindings = bindings;
         _promptBuilder = promptBuilder;
         _log = log;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
         _falCost.OnCostResolved = PublishFalCostAsync;
+        // Изменение персоны (профиль/возможности/привязки) — сбрасываем адаптеры её живых
+        // сессий, чтобы Tool-рубильники и MCP-серверы перемонтировались со следующего хода
+        _personas.OnPersonaChanged += p => InvalidatePersonaSessions(p.Id);
 
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
@@ -534,8 +545,8 @@ public class SessionManager
     private string? SessionOwner(Session s) =>
         s.ProjectId is not null ? _projects.GetById(s.ProjectId)?.OwnerId : s.OwnerId;
 
-    // Персона-слой сессии (промпт характера + контекст памяти + auto-recall + возможности).
-    // Строится одинаково при первом старте и при восстановлении процесса. Пусто, если персоны нет.
+    // Персона-слой сессии (промпт характера + контекст памяти + auto-recall + сама персона
+    // для гейтов возможностей). Строится одинаково при первом старте и при восстановлении процесса.
     // Промпт — замыкание: адаптер зовёт его на каждый ход, поэтому правки персоны
     // (контракт/характер), смена модели сессии и флаг PersonaSwitched применяются сразу.
     private (Func<string?>? Prompt, MemoryMcpContext? Memory, Func<string, Task<string?>>? Recall, Persona? Persona)
@@ -565,9 +576,41 @@ public class SessionManager
         return (prompt, null, null, persona);
     }
 
-    // Возможность персоны (tasks/notes/web): null-список — без ограничений (как раньше)
-    private static bool PersonaToolEnabled(List<string>? tools, string key) =>
-        tools is null || tools.Contains(key, StringComparer.OrdinalIgnoreCase);
+    // Провайдер блока «Привязанные знания и правила» персоны (флаг persona-bindings):
+    // на каждый ход перечитывает персону (привязки могли измениться) и собирает
+    // индекс + always-выжимки. mountedSections — секции workspace, реально смонтированные
+    // этой сессии (типы без своей секции в индекс не попадают). Ошибки → null (ход без блока).
+    private Func<string, Task<string?>>? BuildBindingsProvider(string? ownerId, string? personaId,
+        IReadOnlyList<string>? mountedSections)
+    {
+        if (ownerId is null || personaId is null) return null;
+        var sections = mountedSections ?? [];
+        return async text =>
+        {
+            try { return await _bindings.BuildTurnBlockAsync(ownerId, personaId, text, sections); }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Блок привязок персоны {Persona}", personaId);
+                return null;
+            }
+        };
+    }
+
+    // Сброс адаптеров живых сессий персоны (изменился профиль/возможности/привязки):
+    // процесс пересоздаётся при следующем сообщении с актуальным контекстом,
+    // транскрипт продолжается через --resume (паттерн SetPersona)
+    private void InvalidatePersonaSessions(string personaId)
+    {
+        foreach (var entry in _sessions.Values.Where(e => e.Info.PersonaId == personaId))
+        {
+            if (entry.Process is { } old)
+            {
+                entry.Process = null;
+                FireAndForget(old.DisposeAsync().AsTask(),
+                    $"остановка адаптера после изменения персоны ({entry.Info.Id})");
+            }
+        }
+    }
 
     // Групповая надстройка промпта: участники чата + дисциплина «отвечай только от своего
     // лица». Добавляется к персона-слою активного спикера на каждый ход.
@@ -633,8 +676,68 @@ public class SessionManager
             (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
-        return new PersonasMcpContext(ResolveTasksApiUrl(), entry.Token, projectId, selfPersonaId, mentionsHint);
+        return new PersonasMcpContext(ResolveTasksApiUrl(), entry.Token, projectId, selfPersonaId,
+            mentionsHint, BindingsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaBindings));
     }
+
+    // Контекст MCP-сервера рабочего пространства: доступ ко всем проектам владельца
+    // (за флагом workspace-tools). Секции сужаются возможностями персоны (единая точка
+    // истины — PersonaBindingsService.EffectiveToolEnabled: Tool-привязка приоритетнее
+    // Persona.Tools); search остаётся при любом непустом наборе. Секция chats — за
+    // отдельным флагом workspace-chat-send, секция destructive (безвозвратное удаление) —
+    // за флагом workspace-destructive. Все возможности выключены → сервер не подключаем.
+    // Project/ProjectPath-привязки персоны сужают зону (AllowedProjectIds) до привязанных
+    // проектов + проекта текущей сессии; БЕЗ таких привязок поведение как у Claude —
+    // все проекты владельца (null).
+    private WorkspaceMcpContext? BuildWorkspaceContext(string? ownerId, string? projectId,
+        string? selfSessionId, Persona? persona)
+    {
+        if (ownerId is null || !_flags.IsEnabled(ownerId, FeatureFlagKeys.WorkspaceTools)) return null;
+
+        var sections = new List<string>();
+        foreach (var key in new[] { "projects", "files", "knowledge" })
+            if (_bindings.EffectiveToolEnabled(ownerId, persona, key)) sections.Add(key);
+        if (_flags.IsEnabled(ownerId, FeatureFlagKeys.WorkspaceChatSend)
+            && _bindings.EffectiveToolEnabled(ownerId, persona, "chats"))
+            sections.Add("chats");
+        if (sections.Count == 0) return null;
+        // Разрушающие операции (files_delete/chats_delete) — за отдельным флагом
+        // workspace-destructive; персоне дополнительно нужен tool-ключ destructive
+        // (Tool-привязка или Persona.Tools). Одна destructive без базовых секций не монтируется.
+        // Профиль «Только чтение» строже любых привязок — секцию не монтируем вовсе.
+        if (_flags.IsEnabled(ownerId, FeatureFlagKeys.WorkspaceDestructive)
+            && persona?.Access != PersonaAccess.ReadOnly
+            && _bindings.EffectiveToolEnabled(ownerId, persona, "destructive"))
+            sections.Add("destructive");
+        sections.Add("search");
+
+        IReadOnlyList<string>? allowedIds = null;
+        if (_bindings.BuildFileScopes(ownerId, persona) is { } scopes)
+        {
+            // Привязки есть — зона ужимается; проект самой сессии всегда доступен
+            var set = new HashSet<string>(scopes);
+            if (projectId is not null) set.Add(projectId);
+            allowedIds = set.ToList();
+        }
+
+        var entry = _notesTokens.AddOrUpdate(ownerId,
+            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
+            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
+                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
+                : old);
+        return new WorkspaceMcpContext(ResolveTasksApiUrl(), entry.Token, projectId,
+            sections, allowedIds, selfSessionId);
+    }
+
+    // Дополнительные запреты сессии персоны: профиль доступа (PersonaAccessPolicy — «пол»
+    // запретов: ReadOnly/Custom) + capability-решение «web» через привязки
+    // (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools). Web-решение передаём
+    // в policy параметром, чтобы не дублировать логику; запреты складываются — побеждает
+    // более строгий (ReadOnly режет мутации, даже если binding разрешил инструмент).
+    private IReadOnlyList<string>? BuildExtraDisallowed(string? ownerId, Persona? persona) =>
+        PersonaAccessPolicy.BuildExtraDisallowed(persona,
+            webAllowed: _bindings.EffectiveToolEnabled(ownerId, persona, "web"));
+
 
     // Назначить/сменить собеседника чату (единый селектор): персону (personaId) ИЛИ
     // стандартного .md-агента Claude (agentName) — взаимоисключающе. Оба пустые = снять.
@@ -749,18 +852,21 @@ public class SessionManager
         // Scope контекста уже задан типом сессии (глобальная персона → чат без проекта →
         // доступ ко всем данным владельца; проектная → сессия проекта → только он).
         var persona = BuildPersonaLayer(session, ownerId);
+        var workspace = BuildWorkspaceContext(ownerId, session.ProjectId, session.Id, persona.Persona);
 
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
             rawSystemPrompt, permissionRules,
-            TasksMcp: PersonaToolEnabled(persona.Persona?.Tools, "tasks") ? BuildTasksContext(ownerId, session.ProjectId) : null,
-            NotesMcp: PersonaToolEnabled(persona.Persona?.Tools, "notes") ? BuildNotesContext(ownerId, session.ProjectId) : null,
+            TasksMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "tasks") ? BuildTasksContext(ownerId, session.ProjectId) : null,
+            NotesMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes") ? BuildNotesContext(ownerId, session.ProjectId) : null,
             RecallProvider: BuildRecallProvider(ownerId),
             PersonaPromptProvider: persona.Prompt,
             MemoryMcp: persona.Memory,
             PersonaRecallProvider: persona.Recall,
-            ExtraDisallowedTools: PersonaAccessPolicy.BuildExtraDisallowed(persona.Persona),
-            PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session)));
+            ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona),
+            PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session),
+            WorkspaceMcp: workspace,
+            BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -849,6 +955,56 @@ public class SessionManager
         ? _projects.GetById(session.ProjectId)?.OwnerId
         : session.OwnerId;
 
+    // Отправка сообщения с ожиданием завершения хода — REST-канал агентов (chats_send).
+    // Занятую или ждущую человека сессию не трогаем (Busy). Таймаут НЕ отменяет ход:
+    // вызывающий получает Running и позже читает результат через историю (chats_history).
+    public async Task<SendAndWaitResult> SendMessageAndWaitAsync(string sessionId, string text,
+        TimeSpan timeout, int agentDepth = 0)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry))
+            throw new InvalidOperationException("Сессия не найдена");
+
+        // Занята только при реально идущем ходе (Working) или ожидании человека (Waiting).
+        // Starting у живой сессии означает лишь «создан, ход ещё не запускался»: после первого
+        // хода статус идёт Working→Active/Finished и назад в Starting не возвращается (обратно
+        // Starting ставит только рестарт → Orphaned). Поэтому свежесозданный чат (у него Process
+        // уже присвоен в StartNewSessionAsync, но ходов не было) НЕ занят — принимаем сообщение
+        // и стартуем первый ход. Гонку двух одновременных ходов ловит TurnWaiter ниже.
+        var status = entry.Info.Status;
+        if (status is SessionStatus.Working or SessionStatus.Waiting)
+            return new SendAndWaitResult.Busy(status);
+
+        await EnsureProcessAsync(sessionId, entry);
+        entry.Accumulator?.SetPersona(entry.Info.PersonaId);
+
+        // Авто-имя по первому сообщению — как при отправке человеком
+        if (string.IsNullOrWhiteSpace(entry.Info.Name))
+        {
+            var title = MakeChatTitle(text);
+            if (!string.IsNullOrEmpty(title))
+            {
+                entry.Info.Name = title;
+                SaveSessions();
+            }
+        }
+
+        // Один ожидатель на ход: параллельная отправка проиграла гонку за ход — busy
+        var tcs = new TaskCompletionSource<TurnResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (Interlocked.CompareExchange(ref entry.TurnWaiter, tcs, null) is not null)
+            return new SendAndWaitResult.Busy(entry.Info.Status);
+        entry.TurnWaiterBaseline = entry.Accumulator?.GetAll().Count ?? 0;
+
+        await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
+        entry.Accumulator?.OnUserMessage(text, [], viaAgent: agentDepth >= 1);
+        await entry.Process!.SendMessageAsync(text, null, agentDepth);
+
+        if (timeout <= TimeSpan.Zero) return new SendAndWaitResult.Running();
+        var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeout));
+        return completed == tcs.Task
+            ? new SendAndWaitResult.Completed(await tcs.Task)
+            : new SendAndWaitResult.Running(); // ход продолжается, ожидатель очистит OnMessageAsync
+    }
+
     // Ручное сворачивание контекста: /compact в CLI, минуя счётчики и историю user-сообщений
     public async Task CompactAsync(string sessionId)
     {
@@ -895,35 +1051,41 @@ public class SessionManager
             var rootPath = ResolveChatRoot(entry.Info.OwnerId
                 ?? throw new InvalidOperationException("У чата не задан владелец"));
             var persona = BuildPersonaLayer(entry.Info, entry.Info.OwnerId);
+            var workspace = BuildWorkspaceContext(entry.Info.OwnerId, null, entry.Info.Id, persona.Persona);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 RawSystemPrompt: null, PermissionRules: null,
-                TasksMcp: PersonaToolEnabled(persona.Persona?.Tools, "tasks") ? BuildTasksContext(entry.Info.OwnerId, null) : null,
-                NotesMcp: PersonaToolEnabled(persona.Persona?.Tools, "notes") ? BuildNotesContext(entry.Info.OwnerId, null) : null,
+                TasksMcp: _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "tasks") ? BuildTasksContext(entry.Info.OwnerId, null) : null,
+                NotesMcp: _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes") ? BuildNotesContext(entry.Info.OwnerId, null) : null,
                 RecallProvider: BuildRecallProvider(entry.Info.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
                 MemoryMcp: persona.Memory,
                 PersonaRecallProvider: persona.Recall,
-                ExtraDisallowedTools: PersonaAccessPolicy.BuildExtraDisallowed(persona.Persona),
-                PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info));
+                ExtraDisallowedTools: BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona),
+                PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info),
+                WorkspaceMcp: workspace,
+                BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections));
         }
         else
         {
             var project = _projects.GetById(entry.Info.ProjectId)
                 ?? throw new InvalidOperationException("Проект не найден");
             var persona = BuildPersonaLayer(entry.Info, project.OwnerId);
+            var workspace = BuildWorkspaceContext(project.OwnerId, project.Id, entry.Info.Id, persona.Persona);
             context = new LlmSessionContext(project.RootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                TasksMcp: PersonaToolEnabled(persona.Persona?.Tools, "tasks") ? BuildTasksContext(project.OwnerId, project.Id) : null,
-                NotesMcp: PersonaToolEnabled(persona.Persona?.Tools, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
+                TasksMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "tasks") ? BuildTasksContext(project.OwnerId, project.Id) : null,
+                NotesMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
                 RecallProvider: BuildRecallProvider(project.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
                 MemoryMcp: persona.Memory,
                 PersonaRecallProvider: persona.Recall,
-                ExtraDisallowedTools: PersonaAccessPolicy.BuildExtraDisallowed(persona.Persona),
-                PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info));
+                ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona),
+                PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info),
+                WorkspaceMcp: workspace,
+                BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;
@@ -1226,6 +1388,29 @@ public class SessionManager
             Console.Error.WriteLine($"[SessionManager] Ошибка аккумулятора ({sessionId}): {ex.Message}");
         }
 
+        // Резолв ожидателя синхронного хода (SendMessageAndWaitAsync): result — штатное
+        // завершение, error/exited — обрыв (резолвим тоже, чтобы вызывающий не завис).
+        // Обнуляем безусловно — ожидатель не должен утечь в следующий ход.
+        if (entry is not null && msg is ResultMessage or ErrorMessage or ExitedMessage
+            && Interlocked.Exchange(ref entry.TurnWaiter, null) is { } waiter)
+        {
+            switch (msg)
+            {
+                case ResultMessage rm:
+                    waiter.TrySetResult(new TurnResult(
+                        LastAssistantText(acc, entry.TurnWaiterBaseline), rm.DurationMs, rm.TotalCostUsd));
+                    break;
+                case ErrorMessage em:
+                    waiter.TrySetResult(new TurnResult(em.Text, 0, null));
+                    break;
+                case ExitedMessage:
+                    // Прерван без result — отдаём то, что ассистент успел написать
+                    waiter.TrySetResult(new TurnResult(
+                        LastAssistantText(acc, entry.TurnWaiterBaseline), 0, null));
+                    break;
+            }
+        }
+
         // Обновление статуса — всегда, независимо от аккумулятора; SessionManager —
         // ЕДИНСТВЕННЫЙ владелец переходов Session.Status (ClaudeSession статус не пишет).
         // Если OnResultAsync выбросит, статус всё равно обновится.
@@ -1406,6 +1591,11 @@ public class SessionManager
             status, entry.Info.LastMessage, entry.Info.MessageCount);
     }
 
+    // Текст последней реплики ассистента текущего хода (сообщения после baseline) —
+    // ответ для синхронного ожидателя SendMessageAndWaitAsync
+    private static string LastAssistantText(TurnAccumulator acc, int baseline) =>
+        acc.GetAll().Skip(Math.Max(0, baseline)).OfType<StoredTextMessage>().LastOrDefault()?.Text ?? "";
+
     // Для fire-and-forget задач: ошибку логируем, а не теряем молча
     private static void FireAndForget(Task task, string context) =>
         task.ContinueWith(
@@ -1469,4 +1659,17 @@ public class SessionManager
             tasks.Add(_hub.Clients.Group("user_" + oid).SendAsync("message", statusMsg));
         await Task.WhenAll(tasks);
     }
+}
+
+// Итог завершённого хода для синхронного ожидания (SendMessageAndWaitAsync):
+// текст последней реплики ассистента, длительность и стоимость (если провайдер её отдал)
+public record TurnResult(string Reply, long DurationMs, double? CostUsd);
+
+// Результат отправки с ожиданием: Busy — сессия занята или ждёт человека (ход НЕ отправлен);
+// Completed — ход завершился в срок; Running — ход продолжается (wait=none или истёк таймаут)
+public abstract record SendAndWaitResult
+{
+    public sealed record Busy(SessionStatus CurrentStatus) : SendAndWaitResult;
+    public sealed record Completed(TurnResult Result) : SendAndWaitResult;
+    public sealed record Running : SendAndWaitResult;
 }

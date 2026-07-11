@@ -28,16 +28,21 @@ public static class PersonaAccessPolicy
     ];
 
     // Итоговый список дополнительных запретов сессии персоны:
-    // выключенный «web» (Persona.Tools) + профиль доступа (ReadOnly-список или
-    // пользовательский список при Custom). null — запретов нет (или персоны нет).
-    public static IReadOnlyList<string>? BuildExtraDisallowed(Persona? persona)
+    // выключенный «web» + профиль доступа (ReadOnly-список или пользовательский
+    // список при Custom). null — запретов нет (или персоны нет).
+    // webAllowed — готовое решение по «web» от вызывающего (PersonaBindingsService.
+    // EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools); null — фолбэк
+    // по Persona.Tools для путей без привязок. Запреты складываются: побеждает более строгий.
+    public static IReadOnlyList<string>? BuildExtraDisallowed(Persona? persona, bool? webAllowed = null)
     {
         if (persona is null) return null;
 
         var result = new List<string>();
 
         // Возможность «web» выключена — запрещаем встроенные веб-тулы CLI
-        if (persona.Tools is not null && !persona.Tools.Contains("web", StringComparer.OrdinalIgnoreCase))
+        var webEnabled = webAllowed
+            ?? persona.Tools is null || persona.Tools.Contains("web", StringComparer.OrdinalIgnoreCase);
+        if (!webEnabled)
         {
             result.Add("WebSearch");
             result.Add("WebFetch");

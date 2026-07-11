@@ -8,11 +8,15 @@ import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
+import { showToast } from '../../lib/toast';
+import { ConfirmDialog } from '../../components/ui';
 import { PersonaList } from './PersonaList';
 import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './PersonaForm';
 import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
 import { PersonaPreview } from './PersonaPreview';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
+import { PersonaBindingsPanel } from './PersonaBindingsPanel';
+import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
 import type { PersonaTemplate } from './personaTemplates';
 
@@ -104,14 +108,18 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     if (getNav()?.persona) navReplace({ screen: 'personas' });
   };
 
-  const onDelete = async (p: Persona) => {
-    if (!window.confirm(`Удалить персону «${personaLabel(p)}»?`)) return;
+  // Удаление в два шага: запрос подтверждения (диалог) → само удаление
+  const [deleteTarget, setDeleteTarget] = useState<Persona | null>(null);
+  const onDelete = (p: Persona) => setDeleteTarget(p);
+  const doDelete = async (p: Persona) => {
     try {
       await api.personas.remove(p.id);
       bumpPersonas();
       clearSelection();
     } catch {
-      alert('Не удалось удалить персону.');
+      showToast('Персоны', 'Не удалось удалить персону.');
+    } finally {
+      setDeleteTarget(null);
     }
   };
 
@@ -124,7 +132,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       const session = await api.personas.createChat(p.id, { mode: 'auto' });
       if (session.projectId) {
         const proj = projects.find(x => x.id === session.projectId);
-        if (!proj) { alert('Проект персоны недоступен.'); return; }
+        if (!proj) { showToast('Персоны', 'Проект персоны недоступен.'); return; }
         // Стартовую сессию отдаём проекту через sessionStorage — её подхватит WorkspacePage
         sessionStorage.setItem('cc_pending_session', JSON.stringify(session));
         window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project: proj } }));
@@ -135,7 +143,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         onHubTab('chats');
       }
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Не удалось создать чат');
+      showToast('Персоны', e instanceof Error ? e.message : 'Не удалось создать чат');
     } finally {
       setTalking(false);
     }
@@ -146,7 +154,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const openSession = (session: Session) => {
     if (session.projectId) {
       const proj = projects.find(x => x.id === session.projectId);
-      if (!proj) { alert('Проект чата недоступен.'); return; }
+      if (!proj) { showToast('Персоны', 'Проект чата недоступен.'); return; }
       sessionStorage.setItem('cc_pending_session', JSON.stringify(session));
       window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project: proj } }));
     } else {
@@ -201,6 +209,16 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <HubHeader value="personas" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>{body}</div>
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Удалить персону?"
+          subtitle={<>Персона «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{personaLabel(deleteTarget)}</strong>» будет удалена без возможности восстановления.</>}
+          confirmLabel="Удалить"
+          confirmVariant="danger"
+          onConfirm={() => doDelete(deleteTarget)}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
     </div>
   );
 }
@@ -301,18 +319,29 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSes
   const content = view === 'memory'
     // Память — под тулбаром, свой заголовок не нужен (идентичность уже в тулбаре)
     ? <div style={{ flex: 1, minHeight: 0 }}><PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded /></div>
+    : view === 'tasks'
+    // Задачи — отфильтрованный вид реальных задач, где персона исполнитель
+    ? <div style={{ flex: 1, minHeight: 0 }}><PersonaTasksPanel persona={persona} isMobile={isMobile} /></div>
+    : view === 'knowledge'
+    // Знания — привязки источников и правил (фича persona-bindings)
+    ? <div style={{ flex: 1, minHeight: 0 }}>
+        <PersonaBindingsPanel persona={persona} accent={accent} isMobile={isMobile} />
+      </div>
     : view === 'profile'
     // Профиль — инлайн-форма настройки прямо в контентной зоне (действия — в тулбаре)
     ? <div style={{ flex: 1, minHeight: 0 }}>
         <PersonaForm ref={formRef} persona={persona} projects={projects} onStatus={onStatus}
           onColorChange={setLiveColor} onOpenMemory={() => setView('memory')}
+          onOpenKnowledge={() => setView('knowledge')}
           onSaved={() => {}} onDelete={() => onDelete()} />
       </div>
     // Обзор — read-only визитка со сводкой и недавними разговорами
     : <div style={{ flex: 1, minHeight: 0 }}>
         <PersonaPreview persona={persona} accent={accent} talking={talking}
           onTalk={onTalk} onOpenSession={onOpenSession}
-          onEditProfile={() => setView('profile')} isMobile={isMobile} />
+          onEditProfile={() => setView('profile')}
+          onOpenKnowledge={() => setView('knowledge')}
+          onOpenTasks={() => setView('tasks')} isMobile={isMobile} />
       </div>;
 
   return (

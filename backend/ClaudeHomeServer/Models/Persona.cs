@@ -14,6 +14,33 @@ public enum PersonaMemoryType { Semantic, Episodic, Procedural }
 // Вид аватара: Initials — круг с инициалами на цветном фоне; Image — сгенерированная/загруженная картинка.
 public enum PersonaAvatarKind { Initials, Image }
 
+// Тип привязки персоны к источнику знаний или правилу (фича persona-bindings):
+// Project — проект целиком (файлы через workspace); ProjectPath — папка/файл проекта;
+// Knowledge — Dify-датасет (база знаний проекта или заметок); Notes — источник заметок;
+// Tool — рубильник инструмента (tasks/notes/web/…); Skill — глобальный скилл (~/.claude/skills).
+public enum PersonaBindingType { Project, ProjectPath, Knowledge, Notes, Tool, Skill }
+
+// Режим привязки: Auto — источник в индексе, персона подгружает по условию;
+// Always — вдобавок выжимка из источника подмешивается в каждый ход; Off — выключена.
+public enum PersonaBindingMode { Auto, Always, Off }
+
+// Привязка персоны: «когда {Condition} — используй {Target}». Target по типам:
+// Project/ProjectPath → projectId; Knowledge → datasetId; Notes → sourceKey
+// ("personal" | projectId); Tool → ключ инструмента; Skill → имя скилла.
+public class PersonaBinding
+{
+    public string Id { get; init; } = Guid.NewGuid().ToString();
+    public PersonaBindingType Type { get; set; }
+    public string Target { get; set; } = "";
+    // Путь внутри цели: папка/файл проекта (ProjectPath) или папка источника заметок (Notes)
+    public string? Path { get; set; }
+    // Условие «когда применять источник» — попадает в индекс системного промпта
+    public string Condition { get; set; } = "";
+    public PersonaBindingMode Mode { get; set; } = PersonaBindingMode.Auto;
+    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
 // Профиль доступа персоны (P6): Full — без ограничений; ReadOnly — смотрит и советует,
 // но ничего не меняет (без правок файлов, Bash и мутаций задач/заметок/персон);
 // Custom — свой список запрещённых инструментов (Persona.DisallowedTools).
@@ -75,29 +102,6 @@ public class PersonaContract
         && string.IsNullOrWhiteSpace(Instructions);
 }
 
-// Тип расписания проактивности: каждый день / по будням / по выбранным дням недели.
-public enum PersonaScheduleType { Daily, Weekdays, Weekly }
-
-// Проактивность персоны (флаг persona-proactive): «пишет первой» по расписанию.
-// Пользовательские поля — Enabled/Type/Weekdays/Time/Instruction; служебные —
-// LastFiredAt (идемпотентность срабатываний) и SessionId (закреплённый чат) —
-// при обновлении через API не затираются (partial-merge в PersonaManager.Update).
-public class PersonaProactiveConfig
-{
-    public bool Enabled { get; set; }
-    public PersonaScheduleType Type { get; set; } = PersonaScheduleType.Daily;
-    // ISO-дни недели (1=Пн … 7=Вс) — только для Type == Weekly
-    public List<int>? Weekdays { get; set; }
-    // Локальное время срабатывания в таймзоне владельца, "HH:mm"
-    public string Time { get; set; } = "09:00";
-    // Что сделать при срабатывании (пустая — триггер не срабатывает)
-    public string Instruction { get; set; } = "";
-    // UTC-отметка последнего срабатывания (идемпотентность, переживает рестарт)
-    public DateTime? LastFiredAt { get; set; }
-    // Чат, в котором персона пишет по расписанию (создаётся при первом срабатывании)
-    public string? SessionId { get; set; }
-}
-
 // Персона — сущность с именем, внешностью, характером, своей памятью и зоной контекста.
 // Не путать с .md-агентами Claude Code (.claude/agents) — те подключаются через Session.AgentName.
 public class Persona
@@ -126,14 +130,15 @@ public class Persona
     // Возможности персоны (ключи: tasks, notes, web). null — без ограничений
     // (как раньше, по фич-флагам владельца); список — только перечисленные.
     public List<string>? Tools { get; set; }
+    // Привязки к источникам знаний и правилам (фича persona-bindings).
+    // null — привязок нет (миграция стора не нужна, поведение как раньше).
+    public List<PersonaBinding>? Bindings { get; set; }
     // Профиль доступа (P6): Full/ReadOnly/Custom (см. PersonaAccessPolicy)
     public PersonaAccess Access { get; set; } = PersonaAccess.Full;
     // Свой список запрещённых инструментов — только при Access == Custom
     public List<string>? DisallowedTools { get; set; }
     // Первое приветственное сообщение при открытии чата (опционально)
     public string? Greeting { get; set; }
-    // Проактивность «пишет первой» (флаг persona-proactive); null — выключена
-    public PersonaProactiveConfig? Proactive { get; set; }
     // Ключ каталога пантеона OmO (omo-sisyphus…), если персона подключена из него:
     // идемпотентность подключения, бейдж происхождения, авто-обновление регламента
     public string? TemplateKey { get; set; }

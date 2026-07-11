@@ -16,14 +16,26 @@ public record NotesMcpContext(string ApiUrl, string Token, string? ProjectId);
 // чья долгая память доступна инструментами mcp__memory__* в этой сессии.
 public record MemoryMcpContext(string ApiUrl, string Token, string PersonaId);
 
+// Контекст MCP-сервера рабочего пространства: доступ сессии ко всем проектам владельца
+// (список, файлы, базы знаний, единый поиск). Sections — включённые секции инструментов
+// (projects/files/knowledge/search[,chats,destructive]); AllowedProjectIds — сужение зоны
+// до перечисленных проектов (null — все проекты владельца). SelfSessionId — id самой сессии
+// (запрет self-send/self-delete), AgentDepth — глубина делегирования (анти-рекурсия:
+// на агентных ходах секции chats/destructive срезаются). Не Claude-специфичен.
+public record WorkspaceMcpContext(string ApiUrl, string Token, string? ProjectId,
+    IReadOnlyList<string> Sections, IReadOnlyList<string>? AllowedProjectIds = null,
+    string? SelfSessionId = null, int AgentDepth = 0);
+
 // Контекст MCP-сервера персон: адрес API, сервисный токен владельца и проект сессии
 // (дефолтный projectId для создания проектных персон; null — глобальный контекст).
 // MentionsHint != null — включены @упоминания (флаг persona-mentions): сервер получает
 // инструмент persona_ask, SelfPersonaId — персона самого чата (исключается из списка
 // собеседников), а MentionsHint — готовый блок-подсказка для системного промпта.
+// BindingsEnabled — у владельца включён флаг persona-bindings: сервер персон получает
+// инструменты привязок (personas_bindings_*), а подсказка в промпте упоминает их.
 // Не Claude-специфичен, как и остальные контексты.
 public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId,
-    string? SelfPersonaId = null, string? MentionsHint = null);
+    string? SelfPersonaId = null, string? MentionsHint = null, bool BindingsEnabled = false);
 
 // Per-session контекст, общий для всех адаптеров — то, что SessionManager передаёт
 // при создании сессии независимо от провайдера. Claude-специфичные зависимости
@@ -53,4 +65,12 @@ public sealed record LlmSessionContext(
     IReadOnlyList<string>? ExtraDisallowedTools = null,
     // MCP-сервер персон: CRUD из любого чата + @упоминания/persona_ask
     // (null — фича выключена или нет владельца).
-    PersonasMcpContext? PersonasMcp = null);
+    PersonasMcpContext? PersonasMcp = null,
+    // MCP-сервер рабочего пространства: проекты/файлы/знания/поиск владельца
+    // (null — флаг workspace-tools выключен или нет владельца).
+    WorkspaceMcpContext? WorkspaceMcp = null,
+    // Блок «Привязанные знания и правила» персоны (флаг persona-bindings): по тексту хода
+    // возвращает индекс привязанных источников + выжимки режима «всегда» для системного
+    // промпта (null — фича выключена или сессия без персоны). Вычисляется каждый ход;
+    // флаг проверяется внутри, ошибки — тихо в null (ход идёт без блока).
+    Func<string, Task<string?>>? BindingsProvider = null);

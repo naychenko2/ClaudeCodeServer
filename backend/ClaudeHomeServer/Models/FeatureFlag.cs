@@ -35,8 +35,6 @@ public static class FeatureFlagKeys
     public const string PersonaMemoryConsolidation = "persona-memory-consolidation";
     // @упоминания персон в чатах: MCP persona_ask, автокомплит @ в композере
     public const string PersonaMentions = "persona-mentions";
-    // Проактивность персон: «пишет первой» по расписанию (утренний бриф и т.п.)
-    public const string PersonaProactive = "persona-proactive";
     // Групповые чаты персон (2-4 участника, роутинг спикера по @) + совещания cross-attack
     public const string PersonaGroupChats = "persona-group-chats";
     // Магическое слово ultrawork/ulw/«ультра» в сообщении — инжект режима максимального усилия
@@ -45,6 +43,14 @@ public static class FeatureFlagKeys
     public const string WorkLoop = "work-loop";
     // Конвейер пантеона: эстафета ролей OmO (анализ → план → ревью → авто-исполнение)
     public const string PersonaPipeline = "persona-pipeline";
+    // Привязки персон: источники знаний и правила с условиями применения (индекс в промпте)
+    public const string PersonaBindings = "persona-bindings";
+    // MCP workspace-server: доступ сессии к проектам/файлам/знаниям/поиску владельца
+    public const string WorkspaceTools = "workspace-tools";
+    // Секция chats workspace-server: Claude и персоны могут писать в другие чаты (chats_send)
+    public const string WorkspaceChatSend = "workspace-chat-send";
+    // Секция destructive workspace-server: безвозвратное удаление файлов и чатов (files_delete/chats_delete)
+    public const string WorkspaceDestructive = "workspace-destructive";
 }
 
 /// <summary>
@@ -136,15 +142,6 @@ public static class FeatureFlagCatalog
             Default: false,
             Stage: "dev"),
 
-        // Проактивность персон: персона сама пишет первой по расписанию —
-        // выполняет свою инструкцию (напр. утренний бриф) и присылает уведомление.
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.PersonaProactive,
-            Title: "Проактивные персоны",
-            Description: "Персона может писать первой по расписанию: в заданное время выполняет свою инструкцию (например, собирает утренний бриф) и присылает уведомление со ссылкой на чат.",
-            Default: false,
-            Stage: "dev"),
-
         // Групповые чаты персон: 2-4 участника в одном чате, отвечает тот, к кому
         // обращаются через @handle. Плюс режим «Совещание»: независимые позиции,
         // перекрёстная критика и синтез итога от ведущей.
@@ -180,6 +177,42 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.PersonaPipeline,
             Title: "Конвейер пантеона",
             Description: "Задача проходит эстафету ролей: Аналитик вскрывает риски, Планировщик пишет план, Ревьюер проверяет его, а затем план автоматически уходит исполнителю. Запускается из диалога «Обсудить с командой».",
+            Default: false,
+            Stage: "dev"),
+
+        // Привязки персон к источникам знаний и правилам: индекс «когда → откуда» в
+        // системном промпте, выжимки режима «всегда», сужение workspace до привязанных проектов.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PersonaBindings,
+            Title: "Умения и правила персон",
+            Description: "Персоне можно привязать источники знаний (проекты, папки, базы знаний, заметки, скиллы) и правила инструментов с условиями «когда применять». Персона видит индекс привязок и сама подгружает нужный источник; режим «всегда» подмешивает выжимку в каждый ход.",
+            Default: false,
+            Stage: "dev"),
+
+        // MCP workspace-server: Claude в любом чате видит все проекты владельца —
+        // список, файлы, базы знаний и единый поиск по рабочему пространству.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.WorkspaceTools,
+            Title: "Инструменты рабочего пространства",
+            Description: "Claude в любом чате получает доступ ко всем твоим проектам: список и карточки, чтение и правка файлов других проектов, поиск по базам знаний и единый поиск по заметкам и задачам.",
+            Default: false,
+            Stage: "dev"),
+
+        // Секция chats workspace-server: список/история/создание чужих чатов и chats_send —
+        // полноценный ход в другом чате от имени пользователя (результат виден в его ленте).
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.WorkspaceChatSend,
+            Title: "Отправка сообщений в чаты",
+            Description: "Claude и персоны могут писать в другие твои чаты: просматривать список и историю, создавать чаты и отправлять сообщения (полноценный ход, ответ появляется в ленте чата). Требует включённых «Инструментов рабочего пространства».",
+            Default: false,
+            Stage: "dev"),
+
+        // Секция destructive workspace-server: files_delete/chats_delete. Без флага секция
+        // не выдаётся никому; персоне дополнительно нужен tool-ключ destructive (Tools/привязка).
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.WorkspaceDestructive,
+            Title: "Разрушающие операции агента",
+            Description: "Claude может БЕЗВОЗВРАТНО удалять файлы проектов и чаты через инструменты рабочего пространства (files_delete, chats_delete) — только по явной просьбе. Требует включённых «Инструментов рабочего пространства»; персоне дополнительно нужна возможность «Удаление (опасно)».",
             Default: false,
             Stage: "dev"),
     ];

@@ -5,9 +5,13 @@
 //   PERSONAS_API_URL    — базовый URL бэкенда (http://127.0.0.1:5000)
 //   PERSONAS_API_TOKEN  — сервисный JWT владельца сессии
 //   PERSONAS_PROJECT_ID — id проекта сессии; пусто = чат вне проекта (глобальный контекст)
-//   PERSONAS_SELF_ID    — id персоны текущего чата (для persona_ask: себя не спрашивают)
+//   PERSONAS_SELF_ID    — id персоны текущего чата (для persona_ask: себя не спрашивают;
+//                         для привязок — запрет самоэскалации: свои привязки менять нельзя)
 //   PERSONAS_MENTIONS   — "1" = включены @упоминания (флаг persona-mentions): добавляется
 //                         инструмент persona_ask — спросить другую персону от её лица
+//   PERSONAS_BINDINGS   — "1" = включены привязки (флаг persona-bindings): добавляются
+//                         инструменты personas_bindings_list/suggest/set и параметры
+//                         bindings/autoBindings в personas_create/personas_update
 //
 // Персона — AI-собеседник с именем, ролью, характером и аватаром; бывает глобальной
 // или привязанной к проекту. Изоляция per-owner — на стороне backend (токен определяет
@@ -20,6 +24,7 @@ const API_TOKEN = process.env.PERSONAS_API_TOKEN ?? '';
 const PROJECT_ID = process.env.PERSONAS_PROJECT_ID || null;
 const SELF_ID = process.env.PERSONAS_SELF_ID || null;
 const MENTIONS = process.env.PERSONAS_MENTIONS === '1';
+const BINDINGS = process.env.PERSONAS_BINDINGS === '1';
 
 // --- HTTP к бэкенду ---
 
@@ -54,13 +59,43 @@ const COLORS = ['yellow', 'orange', 'blue', 'green', 'purple', 'red', 'brown', '
 const PERSONA_FIELDS = {
   role: { type: 'string', description: 'Роль — главное в отображении («Роль (Имя)»), например «Дизайнер»' },
   description: { type: 'string', description: 'Короткое описание, кто это (для карточки)' },
-  systemPrompt: { type: 'string', description: 'Характер персоны — тело системного промпта на «ты» («Ты — …»), 2-5 предложений' },
+  // Контракт характера — по слотам (собирается в contract на бэкенде)
+  character: { type: 'string', description: 'Характер и ценности персоны на «ты» («Ты — …»), 2-5 предложений' },
+  tone: { type: 'string', description: 'Тон общения одной короткой фразой (напр. «сухо и по делу»)' },
+  mustDo: { type: 'array', items: { type: 'string' }, description: 'Правила «что делать всегда», 2-4 коротких пункта' },
+  mustNot: { type: 'array', items: { type: 'string' }, description: 'Анти-паттерны «чего не делать никогда», 2-4 пункта' },
+  outputFormat: { type: 'string', description: 'Требования к формату ответов, 1-2 предложения' },
+  speechExamples: { type: 'array', items: { type: 'string' }, description: '1-2 характерные реплики от лица персоны (образцы стиля)' },
+  systemPrompt: { type: 'string', description: 'УСТАРЕЛО: единый текст характера — используй character и остальные слоты' },
   model: { type: 'string', description: 'Модель LLM (пусто = дефолт сервера)' },
   effort: { type: 'string', description: 'Усилие рассуждения модели' },
   color: { type: 'string', enum: COLORS, description: 'Цвет аватара из палитры' },
   greeting: { type: 'string', description: 'Приветствие — первое сообщение от лица персоны' },
   memoryEnabled: { type: 'boolean', description: 'Долгая память персоны (по умолчанию включена)' },
 };
+
+// Привязка персоны (флаг persona-bindings): источник знаний или правило с условием применения
+const BINDING_ITEM_SCHEMA = {
+  type: 'object',
+  required: ['type', 'target'],
+  properties: {
+    type: {
+      type: 'string',
+      enum: ['project', 'projectPath', 'knowledge', 'notes', 'tool', 'skill'],
+      description: 'Тип: project — проект целиком; projectPath — папка/файл проекта; knowledge — база знаний (datasetId); notes — источник заметок; tool — рубильник инструмента; skill — глобальный скилл',
+    },
+    target: { type: 'string', description: 'Цель: projectId | datasetId | source заметок ("personal"/projectId) | ключ инструмента (tasks/notes/web/…) | имя скилла' },
+    path: { type: 'string', description: 'Путь внутри цели (для projectPath — обязателен; для notes — папка источника)' },
+    condition: { type: 'string', description: 'Когда персоне применять источник (1-2 предложения; пусто = «всегда под рукой»)' },
+    mode: { type: 'string', enum: ['auto', 'always', 'off'], description: 'Режим: auto — по условию (дефолт); always — выжимка в каждый ход; off — выключена' },
+  },
+};
+
+// Параметры привязок в create/update — только при включённом флаге persona-bindings
+const BINDING_CREATE_FIELDS = BINDINGS ? {
+  bindings: { type: 'array', items: BINDING_ITEM_SCHEMA, description: 'Явные привязки источников знаний и правил' },
+  autoBindings: { type: 'boolean', description: 'true — после создания AI сам подберёт привязки под роль персоны' },
+} : {};
 
 const TOOLS = [
   {
@@ -88,7 +123,8 @@ const TOOLS = [
     name: 'personas_create',
     description: `Создать персону — AI-собеседника с именем, ролью и характером. ${CONTEXT_NOTE} ` +
       'scope: "global" — доступна во всех чатах (по умолчанию); "project" — привязана к проекту. ' +
-      'Характер пиши в systemPrompt на «ты», приветствие — в greeting от лица персоны.',
+      'Заполняй ВСЕ слоты характера: character (на «ты»), tone, mustDo, mustNot, outputFormat, ' +
+      'speechExamples; приветствие — в greeting от лица персоны.',
     inputSchema: {
       type: 'object',
       required: ['name'],
@@ -97,13 +133,15 @@ const TOOLS = [
         ...PERSONA_FIELDS,
         scope: { type: 'string', enum: ['global', 'project'], description: 'Зона персоны (по умолчанию global)' },
         projectId: { type: 'string', description: 'ID проекта для scope=project (по умолчанию — проект текущей сессии)' },
+        ...BINDING_CREATE_FIELDS,
       },
     },
   },
   {
     name: 'personas_update',
     description: 'Изменить персону: передавай только изменяемые поля. Пустая строка очищает ' +
-      'role/model/effort/color/greeting. Смена scope на "project" требует projectId.',
+      'role/model/effort/color/greeting. Смена scope на "project" требует projectId.' +
+      (BINDINGS ? ' bindings — ПОЛНАЯ замена набора привязок (свои собственные привязки менять нельзя).' : ''),
     inputSchema: {
       type: 'object',
       required: ['id'],
@@ -113,9 +151,88 @@ const TOOLS = [
         ...PERSONA_FIELDS,
         scope: { type: 'string', enum: ['global', 'project'], description: 'Новая зона персоны' },
         projectId: { type: 'string', description: 'ID проекта для scope=project' },
+        ...(BINDINGS ? {
+          bindings: { type: 'array', items: BINDING_ITEM_SCHEMA, description: 'Полная замена набора привязок персоны' },
+        } : {}),
       },
     },
   },
+  // Привязки персон (флаг persona-bindings): источники знаний и правила с условиями применения
+  ...(BINDINGS ? [
+    {
+      name: 'personas_bindings_list',
+      description: 'Привязки персоны: источники знаний (проекты, папки, базы знаний, заметки, скиллы) ' +
+        'и правила инструментов с условиями «когда применять».',
+      inputSchema: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string', description: 'ID персоны' } },
+      },
+    },
+    {
+      name: 'personas_suggest_bindings',
+      description: 'AI-подбор привязок под роль персоны (по каталогу проектов/баз/заметок/скиллов ' +
+        'владельца). Возвращает кандидатов, НЕ сохраняет — сохрани нужные через personas_bindings_set.',
+      inputSchema: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string', description: 'ID персоны' } },
+      },
+    },
+    {
+      name: 'personas_bindings_set',
+      description: 'Полная замена набора привязок персоны (пустой массив — убрать все). ' +
+        'Свои собственные привязки персона менять не может.',
+      inputSchema: {
+        type: 'object',
+        required: ['id', 'bindings'],
+        properties: {
+          id: { type: 'string', description: 'ID персоны' },
+          bindings: { type: 'array', items: BINDING_ITEM_SCHEMA, description: 'Новый набор привязок' },
+        },
+      },
+    },
+    {
+      name: 'knowledge_search',
+      description: 'Гибридный поиск (смысловой + полнотекстовый по ключевым словам) по привязанной ' +
+        'базе знаний (Dify) по её datasetId. Используй, когда выполняется условие привязки-«базы ' +
+        'знаний» из твоего контекста: подставь datasetId из строки привязки и запрос по смыслу ' +
+        'вопроса пользователя (можно включать точные термины/имена — их найдёт полнотекстовая часть). ' +
+        'Возвращает: metadataFields (по каким полям можно фильтровать) и hits — выдержки (документ, ' +
+        'score, текст, metadata: напр. дата встречи/источник) — используй их, чтобы датировать и ' +
+        'атрибутировать факты. Фильтровать можно ТОЛЬКО по полям из metadataFields; если поля нет — ' +
+        'вернётся ошибка со списком доступных. Диапазоны дат не поддерживаются (дата хранится строкой) — ' +
+        'для периода используй contains/start with по году или году-месяцу («2025-09», «2026»).',
+      inputSchema: {
+        type: 'object',
+        required: ['datasetId', 'query'],
+        properties: {
+          datasetId: { type: 'string', description: 'ID датасета из строки привязки (mcp__personas__knowledge_search datasetId "…")' },
+          query: { type: 'string', description: 'Поисковый запрос на естественном языке (по смыслу вопроса)' },
+          topK: { type: 'integer', minimum: 1, maximum: 20, description: 'Сколько выдержек вернуть (по умолчанию 6)' },
+          filters: {
+            type: 'array',
+            description: 'Необязательные фильтры по метаданным документов. Фильтруй только по полям из ' +
+              'metadataFields (сделай сначала поиск без фильтра, чтобы их увидеть).',
+            items: {
+              type: 'object',
+              required: ['name', 'operator'],
+              properties: {
+                name: { type: 'string', description: 'Имя поля метаданных (напр. meeting_date, meeting_source, meeting_id)' },
+                operator: {
+                  type: 'string',
+                  enum: ['contains', 'not contains', 'start with', 'end with', 'is', 'is not', 'empty', 'not empty'],
+                  description: 'Строковый оператор. Для периода дат — contains/start with по «2025-09»/«2026»',
+                },
+                value: { type: 'string', description: 'Значение (не нужно для empty/not empty)' },
+              },
+            },
+          },
+          logic: { type: 'string', enum: ['and', 'or'], description: 'Как объединять несколько фильтров (по умолчанию and)' },
+        },
+      },
+    },
+  ] : []),
   {
     name: 'personas_delete',
     description: 'Удалить персону по id. Действие необратимо: долгая память персоны тоже удаляется.',
@@ -174,6 +291,26 @@ function personaBody(args, keys) {
 
 const FIELD_KEYS = ['name', 'role', 'description', 'systemPrompt', 'model', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId'];
 
+// Запрет самоэскалации: персона не может менять СОБСТВЕННЫЕ привязки
+// (проверка до любого fetch — изменение прав себе блокируется по построению)
+function assertNotSelfBindings(id) {
+  if (SELF_ID && String(id) === SELF_ID)
+    throw new Error('Персона не может менять собственные привязки — попроси об этом пользователя.');
+}
+
+// Слоты контракта характера (P1): плоские аргументы инструмента → объект contract API
+const CONTRACT_KEYS = ['character', 'tone', 'mustDo', 'mustNot', 'outputFormat', 'speechExamples'];
+
+// Собрать contract из аргументов; systemPrompt — legacy-алиас character.
+// null — слоты не переданы (contract в body не включаем)
+function contractFrom(args) {
+  const c = {};
+  for (const key of CONTRACT_KEYS) if (key in args) c[key] = args[key];
+  if (!('character' in c) && typeof args.systemPrompt === 'string' && args.systemPrompt.trim())
+    c.character = args.systemPrompt;
+  return Object.keys(c).length ? c : null;
+}
+
 async function callTool(name, args) {
   switch (name) {
     case 'personas_list': {
@@ -191,6 +328,12 @@ async function callTool(name, args) {
 
     case 'personas_create': {
       const body = personaBody(args, FIELD_KEYS);
+      // Характер — сразу контрактом по слотам; legacy systemPrompt мапится в character
+      const contract = contractFrom(args);
+      if (contract) {
+        body.contract = contract;
+        delete body.systemPrompt;
+      }
       body.scope = args.scope ?? 'global';
       if (body.scope === 'project') {
         body.projectId = args.projectId ?? PROJECT_ID;
@@ -199,11 +342,36 @@ async function callTool(name, args) {
       } else {
         delete body.projectId;
       }
+      // Привязки при создании (флаг persona-bindings): явный список и/или AI-подбор
+      if (BINDINGS) {
+        if (Array.isArray(args.bindings)) body.bindings = args.bindings;
+        if ('autoBindings' in args) body.autoBindings = Boolean(args.autoBindings);
+      }
       return json(await api('/api/personas', { method: 'POST', body: JSON.stringify(body) }));
     }
 
     case 'personas_update': {
+      // Изменение привязок — отдельным PUT-эндпоинтом; себе — запрещено (анти-самоэскалация)
+      if ('bindings' in args) {
+        if (!BINDINGS) throw new Error('Привязки персон выключены (флаг persona-bindings).');
+        assertNotSelfBindings(args.id);
+        await api(`/api/personas/${encodeURIComponent(args.id)}/bindings`, {
+          method: 'PUT',
+          body: JSON.stringify({ bindings: args.bindings ?? [] }),
+        });
+      }
       const body = personaBody(args, FIELD_KEYS);
+      // Частичная правка контракта: мержим с текущим, иначе передача одного слота
+      // (напр. только tone) затёрла бы остальные — API заменяет contract целиком
+      const contract = contractFrom(args);
+      if (contract) {
+        const current = await api(`/api/personas/${encodeURIComponent(args.id)}`);
+        body.contract = { ...(current?.contract ?? {}), ...contract };
+        delete body.systemPrompt;
+      }
+      // Изменены только привязки (body пуст) — просто вернуть актуальную персону
+      if (Object.keys(body).length === 0)
+        return json(await api(`/api/personas/${encodeURIComponent(args.id)}`));
       if (body.scope === 'project' && !('projectId' in body)) {
         if (!PROJECT_ID)
           throw new Error('Для смены зоны на проектную нужен projectId: текущая сессия вне проекта.');
@@ -211,6 +379,32 @@ async function callTool(name, args) {
       }
       return json(await api(`/api/personas/${encodeURIComponent(args.id)}`, { method: 'PUT', body: JSON.stringify(body) }));
     }
+
+    case 'personas_bindings_list':
+      return json(await api(`/api/personas/${encodeURIComponent(args.id)}/bindings`));
+
+    case 'personas_suggest_bindings':
+      return json(await api(`/api/personas/${encodeURIComponent(args.id)}/bindings/suggest`, { method: 'POST' }));
+
+    case 'personas_bindings_set': {
+      assertNotSelfBindings(args.id);
+      return json(await api(`/api/personas/${encodeURIComponent(args.id)}/bindings`, {
+        method: 'PUT',
+        body: JSON.stringify({ bindings: args.bindings ?? [] }),
+      }));
+    }
+
+    case 'knowledge_search':
+      return json(await api('/api/personas/knowledge-search', {
+        method: 'POST',
+        body: JSON.stringify({
+          datasetId: args.datasetId,
+          query: args.query,
+          topK: args.topK ?? null,
+          filters: Array.isArray(args.filters) ? args.filters : null,
+          logic: args.logic ?? null,
+        }),
+      }));
 
     case 'personas_delete':
       await api(`/api/personas/${encodeURIComponent(args.id)}`, { method: 'DELETE' });

@@ -67,8 +67,10 @@ public class SessionManagerTests : IDisposable
         var personas = new PersonaManager(config);
         _personaManager = personas;
         var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config, NullLogger<PersonaMemoryService>.Instance);
+        var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesSvc, notesKb,
+            knowledge, new SkillsService(), flags, userStore, config, NullLogger<PersonaBindingsService>.Instance);
         var promptBuilder = new PersonaPromptBuilder(llmProviders);
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, promptBuilder, NullLogger<SessionManager>.Instance);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, NullLogger<SessionManager>.Instance);
     }
 
     public void Dispose()

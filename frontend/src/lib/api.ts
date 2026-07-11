@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -397,6 +397,40 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+
+    // === Привязки «Знания и правила» (фича persona-bindings) ===
+    // Мгновенное сохранение: каждая мутация — отдельный запрос, без общей формы.
+    bindings: (id: string) =>
+      request<PersonaBinding[]>(`/personas/${encodeURIComponent(id)}/bindings`),
+    addBinding: (id: string, dto: PersonaBindingDto) =>
+      request<PersonaBinding>(`/personas/${encodeURIComponent(id)}/bindings`, {
+        method: 'POST', body: JSON.stringify(dto),
+      }),
+    updateBinding: (id: string, bindingId: string, dto: PersonaBindingDto) =>
+      request<PersonaBinding>(`/personas/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}`, {
+        method: 'PUT', body: JSON.stringify(dto),
+      }),
+    removeBinding: (id: string, bindingId: string) =>
+      request<void>(`/personas/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}`, {
+        method: 'DELETE',
+      }),
+    // Каталог целей для пикера: type = project | knowledge | notes | tool | skill;
+    // для notes с source= — папки внутри источника
+    bindingTargets: (type: string, source?: string) => {
+      const qs = new URLSearchParams({ type });
+      if (source) qs.set('source', source);
+      return request<BindingTarget[]>(`/personas/binding-targets?${qs}`);
+    },
+    // AI-формулировка условия «когда пользоваться» по содержимому источника (LLM, до ~60с)
+    aiBindingCondition: (body: { type: PersonaBindingType; target: string; path?: string | null }) =>
+      request<{ condition: string }>('/personas/bindings/ai-condition', {
+        method: 'POST', body: JSON.stringify(body), timeoutMs: 90_000,
+      }),
+    // AI-подбор привязок под роль персоны: кандидаты, ничего не сохраняется
+    suggestBindings: (id: string) =>
+      request<{ candidates: PersonaBinding[] }>(`/personas/${encodeURIComponent(id)}/bindings/suggest`, {
+        method: 'POST', timeoutMs: 150_000,
+      }),
   },
 
   // Утренний бриф (флаг daily-briefing): собрать план дня в дневник
@@ -623,6 +657,30 @@ export const api = {
       request<void>(`/projects/${projectId}/agents/${agentName}`, { method: 'PUT', body: JSON.stringify({ content }) }),
     createAgent: (projectId: string, name: string, content: string) =>
       request<{ name: string }>(`/projects/${projectId}/agents`, { method: 'POST', body: JSON.stringify({ name, content }) }),
+
+    // --- Реестр skills.sh (обёртка npx skills) ---
+    // Поиск навыков по реестру; owner — опциональное сужение по GitHub-владельцу.
+    // Русский запрос переводится на английский (реестр англоязычный) — translatedQuery
+    // показывает, что реально искали (null, если перевод не понадобился).
+    find: (q: string, owner?: string) =>
+      request<{ query: string; translatedQuery: string | null; results: RegistrySkill[] }>(
+        `/skills/find?q=${encodeURIComponent(q)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`),
+    // Установка навыка: scope 'project' требует projectId, 'global' — нет
+    install: (source: string, skill: string, scope: 'project' | 'global', projectId?: string) =>
+      request<{ installed: string; scope: string }>('/skills/install', {
+        method: 'POST', body: JSON.stringify({ source, skill, scope, projectId }),
+      }),
+    uninstall: (skill: string, scope: 'project' | 'global', projectId?: string) =>
+      request<void>(`/skills/installed?skill=${encodeURIComponent(skill)}&scope=${scope}${projectId ? `&projectId=${projectId}` : ''}`,
+        { method: 'DELETE' }),
+    // LLM-подбор: ровно один из personaId / projectId / query
+    suggest: (ctx: { personaId?: string; projectId?: string; query?: string }) =>
+      request<{ candidates: SkillSuggestion[] }>('/skills/suggest', { method: 'POST', body: JSON.stringify(ctx) }),
+    // Установить навык персоне: глобальная установка + привязка (Skill)
+    installForPersona: (personaId: string, source: string, skill: string) =>
+      request<{ installed: string; bound: boolean; warning?: string }>(`/personas/${personaId}/skills`, {
+        method: 'POST', body: JSON.stringify({ source, skill }),
+      }),
   },
 
   workflow: {

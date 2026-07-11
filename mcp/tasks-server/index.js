@@ -5,12 +5,14 @@
 //   TASKS_API_URL    — базовый URL бэкенда (http://127.0.0.1:5000)
 //   TASKS_API_TOKEN  — сервисный JWT владельца сессии
 //   TASKS_PROJECT_ID — id проекта сессии; пусто = контекст личных задач
+//   TASKS_EXECUTE    — "1" = регистрировать tasks_execute (запуск Claude-исполнителя)
 
 import { createInterface } from 'node:readline';
 
 const API_URL = (process.env.TASKS_API_URL ?? 'http://localhost:5000').replace(/\/$/, '');
 const API_TOKEN = process.env.TASKS_API_TOKEN ?? '';
 const PROJECT_ID = process.env.TASKS_PROJECT_ID || null;
+const EXECUTE_ENABLED = process.env.TASKS_EXECUTE === '1';
 
 // --- HTTP к бэкенду ---
 
@@ -44,6 +46,8 @@ function brief(t) {
     // Правило повторения показываем, только если оно активно
     recurrence: t.recurrence && t.recurrence.type !== 'none' ? t.recurrence : null,
     assignee: t.assignee ?? null,
+    // Исполнитель-персона (id): задача выполняется силами Claude от её лица
+    personaId: t.personaId ?? null,
     projectId: t.projectId ?? null,
     columnId: t.columnId ?? null,
     labels: t.labels,
@@ -105,6 +109,14 @@ const REMINDER_MINUTES_SCHEMA = {
   description: 'Напоминание: за сколько минут до срока уведомить (0 = в момент срока). Требует dueDate.',
 };
 
+// Персона-исполнитель: id персоны, которая выполнит задачу от своего лица (с её
+// характером, моделью и памятью). Список доступных персон и их id — personas_list
+// (MCP personas-server). Назначение персоны автоматически ставит исполнителя Claude.
+const PERSONA_ID_SCHEMA = {
+  type: 'string',
+  description: 'ID персоны-исполнителя (см. personas_list). Задачу выполнит Claude от её лица. "" — снять персону.',
+};
+
 const TOOLS = [
   {
     name: 'tasks_list',
@@ -154,6 +166,7 @@ const TOOLS = [
         reminderMinutes: REMINDER_MINUTES_SCHEMA,
         recurrence: RECURRENCE_SCHEMA,
         assignee: { type: 'string', enum: ENUMS.assignee, description: 'Исполнитель' },
+        personaId: PERSONA_ID_SCHEMA,
         subtasks: { type: 'array', items: { type: 'string' }, description: 'Названия подзадач' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки' },
         columnId: COLUMN_ID_SCHEMA,
@@ -177,6 +190,7 @@ const TOOLS = [
         reminderMinutes: { ...REMINDER_MINUTES_SCHEMA, description: REMINDER_MINUTES_SCHEMA.description + ' Отрицательное значение — убрать напоминание.' },
         recurrence: RECURRENCE_SCHEMA,
         assignee: { type: 'string', enum: ENUMS.assignee },
+        personaId: PERSONA_ID_SCHEMA,
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки (заменяют список целиком)' },
         columnId: { ...COLUMN_ID_SCHEMA, description: COLUMN_ID_SCHEMA.description + ' Пустая строка — сброс на дефолтную колонку категории.' },
       },
@@ -233,6 +247,22 @@ const TOOLS = [
   },
 ];
 
+// tasks_execute — только на пользовательском ходу (env выставляет ClaudeSession):
+// исполнитель порождает новую сессию Claude, на агентных ходах не даётся (анти-рекурсия)
+if (EXECUTE_ENABLED) {
+  TOOLS.push({
+    name: 'tasks_execute',
+    description: 'Запустить Claude-исполнителя задачи: отдельная сессия в проекте задачи ' +
+      '(личная — чат вне проекта), работает в фоне и сама ведёт статус через tasks_*. ' +
+      'Возвращает задачу с id сессии-исполнителя.',
+    inputSchema: {
+      type: 'object',
+      required: ['taskId'],
+      properties: { taskId: { type: 'string', description: 'ID задачи' } },
+    },
+  });
+}
+
 // --- Реализация инструментов ---
 
 function json(data) {
@@ -272,7 +302,7 @@ async function callTool(name, args) {
 
     case 'tasks_create': {
       const body = { title: args.title };
-      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'labels', 'columnId'])
+      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'labels', 'columnId'])
         if (args[k] !== undefined) body[k] = args[k];
       if (Array.isArray(args.subtasks) && args.subtasks.length)
         body.subtasks = args.subtasks.map(t => ({ title: String(t) }));
@@ -289,6 +319,18 @@ async function callTool(name, args) {
       return json(await api(`/api/tasks/${args.id}`, {
         method: 'PUT', body: JSON.stringify({ status: 'done' }),
       }));
+
+    case 'tasks_execute': {
+      if (!EXECUTE_ENABLED) throw new Error('tasks_execute недоступен на этом ходу');
+      const t = await api(`/api/tasks/${args.taskId}/execute`, { method: 'POST' });
+      return json({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        executorSessionId: t.linkedSessionId ?? null,
+        note: 'Исполнитель запущен и работает в фоне — прогресс виден в связанной сессии и статусе задачи.',
+      });
+    }
 
     case 'tasks_delete':
       await api(`/api/tasks/${args.id}`, { method: 'DELETE' });

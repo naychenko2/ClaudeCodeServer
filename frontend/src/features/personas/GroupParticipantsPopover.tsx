@@ -79,7 +79,7 @@ export function GroupParticipantsPopover({ session, participants, onUpdated, onC
         </div>
         {participants.map((p, i) => row(p, (
           <>
-            {i === 0 && pill('ведущая')}
+            {i === 0 && pill('ведущий')}
             {p.id === session.personaId && i !== 0 && pill('отвечает')}
             {participants.length > 2 && (
               <button

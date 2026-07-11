@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using Microsoft.Extensions.Options;
@@ -32,6 +33,14 @@ public record DifyDatasetMetadataResponse(
 public record DifyDatasetResponse(
     [property: JsonPropertyName("id")] string Id);
 
+public record DifyDatasetListItem(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name);
+
+public record DifyDatasetsPage(
+    [property: JsonPropertyName("data")] List<DifyDatasetListItem> Data,
+    [property: JsonPropertyName("has_more")] bool HasMore);
+
 public record DifyDocumentCreateResponse(
     [property: JsonPropertyName("document")] DifyDocumentItem Document);
 
@@ -39,7 +48,10 @@ public record DifyDocumentCreateResponse(
 
 public record DifyRetrieveDocument(
     [property: JsonPropertyName("id")] string Id,
-    [property: JsonPropertyName("name")] string Name);
+    [property: JsonPropertyName("name")] string Name,
+    // Структурные метаданные документа (напр. meeting_date/meeting_id/meeting_source) —
+    // значения произвольных типов, приводятся к строке при маппинге в чанк.
+    [property: JsonPropertyName("doc_metadata")] Dictionary<string, JsonElement>? DocMetadata = null);
 
 public record DifyRetrieveSegment(
     [property: JsonPropertyName("content")] string Content,
@@ -52,8 +64,17 @@ public record DifyRetrieveRecord(
 public record DifyRetrieveResponse(
     [property: JsonPropertyName("records")] List<DifyRetrieveRecord> Records);
 
-// Чанк результата семантического поиска
-public record DifyRetrieveChunk(string Content, double Score, string DocumentId, string DocumentName);
+// Чанк результата поиска. Metadata — структурные метаданные документа-источника
+// (дата встречи, id, источник и т.п.), приведённые к строкам; null/пусто — их нет.
+public record DifyRetrieveChunk(string Content, double Score, string DocumentId, string DocumentName,
+    IReadOnlyDictionary<string, string>? Metadata = null);
+
+// Условие фильтрации по метаданным. Op — строковый оператор Dify (contains, not contains,
+// start with, end with, is, is not, empty, not empty). Value не нужен для empty/not empty.
+public record KnowledgeMetadataFilter(string Name, string Op, string? Value);
+
+// Поле метаданных датасета (имя + тип: string/number/time).
+public record KnowledgeMetadataFieldInfo(string Name, string Type);
 
 public class KnowledgeService
 {
@@ -135,27 +156,86 @@ public class KnowledgeService
         return body.Id;
     }
 
-    // Семантический поиск по датасету: чанки со score и документом-источником
-    public async Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8)
+    // Поиск по датасету: чанки со score и документом-источником. По умолчанию
+    // ГИБРИДНЫЙ поиск — смысловой (векторный) + полнотекстовый (по ключевым словам)
+    // в одном запросе; Dify объединяет результаты. Работает без reranking-модели
+    // (reranking_enable=false). Если датасет не поддерживает гибрид (напр. economy-
+    // индексация без полнотекста) — тихий фолбэк на чисто смысловой поиск.
+    // filters — необязательная фильтрация по метаданным документов (дата встречи,
+    // источник и т.п.); logic — как объединять условия ("and"/"or").
+    public async Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8,
+        IReadOnlyList<KnowledgeMetadataFilter>? filters = null, string logic = "and")
+    {
+        try { return await RetrieveWithMethodAsync(datasetId, query, topK, "hybrid_search", filters, logic); }
+        catch { return await RetrieveWithMethodAsync(datasetId, query, topK, "semantic_search", filters, logic); }
+    }
+
+    private async Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveWithMethodAsync(
+        string datasetId, string query, int topK, string searchMethod,
+        IReadOnlyList<KnowledgeMetadataFilter>? filters, string logic)
     {
         var client = CreateClient();
-        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/retrieve", new
+        // retrieval_model строим словарём: metadata_filtering_conditions добавляется
+        // только при наличии фильтров (внутри retrieval_model — top-level Dify игнорирует)
+        var retrievalModel = new Dictionary<string, object?>
         {
-            query,
-            retrieval_model = new
+            ["search_method"] = searchMethod,
+            ["reranking_enable"] = false,
+            ["top_k"] = topK,
+            ["score_threshold_enabled"] = false,
+        };
+        if (filters is { Count: > 0 })
+            retrievalModel["metadata_filtering_conditions"] = new
             {
-                search_method = "semantic_search",
-                reranking_enable = false,
-                top_k = topK,
-                score_threshold_enabled = false,
-            },
-        });
+                logical_operator = logic is "or" ? "or" : "and",
+                conditions = filters.Select(f => new
+                {
+                    name = f.Name,
+                    comparison_operator = f.Op,
+                    value = f.Value ?? "",
+                }),
+            };
+        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/retrieve", new { query, retrieval_model = retrievalModel });
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<DifyRetrieveResponse>()
             ?? throw new InvalidOperationException("Пустой ответ от Dify при поиске");
         return body.Records
-            .Select(r => new DifyRetrieveChunk(r.Segment.Content, r.Score, r.Segment.Document.Id, r.Segment.Document.Name))
+            .Select(r => new DifyRetrieveChunk(r.Segment.Content, r.Score,
+                r.Segment.Document.Id, r.Segment.Document.Name,
+                MapMetadata(r.Segment.Document.DocMetadata)))
             .ToList();
+    }
+
+    // Поля метаданных датасета (имя + тип) — для валидации фильтра и подсказки персоне,
+    // по каким полям вообще можно фильтровать. Пусто — метаданных у датасета нет.
+    public async Task<IReadOnlyList<KnowledgeMetadataFieldInfo>> ListMetadataFieldsAsync(string datasetId)
+    {
+        if (!IsConfigured) return [];
+        var client = CreateClient();
+        var resp = await client.GetAsync($"datasets/{datasetId}/metadata");
+        resp.EnsureSuccessStatusCode();
+        var meta = await resp.Content.ReadFromJsonAsync<DifyDatasetMetadataResponse>();
+        return meta?.DocMetadata
+            .Select(f => new KnowledgeMetadataFieldInfo(f.Name, f.Type))
+            .ToList() ?? [];
+    }
+
+    // Метаданные документа → строковый словарь (пустые/null значения отбрасываем).
+    private static IReadOnlyDictionary<string, string>? MapMetadata(Dictionary<string, JsonElement>? meta)
+    {
+        if (meta is null || meta.Count == 0) return null;
+        var result = new Dictionary<string, string>();
+        foreach (var (key, value) in meta)
+        {
+            var s = value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString(),
+                JsonValueKind.Null or JsonValueKind.Undefined => null,
+                _ => value.GetRawText(),
+            };
+            if (!string.IsNullOrWhiteSpace(s)) result[key] = s;
+        }
+        return result.Count == 0 ? null : result;
     }
 
     // Lazy-создание датасета при первом обращении; SemaphoreSlim с double-check защищает от гонки.
@@ -320,6 +400,28 @@ public class KnowledgeService
         resp.EnsureSuccessStatusCode();
         return await resp.Content.ReadFromJsonAsync<DifyDocumentsPage>()
             ?? new DifyDocumentsPage([], false, 0);
+    }
+
+    // Все датасеты рабочего пространства Dify (id + имя), с обходом пагинации.
+    // Имя несёт префикс владельца («{username}:…») — фильтрацию по нему делает вызывающий.
+    public async Task<IReadOnlyList<DifyDatasetListItem>> ListDatasetsAsync()
+    {
+        if (!IsConfigured) return [];
+        const int pageSize = 100;
+        var all = new List<DifyDatasetListItem>();
+        var client = CreateClient();
+        var page = 1;
+        while (true)
+        {
+            var resp = await client.GetAsync($"datasets?page={page}&limit={pageSize}");
+            resp.EnsureSuccessStatusCode();
+            var p = await resp.Content.ReadFromJsonAsync<DifyDatasetsPage>();
+            if (p is null) break;
+            all.AddRange(p.Data);
+            if (!p.HasMore || p.Data.Count == 0) break;
+            page++;
+        }
+        return all;
     }
 
     // Возвращает ВСЕ документы датасета, обходя пагинацию Dify (одна страница ограничена).

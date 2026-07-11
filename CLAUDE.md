@@ -280,10 +280,22 @@ WorkingDirectory = `project.RootPath`
   не меняет) | `custom` (свой список `DisallowedTools`); в disallowed-инструменты сессии их
   превращает [PersonaAccessPolicy.cs](backend/ClaudeHomeServer/Services/PersonaAccessPolicy.cs)
   (`BuildExtraDisallowed`, поверх ограничений `Tools`).
-- **Проактивность (флаг `persona-proactive`)**: `Persona.Proactive` (daily/weekdays/weekly +
-  время в таймзоне владельца + инструкция) — [PersonaProactiveService.cs](backend/ClaudeHomeServer/Services/PersonaProactiveService.cs)
-  (BackgroundService) в момент расписания пишет первой в закреплённый чат персоны
-  (`Proactive.SessionId`, проверка `chat.PersonaId == personaId`) и шлёт уведомление.
+- **Персона-исполнитель задач**: `TaskItem.PersonaId` — задача выполняется силами Claude «от лица»
+  персоны (её характер/модель/память). Инвариант `PersonaId != null ⇒ Assignee = Claude`
+  (`TaskManager.NormalizePersonaAssignee` в Create/Update); `SpawnNextOccurrence` переносит
+  `PersonaId` (регулярная задача не теряет исполнителя). Запуск — `TaskExecutionService` (сессия
+  AcceptEdits с `personaId`, 6-секционный контракт `BuildPersonaPrompt`, уведомления от лица;
+  деградация без персоны). Валидация — `TaskPersonaValidator` (персона владельца; проектная — только
+  свой проект). **Три канала назначения** вокруг одного поля `personaId`: (1) UI — единый пикер
+  «Исполнитель» ([ExecutorPicker.tsx](frontend/src/features/tasks/ExecutorPicker.tsx)) в форме и
+  диалоге создания; (2) REST — `personaId` в POST/PUT задач + фильтр `GET /api/tasks?personaId=`;
+  (3) MCP — `personaId` в `tasks_create`/`tasks_update` + `personas_list` для id (подсказка в
+  промпте tasks-server при подключённом personas-server). Вкладка **«Задачи»** в студии персоны
+  ([PersonaTasksPanel.tsx](frontend/src/features/personas/PersonaTasksPanel.tsx)) — отфильтрованный
+  вид реальных задач (те же `TaskCard`), клик открывает задачу в её разделе (`openTaskInSection` →
+  событие `cc-open-url`), кнопка «Поручить задачу» = `NewTaskDialog` с предзаполненным исполнителем;
+  факт-чип «Задачи» на Обзоре. **Проактивность («пишет первой» по расписанию) удалена** — сценарий
+  утреннего брифа покрывается регулярной задачей с персоной-исполнителем.
 - **Групповой чат (флаг `persona-group-chats`)**: `Session.Participants` (2-4 id персон,
   первая — ведущая), `Session.PersonaId` = активный спикер. Создание —
   `SessionManager.CreateGroupChatAsync` (`POST /api/chats/group`; зона — по ведущей, как у
@@ -358,10 +370,10 @@ WorkingDirectory = `project.RootPath`
   (группы «Команда проекта»/«Глобальные»), пилюли «Поговорить с…» в empty state (в проекте
   команда сразу, глобальные за «+N ещё»). Стор [lib/personas.ts](frontend/src/lib/personas.ts)
   (realtime personas_changed; `personaLabel`/`personaTitleLines` — единый формат «Роль (Имя)»).
-- **Флаги**: `personas` (раздел + чат + память + аватар), `persona-memory-autolearn` (авто-извлечение
-  фактов из диалога), `persona-memory-consolidation` (фоновая уборка памяти), `persona-mentions`
-  (@упоминания + persona_ask + дискуссия), `persona-proactive` (пишет первой по расписанию),
-  `persona-group-chats` (групповые чаты + совещания P7).
+- **Флаги**: `personas` (раздел + чат + память + аватар + персона-исполнитель задач + вкладка
+  «Задачи»), `persona-memory-autolearn` (авто-извлечение фактов из диалога),
+  `persona-memory-consolidation` (фоновая уборка памяти), `persona-mentions`
+  (@упоминания + persona_ask + дискуссия), `persona-group-chats` (групповые чаты + совещания P7).
 
 ## Механики OmO в чатах (флаги `ultrawork-keyword`, `work-loop`)
 
@@ -425,7 +437,8 @@ GET                 /api/history/new-count            ?since=iso  → { count } 
 GET                 /api/feature-flags                → { definitions[], values{} }  (реестр + эффективные значения юзера)
 PUT                 /api/feature-flags/{key}          { enabled } → { values{} }      (override per-user; ключ валидируется по каталогу)
 PUT                 /api/auth/timezone                { timeZone }  (IANA-зона устройства — для напоминаний)
-POST                /api/tasks/{id}/execute           → Task  (запуск Claude-исполнителя, флаг task-claude-exec)
+GET                 /api/tasks                        ?from=&to=&q=&status=&priority=&assignee=&projectId=&personal=&personaId=  (все задачи владельца с фильтрами; personaId — поручения персоне)
+POST                /api/tasks/{id}/execute           → Task  (запуск Claude-исполнителя; personaId у задачи → от лица персоны)
 GET                 /api/push/vapid-public-key        → { publicKey }
 POST                /api/push/subscribe|unsubscribe   { endpoint, p256dh?, auth? }  (web-push подписки устройств)
 GET/POST/PUT/DELETE /api/personas                     (CRUD персон; ?scope=context&projectId= — доступные в контексте)  [флаг personas]
@@ -472,11 +485,12 @@ POST                /api/chats/{id}/pipeline/cancel    → 204  (отмена и
 - Артефакты сессии (за фич-флагом `session-artifacts`): панель справа от чата с вкладками — план (ExitPlanMode), задачи (Todo/Task), агенты (субагенты Task/Agent + workflow-группы с раскрытием деталей: промпт, лента вызовов, результат), изменённые/упомянутые файлы, ссылки. Всё derived из ленты чата ([useSessionArtifacts.ts](frontend/src/hooks/useSessionArtifacts.ts)), без участия бэкенда
 - Продуктовая история «Что нового» (основной функционал, кнопка в шапке): AI-сводка изменений **по всем проектам сразу** — что нового и чем полезно пользователю (не код, не diff). [ChangelogService](backend/ClaudeHomeServer/Services/ChangelogService.cs) собирает git-коммиты из репы продукта — путь в `Changelog:SourceRepoPath` (машинно-специфичный, в `appsettings.Local.json`; без него раздел показывает «не настроено»), имя — `Changelog:SourceProjectName` (дефолт = имя папки). Дальше группирует по дням и суммирует каждый день **одним вызовом** через общий [OneShotClaudeRunner](backend/ClaudeHomeServer/Services/Llm/OneShotClaudeRunner.cs) (модель `Changelog:Model`, дефолт haiku; лениво, продуктовый промпт — польза, а не техника; таймаут `Changelog:TimeoutMs`, дефолт 480с). Промпт просит не более 12 пунктов на день (агрессивная группировка) и короткий `scoreReason`. Области выравниваются между днями подсказкой частых `area` из кеша (`KnownAreas`) + канонизацией `NormalizeAreas` (схлопывает «Чат»/«чат»/«ЧАТ»). Fallback без LLM (`FallbackItems`, при недоступном claude) кладёт `area` по типу коммита (feature→«Новое», fix→«Исправления», improvement→«Улучшения», иначе «Прочее») и честный `scoreReason` «сводку собрать не вышло». **Дробить день на параллельные чанки пробовали — отказались**: старт CLI (~15с) платится за каждый вызов, а чанки не видят друг друга и дробят смысл (замер на 59 коммитах: один вызов — 141с/13 пунктов, три чанка — 182с/29 пунктов). Каждый пункт: `type` (feature/improvement/fix/other), `area` (раздел продукта — Claude определяет сам), `emoji`, `title`, `benefit`, `authors`, `projects`. Результат кешируется на уровне продукта в `data/changelog/product.json` (ключ дня = хеш sha-набора всех проектов — сводка одна для всех и перегенерируется только при новых коммитах дня). Алиасы авторов — `Changelog:AuthorAliases` (email → имя). Эндпоинты — глобальный [HistoryController](backend/ClaudeHomeServer/Controllers/HistoryController.cs) (`api/history/*`). Фронт: [ProductHistory.tsx](frontend/src/components/ProductHistory.tsx) — полноэкранная лента по дням (Сегодня/Вчера/дата). Внутри дня пункты **сгруппированы по области** (`area`), и режим показа адаптивный (`LIST_MODE_MAX = 12`): мало пунктов — все области идут **секциями списком** (заголовок `CategoryHeader` + свой таймлайн), много — **вкладки-подчёркивания** `AreaTabs` с таймлайном активной области. Таймлайн (`GroupTimeline`) — маркеры-кружочки единым accent-цветом. Иконки авторов — роли (`AUTHOR_EMOJI`: Григорий 🧑‍💼, Андрей 👨‍💻; новые — из пула детерминированно по имени). Фильтр по исполнителю (чипы, авторы по алфавиту; режим считается от отфильтрованных пунктов). Навигация по дням — **календарь** (`DayCalendar`): дни с изменениями кликабельны, сводка генерится лениво только для выбранного дня. Кнопка «Что нового» в [HubHeader](frontend/src/components/HubHeader.tsx) видна во всех разделах (событие `open-product-history` → overlay в [App.tsx](frontend/src/App.tsx)), бейдж считает новые коммиты с последнего захода (timestamp в `localStorage`)
 - Фич-флаги: per-user тогглы (dark launch), реестр в коде (`FeatureFlagCatalog`), UI-тумблеры в меню аватара («Экспериментальные функции»). См. раздел «Фич-флаги»
-- Задачи v3 (флаги `task-reminders`/`task-recurrence`/`task-claude-exec`):
+- Задачи v3 (напоминания, регулярные, Claude-исполнитель; исполнение гейтится флагом `personas` для персон):
   - Напоминания: `TaskItem.ReminderMinutes` (офсет от срока), `TaskSchedulerService` (BackgroundService, тик 30 с) шлёт `NotificationMessage` в группу user_* (тост [NotificationToasts.tsx](frontend/src/components/NotificationToasts.tsx)) + web push. Сроки локальные: `User.TimeZone` (IANA, фронт шлёт при старте), конверсия в UTC — [TaskDueCalculator.cs](backend/ClaudeHomeServer/Services/TaskDueCalculator.cs), без времени — 09:00
   - Web push: VAPID-ключи автогенерация в `data/vapid-keys.json`, подписки в `data/push-subscriptions.json` (несколько устройств per-user, авточистка 404/410). SW — свой `frontend/src/sw.ts` (vite-plugin-pwa `injectManifest`, отдельный tsconfig.sw.json), обработчики push/notificationclick с hash-диплинками
   - Регулярные задачи: `TaskRecurrence` + `SeriesId`; при переводе экземпляра в done PUT /api/tasks/{id} спавнит следующий ([TaskRecurrenceCalculator.cs](backend/ClaudeHomeServer/Services/TaskRecurrenceCalculator.cs) — отсчёт от срока, не от завершения)
   - Claude-исполнитель: [TaskExecutionService.cs](backend/ClaudeHomeServer/Services/TaskExecutionService.cs) — сессия acceptEdits в проекте задачи (личная — чат вне проекта), промпт с правилами ведения статуса через MCP tasks_*; наблюдение через событие `SessionManager.OnSessionMessage` (result → отметка + уведомление, permission → «ждёт ответа»); триггеры: кнопка «Выполнить с Claude» и автозапуск планировщиком в момент срока (окно 24 ч)
+  - Исполнитель = персона: `TaskItem.PersonaId` — задача выполняется «от лица» персоны (модель приоритетнее `Tasks:ExecutorModel`, 6-секционный контракт, уведомления её лицом). Единый пикер «Исполнитель» (Я/Claude/персона) в форме и диалоге; вкладка «Задачи» персоны и назначение через REST/MCP — см. раздел «Персоны». За флагом `personas` (отдельного `task-claude-exec` нет)
 
 ## Фич-флаги (feature toggles)
 

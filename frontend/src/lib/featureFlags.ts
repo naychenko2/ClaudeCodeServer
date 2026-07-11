@@ -17,11 +17,14 @@ export const FLAGS = {
   personaMemoryAutolearn: 'persona-memory-autolearn',
   personaMemoryConsolidation: 'persona-memory-consolidation',
   personaMentions: 'persona-mentions',
-  personaProactive: 'persona-proactive',
   personaGroupChats: 'persona-group-chats',
   ultraworkKeyword: 'ultrawork-keyword',
   workLoop: 'work-loop',
   personaPipeline: 'persona-pipeline',
+  personaBindings: 'persona-bindings',
+  workspaceTools: 'workspace-tools',
+  workspaceChatSend: 'workspace-chat-send',
+  workspaceDestructive: 'workspace-destructive',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

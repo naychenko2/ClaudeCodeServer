@@ -170,8 +170,8 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
   const subtitle = mode === 'pipeline'
     ? 'Задача пройдёт эстафету ролей пантеона: Аналитик, Планировщик, Ревьюер — и уйдёт исполнителю'
     : mode === 'meeting'
-      ? 'Участники независимо выскажутся, раскритикуют позиции друг друга, ведущая сведёт итог'
-      : 'Выбери до двух участников — ведущая персона соберёт их мнения и сведёт итог';
+      ? 'Участники независимо выскажутся, раскритикуют позиции друг друга, ведущий сведёт итог'
+      : 'Выбери до двух участников — ведущий соберёт их мнения и сведёт итог';
 
   const confirmLabel = mode === 'pipeline' ? 'Запустить конвейер'
     : mode === 'meeting' ? 'Созвать совещание' : 'Начать обсуждение';
@@ -230,7 +230,7 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
           </div>
         ) : (
           <>
-            {/* Ведущая — персона этого чата: собирает мнения и сводит итог */}
+            {/* Ведущий — персона этого чата: собирает мнения и сводит итог */}
             {chatPersona && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
                 borderRadius: R.lg, background: C.bgPanel, fontFamily: FONT.sans }}>
@@ -240,14 +240,14 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
                     {personaTitleLines(chatPersona).primary}
                   </span>
                   <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted }}>
-                    {mode === 'meeting' ? 'Ведущая — выскажется и сведёт итог' : 'Ведущая — опросит участников и сводит итог'}
+                    {mode === 'meeting' ? 'Ведущий — выскажется и сведёт итог' : 'Ведущий — опросит участников и сводит итог'}
                   </span>
                 </span>
                 <span style={{
                   flexShrink: 0, fontSize: 10, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase',
                   padding: '2px 8px', borderRadius: R.pill, background: C.accentLight, color: C.accent,
                 }}>
-                  ведущая
+                  ведущий
                 </span>
               </div>
             )}
@@ -356,7 +356,7 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
               : 'Например: как лучше организовать онбординг новых пользователей?'} />
           {mode === 'meeting' && meetingCount >= 2 && (
             <div style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, marginTop: 6, lineHeight: 1.4 }}>
-              Участников: {meetingCount} (ведущая — {chatPersona ? personaTitleLines(chatPersona).primary : 'персона чата'}).
+              Участников: {meetingCount} (ведущий — {chatPersona ? personaTitleLines(chatPersona).primary : 'персона чата'}).
               Стоимость ≈ {2 * meetingCount + 1} вызовов модели — заметно дольше обычного ответа.
             </div>
           )}

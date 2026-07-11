@@ -242,37 +242,42 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   switch (item.kind) {
     case 'user_message':
       return (
-        <div style={{
-          alignSelf: 'flex-end', background: C.accentMuted, color: C.textHeading,
-          borderRadius: '18px 18px 4px 18px', padding: '12px 17px',
-          maxWidth: '80%', fontSize: 14,
-        }}>
-          {/* Ключевое слово максимального усилия — бэкенд включает режим на этот ход */}
-          {ultraOn && hasUltraworkKeyword(item.text) && (
-            <div style={{ marginBottom: 5 }}>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 3,
-                background: C.accent, color: C.onAccent, borderRadius: R.pill,
-                padding: '2px 8px', fontSize: 9.5, fontWeight: 700,
-                letterSpacing: 0.6, textTransform: 'uppercase',
-              }}>
-                ⚡ ультра
-              </span>
-            </div>
-          )}
-          {item.text}
-          {item.attachedPaths && item.attachedPaths.length > 0 && (
-            <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-              {item.attachedPaths.map(p => (
-                <span key={p} style={{
-                  background: C.accentLight, borderRadius: 5,
-                  padding: '1px 6px', fontSize: 11,
+        <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+          <div style={{
+            background: C.accentMuted, color: C.textHeading,
+            borderRadius: '18px 18px 4px 18px', padding: '12px 17px', fontSize: 14,
+          }}>
+            {/* Ключевое слово максимального усилия — бэкенд включает режим на этот ход */}
+            {ultraOn && hasUltraworkKeyword(item.text) && (
+              <div style={{ marginBottom: 5 }}>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 3,
+                  background: C.accent, color: C.onAccent, borderRadius: R.pill,
+                  padding: '2px 8px', fontSize: 9.5, fontWeight: 700,
+                  letterSpacing: 0.6, textTransform: 'uppercase',
                 }}>
-                  {/* В проекте — путь относительно корня; в чате без проекта — только имя файла */}
-                  {project ? relPath(p, project.rootPath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
+                  ⚡ ультра
                 </span>
-              ))}
-            </div>
+              </div>
+            )}
+            {item.text}
+            {item.attachedPaths && item.attachedPaths.length > 0 && (
+              <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {item.attachedPaths.map(p => (
+                  <span key={p} style={{
+                    background: C.accentLight, borderRadius: 5,
+                    padding: '1px 6px', fontSize: 11,
+                  }}>
+                    {/* В проекте — путь относительно корня; в чате без проекта — только имя файла */}
+                    {project ? relPath(p, project.rootPath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* Приглушённая пометка: сообщение прислал агент из другой сессии (chats_send) */}
+          {item.viaAgent && (
+            <span style={{ fontSize: 11, color: C.textMuted, paddingRight: 4 }}>через агента</span>
           )}
         </div>
       );

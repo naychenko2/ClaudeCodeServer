@@ -13,7 +13,9 @@ public interface ILlmSessionAdapter : IAsyncDisposable
     LlmCapabilities Capabilities { get; }
 
     Task StartAsync();
-    Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null);
+    // agentDepth > 0 — ход инициирован агентом из другой сессии (chats_send):
+    // адаптер урезает инструменты делегирования на этот ход, чтобы не допустить рекурсию агентов
+    Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null, int agentDepth = 0);
 
     // Сворачивание контекста; при !Capabilities.SupportsCompact — no-op
     Task CompactAsync();

@@ -10,16 +10,25 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/sessions")]
-public class SessionsController(SessionManager sessions) : ControllerBase
+public class SessionsController(SessionManager sessions, ProjectManager projects) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
+    // Проект принадлежит текущему пользователю; чужой/несуществующий — как отсутствующий (404)
+    private bool OwnsProject(string projectId) =>
+        projects.GetById(projectId)?.OwnerId == UserId;
+
     [HttpGet]
-    public IActionResult GetAll(string projectId) => Ok(sessions.GetByProject(projectId));
+    public IActionResult GetAll(string projectId)
+    {
+        if (!OwnsProject(projectId)) return NotFound();
+        return Ok(sessions.GetByProject(projectId));
+    }
 
     [HttpPost]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateSessionRequest req)
     {
+        if (!OwnsProject(projectId)) return NotFound();
         try
         {
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;
@@ -33,6 +42,7 @@ public class SessionsController(SessionManager sessions) : ControllerBase
     [HttpPut("{sessionId}")]
     public IActionResult Update(string projectId, string sessionId, [FromBody] UpdateSessionRequest req)
     {
+        if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
         if (req.ExpiresAfterMinutes is not -1)
@@ -52,6 +62,7 @@ public class SessionsController(SessionManager sessions) : ControllerBase
     [HttpPost("{sessionId}/persona")]
     public IActionResult SetPersona(string projectId, string sessionId, [FromBody] SetPersonaRequest req)
     {
+        if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
         try
@@ -66,6 +77,7 @@ public class SessionsController(SessionManager sessions) : ControllerBase
     [HttpGet("{sessionId}/history")]
     public async Task<IActionResult> GetHistory(string projectId, string sessionId)
     {
+        if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
         var history = await sessions.GetHistoryAsync(sessionId);
@@ -75,6 +87,10 @@ public class SessionsController(SessionManager sessions) : ControllerBase
     [HttpDelete("{sessionId}")]
     public async Task<IActionResult> Delete(string projectId, string sessionId)
     {
+        if (!OwnsProject(projectId)) return NotFound();
+        var session = sessions.GetById(sessionId);
+        if (session == null) return NoContent(); // идемпотентное удаление
+        if (session.ProjectId != projectId) return NotFound(); // чужая сессия — не удаляем
         await sessions.DeleteAsync(sessionId);
         return NoContent();
     }

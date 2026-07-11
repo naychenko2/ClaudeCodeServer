@@ -388,7 +388,8 @@ export interface PipelinePhaseItem {
 
 // Элементы чата
 export type ChatItem =
-  | { kind: 'user_message'; text: string; attachedPaths?: string[] }
+  // viaAgent — сообщение прислано не человеком, а агентом из другой сессии (chats_send)
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
@@ -441,7 +442,23 @@ export interface AgentInfo {
 
 export interface SkillsData {
   skills: SkillInfo[];
+  projectSkills: SkillInfo[];
   agents: AgentInfo[];
+}
+
+// Навык из реестра skills.sh (результат поиска/подбора). source — «owner/repo».
+export interface RegistrySkill {
+  source: string;
+  skill: string;
+  description: string | null;
+  installs: number | null;
+  url: string;
+}
+
+// Кандидат LLM-подбора: навык реестра + обоснование.
+export interface SkillSuggestion {
+  skill: RegistrySkill;
+  reason: string;
 }
 
 export interface AuthState {
@@ -631,30 +648,6 @@ export interface PersonaAvatar {
   crop?: AvatarCropStateDto | null;
 }
 
-// Тип расписания проактивности персоны
-export type PersonaScheduleType = 'daily' | 'weekdays' | 'weekly';
-
-// Проактивность «пишет первой» (флаг persona-proactive). lastFiredAt/sessionId —
-// служебные (бэкенд не даёт их затирать через API).
-export interface PersonaProactiveConfig {
-  enabled: boolean;
-  type: PersonaScheduleType;
-  weekdays?: number[] | null;   // ISO 1=Пн … 7=Вс (для weekly)
-  time: string;                 // "HH:mm" в таймзоне владельца
-  instruction: string;          // что сделать при срабатывании
-  lastFiredAt?: string | null;
-  sessionId?: string | null;
-}
-
-// Пользовательские поля проактивности для create/update DTO
-export interface PersonaProactiveDto {
-  enabled: boolean;
-  type?: PersonaScheduleType;
-  weekdays?: number[];
-  time?: string;
-  instruction?: string;
-}
-
 // Структурированный контракт персоны (P1): характер разложен по слотам,
 // каждый слот попадает в свою секцию системного промпта. Отсутствие контракта —
 // legacy-режим: весь характер живёт единым текстом в systemPrompt.
@@ -683,8 +676,6 @@ export interface Persona {
   projectId?: string;         // задан только для scope === 'project'
   avatar: PersonaAvatar;
   greeting?: string;          // приветствие персоны в начале чата
-  // Проактивность «пишет первой» (флаг persona-proactive); null — выключена
-  proactive?: PersonaProactiveConfig | null;
   memoryEnabled: boolean;     // долгая память (этап 2)
   // Возможности персоны (ключи tasks/notes/web); null/отсутствие — без ограничений
   tools?: string[] | null;
@@ -694,6 +685,8 @@ export interface Persona {
   disallowedTools?: string[] | null;
   // Ключ шаблона пантеона OmO, из которого подключена персона (null — создана вручную)
   templateKey?: string | null;
+  // Привязки к источникам знаний и правилам (фича persona-bindings); null — нет
+  bindings?: PersonaBinding[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -713,6 +706,47 @@ export interface PantheonTemplate {
   model?: string;
   effort?: string;
   connectedPersonaId?: string | null;
+}
+
+// === Привязки персоны: «знания и правила» (фича persona-bindings) ===
+// Тип источника: project — проект целиком; projectPath — папка/файл проекта;
+// knowledge — база знаний (Dify-датасет); notes — источник заметок; tool —
+// инструмент workspace; skill — глобальный навык.
+export type PersonaBindingType = 'project' | 'projectPath' | 'knowledge' | 'notes' | 'tool' | 'skill';
+
+// Режим привязки: auto — персона обращается по условию; always — выжимка в каждый ход; off — выключена
+export type PersonaBindingMode = 'auto' | 'always' | 'off';
+
+export interface PersonaBinding {
+  id: string;
+  type: PersonaBindingType;
+  // Цель по типам: project/projectPath → projectId; knowledge → datasetId;
+  // notes → ключ источника; tool → ключ инструмента; skill — имя навыка
+  target: string;
+  // Путь внутри цели: папка/файл проекта или папка источника заметок
+  path?: string | null;
+  // Условие «когда пользоваться» — попадает в системный промпт
+  condition: string;
+  mode: PersonaBindingMode;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Тело создания/обновления привязки (POST/PUT bindings)
+export interface PersonaBindingDto {
+  type: PersonaBindingType;
+  target: string;
+  path?: string | null;
+  condition?: string;
+  mode?: PersonaBindingMode;
+}
+
+// Элемент каталога целей привязки (GET /api/personas/binding-targets)
+export interface BindingTarget {
+  id: string;
+  label: string;
+  hint?: string | null;
+  meta?: string | null;
 }
 
 // Тело создания персоны (POST /api/personas). Большинство полей опциональны.
@@ -736,8 +770,6 @@ export interface CreatePersonaDto {
   access?: PersonaAccess;
   // Свой список запрещённых инструментов (для custom)
   disallowedTools?: string[];
-  // Проактивность (только пользовательские поля); undefined — не менять
-  proactive?: PersonaProactiveDto;
 }
 
 // Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { PantheonTemplate, Persona, PersonaScope } from '../../types';
 import { api } from '../../lib/api';
 import { bumpPersonas } from '../../lib/personas';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { C, FONT, R, FIELD, SHADOW } from '../../lib/design';
 import { Toolbar, tbBtnGhost } from '../../components/Toolbar';
 import { IconButton } from '../../components/ui';
@@ -40,6 +41,9 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
       .then(r => setOmoTemplates(r.templates))
       .catch(() => { /* не критично: секция пантеона просто не появится */ });
   useEffect(() => { void loadPantheon(); }, []);
+  // Фича persona-bindings: бэкенд после создания сам подбирает знания (autoBindings
+  // по умолчанию включён) — предупреждаем об этом в подводке
+  const bindingsEnabled = useFeature(FLAGS.personaBindings);
 
   const canSubmit = !!prompt.trim() && !busy;
 
@@ -88,7 +92,9 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
               Опишите персону
             </div>
             <div style={{ marginTop: 6, fontSize: 13.5, color: C.textMuted, lineHeight: 1.5 }}>
-              Кто это и чем будет заниматься — остальное придумает ИИ: роль, имя, характер, приветствие и аватар.
+              {bindingsEnabled
+                ? 'Кто это и чем будет заниматься. ИИ придумает роль, имя, характер и приветствие — и сразу подберёт умения: проекты, базы знаний и инструменты под задачи персоны.'
+                : 'Кто это и чем будет заниматься — остальное придумает ИИ: роль, имя, характер, приветствие и аватар.'}
             </div>
           </div>
 
@@ -124,7 +130,9 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
                   width: 8, height: 8, borderRadius: R.full, background: C.accent, flexShrink: 0,
                   animation: 'cc-quick-pulse 1.2s ease-in-out infinite',
                 }} />
-                Придумываю характер и генерирую аватар — до минуты
+                {bindingsEnabled
+                  ? 'Придумываю характер, подбираю знания и генерирую аватар — до пары минут'
+                  : 'Придумываю характер и генерирую аватар — до минуты'}
                 <style>{'@keyframes cc-quick-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }'}</style>
               </div>
             ) : error ? (

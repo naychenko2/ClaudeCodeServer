@@ -18,7 +18,7 @@ import { NotesGraph, type GraphStats } from './NotesGraph';
 import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
 import { EmptyState } from '../../components/EmptyState';
-import { Splitter, IconButton } from '../../components/ui';
+import { Splitter, IconButton, ConfirmDialog } from '../../components/ui';
 import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot } from './shared';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile, useWindowWidth } from '../../lib/breakpoints';
@@ -178,22 +178,26 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const clearNote = () => { setSelectedId(null); setMobileView('list'); if (getNav()?.note) navReplace({ screen: 'notes' }); };
 
   // Клик по [[wikilink]]: найти заметку по заголовку, иначе предложить создать
+  // (в два шага: диалог подтверждения → создание)
+  const [wikilinkTarget, setWikilinkTarget] = useState<string | null>(null);
   const onWikilink = (target: string) => {
     const name = target.split('/').pop()!.split('#')[0].trim().toLowerCase();
     const found = notes.find(n => n.title.trim().toLowerCase() === name);
     if (found) { selectNote(found.id); return; }
-    if (window.confirm(`Заметки «${target}» ещё нет. Создать?`)) {
-      const title = target.split('/').pop()!.split('#')[0].trim();
-      const source = selectedId ? notes.find(n => n.id === selectedId)?.source ?? 'personal' : 'personal';
-      void api.notes.create({ title, source })
-        .then(n => { bumpNotes(); selectNote(n.id); })
-        .catch(async e => {
-          if (offlineEnabled && e instanceof OfflineError) {
-            const localKey = await createNoteOffline({ title, source });
-            bumpNotes(); selectNote(localKey);
-          }
-        });
-    }
+    setWikilinkTarget(target);
+  };
+  const createFromWikilink = (target: string) => {
+    setWikilinkTarget(null);
+    const title = target.split('/').pop()!.split('#')[0].trim();
+    const source = selectedId ? notes.find(n => n.id === selectedId)?.source ?? 'personal' : 'personal';
+    void api.notes.create({ title, source })
+      .then(n => { bumpNotes(); selectNote(n.id); })
+      .catch(async e => {
+        if (offlineEnabled && e instanceof OfflineError) {
+          const localKey = await createNoteOffline({ title, source });
+          bumpNotes(); selectNote(localKey);
+        }
+      });
   };
 
   // Дневниковая заметка на сегодня (get-or-create по локальной дате устройства)
@@ -404,6 +408,15 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         {body}
       </div>
       {newDialog && <NewNoteDialog defaults={newDialog} onClose={() => setNewDialog(null)} onCreated={id => { setNewDialog(null); bumpNotes(); selectNote(id); }} />}
+      {wikilinkTarget && (
+        <ConfirmDialog
+          title="Создать заметку?"
+          subtitle={<>Заметки «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{wikilinkTarget}</strong>» ещё нет.</>}
+          confirmLabel="Создать"
+          onConfirm={() => createFromWikilink(wikilinkTarget)}
+          onCancel={() => setWikilinkTarget(null)}
+        />
+      )}
     </div>
   );
 }

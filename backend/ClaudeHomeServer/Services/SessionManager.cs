@@ -710,8 +710,9 @@ public class SessionManager
         SwitchSpeaker(entry, speaker);
 
         var label = string.IsNullOrWhiteSpace(speaker.Role) ? speaker.Name : $"{speaker.Role} ({speaker.Name})";
-        await BroadcastSessionMessageAsync(sessionId,
-            new SpeakerChangedMessage(speaker.Id, label));
+        // Только в session-группу: клиент открытого чата состоит и в user_/project_-группе,
+        // рассылка в обе дублировала разделитель «Теперь отвечает» в ленте
+        await BroadcastAsync(sessionId, new SpeakerChangedMessage(speaker.Id, label));
     }
 
     // Общий запуск новой сессии: аккумулятор истории, регистрация в реестре, старт процесса claude.

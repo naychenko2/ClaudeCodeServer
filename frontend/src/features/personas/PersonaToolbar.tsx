@@ -149,8 +149,9 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
         isMobile={isMobile}
       />
 
-      {/* Поговорить — во всех видах, кроме «Профиль» (там тулбар занят Сохранить/Удалить) */}
-      {view !== 'profile' && (
+      {/* Поговорить — на десктопе во всех видах кроме «Профиль»; на мобиле убрано
+          из тулбара (тесно) и живёт в «Обзоре» */}
+      {view !== 'profile' && !isMobile && (
         <button onClick={onTalk} disabled={talking} title="Поговорить"
           style={{ ...talkBtn(accent), opacity: talking ? 0.6 : 1, cursor: talking ? 'default' : 'pointer' }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

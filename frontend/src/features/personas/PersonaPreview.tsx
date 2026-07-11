@@ -301,7 +301,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
           </span>
           {onOpenKnowledge && (
             <button type="button" onClick={onOpenKnowledge} style={{ ...linkBtn, marginTop: 0 }}>
-              Подключить знания →
+              Подключить умения →
             </button>
           )}
         </div>
@@ -313,7 +313,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
                 key={b.id}
                 type="button"
                 onClick={onOpenKnowledge}
-                title="Настроить знания"
+                title="Настроить умения"
                 onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                 style={{
@@ -342,7 +342,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
           )}
           {onOpenKnowledge && (
             <button type="button" onClick={onOpenKnowledge} style={linkBtn}>
-              Настроить знания →
+              Настроить умения →
             </button>
           )}
         </>
@@ -441,6 +441,20 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
           {hero}
           {greeting}
         </div>
+        {/* «Поговорить» — на мобиле переезжает сюда из тулбара (там тесно) */}
+        {isMobile && (
+          <button type="button" onClick={onTalk} disabled={talking} style={{
+            width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            background: accent, color: C.onAccent, border: 'none', borderRadius: R.xl,
+            padding: '12px 16px', fontSize: 14, fontWeight: 600, fontFamily: FONT.sans,
+            cursor: talking ? 'default' : 'pointer', opacity: talking ? 0.6 : 1,
+          }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 11.5a8.5 8.5 0 0 1-12 7.7L3 21l1.8-6A8.5 8.5 0 1 1 21 11.5z" />
+            </svg>
+            {talking ? 'Создаём…' : 'Поговорить'}
+          </button>
+        )}
         {factsRow}
         {characterSection}
         {knowledgeSection}

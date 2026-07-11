@@ -856,10 +856,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               background: 'none', border: 'none', padding: 0, color: C.accent,
               fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans,
             }}>
-              «Знания» →
+              «Умения» →
             </button>
           ) : (
-            <span style={{ fontWeight: 600 }}>«Знания»</span>
+            <span style={{ fontWeight: 600 }}>«Умения»</span>
           )}
           {' '}— там же настраиваются правила, когда ими пользоваться.
         </span>

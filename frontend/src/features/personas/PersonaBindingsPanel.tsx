@@ -272,7 +272,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       }}>
         {/* Заголовок секции + счётчик + подзаголовок */}
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
-          <SectionLabel>Знания и правила</SectionLabel>
+          <SectionLabel>Умения и правила</SectionLabel>
           <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
             {bindings === null ? 'загрузка…' : bindingsCounter(list)}
           </span>
@@ -500,7 +500,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             ) : (
               <>
                 <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
-                  <SectionLabel>Знания подобраны автоматически</SectionLabel>
+                  <SectionLabel>Умения подобраны автоматически</SectionLabel>
                   <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
                     {suggest.candidates!.filter(c => c.on).length} из {suggest.candidates!.length}
                   </span>

@@ -189,7 +189,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     { label: 'Модель', value: persona.effort ? `${modelName} · ${effortLabel(persona.effort)}` : modelName },
     { label: 'Возможности', value: toolsText },
     ...(bindingsEnabled ? [{
-      label: 'Знания',
+      label: 'Умения',
       value: bindings === null ? '…' : bindings.length === 0 ? 'нет привязок' : bindingsCounter(bindings),
     }] : []),
     { label: 'Память', value: memoryText, title: memoryTitle },
@@ -277,7 +277,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   const knowledgeSection = bindingsEnabled ? (
     <div style={section}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
-        <SectionLabel>Знания и правила</SectionLabel>
+        <SectionLabel>Умения и правила</SectionLabel>
         {bindings !== null && bindings.length > 0 && (
           <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>
             {bindingsCounter(bindings)}

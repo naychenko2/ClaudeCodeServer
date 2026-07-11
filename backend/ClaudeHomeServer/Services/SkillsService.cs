@@ -23,14 +23,23 @@ public class SkillsService
     private static string GlobalSkillsDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "skills");
 
+    private static string GetProjectSkillsDir(string projectRootPath) =>
+        Path.Combine(projectRootPath, ".claude", "skills");
+
     private static string GetAgentsDir(string projectRootPath) =>
         Path.Combine(projectRootPath, ".claude", "agents");
 
     // --- Чтение скиллов и агентов ---
 
-    public IReadOnlyList<SkillInfo> GetGlobalSkills()
+    public IReadOnlyList<SkillInfo> GetGlobalSkills() => ReadSkillsFrom(GlobalSkillsDir);
+
+    // Скиллы уровня проекта (.claude/skills проекта) — сюда CLI устанавливает навыки в scope=project.
+    public IReadOnlyList<SkillInfo> GetProjectSkills(string projectRootPath) =>
+        ReadSkillsFrom(GetProjectSkillsDir(projectRootPath));
+
+    // Общее чтение каталога навыков: каждая подпапка с SKILL.md → SkillInfo (frontmatter name/description).
+    private static IReadOnlyList<SkillInfo> ReadSkillsFrom(string dir)
     {
-        var dir = GlobalSkillsDir;
         if (!Directory.Exists(dir)) return [];
 
         var result = new List<SkillInfo>();

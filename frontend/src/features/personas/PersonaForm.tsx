@@ -819,7 +819,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       <div style={{ marginTop: 18 }}>
         {instructions.trim() || instructionsOpen ? (
           <Field label="Инструкция" hint="Полный регламент роли (markdown) — попадает в системный промпт после остальных слотов">
-            <TextArea value={instructions} onChange={setInstructions} autoGrow minHeight={120}
+            <TextArea value={instructions} onChange={setInstructions} autoGrow minHeight={120} maxHeight={360}
               placeholder="Развёрнутый регламент: протоколы работы, критерии готовности, примеры…" />
           </Field>
         ) : (

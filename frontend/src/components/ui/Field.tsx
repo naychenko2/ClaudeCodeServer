@@ -82,12 +82,15 @@ interface TextAreaProps {
   placeholder?: string;
   autoGrow?: boolean;
   minHeight?: number;
+  // Потолок высоты: с autoGrow поле растёт до него, дальше — внутренний скролл
+  // (иначе очень длинный текст разносит форму по высоте)
+  maxHeight?: number;
   disabled?: boolean;
   style?: CSSProperties;
 }
 
 // === Многострочное поле с авто-ростом высоты ===
-export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, disabled, style }: TextAreaProps) {
+export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, style }: TextAreaProps) {
   const [focused, setFocused] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -96,8 +99,9 @@ export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 8
     const el = ref.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
-  }, [value, autoGrow]);
+    // Ограничиваем рост потолком, если задан — дальше поле скроллится внутри
+    el.style.height = `${maxHeight ? Math.min(el.scrollHeight, maxHeight) : el.scrollHeight}px`;
+  }, [value, autoGrow, maxHeight]);
 
   return (
     <textarea
@@ -109,7 +113,10 @@ export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 8
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={controlStyle(focused, false, {
-        minHeight, resize: 'none', overflow: autoGrow ? 'hidden' : 'auto', lineHeight: 1.5, ...style,
+        minHeight, maxHeight, resize: 'none',
+        // С потолком высоты нужен скролл, даже когда включён autoGrow
+        overflow: autoGrow && !maxHeight ? 'hidden' : 'auto',
+        lineHeight: 1.5, ...style,
       })}
     />
   );

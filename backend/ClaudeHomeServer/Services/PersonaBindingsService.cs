@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using ClaudeHomeServer.Models;
 
@@ -40,13 +41,19 @@ public class PersonaBindingsService
     private readonly KnowledgeService _knowledge;
     private readonly SkillsService _skills;
     private readonly FeatureFlagService _flags;
+    private readonly UserStore _users;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaBindingsService> _log;
+
+    // Кэш имён Dify-датасетов (id → отображаемое имя без префикса владельца).
+    // Наполняется при листинге целей-знаний, чтобы синхронный BuildTargetLabel мог
+    // показать понятное имя базы, а не сырой id (иначе — фолбэк на id).
+    private readonly ConcurrentDictionary<string, string> _datasetLabelCache = new();
 
     public PersonaBindingsService(PersonaManager personas, ProjectManager projects,
         WorkspaceKnowledgeStore wkStore, NotesService notes, NotesKnowledgeService notesKb,
         KnowledgeService knowledge, SkillsService skills, FeatureFlagService flags,
-        IConfiguration config, ILogger<PersonaBindingsService> log)
+        UserStore users, IConfiguration config, ILogger<PersonaBindingsService> log)
     {
         _personas = personas;
         _projects = projects;
@@ -56,6 +63,7 @@ public class PersonaBindingsService
         _knowledge = knowledge;
         _skills = skills;
         _flags = flags;
+        _users = users;
         _config = config;
         _log = log;
     }
@@ -125,6 +133,60 @@ public class PersonaBindingsService
         if (_notesKb.GetDatasetId(ownerId) is { Length: > 0 } notesDs)
             list.Add((notesDs, "Заметки", null));
         return list;
+    }
+
+    // Полный каталог целей-знаний для пикера привязок: датасеты проектов/заметок владельца
+    // (с понятными лейблами) + ВСЕ прочие Dify-датасеты, доступные пользователю по правилу
+    // префикса. Датасеты Dify именуются «{username}:…»; показываем те, у кого префикса-имени
+    // нет вовсе (общие, ничьи) либо префикс совпадает с текущим пользователем; чужие — прячем.
+    public async Task<IReadOnlyList<(string Id, string Label, string? ProjectId)>> KnowledgeTargetsAsync(string ownerId)
+    {
+        var known = KnownDatasets(ownerId);
+        if (!_knowledge.IsConfigured) return known;
+
+        var currentUser = _users.GetById(ownerId)?.Username;
+
+        IReadOnlyList<DifyDatasetListItem> all;
+        try { all = await _knowledge.ListDatasetsAsync(); }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Не удалось получить список датасетов Dify — показываю только известные");
+            return known;
+        }
+
+        var byId = new Dictionary<string, (string Id, string Label, string? ProjectId)>();
+        foreach (var d in known) byId[d.Id] = d;   // проектные/заметки — приоритетнее (понятный лейбл)
+
+        foreach (var d in all)
+        {
+            if (byId.ContainsKey(d.Id)) continue;
+            if (!IsDatasetVisibleToUser(d.Name, currentUser)) continue;
+            var label = StripOwnerPrefix(d.Name, currentUser);
+            _datasetLabelCache[d.Id] = label;
+            byId[d.Id] = (d.Id, label, null);
+        }
+        return byId.Values.ToList();
+    }
+
+    // Правило видимости датасета по префиксу-имени владельца («{username}:…»):
+    //  - нет префикса (двоеточия) → общий/ничей → показываем;
+    //  - префикс совпадает с текущим пользователем → показываем;
+    //  - префикс другой (чужой пользователь) → прячем.
+    internal static bool IsDatasetVisibleToUser(string name, string? currentUser)
+    {
+        var idx = name.IndexOf(':');
+        if (idx <= 0) return true;                       // нет префикса вовсе
+        var prefix = name[..idx];
+        return !string.IsNullOrEmpty(currentUser)
+            && string.Equals(prefix, currentUser, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Отображаемое имя базы: срезаем префикс «{currentUser}:» (у общих датасетов префикса нет).
+    private static string StripOwnerPrefix(string name, string? currentUser)
+    {
+        if (!string.IsNullOrEmpty(currentUser) && name.StartsWith(currentUser + ":", StringComparison.OrdinalIgnoreCase))
+            return name[(currentUser.Length + 1)..];
+        return name;
     }
 
     // --- Блок хода ---
@@ -359,8 +421,10 @@ public class PersonaBindingsService
                 return string.IsNullOrWhiteSpace(binding.Path) ? name : $"{name}/{binding.Path}";
             }
             case PersonaBindingType.Knowledge:
+                // Проектные/заметки — понятный лейбл; прочие Dify-датасеты — из кэша имён
+                // (наполняется при листинге целей), иначе фолбэк на id
                 return KnownDatasets(ownerId).FirstOrDefault(d => d.Id == binding.Target).Label
-                    ?? binding.Target;
+                    ?? (_datasetLabelCache.TryGetValue(binding.Target, out var cached) ? cached : binding.Target);
             case PersonaBindingType.Notes:
             {
                 var label = _notes.GetSources(ownerId)
@@ -388,13 +452,8 @@ public class PersonaBindingsService
     // Path безопасен, дубликат Type+Target+Path запрещён. existing — текущие привязки
     // персоны (привязка с тем же Id при апдейте не считается дубликатом самой себя).
     // Возвращает текст ошибки или null (ок).
-    public Task<string?> ValidateAsync(string ownerId, PersonaBinding binding,
+    public async Task<string?> ValidateAsync(string ownerId, PersonaBinding binding,
         IReadOnlyList<PersonaBinding>? existing)
-    {
-        return Task.FromResult(Validate(ownerId, binding, existing));
-    }
-
-    private string? Validate(string ownerId, PersonaBinding binding, IReadOnlyList<PersonaBinding>? existing)
     {
         if (string.IsNullOrWhiteSpace(binding.Target))
             return "Не указана цель привязки (target)";
@@ -422,8 +481,8 @@ public class PersonaBindingsService
                 break;
             }
             case PersonaBindingType.Knowledge:
-                if (KnownDatasets(ownerId).All(d => d.Id != binding.Target))
-                    return "База знаний не найдена среди датасетов владельца";
+                if ((await KnowledgeTargetsAsync(ownerId)).All(d => d.Id != binding.Target))
+                    return "База знаний не найдена или недоступна";
                 break;
             case PersonaBindingType.Notes:
                 if (_notes.GetSources(ownerId).All(s => s.Key != binding.Target))

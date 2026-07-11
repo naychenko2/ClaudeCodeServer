@@ -32,6 +32,14 @@ public record DifyDatasetMetadataResponse(
 public record DifyDatasetResponse(
     [property: JsonPropertyName("id")] string Id);
 
+public record DifyDatasetListItem(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name);
+
+public record DifyDatasetsPage(
+    [property: JsonPropertyName("data")] List<DifyDatasetListItem> Data,
+    [property: JsonPropertyName("has_more")] bool HasMore);
+
 public record DifyDocumentCreateResponse(
     [property: JsonPropertyName("document")] DifyDocumentItem Document);
 
@@ -320,6 +328,28 @@ public class KnowledgeService
         resp.EnsureSuccessStatusCode();
         return await resp.Content.ReadFromJsonAsync<DifyDocumentsPage>()
             ?? new DifyDocumentsPage([], false, 0);
+    }
+
+    // Все датасеты рабочего пространства Dify (id + имя), с обходом пагинации.
+    // Имя несёт префикс владельца («{username}:…») — фильтрацию по нему делает вызывающий.
+    public async Task<IReadOnlyList<DifyDatasetListItem>> ListDatasetsAsync()
+    {
+        if (!IsConfigured) return [];
+        const int pageSize = 100;
+        var all = new List<DifyDatasetListItem>();
+        var client = CreateClient();
+        var page = 1;
+        while (true)
+        {
+            var resp = await client.GetAsync($"datasets?page={page}&limit={pageSize}");
+            resp.EnsureSuccessStatusCode();
+            var p = await resp.Content.ReadFromJsonAsync<DifyDatasetsPage>();
+            if (p is null) break;
+            all.AddRange(p.Data);
+            if (!p.HasMore || p.Data.Count == 0) break;
+            page++;
+        }
+        return all;
     }
 
     // Возвращает ВСЕ документы датасета, обходя пагинацию Dify (одна страница ограничена).

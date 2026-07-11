@@ -725,7 +725,7 @@ public class PersonasController : ControllerBase
     // Каталог возможных целей привязки для пикера фронта: type = project | knowledge |
     // notes | tool | skill; для notes с ?source= — папки внутри источника.
     [HttpGet("binding-targets")]
-    public ActionResult BindingTargets([FromQuery] string? type, [FromQuery] string? source)
+    public async Task<ActionResult> BindingTargets([FromQuery] string? type, [FromQuery] string? source)
     {
         switch (type?.Trim().ToLowerInvariant())
         {
@@ -734,12 +734,14 @@ public class PersonasController : ControllerBase
                     .Select(p => new { id = p.Id, label = p.Name, hint = p.RootPath, meta = (string?)null }));
 
             case "knowledge":
-                return Ok(_bindings.KnownDatasets(UserId)
+                // Все базы знаний Dify, доступные пользователю (его проекты/заметки + датасеты
+                // без префикса-владельца или с его префиксом); чужие пользователи скрыты.
+                return Ok((await _bindings.KnowledgeTargetsAsync(UserId))
                     .Select(d => new
                     {
                         id = d.Id,
                         label = d.Label,
-                        hint = d.ProjectId is null ? "База знаний заметок" : "База знаний проекта",
+                        hint = d.ProjectId is null ? "База знаний" : "База знаний проекта",
                         meta = d.ProjectId,
                     }));
 

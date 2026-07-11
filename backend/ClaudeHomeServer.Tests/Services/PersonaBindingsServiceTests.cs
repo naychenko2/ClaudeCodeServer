@@ -46,7 +46,7 @@ public class PersonaBindingsServiceTests : IDisposable
         var flags = new FeatureFlagService(_users);
 
         _sut = new PersonaBindingsService(_personas, _projects, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), flags, config,
+            knowledge, new SkillsService(), flags, _users, config,
             NullLogger<PersonaBindingsService>.Instance);
     }
 
@@ -67,6 +67,24 @@ public class PersonaBindingsServiceTests : IDisposable
     {
         var dir = Directory.CreateDirectory(Path.Combine(_tempDir, "proj_" + Guid.NewGuid().ToString("N"))).FullName;
         return _projects.Create(name, dir, _userId, Username);
+    }
+
+    // --- Видимость Dify-датасета по префиксу владельца ---
+
+    [Theory]
+    // Нет префикса (двоеточия) — общий/ничей датасет → показываем
+    [InlineData("SharedKnowledge", true)]
+    [InlineData("общая-база", true)]
+    // Префикс совпадает с текущим пользователем → показываем
+    [InlineData("me:notes", true)]
+    [InlineData("ME:persona:reviewer", true)]   // регистронезависимо
+    [InlineData("me:RR:Узбекистан", true)]      // многоуровневый — важен префикс до первого ':'
+    // Любой чужой префикс (даже незарегистрированного/бывшего пользователя) → прячем
+    [InlineData("bob:notes", false)]
+    [InlineData("andrey:persona:viktoriya", false)]
+    public void IsDatasetVisibleToUser_ПравилоПрефикса(string name, bool expected)
+    {
+        PersonaBindingsService.IsDatasetVisibleToUser(name, "me").Should().Be(expected);
     }
 
     // --- EffectiveToolEnabled ---

@@ -1,9 +1,11 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import type { Persona, AgentInfo } from '../types';
+import type { Persona, AgentInfo, PantheonTemplate } from '../types';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { personaLabel } from '../lib/personas';
 import { modelProvider } from '../lib/models';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
+import { usePantheon, materializePantheon } from '../features/personas/usePantheon';
+import { showToast } from '../lib/toast';
 import { agentDotColor } from './AgentSelector';
 
 // Результат выбора: ровно одно из полей задано (либо оба null — «без собеседника»)
@@ -38,6 +40,11 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
   const [groupMode, setGroupMode] = useState(false);
   // Порядок выбора важен: первая выбранная — ведущая
   const [groupSelected, setGroupSelected] = useState<string[]>([]);
+  // Виртуальные роли пантеона (ещё не подключённые) — всегда доступны в списке;
+  // при выборе тихо материализуются (создаётся глобальная персона)
+  const { virtual: virtualPantheon } = usePantheon();
+  // Ключ роли, которая сейчас материализуется (для спиннера/блокировки)
+  const [materializing, setMaterializing] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   // На мобиле dropdown позиционируется через fixed с вычисленными координатами
   const [fixedPos, setFixedPos] = useState<{ bottom: number; top: number; left: number; right: number } | null>(null);
@@ -65,7 +72,62 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
       : { bottom: 16, top: rect.bottom + 6, left: 16, right: 16 });
   }, [open, isMobile, dropUp]);
 
-  if (personas.length === 0 && agents.length === 0) return null;
+  if (personas.length === 0 && agents.length === 0 && virtualPantheon.length === 0) return null;
+
+  // Материализация роли пантеона (создать глобальную персону) с обработкой ошибок
+  const materialize = async (key: string): Promise<Persona | null> => {
+    setMaterializing(key);
+    try { return await materializePantheon(key); }
+    catch (e) { showToast('Пантеон OmO', e instanceof Error ? e.message : 'Не удалось подключить роль', 'info'); return null; }
+    finally { setMaterializing(null); }
+  };
+
+  // Выбор виртуальной роли собеседником: материализуем и выбираем как обычную персону
+  const selectVirtual = async (key: string) => {
+    const persona = await materialize(key);
+    if (persona) { onSelect({ persona, agent: null }); setOpen(false); }
+  };
+
+  // Добавление виртуальной роли в групповой мультивыбор: материализуем и берём её id
+  const toggleVirtualInGroup = async (key: string) => {
+    if (groupSelected.length >= 4) return;
+    const persona = await materialize(key);
+    if (persona) setGroupSelected(prev => prev.includes(persona.id) || prev.length >= 4 ? prev : [...prev, persona.id]);
+  };
+
+  // Круглый аватар виртуальной роли (инициал роли на её цвете)
+  const roleDot = (color: string, role: string) => (
+    <span style={{
+      width: 28, height: 28, borderRadius: R.full, flexShrink: 0,
+      background: agentDotColor(color), color: '#fff',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700,
+    }}>{role.slice(0, 1)}</span>
+  );
+
+  // Пункт виртуальной роли пантеона в одиночном выборе
+  const virtualItem = (t: PantheonTemplate) => (
+    <button
+      key={`v-${t.key}`}
+      onClick={() => void selectVirtual(t.key)}
+      disabled={materializing !== null}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.accentLight; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+      style={{
+        width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px',
+        borderRadius: R.md, border: 'none', background: 'transparent',
+        cursor: materializing !== null ? 'default' : 'pointer', textAlign: 'left',
+        opacity: materializing !== null && materializing !== t.key ? 0.5 : 1,
+      }}
+    >
+      {roleDot(t.color, t.role)}
+      <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: FONT.sans }}>
+        {personaLabel({ role: t.role, name: t.name })}
+      </span>
+      {materializing === t.key && (
+        <span style={{ flexShrink: 0, fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>…</span>
+      )}
+    </button>
+  );
 
   // Выбранный .md-агент: резолвим по имени; если агент из списка пропал (файл удалили),
   // показываем имя как есть с нейтральной точкой
@@ -270,6 +332,33 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
               </button>
             );
           })}
+          {/* Пантеон OmO в групповом мультивыборе: клик материализует роль и добавляет её */}
+          {virtualPantheon.length > 0 && groupHeader('Пантеон OmO')}
+          {virtualPantheon.map(t => {
+            const disabled = materializing !== null || groupSelected.length >= 4;
+            return (
+              <button
+                key={`gv-${t.key}`}
+                onClick={() => void toggleVirtualInGroup(t.key)}
+                disabled={disabled}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '7px 10px',
+                  borderRadius: R.md, border: 'none', background: 'transparent',
+                  cursor: disabled ? 'default' : 'pointer', textAlign: 'left',
+                  opacity: disabled && materializing !== t.key ? 0.5 : 1,
+                }}
+              >
+                <input type="checkbox" readOnly checked={false} style={{ accentColor: C.accent, pointerEvents: 'none' }} />
+                {roleDot(t.color, t.role)}
+                <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: FONT.sans }}>
+                  {personaLabel({ role: t.role, name: t.name })}
+                </span>
+                {materializing === t.key && (
+                  <span style={{ flexShrink: 0, fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>…</span>
+                )}
+              </button>
+            );
+          })}
           {/* Предупреждение о разных провайдерах моделей участников: транскрипт живёт
               у провайдера, чужая модель не применится при смене спикера */}
           {(() => {
@@ -352,14 +441,17 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
                 {projectPersonas.map(personaItem)}
                 {showSubHeaders && globalPersonas.length > 0 && groupHeader('Глобальные')}
                 {globalPersonas.map(personaItem)}
+                {/* Пантеон OmO — виртуальные роли, доступны всегда */}
+                {virtualPantheon.length > 0 && groupHeader('Пантеон OmO')}
+                {virtualPantheon.map(virtualItem)}
                 {showTopHeaders && groupHeader('Агенты Claude')}
                 {agents.map(agentItem)}
               </>
             );
           })()}
 
-          {/* Вход в мультивыбор группового чата (флаг persona-group-chats, нужно ≥2 персон) */}
-          {onCreateGroup && personas.length >= 2 && (
+          {/* Вход в мультивыбор группового чата (флаг persona-group-chats, нужно ≥2 доступных ролей) */}
+          {onCreateGroup && personas.length + virtualPantheon.length >= 2 && (
             <button
               onClick={() => setGroupMode(true)}
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.accentLight; }}

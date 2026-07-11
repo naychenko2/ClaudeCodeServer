@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/chats")]
 public class ChatsController(SessionManager sessions, FileService files,
-    PersonaMeetingService meetings, FeatureFlagService flags) : ControllerBase
+    PersonaMeetingService meetings, PersonaPipelineService pipelines, FeatureFlagService flags) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -137,6 +137,33 @@ public class ChatsController(SessionManager sessions, FileService files,
         return NoContent();
     }
 
+    // Конвейер пантеона (флаг persona-pipeline): эстафета ролей OmO — анализ → план →
+    // ревью → авто-исполнение. Работает в любом чате владельца (проектном и вне проекта).
+    [HttpPost("{id}/pipeline")]
+    public IActionResult StartPipeline(string id, [FromBody] StartPipelineRequest req)
+    {
+        if (!flags.IsEnabled(UserId, FeatureFlagKeys.PersonaPipeline))
+            return BadRequest(new { error = "Конвейер пантеона выключен (флаг persona-pipeline)" });
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(req.Task))
+            return BadRequest(new { error = "Пустая задача конвейера" });
+        try
+        {
+            var pipelineId = pipelines.Start(UserId, id, req.Task, req.ExecutorKey);
+            return Ok(new { pipelineId });
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    [HttpPost("{id}/pipeline/cancel")]
+    public IActionResult CancelPipeline(string id)
+    {
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        pipelines.Cancel(id);
+        return NoContent();
+    }
+
     // Цикл «до готово» (флаг work-loop): вкл/выкл автопродолжения хода до маркера
     // завершения. Работает и для проектной сессии (GetOwned резолвит владельца через проект).
     [HttpPut("{id}/loop")]
@@ -207,3 +234,5 @@ public record SetParticipantsRequest(List<string>? PersonaIds);
 public record StartMeetingRequest(string Question, List<string>? PersonaIds = null);
 
 public record SetWorkLoopRequest(bool Enabled);
+
+public record StartPipelineRequest(string Task, string? ExecutorKey = null);

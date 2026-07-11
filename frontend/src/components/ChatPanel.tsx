@@ -572,6 +572,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       .catch(() => showToast('Совещание', 'Не удалось отменить совещание', 'info'));
   }, [session.id]);
 
+  // Отмена идущего конвейера пантеона
+  const handlePipelineCancel = useCallback(() => {
+    api.chats.cancelPipeline(session.id)
+      .catch(() => showToast('Конвейер', 'Не удалось отменить конвейер', 'info'));
+  }, [session.id]);
+
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке).
   // useCallback + React.memo на ChatItemView: при дописывании ленты неизменившиеся
   // элементы не перерендериваются (все пропсы-функции стабильны).
@@ -600,12 +606,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       taskPlan={i === lastTaskIdx && taskTodos.length > 0 ? taskTodos : undefined}
       onSendMessage={handleMeetingContinue}
       onMeetingCancel={handleMeetingCancel}
+      onPipelineCancel={handlePipelineCancel}
     />
   ), [
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
     interrupt, lastTaskIdx, taskTodos, handleMeetingContinue, handleMeetingCancel,
+    handlePipelineCancel,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем

@@ -21,6 +21,7 @@ export const FLAGS = {
   personaGroupChats: 'persona-group-chats',
   ultraworkKeyword: 'ultrawork-keyword',
   workLoop: 'work-loop',
+  personaPipeline: 'persona-pipeline',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

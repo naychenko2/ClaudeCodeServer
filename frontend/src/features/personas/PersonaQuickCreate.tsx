@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import type { PantheonTemplate, Persona, PersonaScope } from '../../types';
 import { api } from '../../lib/api';
 import { bumpPersonas } from '../../lib/personas';
-import { showToast } from '../../lib/toast';
 import { C, FONT, R, FIELD, SHADOW } from '../../lib/design';
 import { Toolbar, tbBtnGhost } from '../../components/Toolbar';
 import { IconButton } from '../../components/ui';
@@ -41,24 +40,6 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
       .then(r => setOmoTemplates(r.templates))
       .catch(() => { /* не критично: секция пантеона просто не появится */ });
   useEffect(() => { void loadPantheon(); }, []);
-
-  // «Подключить всю команду»: идемпотентно создаёт глобальные персоны всех ролей
-  const [connecting, setConnecting] = useState(false);
-  const hasUnconnected = (omoTemplates ?? []).some(t => t.connectedPersonaId == null);
-  const connectAll = async () => {
-    if (connecting) return;
-    setConnecting(true);
-    try {
-      const created = await api.personas.connectPantheon();
-      bumpPersonas();
-      showToast('Пантеон OmO', `Команда подключена: ${created.length} ролей`);
-      await loadPantheon();
-    } catch (e) {
-      showToast('Пантеон OmO', e instanceof Error ? e.message : 'Не удалось подключить команду');
-    } finally {
-      setConnecting(false);
-    }
-  };
 
   const canSubmit = !!prompt.trim() && !busy;
 
@@ -189,29 +170,16 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
           )}
 
           {/* Пантеон OmO: роли-специалисты из oh-my-openagent с полными регламентами.
-              Каталог приходит с бэкенда; клик по карточке — кастомная копия через форму,
-              «Подключить всю команду» — идемпотентное создание всех глобальных персон. */}
+              Каталог приходит с бэкенда; клик по карточке — кастомная копия через форму.
+              Роли доступны всегда и в селекторах выбора собеседника (usePantheon),
+              там же материализуются по требованию — здесь их создавать не нужно. */}
           {onTemplate && omoTemplates && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : 'auto' }}>
               <SectionLabel>Пантеон OmO</SectionLabel>
               <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.45, marginTop: -4 }}>
-                Роли-специалисты из oh-my-openagent, адаптированные на русский — с полным регламентом роли.
+                Роли-специалисты из oh-my-openagent. Они всегда доступны при выборе собеседника —
+                карточкой ниже можно создать свою вариацию роли с правками.
               </div>
-              {hasUnconnected && (
-                <div>
-                  <button
-                    onClick={() => void connectAll()}
-                    disabled={connecting}
-                    style={{
-                      background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.md,
-                      padding: '10px 18px', fontSize: 13.5, fontWeight: 600, fontFamily: FONT.sans,
-                      cursor: connecting ? 'default' : 'pointer', opacity: connecting ? 0.55 : 1,
-                      display: 'inline-flex', alignItems: 'center', gap: 7,
-                    }}>
-                    {connecting ? 'Подключаю команду…' : '✨ Подключить всю команду'}
-                  </button>
-                </div>
-              )}
               <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'minmax(0,1fr)' : 'minmax(0,1fr) minmax(0,1fr)', gap: 10 }}>
                 {omoTemplates.map(t => (
                   <TemplateCard

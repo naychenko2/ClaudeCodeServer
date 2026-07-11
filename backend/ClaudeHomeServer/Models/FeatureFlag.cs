@@ -43,6 +43,8 @@ public static class FeatureFlagKeys
     public const string UltraworkKeyword = "ultrawork-keyword";
     // Цикл «до готово»: ход продолжается автоматически, пока агент не выведет маркер завершения
     public const string WorkLoop = "work-loop";
+    // Конвейер пантеона: эстафета ролей OmO (анализ → план → ревью → авто-исполнение)
+    public const string PersonaPipeline = "persona-pipeline";
 }
 
 /// <summary>
@@ -168,6 +170,16 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.WorkLoop,
             Title: "Цикл «до готово»",
             Description: "Кнопка в композере: агент работает циклами без твоего участия, пока честно не отчитается о завершении, — с финальной проверкой сделанного и лимитом итераций.",
+            Default: false,
+            Stage: "dev"),
+
+        // Конвейер пантеона (идея конвейера ролей oh-my-openagent): задача проходит
+        // эстафету специалистов — анализ (Метида) → план (Прометей) → ревью (Мом) →
+        // исполнение (Сизиф/Гефест с циклом «до готово») — одной кнопкой.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PersonaPipeline,
+            Title: "Конвейер пантеона",
+            Description: "Задача проходит эстафету ролей: Аналитик вскрывает риски, Планировщик пишет план, Ревьюер проверяет его, а затем план автоматически уходит исполнителю. Запускается из диалога «Обсудить с командой».",
             Default: false,
             Stage: "dev"),
     ];

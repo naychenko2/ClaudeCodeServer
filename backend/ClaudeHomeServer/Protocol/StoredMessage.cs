@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredFalCostMessage), "fal_cost")]
 [JsonDerivedType(typeof(StoredCompactBoundaryMessage), "compact_boundary")]
 [JsonDerivedType(typeof(StoredMeetingPhaseMessage), "meeting_phase")]
+[JsonDerivedType(typeof(StoredPipelinePhaseMessage), "pipeline_phase")]
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
 public abstract class StoredMessage { }
 
@@ -93,6 +94,18 @@ public class StoredMeetingPhaseMessage : StoredMessage
     public string Phase { get; init; } = "";
     public string Question { get; init; } = "";
     public List<MeetingEntry> Entries { get; init; } = [];
+}
+
+// Завершённая фаза конвейера пантеона (флаг persona-pipeline): analysis | plan | review | execute.
+// Пишется вне хода (AppendStoredAsync) после каждой фазы — переживает перезагрузку.
+public class StoredPipelinePhaseMessage : StoredMessage
+{
+    public string PipelineId { get; init; } = "";
+    public string Phase { get; init; } = "";
+    public string Task { get; init; } = "";
+    public string PersonaId { get; init; } = "";
+    public string Text { get; init; } = "";
+    public int Round { get; init; } = 1;
 }
 
 // Стоимость генерации fal.ai (фактически списанная), приходит вне хода — хранится отдельной записью

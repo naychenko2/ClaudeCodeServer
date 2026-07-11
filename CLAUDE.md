@@ -231,13 +231,16 @@ WorkingDirectory = `project.RootPath`
   Консультант (Оракул), Библиотекарь (Клио); регламенты — сгенерированный partial
   `OmoPantheonCatalog.Instructions.cs` (docs/omo/gen-omo-prompts.ps1 из переводов).
   `GET /api/personas/pantheon` — карточки + connectedPersonaId по `Persona.TemplateKey`;
-  `POST /api/personas/pantheon/connect` — идемпотентно создаёт ГЛОБАЛЬНЫЕ персоны с
-  готовыми именами (кнопка «Подключить всю команду» в PersonaQuickCreate; советники —
-  readOnly). **Авто-обновление регламентов**: `Persona.TemplateInstructionsHash` — SHA-256
-  поставленной из каталога инструкции; при старте (`RefreshPantheonInstructions`) нетронутые
-  (hash совпадает) подтягиваются из каталога, правленные пользователем — «пришпилены».
-  Карточки-шаблоны остаются вторым путём (кастомная копия с предзаполненным именем).
-  Отключение роли = обычное удаление персоны.
+  `POST /api/personas/pantheon/connect` {keys?} — идемпотентно создаёт ГЛОБАЛЬНЫЕ персоны
+  с готовыми именами (советники — readOnly). **Роли видны всегда**: в селекторах собеседника,
+  групповых чатах и диалоге «Обсудить с командой» отдельная группа «Пантеон OmO»
+  (виртуальные роли из [usePantheon.ts](frontend/src/features/personas/usePantheon.ts));
+  при выборе роль тихо материализуется (`materializePantheon` → connect по ключу) — явной
+  кнопки подключения нет. **Авто-обновление регламентов**: `Persona.TemplateInstructionsHash` —
+  SHA-256 поставленной из каталога инструкции; при старте (`RefreshPantheonInstructions`)
+  нетронутые (hash совпадает) подтягиваются из каталога, правленные пользователем — «пришпилены».
+  Карточки-шаблоны в PersonaQuickCreate остаются вторым путём (кастомная копия с
+  предзаполненным именем). Отключение роли = обычное удаление персоны.
 - **Возможности per-persona** (`Persona.Tools`: ключи `tasks`/`notes`/`web`; null = без
   ограничений, полный набор нормализуется в null): гейт tasks/notes MCP при сборке
   LlmSessionContext; выключенный `web` добавляет WebSearch/WebFetch в
@@ -382,6 +385,19 @@ WorkingDirectory = `project.RootPath`
   в композере. Текст хода агрегируется в `SessionEntry.LoopTurnText` (поиск маркера).
 - Справочник категорий делегирования (`OmoPrompts.DelegationCategories`) — секция «ДЕЛЕГИРОВАНИЕ»
   в промпте персоны-исполнителя задач (TaskExecutionService).
+- **Конвейер пантеона** (`persona-pipeline`, идея конвейера ролей OmO): эстафета
+  анализ → план → ревью → авто-исполнение. [PersonaPipelineService.cs](backend/ClaudeHomeServer/Services/PersonaPipelineService.cs)
+  (образец — PersonaMeetingService): материализует роли (`ConnectPantheon` для
+  metis/prometheus/momus + executor), фазы analysis (Метида) → plan (Прометей) → review
+  (Мом: детект `[REJECT]` → доработка плана, до 2 кругов; двойной REJECT → error без
+  исполнения) — one-shot через PersonaAskService; фаза execute (Сизиф/Гефест) —
+  реальный ход: `SetPersona` исполнителю (в группе — текущий спикер) + `SetWorkLoopAsync(true)`
+  + `SendMessageAsync(план)`; вынесена в `virtual ExecuteAsync` (seam для тестов).
+  `POST /api/chats/{id}/pipeline` {task, executorKey?}, `.../pipeline/cancel`; протокол —
+  `pipeline_progress`/`pipeline_phase` (+ StoredPipelinePhaseMessage). Фронт: третий режим
+  «Конвейер» в [DiscussTeamDialog](frontend/src/features/personas/DiscussTeamDialog.tsx)
+  (кнопка «Обсудить с командой» доступна в ЛЮБОМ чате при флаге), карточка фаз
+  [PipelineView](frontend/src/components/chat/PipelineView.tsx).
 
 ## REST API
 
@@ -428,6 +444,8 @@ PUT                 /api/chats/{id}/participants       { personaIds[] } → Sess
 POST                /api/chats/{id}/meeting            { question, personaIds? } → { meetingId }  (совещание P7; дефолт — participants чата)
 POST                /api/chats/{id}/meeting/cancel     → 204  (отмена идущего совещания)
 PUT                 /api/chats/{id}/loop               { enabled } → Session  (цикл «до готово», флаг work-loop; работает и для проектных сессий)
+POST                /api/chats/{id}/pipeline           { task, executorKey? } → { pipelineId }  (конвейер пантеона, флаг persona-pipeline)
+POST                /api/chats/{id}/pipeline/cancel    → 204  (отмена идущего конвейера)
 ```
 
 Эффективные значения флагов также возвращаются в `GET /api/auth/me` (поле `featureFlags`),

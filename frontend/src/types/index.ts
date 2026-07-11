@@ -285,6 +285,8 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
   | { type: 'meeting_progress'; meetingId: string; phase: string; personaId?: string; status?: string; error?: string }
   | { type: 'meeting_phase'; meetingId: string; phase: MeetingPhaseKey; question: string; entries: MeetingEntryItem[] }
+  | { type: 'pipeline_progress'; pipelineId: string; phase: string; status?: string; error?: string }
+  | { type: 'pipeline_phase'; pipelineId: string; phase: PipelinePhaseKey; task: string; personaId: string; text: string; round?: number }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' }
 );
 
@@ -373,6 +375,17 @@ export interface WorkLoopState {
   phase: string | null;
 }
 
+// Фазы конвейера пантеона: анализ → план → ревью → исполнение
+export type PipelinePhaseKey = 'analysis' | 'plan' | 'review' | 'execute';
+
+// Завершённая фаза конвейера (карточка в ленте). round — круг доработки плана (по REJECT)
+export interface PipelinePhaseItem {
+  phase: PipelinePhaseKey;
+  personaId: string;
+  text: string;
+  round: number;
+}
+
 // Элементы чата
 export type ChatItem =
   | { kind: 'user_message'; text: string; attachedPaths?: string[] }
@@ -403,6 +416,10 @@ export type ChatItem =
   | { kind: 'meeting'; meetingId: string; question: string;
       phases: Partial<Record<MeetingPhaseKey, MeetingEntryItem[]>>;
       running?: MeetingRunningState; status?: 'running' | 'done' | 'error'; error?: string }
+  // Карточка конвейера пантеона: последовательность фаз одного pipelineId
+  // (собирается из pipeline_phase/pipeline_progress и из истории)
+  | { kind: 'pipeline'; pipelineId: string; task: string; phases: PipelinePhaseItem[];
+      runningPhase?: string | null; status?: 'running' | 'done' | 'error'; error?: string }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 // Скиллы и агенты

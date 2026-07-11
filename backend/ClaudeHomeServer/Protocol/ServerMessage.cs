@@ -145,6 +145,18 @@ public record MeetingPhaseMessage(string MeetingId, string Phase, string Questio
     IReadOnlyList<MeetingEntry> Entries)
     : ServerMessage("meeting_phase");
 
+// Live-прогресс конвейера пантеона (флаг persona-pipeline). Phase: analysis | plan |
+// review | execute — со Status (running/done/error); финал — Phase "done"/"error" (+ Error).
+public record PipelineProgressMessage(string PipelineId, string Phase,
+    string? Status = null, string? Error = null)
+    : ServerMessage("pipeline_progress");
+
+// Завершённая фаза конвейера с содержимым (broadcast-пара StoredPipelinePhaseMessage).
+// Round — номер круга доработки плана (1 = первый проход).
+public record PipelinePhaseMessage(string PipelineId, string Phase, string Task,
+    string PersonaId, string Text, int Round = 1)
+    : ServerMessage("pipeline_phase");
+
 // Пользовательское уведомление (напоминание о задаче, событие Claude-исполнителя и т.п.) —
 // в группу user_{userId}: открытое приложение показывает тост, клик ведёт по Url (hash-диплинк).
 // Kind — семантика для иконки/цвета: reminder | claude | info

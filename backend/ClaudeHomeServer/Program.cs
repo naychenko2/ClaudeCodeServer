@@ -88,6 +88,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IOneShotRunner>(
 // Совещания персон (P7): one-shot ответы персон + оркестратор фаз
 builder.Services.AddSingleton<PersonaAskService>();
 builder.Services.AddSingleton<PersonaMeetingService>();
+builder.Services.AddSingleton<PersonaPipelineService>();
 builder.Services.AddSingleton<ChangelogService>();
 builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();

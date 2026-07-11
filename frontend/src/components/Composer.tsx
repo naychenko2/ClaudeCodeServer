@@ -204,9 +204,12 @@ export function Composer({
     const rank = (p: Persona) => participantIds!.includes(p.id) ? 0 : 1;
     return [...base].sort((a, b) => rank(a) - rank(b));
   })();
-  // Мультиперсонная дискуссия: доступна в чате персоны, когда есть кого позвать
+  // Конвейер пантеона (флаг persona-pipeline): запускается из «Обсудить с командой» в любом чате
+  const pipelineOn = useFeature(FLAGS.personaPipeline);
+  // Мультиперсонная дискуссия: в чате персоны — когда есть кого позвать; конвейер — в любом чате
   const [showDiscuss, setShowDiscuss] = useState(false);
-  const canDiscuss = mentionsActive && !!selectedPersona && mentionable.length > 0;
+  const canDiscuss = (mentionsActive && !!selectedPersona && mentionable.length > 0)
+    || (pipelineOn && !!sessionId);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
   const recCancelRef = useRef(false);
@@ -912,6 +915,7 @@ export function Composer({
           chatPersona={selectedPersona}
           sessionId={sessionId}
           meetingEnabled={groupChatsOn}
+          pipelineEnabled={pipelineOn}
           onSend={t => onSend(t, [])}
           onClose={() => setShowDiscuss(false)}
         />

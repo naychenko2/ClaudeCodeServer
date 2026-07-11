@@ -3,9 +3,10 @@
 // тестировать без рендера React. Побочные эффекты (загрузка истории, SignalR)
 // остаются в хуке; редьюсер только считает следующее состояние.
 
-import type { ChatItem, ServerMessage, RateLimitInfo, MeetingEntryItem, MeetingPhaseKey, WorkLoopState } from '../types';
+import type { ChatItem, ServerMessage, RateLimitInfo, MeetingEntryItem, MeetingPhaseKey, WorkLoopState, PipelinePhaseItem, PipelinePhaseKey } from '../types';
 
 type MeetingItem = Extract<ChatItem, { kind: 'meeting' }>;
+type PipelineItem = Extract<ChatItem, { kind: 'pipeline' }>;
 
 // Часть состояния сессии, которой управляет редьюсер
 export interface ChatState {
@@ -45,6 +46,8 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
 
   // Карточки совещаний: фазы одного meetingId из истории склеиваются в один элемент
   const meetings = new Map<string, MeetingItem>();
+  // Карточки конвейеров: фазы одного pipelineId склеиваются в один элемент
+  const pipelines = new Map<string, PipelineItem>();
 
   for (const msg of raw) {
     const m = msg as StoredHistoryMessage;
@@ -66,6 +69,19 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
       it.phases[mp.phase] = mp.entries;
       if (!it.question) it.question = mp.question;
       if (mp.phase === 'synthesis') it.status = 'done';
+      continue;
+    }
+    if ((m.kind as string) === 'pipeline_phase') {
+      const pp = m as unknown as { pipelineId: string; phase: PipelinePhaseKey; task: string; personaId: string; text: string; round?: number };
+      let it = pipelines.get(pp.pipelineId);
+      if (!it) {
+        it = { kind: 'pipeline', pipelineId: pp.pipelineId, task: pp.task, phases: [] };
+        pipelines.set(pp.pipelineId, it);
+        items.push(it);
+      }
+      it.phases.push({ phase: pp.phase, personaId: pp.personaId, text: pp.text, round: pp.round ?? 1 });
+      if (!it.task) it.task = pp.task;
+      if (pp.phase === 'execute') it.status = 'done';
       continue;
     }
 
@@ -311,6 +327,54 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           }
         : base.running?.phase === msg.phase ? undefined : base.running;
       const updated: MeetingItem = { ...base, running, status: base.status ?? 'running' };
+      return idx >= 0
+        ? withItems(prev.items.map((it, i) => i === idx ? updated : it))
+        : withItems([...prev.items, updated]);
+    }
+
+    case 'pipeline_phase': {
+      // Фаза конвейера завершена — добавляем в карточку (или создаём)
+      const idx = prev.items.findIndex(it => it.kind === 'pipeline' && it.pipelineId === msg.pipelineId);
+      const entry: PipelinePhaseItem = { phase: msg.phase, personaId: msg.personaId, text: msg.text, round: msg.round ?? 1 };
+      if (idx >= 0) {
+        const ex = prev.items[idx] as PipelineItem;
+        const updated: PipelineItem = {
+          ...ex,
+          task: ex.task || msg.task,
+          phases: [...ex.phases, entry],
+          runningPhase: undefined,
+          status: msg.phase === 'execute' ? 'done' : ex.status,
+        };
+        return withItems(prev.items.map((it, i) => i === idx ? updated : it));
+      }
+      return withItems([...prev.items, {
+        kind: 'pipeline', pipelineId: msg.pipelineId, task: msg.task, phases: [entry],
+        status: msg.phase === 'execute' ? 'done' : 'running',
+      }]);
+    }
+
+    case 'pipeline_progress': {
+      const idx = prev.items.findIndex(it => it.kind === 'pipeline' && it.pipelineId === msg.pipelineId);
+      // Финальные статусы конвейера
+      if (msg.phase === 'done' || msg.phase === 'error') {
+        if (idx < 0) return prev;
+        const ex = prev.items[idx] as PipelineItem;
+        const updated: PipelineItem = {
+          ...ex, runningPhase: undefined,
+          status: msg.phase === 'done' ? 'done' : 'error',
+          error: msg.phase === 'error' ? (msg.error ?? 'Конвейер прерван') : undefined,
+        };
+        return withItems(prev.items.map((it, i) => i === idx ? updated : it));
+      }
+      // Идёт фаза (running) — показываем спиннер этой фазы
+      const base: PipelineItem = idx >= 0
+        ? prev.items[idx] as PipelineItem
+        : { kind: 'pipeline', pipelineId: msg.pipelineId, task: '', phases: [], status: 'running' };
+      const updated: PipelineItem = {
+        ...base,
+        runningPhase: msg.status === 'running' ? msg.phase : base.runningPhase,
+        status: base.status ?? 'running',
+      };
       return idx >= 0
         ? withItems(prev.items.map((it, i) => i === idx ? updated : it))
         : withItems([...prev.items, updated]);

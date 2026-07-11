@@ -476,6 +476,15 @@ export const api = {
       }),
     cancelMeeting: (id: string) =>
       request<void>(`/chats/${id}/meeting/cancel`, { method: 'POST' }),
+    // Конвейер пантеона (флаг persona-pipeline): анализ → план → ревью → авто-исполнение.
+    // executorKey — omo-sisyphus | omo-hephaestus (дефолт omo-hephaestus)
+    startPipeline: (id: string, task: string, executorKey?: string) =>
+      request<{ pipelineId: string }>(`/chats/${id}/pipeline`, {
+        method: 'POST',
+        body: JSON.stringify({ task, executorKey }),
+      }),
+    cancelPipeline: (id: string) =>
+      request<void>(`/chats/${id}/pipeline/cancel`, { method: 'POST' }),
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
     uploadFile: async (id: string, file: File): Promise<{ path: string }> => {

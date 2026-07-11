@@ -336,7 +336,8 @@ export interface FalAccountResponse {
 
 // Элементы чата
 export type ChatItem =
-  | { kind: 'user_message'; text: string; attachedPaths?: string[] }
+  // viaAgent — сообщение прислано не человеком, а агентом из другой сессии (chats_send)
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
@@ -571,8 +572,51 @@ export interface Persona {
   memoryEnabled: boolean;     // долгая память (этап 2)
   // Возможности персоны (ключи tasks/notes/web); null/отсутствие — без ограничений
   tools?: string[] | null;
+  // Привязки к источникам знаний и правилам (фича persona-bindings); null — нет
+  bindings?: PersonaBinding[] | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// === Привязки персоны: «знания и правила» (фича persona-bindings) ===
+// Тип источника: project — проект целиком; projectPath — папка/файл проекта;
+// knowledge — база знаний (Dify-датасет); notes — источник заметок; tool —
+// инструмент workspace; skill — глобальный навык.
+export type PersonaBindingType = 'project' | 'projectPath' | 'knowledge' | 'notes' | 'tool' | 'skill';
+
+// Режим привязки: auto — персона обращается по условию; always — выжимка в каждый ход; off — выключена
+export type PersonaBindingMode = 'auto' | 'always' | 'off';
+
+export interface PersonaBinding {
+  id: string;
+  type: PersonaBindingType;
+  // Цель по типам: project/projectPath → projectId; knowledge → datasetId;
+  // notes → ключ источника; tool → ключ инструмента; skill — имя навыка
+  target: string;
+  // Путь внутри цели: папка/файл проекта или папка источника заметок
+  path?: string | null;
+  // Условие «когда пользоваться» — попадает в системный промпт
+  condition: string;
+  mode: PersonaBindingMode;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Тело создания/обновления привязки (POST/PUT bindings)
+export interface PersonaBindingDto {
+  type: PersonaBindingType;
+  target: string;
+  path?: string | null;
+  condition?: string;
+  mode?: PersonaBindingMode;
+}
+
+// Элемент каталога целей привязки (GET /api/personas/binding-targets)
+export interface BindingTarget {
+  id: string;
+  label: string;
+  hint?: string | null;
+  meta?: string | null;
 }
 
 // Тело создания персоны (POST /api/personas). Большинство полей опциональны.

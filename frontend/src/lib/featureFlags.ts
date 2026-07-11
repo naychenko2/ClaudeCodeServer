@@ -16,6 +16,10 @@ export const FLAGS = {
   personas: 'personas',
   personaMemoryAutolearn: 'persona-memory-autolearn',
   personaMentions: 'persona-mentions',
+  personaBindings: 'persona-bindings',
+  workspaceTools: 'workspace-tools',
+  workspaceChatSend: 'workspace-chat-send',
+  workspaceDestructive: 'workspace-destructive',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

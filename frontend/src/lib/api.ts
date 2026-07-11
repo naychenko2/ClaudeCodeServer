@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -348,6 +348,40 @@ export const api = {
       request<{ character: string }>('/personas/ai/character', {
         method: 'POST',
         body: JSON.stringify(body),
+      }),
+
+    // === Привязки «Знания и правила» (фича persona-bindings) ===
+    // Мгновенное сохранение: каждая мутация — отдельный запрос, без общей формы.
+    bindings: (id: string) =>
+      request<PersonaBinding[]>(`/personas/${encodeURIComponent(id)}/bindings`),
+    addBinding: (id: string, dto: PersonaBindingDto) =>
+      request<PersonaBinding>(`/personas/${encodeURIComponent(id)}/bindings`, {
+        method: 'POST', body: JSON.stringify(dto),
+      }),
+    updateBinding: (id: string, bindingId: string, dto: PersonaBindingDto) =>
+      request<PersonaBinding>(`/personas/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}`, {
+        method: 'PUT', body: JSON.stringify(dto),
+      }),
+    removeBinding: (id: string, bindingId: string) =>
+      request<void>(`/personas/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}`, {
+        method: 'DELETE',
+      }),
+    // Каталог целей для пикера: type = project | knowledge | notes | tool | skill;
+    // для notes с source= — папки внутри источника
+    bindingTargets: (type: string, source?: string) => {
+      const qs = new URLSearchParams({ type });
+      if (source) qs.set('source', source);
+      return request<BindingTarget[]>(`/personas/binding-targets?${qs}`);
+    },
+    // AI-формулировка условия «когда пользоваться» по содержимому источника (LLM, до ~60с)
+    aiBindingCondition: (body: { type: PersonaBindingType; target: string; path?: string | null }) =>
+      request<{ condition: string }>('/personas/bindings/ai-condition', {
+        method: 'POST', body: JSON.stringify(body), timeoutMs: 90_000,
+      }),
+    // AI-подбор привязок под роль персоны: кандидаты, ничего не сохраняется
+    suggestBindings: (id: string) =>
+      request<{ candidates: PersonaBinding[] }>(`/personas/${encodeURIComponent(id)}/bindings/suggest`, {
+        method: 'POST', timeoutMs: 150_000,
       }),
   },
 

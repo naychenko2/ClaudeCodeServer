@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
-import type { Persona, PersonaMemoryEntry, Session } from '../../types';
+import type { Persona, PersonaBinding, PersonaMemoryEntry, Session } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { relativeTime } from '../projects/projectUtil';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
+import { BindingModeBadge, BindingTypeIcon, bindingPlural, bindingsCounter, useBindingLabels } from './bindingMeta';
 
 // Режим «Обзор» студии персоны: read-only визитка со сводкой — кто это,
 // как настроена (модель/возможности/память), её характер и недавние разговоры.
@@ -31,7 +33,7 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
-export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking, onEditProfile, isMobile }: {
+export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking, onEditProfile, onOpenKnowledge, isMobile }: {
   persona: Persona;
   // Цвет персоны (уже разрезолвленный из палитры) — тот же, что в тулбаре
   accent: string;
@@ -42,9 +44,25 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   talking?: boolean;
   // Перейти в вид «Профиль» (подсказка при пустом характере)
   onEditProfile?: () => void;
+  // Перейти во вкладку «Знания» (секция привязок, фича persona-bindings)
+  onOpenKnowledge?: () => void;
   isMobile?: boolean;
 }) {
   const modelName = useModelLabel(persona.model);
+  const bindingsEnabled = useFeature(FLAGS.personaBindings);
+
+  // Привязки «Знания и правила» — только при включённом флаге; тихий fail → пусто
+  const [bindings, setBindings] = useState<PersonaBinding[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setBindings(null);
+    if (!bindingsEnabled) return;
+    api.personas.bindings(persona.id)
+      .then(list => { if (alive) setBindings(list); })
+      .catch(() => { if (alive) setBindings([]); });
+    return () => { alive = false; };
+  }, [persona.id, bindingsEnabled]);
+  const bindingLabelOf = useBindingLabels(bindings);
 
   // Недавние разговоры: best-effort, тихий fail → пустой список
   const [chats, setChats] = useState<Session[] | null>(null);
@@ -154,10 +172,14 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     </div>
   ) : null;
 
-  // === Факты-строка: модель / возможности / память ===
+  // === Факты-строка: модель / возможности / [знания] / память ===
   const facts: { label: string; value: string; title?: string }[] = [
     { label: 'Модель', value: persona.effort ? `${modelName} · ${effortLabel(persona.effort)}` : modelName },
     { label: 'Возможности', value: toolsText },
+    ...(bindingsEnabled ? [{
+      label: 'Знания',
+      value: bindings === null ? '…' : bindings.length === 0 ? 'нет привязок' : bindingsCounter(bindings),
+    }] : []),
     { label: 'Память', value: memoryText, title: memoryTitle },
   ];
   const factsRow = (
@@ -216,6 +238,82 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
       )}
     </div>
   );
+
+  // === Знания и правила (фича persona-bindings): компактная выжимка привязок ===
+  const shownBindings = (bindings ?? []).filter(b => b.mode !== 'off').slice(0, 4);
+  const moreBindings = (bindings?.length ?? 0) - shownBindings.length;
+  const knowledgeSection = bindingsEnabled ? (
+    <div style={section}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+        <SectionLabel>Знания и правила</SectionLabel>
+        {bindings !== null && bindings.length > 0 && (
+          <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>
+            {bindingsCounter(bindings)}
+          </span>
+        )}
+      </div>
+
+      {bindings === null ? (
+        <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans, padding: '6px 0' }}>Загружаю…</div>
+      ) : bindings.length === 0 ? (
+        // Мини-пустышка: источники не подключены
+        <div style={{
+          border: `1px dashed ${C.dashed}`, borderRadius: R.xl, padding: '18px 16px',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center',
+        }}>
+          <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
+            Источники не подключены — персона отвечает по общим знаниям.
+          </span>
+          {onOpenKnowledge && (
+            <button type="button" onClick={onOpenKnowledge} style={{ ...linkBtn, marginTop: 0 }}>
+              Подключить знания →
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <div style={{ background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, overflow: 'hidden' }}>
+            {shownBindings.map((b, i) => (
+              <button
+                key={b.id}
+                type="button"
+                onClick={onOpenKnowledge}
+                title="Настроить знания"
+                onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+                  background: 'transparent', border: 'none', padding: '9px 14px', minHeight: 42,
+                  borderTop: i > 0 ? `1px solid ${C.borderLight}` : 'none',
+                  cursor: onOpenKnowledge ? 'pointer' : 'default', fontFamily: FONT.sans, boxSizing: 'border-box',
+                }}
+              >
+                <BindingTypeIcon type={b.type} size={24} />
+                <span style={{
+                  flex: 1, minWidth: 0, fontSize: 13, color: C.textPrimary,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  <span style={{ fontWeight: 600, color: C.textHeading }}>{bindingLabelOf(b)}</span>
+                  {b.condition && <span style={{ color: C.textSecondary }}> — {b.condition}</span>}
+                </span>
+                <BindingModeBadge mode={b.mode} />
+              </button>
+            ))}
+          </div>
+          {moreBindings > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, textAlign: 'center' }}>
+              и ещё {moreBindings} {bindingPlural(moreBindings)}
+            </div>
+          )}
+          {onOpenKnowledge && (
+            <button type="button" onClick={onOpenKnowledge} style={linkBtn}>
+              Настроить знания →
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  ) : null;
 
   // === Недавние разговоры ===
   const chatsSection = (
@@ -310,6 +408,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
         </div>
         {factsRow}
         {characterSection}
+        {knowledgeSection}
         {chatsSection}
       </div>
     </div>

@@ -5,9 +5,13 @@
 //   PERSONAS_API_URL    — базовый URL бэкенда (http://127.0.0.1:5000)
 //   PERSONAS_API_TOKEN  — сервисный JWT владельца сессии
 //   PERSONAS_PROJECT_ID — id проекта сессии; пусто = чат вне проекта (глобальный контекст)
-//   PERSONAS_SELF_ID    — id персоны текущего чата (для persona_ask: себя не спрашивают)
+//   PERSONAS_SELF_ID    — id персоны текущего чата (для persona_ask: себя не спрашивают;
+//                         для привязок — запрет самоэскалации: свои привязки менять нельзя)
 //   PERSONAS_MENTIONS   — "1" = включены @упоминания (флаг persona-mentions): добавляется
 //                         инструмент persona_ask — спросить другую персону от её лица
+//   PERSONAS_BINDINGS   — "1" = включены привязки (флаг persona-bindings): добавляются
+//                         инструменты personas_bindings_list/suggest/set и параметры
+//                         bindings/autoBindings в personas_create/personas_update
 //
 // Персона — AI-собеседник с именем, ролью, характером и аватаром; бывает глобальной
 // или привязанной к проекту. Изоляция per-owner — на стороне backend (токен определяет
@@ -20,6 +24,7 @@ const API_TOKEN = process.env.PERSONAS_API_TOKEN ?? '';
 const PROJECT_ID = process.env.PERSONAS_PROJECT_ID || null;
 const SELF_ID = process.env.PERSONAS_SELF_ID || null;
 const MENTIONS = process.env.PERSONAS_MENTIONS === '1';
+const BINDINGS = process.env.PERSONAS_BINDINGS === '1';
 
 // --- HTTP к бэкенду ---
 
@@ -62,6 +67,29 @@ const PERSONA_FIELDS = {
   memoryEnabled: { type: 'boolean', description: 'Долгая память персоны (по умолчанию включена)' },
 };
 
+// Привязка персоны (флаг persona-bindings): источник знаний или правило с условием применения
+const BINDING_ITEM_SCHEMA = {
+  type: 'object',
+  required: ['type', 'target'],
+  properties: {
+    type: {
+      type: 'string',
+      enum: ['project', 'projectPath', 'knowledge', 'notes', 'tool', 'skill'],
+      description: 'Тип: project — проект целиком; projectPath — папка/файл проекта; knowledge — база знаний (datasetId); notes — источник заметок; tool — рубильник инструмента; skill — глобальный скилл',
+    },
+    target: { type: 'string', description: 'Цель: projectId | datasetId | source заметок ("personal"/projectId) | ключ инструмента (tasks/notes/web/…) | имя скилла' },
+    path: { type: 'string', description: 'Путь внутри цели (для projectPath — обязателен; для notes — папка источника)' },
+    condition: { type: 'string', description: 'Когда персоне применять источник (1-2 предложения; пусто = «всегда под рукой»)' },
+    mode: { type: 'string', enum: ['auto', 'always', 'off'], description: 'Режим: auto — по условию (дефолт); always — выжимка в каждый ход; off — выключена' },
+  },
+};
+
+// Параметры привязок в create/update — только при включённом флаге persona-bindings
+const BINDING_CREATE_FIELDS = BINDINGS ? {
+  bindings: { type: 'array', items: BINDING_ITEM_SCHEMA, description: 'Явные привязки источников знаний и правил' },
+  autoBindings: { type: 'boolean', description: 'true — после создания AI сам подберёт привязки под роль персоны' },
+} : {};
+
 const TOOLS = [
   {
     name: 'personas_list',
@@ -97,13 +125,15 @@ const TOOLS = [
         ...PERSONA_FIELDS,
         scope: { type: 'string', enum: ['global', 'project'], description: 'Зона персоны (по умолчанию global)' },
         projectId: { type: 'string', description: 'ID проекта для scope=project (по умолчанию — проект текущей сессии)' },
+        ...BINDING_CREATE_FIELDS,
       },
     },
   },
   {
     name: 'personas_update',
     description: 'Изменить персону: передавай только изменяемые поля. Пустая строка очищает ' +
-      'role/model/effort/color/greeting. Смена scope на "project" требует projectId.',
+      'role/model/effort/color/greeting. Смена scope на "project" требует projectId.' +
+      (BINDINGS ? ' bindings — ПОЛНАЯ замена набора привязок (свои собственные привязки менять нельзя).' : ''),
     inputSchema: {
       type: 'object',
       required: ['id'],
@@ -113,9 +143,48 @@ const TOOLS = [
         ...PERSONA_FIELDS,
         scope: { type: 'string', enum: ['global', 'project'], description: 'Новая зона персоны' },
         projectId: { type: 'string', description: 'ID проекта для scope=project' },
+        ...(BINDINGS ? {
+          bindings: { type: 'array', items: BINDING_ITEM_SCHEMA, description: 'Полная замена набора привязок персоны' },
+        } : {}),
       },
     },
   },
+  // Привязки персон (флаг persona-bindings): источники знаний и правила с условиями применения
+  ...(BINDINGS ? [
+    {
+      name: 'personas_bindings_list',
+      description: 'Привязки персоны: источники знаний (проекты, папки, базы знаний, заметки, скиллы) ' +
+        'и правила инструментов с условиями «когда применять».',
+      inputSchema: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string', description: 'ID персоны' } },
+      },
+    },
+    {
+      name: 'personas_suggest_bindings',
+      description: 'AI-подбор привязок под роль персоны (по каталогу проектов/баз/заметок/скиллов ' +
+        'владельца). Возвращает кандидатов, НЕ сохраняет — сохрани нужные через personas_bindings_set.',
+      inputSchema: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string', description: 'ID персоны' } },
+      },
+    },
+    {
+      name: 'personas_bindings_set',
+      description: 'Полная замена набора привязок персоны (пустой массив — убрать все). ' +
+        'Свои собственные привязки персона менять не может.',
+      inputSchema: {
+        type: 'object',
+        required: ['id', 'bindings'],
+        properties: {
+          id: { type: 'string', description: 'ID персоны' },
+          bindings: { type: 'array', items: BINDING_ITEM_SCHEMA, description: 'Новый набор привязок' },
+        },
+      },
+    },
+  ] : []),
   {
     name: 'personas_delete',
     description: 'Удалить персону по id. Действие необратимо: долгая память персоны тоже удаляется.',
@@ -174,6 +243,13 @@ function personaBody(args, keys) {
 
 const FIELD_KEYS = ['name', 'role', 'description', 'systemPrompt', 'model', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId'];
 
+// Запрет самоэскалации: персона не может менять СОБСТВЕННЫЕ привязки
+// (проверка до любого fetch — изменение прав себе блокируется по построению)
+function assertNotSelfBindings(id) {
+  if (SELF_ID && String(id) === SELF_ID)
+    throw new Error('Персона не может менять собственные привязки — попроси об этом пользователя.');
+}
+
 async function callTool(name, args) {
   switch (name) {
     case 'personas_list': {
@@ -199,17 +275,47 @@ async function callTool(name, args) {
       } else {
         delete body.projectId;
       }
+      // Привязки при создании (флаг persona-bindings): явный список и/или AI-подбор
+      if (BINDINGS) {
+        if (Array.isArray(args.bindings)) body.bindings = args.bindings;
+        if ('autoBindings' in args) body.autoBindings = Boolean(args.autoBindings);
+      }
       return json(await api('/api/personas', { method: 'POST', body: JSON.stringify(body) }));
     }
 
     case 'personas_update': {
+      // Изменение привязок — отдельным PUT-эндпоинтом; себе — запрещено (анти-самоэскалация)
+      if ('bindings' in args) {
+        if (!BINDINGS) throw new Error('Привязки персон выключены (флаг persona-bindings).');
+        assertNotSelfBindings(args.id);
+        await api(`/api/personas/${encodeURIComponent(args.id)}/bindings`, {
+          method: 'PUT',
+          body: JSON.stringify({ bindings: args.bindings ?? [] }),
+        });
+      }
       const body = personaBody(args, FIELD_KEYS);
+      if (Object.keys(body).length === 0)
+        return json(await api(`/api/personas/${encodeURIComponent(args.id)}`));
       if (body.scope === 'project' && !('projectId' in body)) {
         if (!PROJECT_ID)
           throw new Error('Для смены зоны на проектную нужен projectId: текущая сессия вне проекта.');
         body.projectId = PROJECT_ID;
       }
       return json(await api(`/api/personas/${encodeURIComponent(args.id)}`, { method: 'PUT', body: JSON.stringify(body) }));
+    }
+
+    case 'personas_bindings_list':
+      return json(await api(`/api/personas/${encodeURIComponent(args.id)}/bindings`));
+
+    case 'personas_suggest_bindings':
+      return json(await api(`/api/personas/${encodeURIComponent(args.id)}/bindings/suggest`, { method: 'POST' }));
+
+    case 'personas_bindings_set': {
+      assertNotSelfBindings(args.id);
+      return json(await api(`/api/personas/${encodeURIComponent(args.id)}/bindings`, {
+        method: 'PUT',
+        body: JSON.stringify({ bindings: args.bindings ?? [] }),
+      }));
     }
 
     case 'personas_delete':

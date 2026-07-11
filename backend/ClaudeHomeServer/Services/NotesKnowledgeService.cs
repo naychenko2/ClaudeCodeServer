@@ -58,6 +58,10 @@ public sealed class NotesKnowledgeService
         return !string.IsNullOrEmpty(entry.DatasetId) && entry.Docs.Count > 0;
     }
 
+    // Id Dify-датасета заметок владельца («{username}:notes»); null — индекс ещё не создавался.
+    // Нужен привязкам персон (PersonaBindingsService): датасет заметок — валидная цель Knowledge.
+    public string? GetDatasetId(string userId) => GetEntry(userId).DatasetId;
+
     // Markdown-блок с релевантными заметками для системного промпта хода (auto-recall).
     // Пустой список / все ниже порога → null (нечего подмешивать).
     internal static string? BuildRecallBlock(IReadOnlyList<NoteSemanticHit> hits, double minScore, int topK)

@@ -12,6 +12,33 @@ public enum PersonaMemoryType { Semantic, Episodic, Procedural }
 // Вид аватара: Initials — круг с инициалами на цветном фоне; Image — сгенерированная/загруженная картинка.
 public enum PersonaAvatarKind { Initials, Image }
 
+// Тип привязки персоны к источнику знаний или правилу (фича persona-bindings):
+// Project — проект целиком (файлы через workspace); ProjectPath — папка/файл проекта;
+// Knowledge — Dify-датасет (база знаний проекта или заметок); Notes — источник заметок;
+// Tool — рубильник инструмента (tasks/notes/web/…); Skill — глобальный скилл (~/.claude/skills).
+public enum PersonaBindingType { Project, ProjectPath, Knowledge, Notes, Tool, Skill }
+
+// Режим привязки: Auto — источник в индексе, персона подгружает по условию;
+// Always — вдобавок выжимка из источника подмешивается в каждый ход; Off — выключена.
+public enum PersonaBindingMode { Auto, Always, Off }
+
+// Привязка персоны: «когда {Condition} — используй {Target}». Target по типам:
+// Project/ProjectPath → projectId; Knowledge → datasetId; Notes → sourceKey
+// ("personal" | projectId); Tool → ключ инструмента; Skill → имя скилла.
+public class PersonaBinding
+{
+    public string Id { get; init; } = Guid.NewGuid().ToString();
+    public PersonaBindingType Type { get; set; }
+    public string Target { get; set; } = "";
+    // Путь внутри цели: папка/файл проекта (ProjectPath) или папка источника заметок (Notes)
+    public string? Path { get; set; }
+    // Условие «когда применять источник» — попадает в индекс системного промпта
+    public string Condition { get; set; } = "";
+    public PersonaBindingMode Mode { get; set; } = PersonaBindingMode.Auto;
+    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
 // Внешний вид персоны.
 public class PersonaAvatar
 {
@@ -47,6 +74,9 @@ public class Persona
     // Возможности персоны (ключи: tasks, notes, web). null — без ограничений
     // (как раньше, по фич-флагам владельца); список — только перечисленные.
     public List<string>? Tools { get; set; }
+    // Привязки к источникам знаний и правилам (фича persona-bindings).
+    // null — привязок нет (миграция стора не нужна, поведение как раньше).
+    public List<PersonaBinding>? Bindings { get; set; }
     // Первое приветственное сообщение при открытии чата (опционально)
     public string? Greeting { get; set; }
     public bool MemoryEnabled { get; set; } = true;

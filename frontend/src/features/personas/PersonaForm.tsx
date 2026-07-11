@@ -8,6 +8,7 @@ import { useModels, useModelCaps, modelProvider } from '../../lib/models';
 import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { bumpPersonas } from '../../lib/personas';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
@@ -59,6 +60,8 @@ interface PersonaFormProps {
   onColorChange?: (color: string) => void;
   // Клик по «Открыть память →» в summary-карточке памяти — родитель переключит вид на «Память»
   onOpenMemory?: () => void;
+  // Переход во вкладку «Знания» из плашки-переадресации (фича persona-bindings)
+  onOpenKnowledge?: () => void;
   // Дефолты зоны при создании (persona=null): для проектной панели персон —
   // сразу «Проект» + id текущего проекта, чтобы персона создавалась проектной.
   defaultScope?: PersonaScope;
@@ -72,11 +75,14 @@ interface PersonaFormProps {
 // (сохранить/удалить/отмена) живут в тулбаре РОДИТЕЛЯ: форма экспонирует
 // save()/remove() через ref и сообщает своё состояние через onStatus.
 export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(function PersonaForm(
-  { persona, projects, onSaved, onDelete, initial, onStatus, onColorChange, onOpenMemory, defaultScope, defaultProjectId }, ref,
+  { persona, projects, onSaved, onDelete, initial, onStatus, onColorChange, onOpenMemory, onOpenKnowledge, defaultScope, defaultProjectId }, ref,
 ) {
   const isEdit = !!persona;
   const isMobile = useIsMobile();
   const models = useModels();
+  // Фича persona-bindings: возможности переехали во вкладку «Знания» —
+  // вместо тумблеров показываем плашку-переадресацию
+  const bindingsEnabled = useFeature(FLAGS.personaBindings);
 
   const [name, setName] = useState(persona?.name ?? '');
   const [role, setRole] = useState(persona?.role ?? initial?.role ?? '');
@@ -612,7 +618,38 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const toggleTool = (key: string) =>
     setTools(prev => prev.includes(key) ? prev.filter(t => t !== key) : [...prev, key]);
 
-  const toolsSection = (
+  // При включённой фиче persona-bindings вместо тумблеров — плашка-переадресация
+  // во вкладку «Знания» (источники/инструменты и правила настраиваются там).
+  const toolsSection = bindingsEnabled ? (
+    <div style={section}>
+      <SectionLabel style={{ marginBottom: 4 }}>Возможности</SectionLabel>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginTop: 12,
+        background: C.bgCard, border: `1px dashed ${C.dashed}`, borderRadius: R.xl,
+        padding: '11px 14px', fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.45,
+      }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+          strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+        </svg>
+        <span>
+          Источники и инструменты персоны переехали во вкладку{' '}
+          {onOpenKnowledge ? (
+            <button type="button" onClick={onOpenKnowledge} style={{
+              background: 'none', border: 'none', padding: 0, color: C.accent,
+              fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans,
+            }}>
+              «Знания» →
+            </button>
+          ) : (
+            <span style={{ fontWeight: 600 }}>«Знания»</span>
+          )}
+          {' '}— там же настраиваются правила, когда ими пользоваться.
+        </span>
+      </div>
+    </div>
+  ) : (
     <div style={section}>
       <SectionLabel style={{ marginBottom: 4 }}>Возможности</SectionLabel>
       <div style={{ fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans, marginBottom: 14 }}>

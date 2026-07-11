@@ -35,6 +35,10 @@ public class PersonaManager
     // Папка с ассетами персон (аватары): data/personas/
     public string AssetsDir => Path.Combine(Path.GetDirectoryName(_storePath)!, "personas");
 
+    // Изменение персоны (профиль/возможности/привязки) — SessionManager сбрасывает адаптеры
+    // её живых сессий, чтобы Tool-рубильники и MCP-серверы перемонтировались со следующего хода
+    public event Action<Persona>? OnPersonaChanged;
+
     public IReadOnlyCollection<Persona> GetByOwner(string userId) =>
         _personas.Values.Where(p => p.OwnerId == userId)
             .OrderByDescending(p => p.UpdatedAt).ToList();
@@ -126,6 +130,20 @@ public class PersonaManager
         if (tools is not null) persona.Tools = NormalizeTools(tools);
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
+        OnPersonaChanged?.Invoke(persona);
+        return persona;
+    }
+
+    // Полная замена привязок персоны (фича persona-bindings); сохранение мгновенное.
+    // Пустой список нормализуется в null (поведение как без привязок).
+    public Persona UpdateBindings(string id, string userId, List<PersonaBinding>? bindings)
+    {
+        var persona = Get(id, userId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        persona.Bindings = bindings is { Count: > 0 } ? bindings : null;
+        persona.UpdatedAt = DateTime.UtcNow;
+        Save();
+        OnPersonaChanged?.Invoke(persona);
         return persona;
     }
 

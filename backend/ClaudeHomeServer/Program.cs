@@ -64,6 +64,7 @@ builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<PersonaManager>();
 builder.Services.AddSingleton<PersonaMemoryService>();
+builder.Services.AddSingleton<PersonaBindingsService>();
 builder.Services.AddSingleton<FalImageService>();
 builder.Services.AddHostedService<PersonaMemoryAutolearnService>();
 builder.Services.AddSingleton<TaskManager>();

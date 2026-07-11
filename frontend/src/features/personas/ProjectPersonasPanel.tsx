@@ -9,6 +9,7 @@ import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './P
 import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
 import { PersonaPreview } from './PersonaPreview';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
+import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
 import type { PersonaTemplate } from './personaTemplates';
 
@@ -170,6 +171,9 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
         {persona ? (
           view === 'memory' ? (
             <PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded />
+          ) : view === 'knowledge' ? (
+            // Знания — привязки источников и правил (фича persona-bindings)
+            <PersonaBindingsPanel persona={persona} accent={accent} isMobile={isMobile} />
           ) : view === 'preview' ? (
             // Обзор — read-only визитка; чаты проектной персоны открываются на месте
             <PersonaPreview
@@ -179,6 +183,7 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
               onTalk={() => talk(persona)}
               onOpenSession={onOpenChat}
               onEditProfile={() => setView('profile')}
+              onOpenKnowledge={() => setView('knowledge')}
               isMobile={isMobile}
             />
           ) : (
@@ -190,6 +195,7 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
               onStatus={onStatus}
               onColorChange={setLiveColor}
               onOpenMemory={() => setView('memory')}
+              onOpenKnowledge={() => setView('knowledge')}
               onSaved={() => {}}
               onDelete={() => onDelete(persona)}
             />

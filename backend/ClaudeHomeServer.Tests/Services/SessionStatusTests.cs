@@ -80,7 +80,9 @@ public class SessionStatusTests : IDisposable
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(_config);
         var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, _config, NullLogger<PersonaMemoryService>.Instance);
-        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, NullLogger<SessionManager>.Instance);
+        var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesSvc, notesKb,
+            knowledge, new SkillsService(), flags, _config, NullLogger<PersonaBindingsService>.Instance);
+        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, NullLogger<SessionManager>.Instance);
     }
 
     private void WriteSessions(IEnumerable<Session> sessions)

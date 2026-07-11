@@ -63,7 +63,9 @@ public class SessionManagerTests : IDisposable
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
         var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config, NullLogger<PersonaMemoryService>.Instance);
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, NullLogger<SessionManager>.Instance);
+        var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesSvc, notesKb,
+            knowledge, new SkillsService(), flags, config, NullLogger<PersonaBindingsService>.Instance);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, NullLogger<SessionManager>.Instance);
     }
 
     public void Dispose()

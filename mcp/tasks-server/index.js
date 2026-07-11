@@ -5,12 +5,14 @@
 //   TASKS_API_URL    — базовый URL бэкенда (http://127.0.0.1:5000)
 //   TASKS_API_TOKEN  — сервисный JWT владельца сессии
 //   TASKS_PROJECT_ID — id проекта сессии; пусто = контекст личных задач
+//   TASKS_EXECUTE    — "1" = регистрировать tasks_execute (запуск Claude-исполнителя)
 
 import { createInterface } from 'node:readline';
 
 const API_URL = (process.env.TASKS_API_URL ?? 'http://localhost:5000').replace(/\/$/, '');
 const API_TOKEN = process.env.TASKS_API_TOKEN ?? '';
 const PROJECT_ID = process.env.TASKS_PROJECT_ID || null;
+const EXECUTE_ENABLED = process.env.TASKS_EXECUTE === '1';
 
 // --- HTTP к бэкенду ---
 
@@ -233,6 +235,22 @@ const TOOLS = [
   },
 ];
 
+// tasks_execute — только на пользовательском ходу (env выставляет ClaudeSession):
+// исполнитель порождает новую сессию Claude, на агентных ходах не даётся (анти-рекурсия)
+if (EXECUTE_ENABLED) {
+  TOOLS.push({
+    name: 'tasks_execute',
+    description: 'Запустить Claude-исполнителя задачи: отдельная сессия в проекте задачи ' +
+      '(личная — чат вне проекта), работает в фоне и сама ведёт статус через tasks_*. ' +
+      'Возвращает задачу с id сессии-исполнителя.',
+    inputSchema: {
+      type: 'object',
+      required: ['taskId'],
+      properties: { taskId: { type: 'string', description: 'ID задачи' } },
+    },
+  });
+}
+
 // --- Реализация инструментов ---
 
 function json(data) {
@@ -289,6 +307,18 @@ async function callTool(name, args) {
       return json(await api(`/api/tasks/${args.id}`, {
         method: 'PUT', body: JSON.stringify({ status: 'done' }),
       }));
+
+    case 'tasks_execute': {
+      if (!EXECUTE_ENABLED) throw new Error('tasks_execute недоступен на этом ходу');
+      const t = await api(`/api/tasks/${args.taskId}/execute`, { method: 'POST' });
+      return json({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        executorSessionId: t.linkedSessionId ?? null,
+        note: 'Исполнитель запущен и работает в фоне — прогресс виден в связанной сессии и статусе задачи.',
+      });
+    }
 
     case 'tasks_delete':
       await api(`/api/tasks/${args.id}`, { method: 'DELETE' });

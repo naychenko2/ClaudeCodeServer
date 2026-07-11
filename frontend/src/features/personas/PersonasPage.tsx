@@ -13,6 +13,7 @@ import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './P
 import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
 import { PersonaPreview } from './PersonaPreview';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
+import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
 import type { PersonaTemplate } from './personaTemplates';
 
@@ -301,18 +302,25 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSes
   const content = view === 'memory'
     // Память — под тулбаром, свой заголовок не нужен (идентичность уже в тулбаре)
     ? <div style={{ flex: 1, minHeight: 0 }}><PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded /></div>
+    : view === 'knowledge'
+    // Знания — привязки источников и правил (фича persona-bindings)
+    ? <div style={{ flex: 1, minHeight: 0 }}>
+        <PersonaBindingsPanel persona={persona} accent={accent} isMobile={isMobile} />
+      </div>
     : view === 'profile'
     // Профиль — инлайн-форма настройки прямо в контентной зоне (действия — в тулбаре)
     ? <div style={{ flex: 1, minHeight: 0 }}>
         <PersonaForm ref={formRef} persona={persona} projects={projects} onStatus={onStatus}
           onColorChange={setLiveColor} onOpenMemory={() => setView('memory')}
+          onOpenKnowledge={() => setView('knowledge')}
           onSaved={() => {}} onDelete={() => onDelete()} />
       </div>
     // Обзор — read-only визитка со сводкой и недавними разговорами
     : <div style={{ flex: 1, minHeight: 0 }}>
         <PersonaPreview persona={persona} accent={accent} talking={talking}
           onTalk={onTalk} onOpenSession={onOpenSession}
-          onEditProfile={() => setView('profile')} isMobile={isMobile} />
+          onEditProfile={() => setView('profile')}
+          onOpenKnowledge={() => setView('knowledge')} isMobile={isMobile} />
       </div>;
 
   return (

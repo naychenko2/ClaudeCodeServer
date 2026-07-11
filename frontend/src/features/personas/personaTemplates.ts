@@ -16,6 +16,10 @@ export interface PersonaTemplate {
   tools?: string[];
   // Профиль доступа (P6): у «советующих» ролей — readOnly
   access?: PersonaAccess;
+  // Дефолтная модель/усилие роли (алиасы 'opus'|'sonnet'|'haiku'; effort 'high') —
+  // используются тяжёлыми ролями пантеона OmO, наши шаблоны модель не навязывают
+  model?: string;
+  effort?: string;
 }
 
 export const PERSONA_TEMPLATES: PersonaTemplate[] = [

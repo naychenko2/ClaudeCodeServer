@@ -88,6 +88,7 @@ public class PersonaManager
             MustNot = CleanList(contract.MustNot),
             OutputFormat = TrimToNull(contract.OutputFormat),
             SpeechExamples = CleanList(contract.SpeechExamples),
+            Instructions = TrimToNull(contract.Instructions),
         };
         return clean.IsEmpty ? null : clean;
     }

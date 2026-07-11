@@ -48,6 +48,9 @@ export interface PersonaFormInitial {
   tools?: string[];
   // Профиль доступа из шаблона (напр. Ревьюер — только чтение)
   access?: PersonaAccess;
+  // Дефолтная модель/усилие из шаблона (алиасы 'opus'|'sonnet'|'haiku'; effort 'high')
+  model?: string;
+  effort?: string;
 }
 
 interface PersonaFormProps {
@@ -100,8 +103,13 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     persona ? (persona.contract?.outputFormat ?? '') : (initial?.contract?.outputFormat ?? ''));
   const [speechExamples, setSpeechExamples] = useState<string[]>(
     (persona ? persona.contract?.speechExamples : initial?.contract?.speechExamples) ?? []);
-  const [model, setModel] = useState(persona?.model ?? '');
-  const [effort, setEffort] = useState(persona?.effort ?? '');
+  // Полный регламент роли (длинный markdown) — для «тяжёлых» ролей вроде пантеона OmO
+  const [instructions, setInstructions] = useState(
+    persona ? (persona.contract?.instructions ?? '') : (initial?.contract?.instructions ?? ''));
+  // Пустая инструкция свёрнута в кнопку «+ инструкция» — раскрытие по клику
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const [model, setModel] = useState(persona?.model ?? initial?.model ?? '');
+  const [effort, setEffort] = useState(persona?.effort ?? initial?.effort ?? '');
   const [scope, setScope] = useState<PersonaScope>(persona?.scope ?? defaultScope ?? 'global');
   const [projectId, setProjectId] = useState(persona?.projectId ?? defaultProjectId ?? '');
   const [greeting, setGreeting] = useState(persona?.greeting ?? initial?.greeting ?? '');
@@ -254,11 +262,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     mustNot: parseLines(mustNot),
     outputFormat: outputFormat.trim() || undefined,
     speechExamples: speechExamples.map(s => s.trim()).filter(Boolean),
+    instructions: instructions.trim() || undefined,
   });
 
   // Заполнен ли хоть один слот контракта — от этого зависит доступность «Улучшить»
   const contractFilled = !!(character.trim() || tone.trim() || mustDo.trim() || mustNot.trim()
-    || outputFormat.trim() || speechExamples.some(s => s.trim()));
+    || outputFormat.trim() || speechExamples.some(s => s.trim()) || instructions.trim());
 
   // Ответ AI заполняет ВСЕ слоты контракта (перезаписывает текущие)
   const applyContract = (c: PersonaContract) => {
@@ -311,6 +320,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       mustDo: parseLines(mustDo), mustNot: parseLines(mustNot),
       outputFormat: outputFormat.trim(),
       speechExamples: speechExamples.map(s => s.trim()).filter(Boolean),
+      instructions: instructions.trim(),
     },
     model, effort, scope,
     projectId: scope === 'project' ? projectId : '',
@@ -335,6 +345,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         mustNot: persona?.contract?.mustNot ?? [],
         outputFormat: (persona?.contract?.outputFormat ?? '').trim(),
         speechExamples: (persona?.contract?.speechExamples ?? []).map(x => x.trim()).filter(Boolean),
+        instructions: (persona?.contract?.instructions ?? '').trim(),
       },
       model: persona?.model ?? '',
       effort: persona?.effort ?? '',
@@ -799,6 +810,21 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               + пример
             </button>
           </div>
+        )}
+      </div>
+
+      {/* Слот «Инструкция»: полный регламент роли. Показываем свёрнуто, если пусто —
+          обычным персонам он не нужен, а у «тяжёлых» ролей (пантеон) приходит из шаблона */}
+      <div style={{ marginTop: 18 }}>
+        {instructions.trim() || instructionsOpen ? (
+          <Field label="Инструкция" hint="Полный регламент роли (markdown) — попадает в системный промпт после остальных слотов">
+            <TextArea value={instructions} onChange={setInstructions} autoGrow minHeight={120}
+              placeholder="Развёрнутый регламент: протоколы работы, критерии готовности, примеры…" />
+          </Field>
+        ) : (
+          <button type="button" onClick={() => setInstructionsOpen(true)} style={addExampleBtn}>
+            + инструкция (полный регламент роли)
+          </button>
         )}
       </div>
     </div>

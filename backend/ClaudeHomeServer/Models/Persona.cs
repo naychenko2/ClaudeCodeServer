@@ -59,6 +59,9 @@ public class PersonaContract
     public string? OutputFormat { get; set; }
     // Примеры реплик персоны — образцы стиля (не готовые ответы)
     public List<string>? SpeechExamples { get; set; }
+    // Полный регламент роли (длинный markdown, сотни строк) — для «тяжёлых» ролей
+    // вроде пантеона OmO; короткие слоты выше остаются визиткой для карточек UI
+    public string? Instructions { get; set; }
 
     // Все слоты пустые — контракт эквивалентен отсутствию (нормализуется в null)
     [JsonIgnore]
@@ -68,7 +71,8 @@ public class PersonaContract
         && (MustDo is null || MustDo.All(string.IsNullOrWhiteSpace))
         && (MustNot is null || MustNot.All(string.IsNullOrWhiteSpace))
         && string.IsNullOrWhiteSpace(OutputFormat)
-        && (SpeechExamples is null || SpeechExamples.All(string.IsNullOrWhiteSpace));
+        && (SpeechExamples is null || SpeechExamples.All(string.IsNullOrWhiteSpace))
+        && string.IsNullOrWhiteSpace(Instructions);
 }
 
 // Тип расписания проактивности: каждый день / по будням / по выбранным дням недели.

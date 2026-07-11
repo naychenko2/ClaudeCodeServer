@@ -93,6 +93,35 @@ public class PersonaPromptBuilderTests
         prompt.Should().Contain("образцы стиля, а не готовые ответы");
     }
 
+    [Fact]
+    public void Инструкция_ОтдельнойСекциейПослеОстальныхСлотов()
+    {
+        var persona = MakePersona(contract: new PersonaContract
+        {
+            Character = "Ты дотошный.",
+            Instructions = "### Протокол\n1. Прочитай план.\n2. Вынеси вердикт.",
+        });
+
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("## Инструкция\n### Протокол\n1. Прочитай план.\n2. Вынеси вердикт.");
+        prompt.IndexOf("## Инструкция").Should().BeGreaterThan(prompt.IndexOf("## Характер"));
+    }
+
+    [Fact]
+    public void ТолькоИнструкция_КонтрактНеПустой()
+    {
+        // Контракт из одной инструкции — не legacy-режим: SystemPrompt игнорируется
+        var persona = MakePersona(
+            contract: new PersonaContract { Instructions = "Полный регламент роли." },
+            systemPrompt: "СТАРЫЙ ТЕКСТ");
+
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("## Инструкция\nПолный регламент роли.");
+        prompt.Should().NotContain("СТАРЫЙ ТЕКСТ");
+    }
+
     [Theory]
     [InlineData(false, "Привет! Что проверить?", false)] // greeted=false — секции нет
     [InlineData(true, null, false)]                      // приветствие пустое — секции нет
@@ -114,34 +143,41 @@ public class PersonaPromptBuilderTests
     }
 
     [Fact]
-    public void Дисциплина_Claude_ТолькоКраткость()
+    public void Дисциплина_Claude_КраткостьИПрагматизм()
     {
         var prompt = Build(MakePersona(), providerKey: "claude");
 
         prompt.Should().Contain(PersonaPromptBuilder.Brevity);
+        prompt.Should().Contain(PersonaPromptBuilder.LeastChange);
         prompt.Should().NotContain(PersonaPromptBuilder.Verification);
         prompt.Should().NotContain(PersonaPromptBuilder.NeverRules);
         prompt.Should().NotContain(PersonaPromptBuilder.AntiSlop);
+        prompt.Should().NotContain(PersonaPromptBuilder.FiveFailures);
     }
 
     [Fact]
-    public void Дисциплина_DeepSeek_ПолныйНабор()
+    public void Дисциплина_DeepSeek_ПолныйНаборССамопроверкой()
     {
         var prompt = Build(MakePersona(), providerKey: "deepseek");
 
         prompt.Should().Contain(PersonaPromptBuilder.Brevity);
         prompt.Should().Contain(PersonaPromptBuilder.Verification);
+        prompt.Should().Contain(PersonaPromptBuilder.SelfCheck);
+        prompt.Should().Contain(PersonaPromptBuilder.TurnIntent);
         prompt.Should().Contain(PersonaPromptBuilder.NeverRules);
         prompt.Should().Contain(PersonaPromptBuilder.AntiSlop);
+        prompt.Should().NotContain(PersonaPromptBuilder.LeastChange);
     }
 
     [Fact]
-    public void Дисциплина_Glm_БезДостоверности()
+    public void Дисциплина_Glm_КалибровкаБезДостоверности()
     {
         var prompt = Build(MakePersona(), providerKey: "glm");
 
         prompt.Should().Contain(PersonaPromptBuilder.Brevity);
         prompt.Should().NotContain(PersonaPromptBuilder.Verification);
+        prompt.Should().Contain(PersonaPromptBuilder.FiveFailures);
+        prompt.Should().Contain(PersonaPromptBuilder.OutcomeFirst);
         prompt.Should().Contain(PersonaPromptBuilder.NeverRules);
         prompt.Should().Contain(PersonaPromptBuilder.AntiSlop);
     }

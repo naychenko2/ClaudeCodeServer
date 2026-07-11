@@ -18,8 +18,8 @@ public class PersonaMeetingServiceTests : IDisposable
 {
     // Маркеры фаз в промптах (см. PersonaMeetingService)
     private const string M1 = "НЕЗАВИСИМУЮ";
-    private const string M2 = "Перекрёстная критика";
-    private const string M3 = "Сведи итог";
+    private const string M2 = "Перекрёстная атака";
+    private const string M3 = "Дистиллируй итог";
 
     // Фейковый one-shot: потокобезопасный журнал промптов + программируемое поведение
     private sealed class FakeRunner : IOneShotRunner

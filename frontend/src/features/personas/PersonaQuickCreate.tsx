@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Persona, PersonaScope } from '../../types';
 import { api } from '../../lib/api';
 import { bumpPersonas } from '../../lib/personas';
@@ -31,6 +31,17 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
+  // Шаблоны «Пантеон OmO»: модуль с полными промптами (~3000 строк md) грузится
+  // лениво отдельным чанком, чтобы не раздувать основной бандл. Пока грузится —
+  // секция просто не показывается.
+  const [omoTemplates, setOmoTemplates] = useState<PersonaTemplate[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void import('./omoPantheonTemplates')
+      .then(m => { if (alive) setOmoTemplates(m.OMO_PANTHEON_TEMPLATES); })
+      .catch(() => { /* не критично: секция пантеона просто не появится */ });
+    return () => { alive = false; };
+  }, []);
 
   const canSubmit = !!prompt.trim() && !busy;
 
@@ -154,39 +165,23 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
               <SectionLabel>Или начните с шаблона</SectionLabel>
               <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10 }}>
                 {PERSONA_TEMPLATES.map(t => (
-                  <button
-                    key={t.key}
-                    type="button"
-                    onClick={() => onTemplate(t)}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = agentDotColor(t.avatarColor); e.currentTarget.style.background = C.bgWhite; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.bgWhite; }}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left',
-                      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
-                      padding: '11px 13px', cursor: 'pointer', fontFamily: FONT.sans,
-                      transition: 'border-color 0.15s',
-                    }}
-                  >
-                    <span style={{
-                      width: 36, height: 36, borderRadius: R.full, flexShrink: 0,
-                      background: agentDotColor(t.avatarColor), color: '#fff',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: 15, fontWeight: 600,
-                    }}>
-                      {t.role.slice(0, 1)}
-                    </span>
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>
-                        {t.role}
-                      </span>
-                      <span style={{
-                        display: 'block', fontSize: 12, color: C.textMuted, marginTop: 2, lineHeight: 1.4,
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {t.description}
-                      </span>
-                    </span>
-                  </button>
+                  <TemplateCard key={t.key} template={t} title={t.role} onSelect={() => onTemplate(t)} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Пантеон OmO: роли-специалисты из oh-my-openagent с полными регламентами.
+              Появляется, когда лениво подгрузился чанк с промптами. */}
+          {onTemplate && omoTemplates && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : 'auto' }}>
+              <SectionLabel>Пантеон OmO</SectionLabel>
+              <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.45, marginTop: -4 }}>
+                Роли-специалисты из oh-my-openagent, адаптированные на русский — с полным регламентом роли.
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10 }}>
+                {omoTemplates.map(t => (
+                  <TemplateCard key={t.key} template={t} title={`${t.role} (${t.namePlaceholder})`} onSelect={() => onTemplate(t)} />
                 ))}
               </div>
             </div>
@@ -194,5 +189,47 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
         </div>
       </div>
     </div>
+  );
+}
+
+// Карточка шаблона роли — общая для наших шаблонов и пантеона OmO
+function TemplateCard({ template: t, title, onSelect }: {
+  template: PersonaTemplate;
+  title: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = agentDotColor(t.avatarColor); e.currentTarget.style.background = C.bgWhite; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.bgWhite; }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left',
+        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+        padding: '11px 13px', cursor: 'pointer', fontFamily: FONT.sans,
+        transition: 'border-color 0.15s',
+      }}
+    >
+      <span style={{
+        width: 36, height: 36, borderRadius: R.full, flexShrink: 0,
+        background: agentDotColor(t.avatarColor), color: '#fff',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 15, fontWeight: 600,
+      }}>
+        {t.role.slice(0, 1)}
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>
+          {title}
+        </span>
+        <span style={{
+          display: 'block', fontSize: 12, color: C.textMuted, marginTop: 2, lineHeight: 1.4,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {t.description}
+        </span>
+      </span>
+    </button>
   );
 }

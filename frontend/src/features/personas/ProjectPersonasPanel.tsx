@@ -4,6 +4,8 @@ import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaTitleLines } from '../../lib/personas';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { C, FONT, R } from '../../lib/design';
+import { showToast } from '../../lib/toast';
+import { ConfirmDialog } from '../../components/ui';
 import { PersonaList } from './PersonaList';
 import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './PersonaForm';
 import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
@@ -91,14 +93,18 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
   // Живой цвет из формы — мгновенная перекраска акцентной полосы/тулбара
   const [liveColor, setLiveColor] = useState<string | undefined>(undefined);
 
-  const onDelete = async (p: Persona) => {
-    if (!window.confirm(`Удалить персону «${personaTitleLines(p).primary}»?`)) return;
+  // Удаление в два шага: запрос подтверждения (диалог) → само удаление
+  const [deleteTarget, setDeleteTarget] = useState<Persona | null>(null);
+  const onDelete = (p: Persona) => setDeleteTarget(p);
+  const doDelete = async (p: Persona) => {
     try {
       await api.personas.remove(p.id);
       bumpPersonas();
       onCleared();
     } catch {
-      alert('Не удалось удалить персону.');
+      showToast('Персоны', 'Не удалось удалить персону.');
+    } finally {
+      setDeleteTarget(null);
     }
   };
 
@@ -111,7 +117,7 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
       const session = await api.personas.createChat(p.id, { mode: 'auto' });
       onOpenChat(session);
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Не удалось создать чат');
+      showToast('Персоны', e instanceof Error ? e.message : 'Не удалось создать чат');
     } finally {
       setTalking(false);
     }
@@ -214,6 +220,16 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
           />
         ) : null}
       </div>
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Удалить персону?"
+          subtitle={<>Персона «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{personaTitleLines(deleteTarget).primary}</strong>» будет удалена без возможности восстановления.</>}
+          confirmLabel="Удалить"
+          confirmVariant="danger"
+          onConfirm={() => doDelete(deleteTarget)}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/mode
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
+import { showToast } from '../lib/toast';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import type { SkillInfo, AgentInfo, Persona } from '../types';
 
@@ -418,9 +419,9 @@ export function Composer({
         try { rec.abort(); } catch { /* noop */ }
         setIsListening(false);
         try { localStorage.setItem('micKeyboardFallback', '1'); } catch { /* noop */ }
-        alert('Распознавание речи недоступно в браузере на этом устройстве.\n' +
-          'Переключаюсь на голосовой ввод клавиатуры — нажми кнопку микрофона ещё раз: ' +
-          'откроется клавиатура, на ней нажми микрофон и говори.');
+        // Тост клампится тремя строками — текст короче исходного alert, но с той же сутью
+        showToast('Голосовой ввод',
+          'Распознавание речи в браузере недоступно. Нажми кнопку микрофона ещё раз — откроется клавиатура, говори через её микрофон.');
       }, 2500);
     } catch {
       setIsListening(false);

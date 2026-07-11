@@ -7,7 +7,7 @@ import { lazy, Suspense } from 'react';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
 const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
-import { BackButton, IconButton, Splitter, Modal } from '../../components/ui';
+import { BackButton, ConfirmDialog, IconButton, Splitter, Modal } from '../../components/ui';
 import { tbBtnPrimary, tbBtnGhost } from '../../components/Toolbar';
 import { useNotes } from '../../lib/notes';
 import type { NoteSource } from '../../types';
@@ -184,9 +184,12 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     }
   };
 
-  const del = async () => {
+  // Удаление в два шага: запрос подтверждения (диалог) → само удаление
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const del = () => { if (note) setDeleteConfirm(true); };
+  const doDelete = async () => {
     if (!note) return;
-    if (!window.confirm(`Удалить заметку «${note.title}»?`)) return;
+    setDeleteConfirm(false);
     try {
       await api.notes.delete(note.id);
     } catch (e) {
@@ -414,6 +417,17 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           error={moveError}
           onMove={moveTo}
           onClose={() => setShowMove(false)}
+        />
+      )}
+
+      {deleteConfirm && (
+        <ConfirmDialog
+          title="Удалить заметку?"
+          subtitle={<>Заметка «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{note.title}</strong>» будет удалена без возможности восстановления.</>}
+          confirmLabel="Удалить"
+          confirmVariant="danger"
+          onConfirm={doDelete}
+          onCancel={() => setDeleteConfirm(false)}
         />
       )}
     </div>

@@ -554,6 +554,18 @@ export interface PersonaAvatar {
   imageFile?: string;
 }
 
+// Структурированный контракт персоны (P1): характер разложен по слотам,
+// каждый слот попадает в свою секцию системного промпта. Отсутствие контракта —
+// legacy-режим: весь характер живёт единым текстом в systemPrompt.
+export interface PersonaContract {
+  character?: string;         // характер и манера общения (свободный текст)
+  tone?: string;              // тон одной фразой («тепло и на равных»)
+  mustDo?: string[];          // правила «всегда …»
+  mustNot?: string[];         // правила «никогда …»
+  outputFormat?: string;      // требования к формату ответов
+  speechExamples?: string[];  // примеры реплик (образцы стиля)
+}
+
 export interface Persona {
   id: string;
   ownerId: string;
@@ -561,7 +573,8 @@ export interface Persona {
   role?: string;              // роль персоны (главная подпись: «Роль (Имя)»)
   handle: string;             // машинное имя (@handle) — уникально у владельца
   description?: string;
-  systemPrompt?: string;      // «характер» — системный промпт персоны
+  systemPrompt?: string;      // «характер» — legacy-текст (у персон без contract)
+  contract?: PersonaContract | null; // структурированный контракт (P1)
   model?: string;
   effort?: string;
   scope: PersonaScope;
@@ -581,6 +594,8 @@ export interface CreatePersonaDto {
   role?: string;
   description?: string;
   systemPrompt?: string;
+  // Контракт характера; при обновлении: undefined — не менять, пустые слоты — сбросить
+  contract?: PersonaContract;
   model?: string;
   effort?: string;
   scope?: PersonaScope;

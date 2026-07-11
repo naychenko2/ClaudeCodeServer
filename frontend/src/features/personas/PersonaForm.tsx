@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
-import type { Persona, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, Project } from '../../types';
+import type { Persona, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, Project } from '../../types';
 import { api } from '../../lib/api';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl } from '../../components/ui';
 import { PillSwitch } from '../../components/Toolbar';
@@ -40,7 +40,7 @@ export interface PersonaFormStatus {
 export interface PersonaFormInitial {
   role?: string;
   description?: string;
-  systemPrompt?: string;
+  contract?: PersonaContract;
   greeting?: string;
   color?: string;
   tools?: string[];
@@ -81,7 +81,21 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [name, setName] = useState(persona?.name ?? '');
   const [role, setRole] = useState(persona?.role ?? initial?.role ?? '');
   const [description, setDescription] = useState(persona?.description ?? initial?.description ?? '');
-  const [systemPrompt, setSystemPrompt] = useState(persona?.systemPrompt ?? initial?.systemPrompt ?? '');
+  // Контракт характера (P1) по слотам. Legacy-персона (без contract) — её systemPrompt
+  // предзаполняет слот «Характер» и при сохранении переезжает в контракт.
+  const legacyMigrated = !!persona && !persona.contract && !!(persona.systemPrompt ?? '').trim();
+  const [character, setCharacter] = useState(
+    persona ? (persona.contract?.character ?? persona.systemPrompt ?? '') : (initial?.contract?.character ?? ''));
+  const [tone, setTone] = useState(persona ? (persona.contract?.tone ?? '') : (initial?.contract?.tone ?? ''));
+  // «Всегда»/«Никогда» — textarea «строка = пункт»
+  const [mustDo, setMustDo] = useState(
+    ((persona ? persona.contract?.mustDo : initial?.contract?.mustDo) ?? []).join('\n'));
+  const [mustNot, setMustNot] = useState(
+    ((persona ? persona.contract?.mustNot : initial?.contract?.mustNot) ?? []).join('\n'));
+  const [outputFormat, setOutputFormat] = useState(
+    persona ? (persona.contract?.outputFormat ?? '') : (initial?.contract?.outputFormat ?? ''));
+  const [speechExamples, setSpeechExamples] = useState<string[]>(
+    (persona ? persona.contract?.speechExamples : initial?.contract?.speechExamples) ?? []);
   const [model, setModel] = useState(persona?.model ?? '');
   const [effort, setEffort] = useState(persona?.effort ?? '');
   const [scope, setScope] = useState<PersonaScope>(persona?.scope ?? defaultScope ?? 'global');
@@ -184,30 +198,48 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     }
   };
 
-  // Дополнение системного промпта заготовкой тона (не дублируем уже добавленную)
-  const appendTone = (text: string) => {
-    setSystemPrompt(prev => {
-      const cur = prev.trimEnd();
-      if (cur.includes(text)) return prev;
-      return cur ? `${cur}\n${text}` : text;
-    });
+  // Разбор textarea «строка = пункт» в список правил
+  const parseLines = (s: string) => s.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // Текущий контракт из стейтов формы — для сохранения и как current при AI-улучшении
+  const buildContract = (): PersonaContract => ({
+    character: character.trim() || undefined,
+    tone: tone.trim() || undefined,
+    mustDo: parseLines(mustDo),
+    mustNot: parseLines(mustNot),
+    outputFormat: outputFormat.trim() || undefined,
+    speechExamples: speechExamples.map(s => s.trim()).filter(Boolean),
+  });
+
+  // Заполнен ли хоть один слот контракта — от этого зависит доступность «Улучшить»
+  const contractFilled = !!(character.trim() || tone.trim() || mustDo.trim() || mustNot.trim()
+    || outputFormat.trim() || speechExamples.some(s => s.trim()));
+
+  // Ответ AI заполняет ВСЕ слоты контракта (перезаписывает текущие)
+  const applyContract = (c: PersonaContract) => {
+    setCharacter(c.character ?? '');
+    setTone(c.tone ?? '');
+    setMustDo((c.mustDo ?? []).join('\n'));
+    setMustNot((c.mustNot ?? []).join('\n'));
+    setOutputFormat(c.outputFormat ?? '');
+    setSpeechExamples((c.speechExamples ?? []).slice(0, 3));
   };
 
-  // AI-характер: генерация с нуля (по роли/имени/описанию) или улучшение текущего.
-  // В обоих режимах поддерживается необязательный уточняющий промпт из поповера.
+  // AI-характер: генерация с нуля (по роли/имени/описанию) или улучшение текущего
+  // контракта (уходит сериализованным JSON). Необязательный уточняющий промпт — в обоих режимах.
   const runAiCharacter = async (mode: 'generate' | 'improve') => {
     if (aiAction) return;
     setAiAction(mode);
     setAiError(null);
     try {
-      const { character } = await api.personas.aiCharacter({
+      const { contract } = await api.personas.aiCharacter({
         name: name.trim() || undefined,
         role: role.trim() || undefined,
         description: description.trim() || undefined,
-        current: mode === 'improve' ? systemPrompt : undefined,
+        current: mode === 'improve' ? JSON.stringify(buildContract()) : undefined,
         instruction: aiInstruction.trim() || undefined,
       });
-      setSystemPrompt(character);
+      applyContract(contract);
       setAiInstruction('');
       setAiPopover(null);
     } catch (e) {
@@ -229,18 +261,33 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Снимок редактируемых полей — для вычисления «есть несохранённые правки» (dirty)
   const snapshot = JSON.stringify({
     name: name.trim(), role: role.trim(), description: description.trim(),
-    systemPrompt: systemPrompt.trim(), model, effort, scope,
+    contract: {
+      character: character.trim(), tone: tone.trim(),
+      mustDo: parseLines(mustDo), mustNot: parseLines(mustNot),
+      outputFormat: outputFormat.trim(),
+      speechExamples: speechExamples.map(s => s.trim()).filter(Boolean),
+    },
+    model, effort, scope,
     projectId: scope === 'project' ? projectId : '',
     color, greeting: greeting.trim(), memoryEnabled,
     tools: [...tools].sort(),
   });
+  // Исходный снимок считается от предзаполненного состояния: у legacy-персоны
+  // слот «Характер» = systemPrompt, поэтому сама миграция не делает форму dirty.
   const initialSnapshot = useMemo(() => {
     const s = persona?.scope ?? defaultScope ?? 'global';
     return JSON.stringify({
       name: (persona?.name ?? '').trim(),
       role: (persona?.role ?? '').trim(),
       description: (persona?.description ?? '').trim(),
-      systemPrompt: (persona?.systemPrompt ?? '').trim(),
+      contract: {
+        character: (persona?.contract?.character ?? persona?.systemPrompt ?? '').trim(),
+        tone: (persona?.contract?.tone ?? '').trim(),
+        mustDo: persona?.contract?.mustDo ?? [],
+        mustNot: persona?.contract?.mustNot ?? [],
+        outputFormat: (persona?.contract?.outputFormat ?? '').trim(),
+        speechExamples: (persona?.contract?.speechExamples ?? []).map(x => x.trim()).filter(Boolean),
+      },
       model: persona?.model ?? '',
       effort: persona?.effort ?? '',
       scope: s,
@@ -261,7 +308,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       name: name.trim(),
       role: role.trim() || undefined,
       description: description.trim() || undefined,
-      systemPrompt: systemPrompt.trim() || undefined,
+      // Характер — только контрактом; legacy-поле systemPrompt чистим при каждом сохранении
+      contract: buildContract(),
+      systemPrompt: '',
       model: model || undefined,
       effort: effort || undefined,
       scope,
@@ -303,7 +352,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     borderTop: `1px solid ${C.borderLight}`, paddingTop: 22,
   };
 
-  const wordCount = systemPrompt.trim() ? systemPrompt.trim().split(/\s+/).length : 0;
+  const wordCount = character.trim() ? character.trim().split(/\s+/).length : 0;
 
   // === Секция 1 — Идентичность (hero) ===
   const heroSection = (
@@ -467,43 +516,38 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     </div>
   );
 
-  // === Секция 2 — Характер (во всю ширину, доминирует) ===
+  // === Секция 2 — Характер: контракт по слотам (P1) ===
   const characterSection = (
     <div style={section}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 4 }}>
-        <SectionLabel>Характер</SectionLabel>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
+          <SectionLabel>Характер</SectionLabel>
+          {legacyMigrated && (
+            <span
+              style={legacyBadge}
+              title="Текст характера перенесён из старого единого промпта — при сохранении он станет структурированным контрактом"
+            >
+              перенесено из старого формата
+            </span>
+          )}
+        </div>
         <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>
           {wordCount} {wordPlural(wordCount)}
         </span>
       </div>
 
-      {/* Липкая мини-панель: тон-чипы слева, AI-действия справа */}
+      {/* Липкая мини-панель AI-действий: заполняют все слоты контракта разом */}
       <div style={{
         position: 'sticky', top: 0, zIndex: 2, background: C.bgMain,
         margin: '0 0 12px', padding: '8px 0', borderBottom: `1px solid ${C.borderLight}`,
-        display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+        display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end',
       }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1, minWidth: 0 }}>
-          {TONE_PRESETS.map(p => (
-            <button
-              key={p.label}
-              type="button"
-              onClick={() => appendTone(p.text)}
-              title={p.text}
-              style={presetChip}
-              onMouseEnter={e => { e.currentTarget.style.background = C.accentLight; e.currentTarget.style.borderColor = C.accent; }}
-              onMouseLeave={e => { e.currentTarget.style.background = C.bgWhite; e.currentTarget.style.borderColor = C.border; }}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, position: 'relative' }}>
           <Button variant="ghostAccent" size="sm" loading={aiAction === 'generate'} disabled={!!aiAction}
             onClick={() => setAiPopover(v => v === 'generate' ? null : 'generate')}>
             {aiAction === 'generate' ? 'Генерирую…' : '✨ Сгенерировать'}
           </Button>
-          {systemPrompt.trim().length > 0 && (
+          {contractFilled && (
             <Button variant="ghostAccent" size="sm" loading={aiAction === 'improve'} disabled={!!aiAction}
               onClick={() => setAiPopover(v => v === 'improve' ? null : 'improve')}>
               {aiAction === 'improve' ? 'Улучшаю…' : '✨ Улучшить'}
@@ -540,13 +584,13 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         </div>
       </div>
 
-      {/* Крупная textarea без внутреннего скролла + плейсхолдер-скелет при пустом */}
+      {/* Слот «Характер»: манера общения свободным текстом + плейсхолдер-скелет при пустом */}
       <div style={{ position: 'relative' }}>
-        <TextArea value={systemPrompt} onChange={setSystemPrompt}
+        <TextArea value={character} onChange={setCharacter}
           autoGrow
-          minHeight={isMobile ? 240 : 320}
+          minHeight={isMobile ? 160 : 200}
           style={{ fontSize: 14.5, lineHeight: 1.6 }} />
-        {!systemPrompt && (
+        {!character && (
           <div style={{
             position: 'absolute', top: 10, left: 13, right: 13, pointerEvents: 'none',
             fontSize: 14.5, lineHeight: 1.6, color: C.textMuted, fontFamily: FONT.sans,
@@ -554,13 +598,100 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           }}>
             <span>Ты — …</span>
             <span style={{ opacity: 0.75 }}>Общаешься …</span>
-            <span style={{ opacity: 0.55 }}>Никогда не …</span>
           </div>
         )}
       </div>
       {aiError && (
         <span style={{ display: 'block', marginTop: 8, fontSize: 12, color: C.dangerText, fontFamily: FONT.sans }}>{aiError}</span>
       )}
+
+      {/* Слот «Тон»: пресеты как single-select — выбор пишет текст в редактируемое поле */}
+      <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <FieldLabel>Тон</FieldLabel>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {TONE_PRESETS.map(p => {
+            const active = tone === p.text;
+            return (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => setTone(active ? '' : p.text)}
+                title={p.text}
+                style={{
+                  ...presetChip,
+                  background: active ? C.accentLight : C.bgWhite,
+                  borderColor: active ? C.accent : C.border,
+                  color: active ? C.accent : C.textSecondary,
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = C.accentLight; e.currentTarget.style.borderColor = C.accent; }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.background = active ? C.accentLight : C.bgWhite;
+                  e.currentTarget.style.borderColor = active ? C.accent : C.border;
+                }}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+        <TextField value={tone} onChange={setTone} placeholder="Например: тепло и на равных" />
+      </div>
+
+      {/* Слоты «Всегда»/«Никогда»: textarea «строка = пункт» */}
+      <div style={{ marginTop: 18, display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
+        <Field label="Всегда" hint="Каждая строка — отдельное правило">
+          <TextArea value={mustDo} onChange={setMustDo} autoGrow minHeight={88}
+            placeholder={'Выноси вывод первым\nУточняй при неясности'} />
+        </Field>
+        <Field label="Никогда" hint="Каждая строка — отдельное правило">
+          <TextArea value={mustNot} onChange={setMustNot} autoGrow minHeight={88}
+            placeholder={'Не отвечай наугад\nНе хвали из вежливости'} />
+        </Field>
+      </div>
+
+      {/* Слот «Формат ответов» */}
+      <div style={{ marginTop: 18 }}>
+        <Field label="Формат ответов" hint="Структура и объём типового ответа">
+          <TextArea value={outputFormat} onChange={setOutputFormat} autoGrow minHeight={56}
+            placeholder="Краткий вывод, затем аргументы; списки — только где они уместны" />
+        </Field>
+      </div>
+
+      {/* Слот «Примеры реплик»: до 3 образцов стиля */}
+      <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <FieldLabel>Примеры реплик</FieldLabel>
+        {speechExamples.map((example, i) => (
+          <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <TextField
+                value={example}
+                onChange={v => setSpeechExamples(prev => prev.map((p, j) => (j === i ? v : p)))}
+                placeholder="Реплика от лица персоны"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setSpeechExamples(prev => prev.filter((_, j) => j !== i))}
+              aria-label="Убрать пример"
+              title="Убрать пример"
+              style={exampleRemoveBtn}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        {speechExamples.length < 3 && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setSpeechExamples(prev => [...prev, ''])}
+              style={addExampleBtn}
+            >
+              + пример
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 
@@ -711,7 +842,7 @@ const TOOL_OPTIONS: { key: string; title: string; hint: string }[] = [
   { key: 'web', title: 'Веб', hint: 'Ищет и читает страницы в интернете' },
 ];
 
-// Пресеты тона характера — клик добавляет заготовку в системный промпт
+// Пресеты тона — single-select: выбор записывает текст в редактируемый слот «Тон»
 const TONE_PRESETS: { label: string; text: string }[] = [
   { label: 'Дружелюбный', text: 'Общайся тепло и дружелюбно, на равных.' },
   { label: 'Деловой', text: 'Держи деловой, профессиональный тон. Формулируй чётко и по существу.' },
@@ -733,6 +864,27 @@ function wordPlural(n: number): string {
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'слова';
   return 'слов';
 }
+
+// Бейдж legacy-персоны: характер перенесён из старого единого промпта
+const legacyBadge: React.CSSProperties = {
+  fontSize: 11, color: C.textMuted, fontFamily: FONT.sans,
+  background: C.bgPanel, border: `1px solid ${C.borderLight}`, borderRadius: R.pill,
+  padding: '2px 8px', whiteSpace: 'nowrap',
+};
+
+// «×» у примера реплики
+const exampleRemoveBtn: React.CSSProperties = {
+  flexShrink: 0, width: 28, height: 28, borderRadius: R.full,
+  background: 'transparent', border: `1px solid ${C.border}`, color: C.textMuted,
+  cursor: 'pointer', fontSize: 15, lineHeight: 1, fontFamily: FONT.sans,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+};
+
+// «+ пример» под списком реплик
+const addExampleBtn: React.CSSProperties = {
+  background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
+  fontSize: 13, fontWeight: 600, fontFamily: FONT.sans, padding: 0,
+};
 
 const presetChip: React.CSSProperties = {
   background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.pill,

@@ -58,6 +58,7 @@ public class SessionManager
     private readonly FeatureFlagService _flags;
     private readonly PersonaManager _personas;
     private readonly PersonaMemoryService _personaMemory;
+    private readonly PersonaPromptBuilder _promptBuilder;
     private readonly ILogger<SessionManager> _log;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
@@ -67,7 +68,8 @@ public class SessionManager
         Microsoft.AspNetCore.Hosting.Server.IServer server,
         LlmProviderRegistry llmProviders,
         NotesKnowledgeService notesKb, FeatureFlagService flags, PersonaManager personas,
-        PersonaMemoryService personaMemory, ILogger<SessionManager> log)
+        PersonaMemoryService personaMemory, PersonaPromptBuilder promptBuilder,
+        ILogger<SessionManager> log)
     {
         _projects = projects;
         _hub = hub;
@@ -85,6 +87,7 @@ public class SessionManager
         _flags = flags;
         _personas = personas;
         _personaMemory = personaMemory;
+        _promptBuilder = promptBuilder;
         _log = log;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
         _falCost.OnCostResolved = PublishFalCostAsync;
@@ -434,13 +437,21 @@ public class SessionManager
 
     // Персона-слой сессии (промпт характера + контекст памяти + auto-recall + возможности).
     // Строится одинаково при первом старте и при восстановлении процесса. Пусто, если персоны нет.
-    private (string? Prompt, MemoryMcpContext? Memory, Func<string, Task<string?>>? Recall, List<string>? Tools)
+    // Промпт — замыкание: адаптер зовёт его на каждый ход, поэтому правки персоны
+    // (контракт/характер), смена модели сессии и флаг PersonaSwitched применяются сразу.
+    private (Func<string?>? Prompt, MemoryMcpContext? Memory, Func<string, Task<string?>>? Recall, List<string>? Tools)
         BuildPersonaLayer(Session session, string? ownerId)
     {
         if (session.PersonaId is null || ownerId is null) return (null, null, null, null);
         var persona = _personas.Get(session.PersonaId, ownerId);
         if (persona is null) return (null, null, null, null);
-        var prompt = BuildPersonaPrompt(persona, session.PersonaSwitched);
+        Func<string?> prompt = () =>
+        {
+            var p = session.PersonaId is { } pid ? _personas.Get(pid, ownerId) : null;
+            if (p is null) return null;
+            return _promptBuilder.Build(p, session.Model, session.PersonaSwitched,
+                greeted: !string.IsNullOrWhiteSpace(p.Greeting));
+        };
         // Долгая память — только если включена у персоны и владелец имеет доступ к фиче
         if (persona.MemoryEnabled && _flags.IsEnabled(ownerId, FeatureFlagKeys.Personas))
             return (prompt, BuildMemoryContext(ownerId, persona.Id), BuildPersonaRecallProvider(ownerId, persona.Id), persona.Tools);
@@ -555,27 +566,6 @@ public class SessionManager
         return entry.Info;
     }
 
-    // Системный промпт персоны: имя + роль/описание + характер (тело systemPrompt).
-    // Public static: переиспользуется PersonasController при one-shot ответе persona_ask.
-    // switched — собеседника меняли по ходу разговора (в транскрипте есть чужие ответы).
-    public static string BuildPersonaPrompt(Persona persona, bool switched = false)
-    {
-        var sb = new System.Text.StringBuilder();
-        // Роль — главная («Ты — Дизайнер по имени Светлана»); без роли — просто имя
-        if (!string.IsNullOrWhiteSpace(persona.Role))
-            sb.Append($"Ты — {persona.Role.Trim()} по имени {persona.Name}");
-        else
-            sb.Append($"Ты — {persona.Name}");
-        if (!string.IsNullOrWhiteSpace(persona.Description))
-            sb.Append($", {persona.Description.Trim()}");
-        sb.Append(". Отвечай и действуй от своего лица, в своём характере, оставаясь собой на протяжении всего разговора.");
-        if (switched)
-            sb.Append(" Ранее в этом разговоре мог отвечать другой собеседник — продолжай диалог от своего лица, не переписывай и не комментируй прошлые ответы.");
-        if (!string.IsNullOrWhiteSpace(persona.SystemPrompt))
-            sb.Append("\n\n").Append(persona.SystemPrompt.Trim());
-        return sb.ToString();
-    }
-
     // Общий запуск новой сессии: аккумулятор истории, регистрация в реестре, старт процесса claude.
     private async Task StartNewSessionAsync(Session session, string rootPath, string? rawSystemPrompt,
         Func<IReadOnlyList<PermissionRule>>? permissionRules)
@@ -601,14 +591,14 @@ public class SessionManager
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
             rawSystemPrompt, permissionRules,
-            PersonaToolEnabled(persona.Tools, "tasks") ? BuildTasksContext(ownerId, session.ProjectId) : null,
-            PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(ownerId, session.ProjectId) : null,
-            BuildRecallProvider(ownerId),
-            persona.Prompt,
-            persona.Memory,
-            persona.Recall,
-            BuildExtraDisallowed(persona.Tools),
-            BuildPersonasContext(ownerId, session.ProjectId, session.PersonaId)));
+            TasksMcp: PersonaToolEnabled(persona.Tools, "tasks") ? BuildTasksContext(ownerId, session.ProjectId) : null,
+            NotesMcp: PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(ownerId, session.ProjectId) : null,
+            RecallProvider: BuildRecallProvider(ownerId),
+            PersonaPromptProvider: persona.Prompt,
+            MemoryMcp: persona.Memory,
+            PersonaRecallProvider: persona.Recall,
+            ExtraDisallowedTools: BuildExtraDisallowed(persona.Tools),
+            PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session.PersonaId)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -698,12 +688,14 @@ public class SessionManager
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 RawSystemPrompt: null, PermissionRules: null,
-                PersonaToolEnabled(persona.Tools, "tasks") ? BuildTasksContext(entry.Info.OwnerId, null) : null,
-                PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(entry.Info.OwnerId, null) : null,
-                BuildRecallProvider(entry.Info.OwnerId),
-                persona.Prompt, persona.Memory, persona.Recall,
-                BuildExtraDisallowed(persona.Tools),
-                BuildPersonasContext(entry.Info.OwnerId, null, entry.Info.PersonaId));
+                TasksMcp: PersonaToolEnabled(persona.Tools, "tasks") ? BuildTasksContext(entry.Info.OwnerId, null) : null,
+                NotesMcp: PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(entry.Info.OwnerId, null) : null,
+                RecallProvider: BuildRecallProvider(entry.Info.OwnerId),
+                PersonaPromptProvider: persona.Prompt,
+                MemoryMcp: persona.Memory,
+                PersonaRecallProvider: persona.Recall,
+                ExtraDisallowedTools: BuildExtraDisallowed(persona.Tools),
+                PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info.PersonaId));
         }
         else
         {
@@ -714,12 +706,14 @@ public class SessionManager
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                PersonaToolEnabled(persona.Tools, "tasks") ? BuildTasksContext(project.OwnerId, project.Id) : null,
-                PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
-                BuildRecallProvider(project.OwnerId),
-                persona.Prompt, persona.Memory, persona.Recall,
-                BuildExtraDisallowed(persona.Tools),
-                BuildPersonasContext(project.OwnerId, project.Id, entry.Info.PersonaId));
+                TasksMcp: PersonaToolEnabled(persona.Tools, "tasks") ? BuildTasksContext(project.OwnerId, project.Id) : null,
+                NotesMcp: PersonaToolEnabled(persona.Tools, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
+                RecallProvider: BuildRecallProvider(project.OwnerId),
+                PersonaPromptProvider: persona.Prompt,
+                MemoryMcp: persona.Memory,
+                PersonaRecallProvider: persona.Recall,
+                ExtraDisallowedTools: BuildExtraDisallowed(persona.Tools),
+                PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info.PersonaId));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

@@ -73,7 +73,8 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   const [expanded, setExpanded] = useState(false);
   useEffect(() => { setExpanded(false); }, [persona.id]);
 
-  const character = persona.systemPrompt?.trim() ?? '';
+  // Характер: слот контракта (P1), для legacy-персон — старый единый systemPrompt
+  const character = (persona.contract?.character ?? persona.systemPrompt ?? '').trim();
   const characterLong = character.length > CHARACTER_CLAMP_CHARS
     || character.split('\n').length > CHARACTER_CLAMP_LINES;
 

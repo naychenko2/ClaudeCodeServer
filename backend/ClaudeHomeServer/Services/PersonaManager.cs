@@ -71,9 +71,36 @@ public class PersonaManager
         return AllTools.All(clean.Contains) ? null : clean;
     }
 
+    // Нормализация контракта (P1): трим слотов, выброс пустых элементов списков;
+    // полностью пустой контракт эквивалентен отсутствию → null (legacy-режим).
+    internal static PersonaContract? NormalizeContract(PersonaContract? contract)
+    {
+        if (contract is null) return null;
+        var clean = new PersonaContract
+        {
+            Character = TrimToNull(contract.Character),
+            Tone = TrimToNull(contract.Tone),
+            MustDo = CleanList(contract.MustDo),
+            MustNot = CleanList(contract.MustNot),
+            OutputFormat = TrimToNull(contract.OutputFormat),
+            SpeechExamples = CleanList(contract.SpeechExamples),
+        };
+        return clean.IsEmpty ? null : clean;
+    }
+
+    private static string? TrimToNull(string? s) =>
+        string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    private static List<string>? CleanList(List<string>? items)
+    {
+        var clean = items?.Where(i => !string.IsNullOrWhiteSpace(i)).Select(i => i.Trim()).ToList();
+        return clean is { Count: > 0 } ? clean : null;
+    }
+
     public Persona Create(string userId, string name, string? role, string? description, string? systemPrompt,
         string? model, string? effort, PersonaScope scope, string? projectId,
-        string? color, string? greeting, bool memoryEnabled, List<string>? tools = null)
+        string? color, string? greeting, bool memoryEnabled, List<string>? tools = null,
+        PersonaContract? contract = null)
     {
         var persona = new Persona
         {
@@ -82,6 +109,7 @@ public class PersonaManager
             Role = string.IsNullOrWhiteSpace(role) ? null : role.Trim(),
             Description = description,
             SystemPrompt = systemPrompt,
+            Contract = NormalizeContract(contract),
             Model = model,
             Effort = effort,
             Scope = scope,
@@ -99,7 +127,8 @@ public class PersonaManager
 
     public Persona Update(string id, string userId, string? name, string? role, string? description,
         string? systemPrompt, string? model, string? effort, PersonaScope? scope, string? projectId,
-        string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null)
+        string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null,
+        PersonaContract? contract = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -108,6 +137,8 @@ public class PersonaManager
         if (role is not null) persona.Role = role.Length == 0 ? null : role.Trim();
         if (description is not null) persona.Description = description;
         if (systemPrompt is not null) persona.SystemPrompt = systemPrompt;
+        // null — не менять; объект с пустыми слотами — сбросить контракт (нормализуется в null)
+        if (contract is not null) persona.Contract = NormalizeContract(contract);
         if (model is not null) persona.Model = model.Length == 0 ? null : model;
         if (effort is not null) persona.Effort = effort.Length == 0 ? null : effort;
         if (scope is not null)

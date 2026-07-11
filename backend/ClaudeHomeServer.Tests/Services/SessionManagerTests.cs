@@ -63,7 +63,8 @@ public class SessionManagerTests : IDisposable
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
         var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config, NullLogger<PersonaMemoryService>.Instance);
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, NullLogger<SessionManager>.Instance);
+        var promptBuilder = new PersonaPromptBuilder(llmProviders);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, promptBuilder, NullLogger<SessionManager>.Instance);
     }
 
     public void Dispose()

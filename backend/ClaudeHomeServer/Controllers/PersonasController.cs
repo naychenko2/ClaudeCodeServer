@@ -23,13 +23,15 @@ public class PersonasController : ControllerBase
     private readonly FalImageService _falImage;
     private readonly Services.Llm.OneShotClaudeRunner _oneShot;
     private readonly FeatureFlagService _flags;
+    private readonly PersonaPromptBuilder _promptBuilder;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonasController> _log;
     private readonly IHubContext<SessionHub> _hub;
 
     public PersonasController(PersonaManager personas, ProjectManager projects,
         SessionManager sessions, PersonaMemoryService memory, FalImageService falImage,
-        Services.Llm.OneShotClaudeRunner oneShot, FeatureFlagService flags, IConfiguration config,
+        Services.Llm.OneShotClaudeRunner oneShot, FeatureFlagService flags,
+        PersonaPromptBuilder promptBuilder, IConfiguration config,
         ILogger<PersonasController> log, IHubContext<SessionHub> hub)
     {
         _personas = personas;
@@ -39,6 +41,7 @@ public class PersonasController : ControllerBase
         _falImage = falImage;
         _oneShot = oneShot;
         _flags = flags;
+        _promptBuilder = promptBuilder;
         _config = config;
         _log = log;
         _hub = hub;
@@ -87,7 +90,7 @@ public class PersonasController : ControllerBase
 
         var persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled ?? true, req.Tools);
+            req.MemoryEnabled ?? true, req.Tools, req.Contract);
         await Broadcast("created", persona.Id);
         return Ok(persona);
     }
@@ -104,7 +107,7 @@ public class PersonasController : ControllerBase
 
         var persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled, req.Tools);
+            req.MemoryEnabled, req.Tools, req.Contract);
         await Broadcast("updated", id);
         return Ok(persona);
     }
@@ -257,7 +260,7 @@ public class PersonasController : ControllerBase
     }
 
     // AI-помощь с характером персоны: сгенерировать с нуля или улучшить/дополнить существующий
-    // (one-shot LLM). Возвращает готовый текст характера для подстановки в форму.
+    // (one-shot LLM). Возвращает структурированный контракт (P1) для подстановки в форму.
     [HttpPost("ai/character")]
     public async Task<ActionResult> AiCharacter([FromBody] AiCharacterRequest req)
     {
@@ -265,11 +268,15 @@ public class PersonasController : ControllerBase
         var prompt = BuildCharacterPrompt(req);
         try
         {
-            var text = await _oneShot.RunAsync(prompt, model, TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
-            var character = text.Trim();
-            if (string.IsNullOrWhiteSpace(character))
-                return StatusCode(502, new { error = "Пустой ответ модели" });
-            return Ok(new { character });
+            var raw = await _oneShot.RunAsync(prompt, model, TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
+            var contract = PersonaManager.NormalizeContract(ParseJsonObject<PersonaContract>(raw));
+            if (contract is null)
+            {
+                _log.LogWarning("ai/character: контракт не распознан; сырой ответ: {Raw}",
+                    raw.Length > 600 ? raw[..600] + "…" : raw);
+                return StatusCode(502, new { error = "Модель не вернула корректный контракт — попробуйте ещё раз" });
+            }
+            return Ok(new { contract });
         }
         catch (Exception ex)
         {
@@ -281,20 +288,25 @@ public class PersonasController : ControllerBase
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("Ты помогаешь описать характер и стиль общения персоны-ассистента. " +
-                      "Составь ТЕЛО системного промпта персоны — как она общается и действует.");
+                      "Составь структурированный контракт персоны — как она общается и действует.");
         if (!string.IsNullOrWhiteSpace(req.Role)) sb.AppendLine($"Роль персоны: {req.Role.Trim()}.");
         if (!string.IsNullOrWhiteSpace(req.Name)) sb.AppendLine($"Имя персоны: {req.Name.Trim()}.");
         if (!string.IsNullOrWhiteSpace(req.Description)) sb.AppendLine($"Кратко: {req.Description.Trim()}.");
         if (!string.IsNullOrWhiteSpace(req.Current))
         {
-            sb.AppendLine($"\nТекущий характер (переработай/улучши его):\n{req.Current.Trim()}");
+            // Current — либо legacy-текст характера, либо сериализованный контракт (JSON)
+            sb.AppendLine($"\nТекущий характер (текст или JSON-контракт — переработай/улучши его):\n{req.Current.Trim()}");
         }
         if (!string.IsNullOrWhiteSpace(req.Instruction))
             sb.AppendLine($"\nПожелание пользователя: {req.Instruction.Trim()}");
-        sb.AppendLine("\nТребования к ответу:");
-        sb.AppendLine("- обращение на «ты» к персоне («Ты …»), описывай её манеру, ценности, стиль ответов;");
-        sb.AppendLine("- по-русски, живо и конкретно, 2–5 предложений;");
-        sb.AppendLine("- НЕ упоминай имя модели, не пиши преамбул и пояснений — только сам текст характера.");
+        sb.AppendLine("\nВерни ТОЛЬКО JSON-объект (без пояснений и markdown) с полями:");
+        sb.AppendLine("  character — характер и манера общения: обращение на «ты» («Ты …»), живо и конкретно, 2-4 предложения;");
+        sb.AppendLine("  tone — тон одной короткой фразой (напр. «тепло и на равных», «сухо и по делу»);");
+        sb.AppendLine("  mustDo — массив из 2-4 правил «что делать всегда», каждое — короткое предложение;");
+        sb.AppendLine("  mustNot — массив из 2-4 правил «чего не делать никогда»;");
+        sb.AppendLine("  outputFormat — требования к формату ответов, 1-2 предложения;");
+        sb.AppendLine("  speechExamples — массив из 1-2 характерных реплик персоны от её лица.");
+        sb.AppendLine("Всё по-русски. НЕ упоминай имя модели.");
         return sb.ToString();
     }
 
@@ -341,11 +353,20 @@ public class PersonasController : ControllerBase
         if (draft is null)
             return StatusCode(502, new { error = "Модель не вернула корректный черновик — попробуйте ещё раз" });
 
-        // 2. Создаём персону с заполненными полями
+        // 2. Создаём персону с заполненными полями; характер — сразу контрактом (P1)
         var color = ValidColor(draft.Color) ? draft.Color : "orange";
+        var contract = new PersonaContract
+        {
+            Character = draft.Character,
+            Tone = draft.Tone,
+            MustDo = draft.MustDo,
+            MustNot = draft.MustNot,
+            OutputFormat = draft.OutputFormat,
+            SpeechExamples = draft.SpeechExamples,
+        };
         var persona = _personas.Create(UserId, draft.Name!, draft.Role, draft.Description,
-            draft.Character, model: null, effort: null, scope, req.ProjectId,
-            color, draft.Greeting, memoryEnabled: true);
+            systemPrompt: null, model: null, effort: null, scope, req.ProjectId,
+            color, draft.Greeting, memoryEnabled: true, tools: null, contract: contract);
 
         // 3. Фото-аватар — автоматически (не критично: при сбое остаются инициалы)
         if (_falImage.Enabled)
@@ -383,14 +404,22 @@ public class PersonasController : ControllerBase
         sb.AppendLine("  name — русское имя-человека (одно слово, подходит персоне);");
         sb.AppendLine("  description — краткое «кто это», 3-8 слов, по-русски;");
         sb.AppendLine("  character — характер и стиль общения: обращение на «ты» («Ты …»), живо, 2-5 предложений, по-русски;");
+        sb.AppendLine("  tone — тон одной короткой фразой по-русски (напр. «тепло и на равных», «сухо и по делу»);");
+        sb.AppendLine("  mustDo — массив из 2-4 правил «что делать всегда», по-русски, короткими предложениями;");
+        sb.AppendLine("  mustNot — массив из 2-4 правил «чего не делать никогда», по-русски;");
+        sb.AppendLine("  outputFormat — требования к формату ответов, 1-2 предложения, по-русски;");
+        sb.AppendLine("  speechExamples — массив из 1-2 характерных реплик персоны от её лица, по-русски;");
         sb.AppendLine("  greeting — первое приветственное сообщение персоны пользователю, 1-2 предложения, по-русски, в её характере;");
         sb.AppendLine("  color — один из: yellow, orange, blue, green, purple, red, brown, cyan, pink (подходит образу);");
         sb.AppendLine("  avatarPrompt — описание внешности для фотопортрета, по-английски, 5-15 слов (пол, возраст, стиль, настроение, фон).");
         return sb.ToString();
     }
 
-    // Парс JSON-объекта из ответа модели (устойчиво к преамбуле/markdown-fence)
-    private static DraftRaw? ParseDraft(string raw)
+    private static DraftRaw? ParseDraft(string raw) => ParseJsonObject<DraftRaw>(raw);
+
+    // Парс первого сбалансированного JSON-объекта из ответа модели
+    // (устойчиво к преамбуле/markdown-fence). Общий для quick-create и ai/character.
+    private static T? ParseJsonObject<T>(string raw) where T : class
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
         var start = raw.IndexOf('{');
@@ -412,7 +441,7 @@ public class PersonasController : ControllerBase
             {
                 try
                 {
-                    return System.Text.Json.JsonSerializer.Deserialize<DraftRaw>(raw[start..(i + 1)],
+                    return System.Text.Json.JsonSerializer.Deserialize<T>(raw[start..(i + 1)],
                         new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 }
                 catch (System.Text.Json.JsonException) { return null; }
@@ -425,7 +454,9 @@ public class PersonasController : ControllerBase
         c is "yellow" or "orange" or "blue" or "green" or "purple" or "red" or "brown" or "cyan" or "pink";
 
     private sealed record DraftRaw(string? Role, string? Name, string? Description,
-        string? Character, string? Greeting, string? Color, string? AvatarPrompt);
+        string? Character, string? Tone, List<string>? MustDo, List<string>? MustNot,
+        string? OutputFormat, List<string>? SpeechExamples,
+        string? Greeting, string? Color, string? AvatarPrompt);
 
     // --- Долгая память персоны (дёргается MCP memory-server и UI-панелью «что помнит персона») ---
 
@@ -490,7 +521,7 @@ public class PersonasController : ControllerBase
 
         // Слой персоны + релевантная память (best-effort: без памяти ответ всё равно валиден)
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine(SessionManager.BuildPersonaPrompt(persona));
+        sb.AppendLine(_promptBuilder.Build(persona, persona.Model, greeted: false));
         if (persona.MemoryEnabled)
         {
             try
@@ -545,7 +576,9 @@ public record CreatePersonaRequest(
     string? Color,
     string? Greeting,
     bool? MemoryEnabled,
-    List<string>? Tools = null);
+    List<string>? Tools = null,
+    // Структурированный контракт характера (P1); null — не задан
+    PersonaContract? Contract = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -559,7 +592,9 @@ public record UpdatePersonaRequest(
     string? Color,
     string? Greeting,
     bool? MemoryEnabled,
-    List<string>? Tools = null);
+    List<string>? Tools = null,
+    // null — не менять; объект с пустыми слотами — сбросить контракт
+    PersonaContract? Contract = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null);
 

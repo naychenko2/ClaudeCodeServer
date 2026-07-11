@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ClaudeHomeServer.Models;
 
 // Зона контекста персоны: Global — доступ ко всем данным владельца (заметки/задачи/проекты),
@@ -22,6 +24,35 @@ public class PersonaAvatar
     public string? ImageFile { get; set; }
 }
 
+// Структурированный контракт персоны (P1): характер разложен по слотам, каждый слот
+// становится своей секцией системного промпта (PersonaPromptBuilder). null у персоны —
+// legacy-режим: весь характер живёт единым текстом в Persona.SystemPrompt.
+public class PersonaContract
+{
+    // Характер и манера общения — основной свободный текст
+    public string? Character { get; set; }
+    // Тон (краткая формула: «тепло и на равных», «сухо и по делу»)
+    public string? Tone { get; set; }
+    // Правила «всегда делай …» — по пункту на строку
+    public List<string>? MustDo { get; set; }
+    // Правила «никогда не …»
+    public List<string>? MustNot { get; set; }
+    // Требования к формату ответов (структура, длина, оформление)
+    public string? OutputFormat { get; set; }
+    // Примеры реплик персоны — образцы стиля (не готовые ответы)
+    public List<string>? SpeechExamples { get; set; }
+
+    // Все слоты пустые — контракт эквивалентен отсутствию (нормализуется в null)
+    [JsonIgnore]
+    public bool IsEmpty =>
+        string.IsNullOrWhiteSpace(Character)
+        && string.IsNullOrWhiteSpace(Tone)
+        && (MustDo is null || MustDo.All(string.IsNullOrWhiteSpace))
+        && (MustNot is null || MustNot.All(string.IsNullOrWhiteSpace))
+        && string.IsNullOrWhiteSpace(OutputFormat)
+        && (SpeechExamples is null || SpeechExamples.All(string.IsNullOrWhiteSpace));
+}
+
 // Персона — сущность с именем, внешностью, характером, своей памятью и зоной контекста.
 // Не путать с .md-агентами Claude Code (.claude/agents) — те подключаются через Session.AgentName.
 public class Persona
@@ -35,8 +66,11 @@ public class Persona
     public string Handle { get; set; } = "";
     // Краткое «кто это» — для карточки в списке
     public string? Description { get; set; }
-    // Характер/роль/стиль — тело персоны, инжектится в системный промпт сессии
+    // Характер/роль/стиль — тело персоны, инжектится в системный промпт сессии.
+    // Legacy-поле: у персон с Contract != null игнорируется (источник правды — контракт)
     public string? SystemPrompt { get; set; }
+    // Структурированный контракт (P1); null — legacy-режим с единым SystemPrompt
+    public PersonaContract? Contract { get; set; }
     // Модель CLI (алиас/id любого провайдера); null = дефолт сервера
     public string? Model { get; set; }
     public string? Effort { get; set; }

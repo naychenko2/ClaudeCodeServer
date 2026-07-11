@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -341,11 +341,11 @@ export const api = {
         body: JSON.stringify(body),
         timeoutMs: 150_000,
       }),
-    // AI-редактирование «характера» (system-промпта): без current — генерация с нуля
-    // по имени/роли/описанию; с current (+ опц. instruction) — улучшение текущего текста.
-    // Может занять до ~30с; 502 при ошибке.
+    // AI-редактирование характера: без current — генерация с нуля по имени/роли/описанию;
+    // с current (legacy-текст или сериализованный контракт, + опц. instruction) — улучшение.
+    // Возвращает структурированный контракт (P1). Может занять до ~30с; 502 при ошибке.
     aiCharacter: (body: { name?: string; role?: string; description?: string; current?: string; instruction?: string }) =>
-      request<{ character: string }>('/personas/ai/character', {
+      request<{ contract: PersonaContract }>('/personas/ai/character', {
         method: 'POST',
         body: JSON.stringify(body),
       }),

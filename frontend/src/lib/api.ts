@@ -662,24 +662,29 @@ export const api = {
     // Поиск навыков по реестру; owner — опциональное сужение по GitHub-владельцу.
     // Русский запрос переводится на английский (реестр англоязычный) — translatedQuery
     // показывает, что реально искали (null, если перевод не понадобился).
+    // Все операции с реестром долгие (перевод LLM, клонирование репозиториев, подбор) —
+    // задаём щедрый timeoutMs, иначе дефолтные 30с обрывают запрос и офлайн-слой
+    // ложно решает, что мы офлайн («Действие недоступно офлайн»).
     find: (q: string, owner?: string) =>
       request<{ query: string; translatedQuery: string | null; results: RegistrySkill[] }>(
-        `/skills/find?q=${encodeURIComponent(q)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`),
+        `/skills/find?q=${encodeURIComponent(q)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`,
+        { timeoutMs: 90_000 }),
     // Установка навыка: scope 'project' требует projectId, 'global' — нет
     install: (source: string, skill: string, scope: 'project' | 'global', projectId?: string) =>
       request<{ installed: string; scope: string }>('/skills/install', {
-        method: 'POST', body: JSON.stringify({ source, skill, scope, projectId }),
+        method: 'POST', body: JSON.stringify({ source, skill, scope, projectId }), timeoutMs: 180_000,
       }),
     uninstall: (skill: string, scope: 'project' | 'global', projectId?: string) =>
       request<void>(`/skills/installed?skill=${encodeURIComponent(skill)}&scope=${scope}${projectId ? `&projectId=${projectId}` : ''}`,
-        { method: 'DELETE' }),
+        { method: 'DELETE', timeoutMs: 90_000 }),
     // LLM-подбор: ровно один из personaId / projectId / query
     suggest: (ctx: { personaId?: string; projectId?: string; query?: string }) =>
-      request<{ candidates: SkillSuggestion[] }>('/skills/suggest', { method: 'POST', body: JSON.stringify(ctx) }),
+      request<{ candidates: SkillSuggestion[] }>('/skills/suggest',
+        { method: 'POST', body: JSON.stringify(ctx), timeoutMs: 200_000 }),
     // Установить навык персоне: глобальная установка + привязка (Skill)
     installForPersona: (personaId: string, source: string, skill: string) =>
       request<{ installed: string; bound: boolean; warning?: string }>(`/personas/${personaId}/skills`, {
-        method: 'POST', body: JSON.stringify({ source, skill }),
+        method: 'POST', body: JSON.stringify({ source, skill }), timeoutMs: 180_000,
       }),
   },
 

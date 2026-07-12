@@ -4,9 +4,24 @@ import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { bumpKnowledge, useKnowledgeVersion } from '../../lib/knowledge';
 import { Toolbar, ToolbarIconButton, tbBtnPrimary } from '../../components/Toolbar';
+import { Splitter } from '../../components/ui';
 import { typeIcon, IconBack, IconPlus, IconDots, IconFile, IconTrash, IconSearch, IconLock, IconChevronRight } from './shared';
 import { KbActionsMenu } from './KbActionsMenu';
 import { DocumentViewer } from './DocumentViewer';
+
+// Ширина правой панели просмотра документа (десктоп). Общий паттерн с «Артефактами
+// сессии»: персист в localStorage, clamp по разумным границам. Сплиттер между списком
+// документов и панелью — общий `Splitter` из components/ui.
+const DOC_PANEL_KEY = 'cc_knowledge_doc_width';
+const DOC_PANEL_MIN = 320;
+const DOC_PANEL_MAX = 560;
+const DOC_PANEL_DEFAULT = 420;
+function loadDocPanelWidth(): number {
+  const v = localStorage.getItem(DOC_PANEL_KEY);
+  if (!v) return DOC_PANEL_DEFAULT;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(DOC_PANEL_MIN, Math.min(DOC_PANEL_MAX, n)) : DOC_PANEL_DEFAULT;
+}
 
 // Детальная зона базы: тулбар (симметричный другим разделам) + описание + документы +
 // семантический/полнотекстовый поиск. На десктопе/планшете в тулбаре много места —
@@ -25,6 +40,33 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
   const [menu, setMenu] = useState(false);
   // Какой документ открыт для просмотра (содержимое). null — просмотр закрыт.
   const [viewDoc, setViewDoc] = useState<KnowledgeDocument | null>(null);
+  // Ширина правой панели просмотра (десктоп). На мобиле take-over — ширина не нужна.
+  const [docPanelWidth, setDocPanelWidth] = useState(loadDocPanelWidth);
+  const [draggingSplitter, setDraggingSplitter] = useState(false);
+  useEffect(() => { localStorage.setItem(DOC_PANEL_KEY, String(docPanelWidth)); }, [docPanelWidth]);
+
+  // Ресайз панели просмотра: панель справа, тянем влево (clientX падает) → ширина растёт.
+  // Тот же паттерн, что у handleArtifactsSplitterMouseDown в WorkspacePage.
+  const handleDocSplitterMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setDraggingSplitter(true);
+    const startX = e.clientX;
+    const startW = docPanelWidth;
+    const onMove = (ev: MouseEvent) => {
+      setDocPanelWidth(Math.max(DOC_PANEL_MIN, Math.min(DOC_PANEL_MAX, startW - (ev.clientX - startX))));
+    };
+    const onUp = () => {
+      setDraggingSplitter(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   // Поиск: semantic (по смыслу) | fulltext (точный). Дебаунс.
   const [query, setQuery] = useState('');
@@ -128,47 +170,72 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
         </span>
       </Toolbar>
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        {/* Описание — везде. Кол-во/привязка отдельной строкой — только на мобиле
-            (на десктопе они в тулбаре). */}
-        <div style={{ padding: '16px 18px 8px' }}>
-          {kb.description && (
-            <div style={{ color: C.textSecondary, fontSize: 13.5, maxWidth: 680, lineHeight: 1.5 }}>{kb.description}</div>
-          )}
+      {/* Тело под тулбаром: на десктопе — flex-строка [список | splitter | панель просмотра]
+          (push-панель в потоке, как «Артефакты сессии»); на мобиле — один экран за раз:
+          либо список, либо полноэкранный просмотр (list↔item take-over, как NoteView). */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+        {/* Список/поиск — на мобиле скрывается, когда открыт документ (take-over) */}
+        <div style={{
+          flex: 1, minWidth: 0,
+          display: isMobile && viewDoc ? 'none' : 'flex',
+          flexDirection: 'column',
+          overflowY: 'auto',
+        }}>
+          {/* Описание — везде. Кол-во/привязка отдельной строкой — только на мобиле
+              (на десктопе они в тулбаре). */}
+          <div style={{ padding: '16px 18px 8px' }}>
+            {kb.description && (
+              <div style={{ color: C.textSecondary, fontSize: 13.5, maxWidth: 680, lineHeight: 1.5 }}>{kb.description}</div>
+            )}
+            {isMobile && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12, color: C.textMuted }}>
+                <span>{kb.documentCount} {pluralDocs(kb.documentCount)}</span>
+                {!kb.deletable && (
+                  <>
+                    <span>·</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <IconLock size={11} />привязана к разделу «{kb.type}»
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Поиск отдельной строкой — только на мобиле */}
           {isMobile && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12, color: C.textMuted }}>
-              <span>{kb.documentCount} {pluralDocs(kb.documentCount)}</span>
-              {!kb.deletable && (
-                <>
-                  <span>·</span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <IconLock size={11} />привязана к разделу «{kb.type}»
-                  </span>
-                </>
-              )}
-            </div>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '8px 18px 10px',
+              position: 'sticky', top: 0, background: C.bgMain, zIndex: 2,
+            }}>{searchInput(false)}</div>
+          )}
+
+          {query.trim() ? (
+            <SearchResults hits={hits} searching={searching} query={query.trim()} mode={mode} />
+          ) : (
+            <DocumentsList docs={docs} err={loadErr} onOpen={setViewDoc} onRemove={removeDoc} />
           )}
         </div>
 
-        {/* Поиск отдельной строкой — только на мобиле */}
-        {isMobile && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 8, padding: '8px 18px 10px',
-            position: 'sticky', top: 0, background: C.bgMain, zIndex: 2,
-          }}>{searchInput(false)}</div>
+        {/* Десктоп: push-панель просмотра в потоке + сплиттер (как ArtifactsPanel).
+            Мобила обрабатывается отдельным take-over блоком ниже. */}
+        {!isMobile && viewDoc && (
+          <>
+            <Splitter orientation="v" active={draggingSplitter} onMouseDown={handleDocSplitterMouseDown} />
+            <div style={{ width: docPanelWidth, flexShrink: 0, height: '100%', minWidth: 0 }}>
+              <DocumentViewer kbId={kb.id} doc={viewDoc} onClose={() => setViewDoc(null)} isMobile={false} />
+            </div>
+          </>
         )}
 
-        {query.trim() ? (
-          <SearchResults hits={hits} searching={searching} query={query.trim()} mode={mode} />
-        ) : (
-          <DocumentsList docs={docs} err={loadErr} onOpen={setViewDoc} onRemove={removeDoc} />
+        {/* Мобила: полноэкранный take-over списка (list↔item). Панель занимает всю зону
+            детали под тулбаром, закрытие — кнопка «назад» в шапке панели (IconBack). */}
+        {isMobile && viewDoc && (
+          <div style={{ flex: 1, minWidth: 0, height: '100%' }}>
+            <DocumentViewer kbId={kb.id} doc={viewDoc} onClose={() => setViewDoc(null)} isMobile={true} />
+          </div>
         )}
       </div>
-
-      {/* Просмотр содержимого документа — модалка (десктоп: карточка, мобила: шторка) */}
-      {viewDoc && (
-        <DocumentViewer kbId={kb.id} doc={viewDoc} onClose={() => setViewDoc(null)} />
-      )}
     </div>
   );
 }

@@ -117,6 +117,21 @@ const PERSONA_ID_SCHEMA = {
   description: 'ID персоны-исполнителя (см. personas_list). Задачу выполнит Claude от её лица. "" — снять персону.',
 };
 
+// Markdown-итог выполнения задачи — прикрепляет исполнитель при завершении/обновлении.
+// null/отсутствует = не менять, "" = очистить (как у description).
+const RESULT_MARKDOWN_SCHEMA = {
+  type: 'string',
+  description: 'Markdown-описание итога выполнения (заменяет целиком). "" — очистить.',
+};
+
+// Ссылки на файлы проекта — относительные пути от корня проекта через / (напр. "src/index.ts").
+// Заменяют список целиком.
+const LINKED_FILES_SCHEMA = {
+  type: 'array',
+  items: { type: 'string' },
+  description: 'Пути файлов проекта (от корня проекта, через /). Заменяют список целиком.',
+};
+
 const TOOLS = [
   {
     name: 'tasks_list',
@@ -191,6 +206,8 @@ const TOOLS = [
         recurrence: RECURRENCE_SCHEMA,
         assignee: { type: 'string', enum: ENUMS.assignee },
         personaId: PERSONA_ID_SCHEMA,
+        resultMarkdown: RESULT_MARKDOWN_SCHEMA,
+        linkedFiles: LINKED_FILES_SCHEMA,
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки (заменяют список целиком)' },
         columnId: { ...COLUMN_ID_SCHEMA, description: COLUMN_ID_SCHEMA.description + ' Пустая строка — сброс на дефолтную колонку категории.' },
       },
@@ -203,11 +220,16 @@ const TOOLS = [
   },
   {
     name: 'tasks_complete',
-    description: 'Пометить задачу выполненной (status → done).',
+    description: 'Пометить задачу выполненной (status → done). Можно сразу прикрепить итог: ' +
+      'resultMarkdown (короткое описание сделанного) и linkedFiles (пути итоговых файлов проекта).',
     inputSchema: {
       type: 'object',
       required: ['id'],
-      properties: { id: { type: 'string', description: 'ID задачи' } },
+      properties: {
+        id: { type: 'string', description: 'ID задачи' },
+        resultMarkdown: { ...RESULT_MARKDOWN_SCHEMA, description: 'Короткий итог сделанного (markdown) — прикрепится к задаче при завершении.' },
+        linkedFiles: { ...LINKED_FILES_SCHEMA, description: 'Итоговые файлы проекта (пути от корня, через /) — прикрепятся к задаче при завершении.' },
+      },
     },
   },
   {
@@ -315,10 +337,12 @@ async function callTool(name, args) {
       return json(await api(`/api/tasks/${id}`, { method: 'PUT', body: JSON.stringify(rest) }));
     }
 
-    case 'tasks_complete':
-      return json(await api(`/api/tasks/${args.id}`, {
-        method: 'PUT', body: JSON.stringify({ status: 'done' }),
-      }));
+    case 'tasks_complete': {
+      const body = { status: 'done' };
+      if (args.resultMarkdown !== undefined) body.resultMarkdown = args.resultMarkdown;
+      if (args.linkedFiles !== undefined) body.linkedFiles = args.linkedFiles;
+      return json(await api(`/api/tasks/${args.id}`, { method: 'PUT', body: JSON.stringify(body) }));
+    }
 
     case 'tasks_execute': {
       if (!EXECUTE_ENABLED) throw new Error('tasks_execute недоступен на этом ходу');

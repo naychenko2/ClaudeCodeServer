@@ -34,6 +34,10 @@ public class TaskItem
     public DateTime? ClaudeStartedAt { get; set; }
     // Итог последнего запуска: success | error; null — ещё выполняется или не запускалась
     public string? ClaudeResult { get; set; }
+    // Markdown-описание итога выполнения (прикрепляет исполнитель через tasks_complete/
+    // tasks_update). null — результата нет; "" — очищен. Не переносится в следующий
+    // экземпляр регулярной задачи (как ClaudeResult/LinkedSessionId — серия начинается заново).
+    public string? ResultMarkdown { get; set; }
     public List<string> LinkedFiles { get; set; } = [];
     public List<TaskSubtask> Subtasks { get; set; } = [];
     public List<string> Labels { get; set; } = [];

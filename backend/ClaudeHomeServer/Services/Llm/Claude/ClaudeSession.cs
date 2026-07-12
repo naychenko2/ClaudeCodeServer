@@ -642,12 +642,16 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? " Чтобы поручить задачу персоне-исполнителю, передай её personaId в tasks_create/tasks_update — " +
                       "задачу выполнит Claude от её лица; список персон и их id — personas_list."
                     : "";
+                // Прикрепление итога выполнения — задачи с проектом имеют файлы; результат полезен всегда
+                var resultHint = _tasksMcp.ProjectId is not null
+                    ? " Завершая задачу через tasks_complete, прикрепляй итог: resultMarkdown — короткое описание сделанного, linkedFiles — пути затронутых файлов проекта (от корня, через /)."
+                    : " Завершая задачу через tasks_complete, прикрепляй итог: resultMarkdown — короткое описание сделанного.";
                 var tasksHint =
                     "У пользователя есть встроенная система задач (вкладка «Задачи» в проекте и раздел «Календарь»). " +
                     "Управляй ею через MCP-инструменты mcp__tasks__* (tasks_list, tasks_search, tasks_get, tasks_create, " +
                     "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
-                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint;
+                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint + resultHint;
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? tasksHint
                     : basePrompt + "\n\n" + tasksHint;

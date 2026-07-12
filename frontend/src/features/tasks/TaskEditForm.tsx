@@ -9,10 +9,11 @@ import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import { PRIORITY_LABEL, PRIORITY_ORDER, RECURRENCE_TYPE_LABEL, REMINDER_PRESETS, reminderLabel } from '../../lib/tasks';
-import { PriorityFlag, SubtaskCheck } from './bits';
+import { ExtBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
 import { ExecutorPicker } from './ExecutorPicker';
 import { MarkdownEditor } from './MarkdownEditor';
+import { FilePicker } from './FilePicker';
 
 interface Props {
   task: Task;
@@ -64,6 +65,12 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   const [personaId, setPersonaId] = useState(task.personaId ?? '');
   const [description, setDescription] = useState(task.description);
   const [descEditing, setDescEditing] = useState(!task.description);
+  // Markdown-итог выполнения (прикрепляет исполнитель; тут — ручная правка пользователем)
+  const [result, setResult] = useState(task.resultMarkdown ?? '');
+  const [resultEditing, setResultEditing] = useState(false);
+  // Ссылки на файлы проекта (только у проектных задач — есть где брать пути)
+  const [files, setFiles] = useState<string[]>(task.linkedFiles);
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
   const [subtasks, setSubtasks] = useState<TaskSubtask[]>(task.subtasks);
   const [newSubtask, setNewSubtask] = useState('');
   const [labels, setLabels] = useState<string[]>(task.labels);
@@ -146,6 +153,9 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
         // Персона-исполнитель имеет смысл только у Claude; '' = убрать на бэке
         personaId: assignee === 'claude' && personaId ? personaId : '',
         description,
+        resultMarkdown: result,
+        // linkedFiles имеет смысл только у проектной задачи (у личной нет файлов)
+        ...(task.projectId ? { linkedFiles: files } : {}),
         subtasks: subtasks.filter(s => s.title.trim()),
         labels,
       });
@@ -485,6 +495,53 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
             )}
           </div>
 
+          {/* Результат — Markdown-итог выполнения (обычно прикрепляет исполнитель; тут можно поправить) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 9 }}>
+            <div style={{ ...fieldLabelStyle(), marginBottom: 0 }}>Результат</div>
+            <div style={{ flex: 1 }} />
+            <button
+              onClick={() => setResultEditing(v => !v)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                border: 'none', background: 'none', cursor: 'pointer', padding: 0,
+                fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, color: C.accent,
+              }}
+            >
+              {resultEditing ? (
+                <>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><polyline points="20 6 9 17 4 12" /></svg>
+                  Просмотр
+                </>
+              ) : (
+                <>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                  </svg>
+                  Редактировать
+                </>
+              )}
+            </button>
+          </div>
+          <div style={{ marginBottom: 22 }}>
+            {resultEditing ? (
+              <MarkdownEditor
+                value={result}
+                onChange={setResult}
+                placeholder="Итог выполнения (markdown)…"
+                minHeight={120}
+              />
+            ) : (
+              <div style={{
+                background: C.bgWhite, border: `1px solid ${C.borderLight}`,
+                borderRadius: R.xl, padding: '14px 18px', fontSize: 14,
+              }}>
+                {result
+                  ? <MarkdownViewer content={result} />
+                  : <span style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textMuted }}>Итога ещё нет</span>}
+              </div>
+            )}
+          </div>
+
           {aiError && (
             <div style={{ fontFamily: FONT.sans, fontSize: 12.5, color: C.danger, margin: '-12px 0 18px' }}>
               {aiError}
@@ -609,8 +666,73 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
               Добавить
             </button>
           </div>
+
+          {/* Файлы проекта — только у проектных задач (у личных нет файлового контекста) */}
+          {task.projectId && (
+            <>
+              <div style={fieldLabelStyle()}>Файлы</div>
+              {files.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 10 }}>
+                  {files.map(f => (
+                    <span
+                      key={f}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '9px 12px', background: C.bgWhite,
+                        border: `1px solid ${C.borderLight}`, borderRadius: R.xl,
+                      }}
+                    >
+                      <ExtBadge filename={f} />
+                      <span style={{
+                        flex: 1, fontFamily: FONT.mono, fontSize: 13, color: C.textPrimary,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
+                        {f}
+                      </span>
+                      <button
+                        onClick={() => setFiles(prev => prev.filter(x => x !== f))}
+                        title="Убрать файл"
+                        style={{
+                          border: 'none', background: 'none', cursor: 'pointer', padding: 4,
+                          color: C.textMuted, fontSize: 15, lineHeight: 1, fontFamily: FONT.sans,
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div style={{ marginBottom: 22 }}>
+                <button
+                  onClick={() => setFilePickerOpen(true)}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 7,
+                    padding: '9px 14px', cursor: 'pointer',
+                    border: `1px solid ${C.border}`, borderRadius: R.lg,
+                    background: C.bgWhite, color: C.textPrimary,
+                    fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
+                  }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                  </svg>
+                  {files.length > 0 ? 'Добавить ещё файл' : 'Добавить файл'}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
+      {filePickerOpen && task.projectId && (
+        <FilePicker
+          projectId={task.projectId}
+          exclude={files}
+          onSelect={p => setFiles(prev => prev.includes(p) ? prev : [...prev, p])}
+          onClose={() => setFilePickerOpen(false)}
+        />
+      )}
     </div>
   );
 }

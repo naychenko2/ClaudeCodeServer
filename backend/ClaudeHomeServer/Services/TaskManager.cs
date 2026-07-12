@@ -66,6 +66,7 @@ public class TaskManager
             Assignee = req.Assignee,
             LinkedSessionId = req.LinkedSessionId,
             PersonaId = string.IsNullOrEmpty(req.PersonaId) ? null : req.PersonaId,
+            ResultMarkdown = req.ResultMarkdown,
             LinkedFiles = req.LinkedFiles ?? [],
             Subtasks = req.Subtasks?.Select(s => new TaskSubtask { Title = s.Title }).ToList() ?? [],
             Labels = req.Labels ?? [],
@@ -126,6 +127,7 @@ public class TaskManager
         // Персона-исполнитель: null = не менять, "" = убрать (как у строковых полей)
         if (req.PersonaId is not null)
             task.PersonaId = req.PersonaId == "" ? null : req.PersonaId;
+        if (req.ResultMarkdown is not null) task.ResultMarkdown = req.ResultMarkdown;
         if (req.LinkedFiles is not null) task.LinkedFiles = req.LinkedFiles;
         if (req.Labels is not null) task.Labels = req.Labels;
         if (req.Order is not null) task.Order = req.Order.Value;
@@ -290,6 +292,8 @@ public record CreateTaskRequest(
     string? LinkedSessionId = null,
     // Исполнение от лица персоны (assignee=Claude); null/пусто — обычный Claude
     string? PersonaId = null,
+    // Markdown-итог выполнения (null = не менять, "" = очистить)
+    string? ResultMarkdown = null,
     List<string>? LinkedFiles = null,
     List<CreateSubtaskRequest>? Subtasks = null,
     List<string>? Labels = null,
@@ -313,6 +317,8 @@ public record UpdateTaskRequest(
     string? LinkedSessionId = null,
     // Персона-исполнитель: null = не менять, "" = убрать
     string? PersonaId = null,
+    // Markdown-итог выполнения: null = не менять, "" = очистить
+    string? ResultMarkdown = null,
     List<string>? LinkedFiles = null,
     List<UpdateSubtaskRequest>? Subtasks = null,
     List<string>? Labels = null,

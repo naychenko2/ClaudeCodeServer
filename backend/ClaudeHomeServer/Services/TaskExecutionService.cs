@@ -131,9 +131,9 @@ public class TaskExecutionService
         sb.AppendLine("Правила:");
         sb.AppendLine("- Задача уже переведена в статус inProgress; веди её через MCP-инструменты tasks_*.");
         sb.AppendLine("- Выполненные подзадачи отмечай через tasks_toggle_subtask.");
-        sb.AppendLine("- Когда всё сделано и проверено — заверши задачу через tasks_complete.");
+        sb.AppendLine("- Когда всё сделано и проверено — заверши задачу через tasks_complete, передав resultMarkdown " +
+                      "(короткий итог сделанного) и linkedFiles (пути итоговых файлов проекта, если есть).");
         sb.AppendLine("- Если выполнить невозможно — не завершай задачу, а кратко опиши причину.");
-        sb.AppendLine("- В конце подведи короткий итог сделанного.");
         return sb.ToString();
     }
 
@@ -156,7 +156,8 @@ public class TaskExecutionService
         sb.AppendLine();
         sb.AppendLine("## ОЖИДАЕМЫЙ РЕЗУЛЬТАТ");
         sb.AppendLine("- Задача выполнена, проверена и завершена в трекере.");
-        sb.AppendLine("- В конце — короткий итог сделанного от твоего лица.");
+        sb.AppendLine("- Завершая через tasks_complete, прикрепи resultMarkdown — короткий итог сделанного " +
+                      "от твоего лица, и linkedFiles — пути итоговых файлов проекта (если есть).");
         sb.AppendLine();
         sb.AppendLine("## ИНСТРУМЕНТЫ");
         sb.AppendLine("- Статус задачи веди через MCP-инструменты tasks_*.");
@@ -169,8 +170,8 @@ public class TaskExecutionService
         sb.AppendLine("- НЕТ СВИДЕТЕЛЬСТВ = НЕ ГОТОВО: перед завершением прогони фактическую проверку " +
                       "(сборка, тесты, реальный результат) и приведи её вывод в итоге.");
         sb.AppendLine("- Делегировал часть работы субагенту — не доверяй его отчёту на слово, проверь результат сам.");
-        sb.AppendLine("- Когда всё сделано и проверено — заверши задачу через tasks_complete.");
-        sb.AppendLine("- В конце подведи короткий итог сделанного.");
+        sb.AppendLine("- Когда всё сделано и проверено — заверши задачу через tasks_complete с resultMarkdown " +
+                      "(итог сделанного) и linkedFiles (итоговые файлы проекта, если есть).");
         sb.AppendLine();
         sb.AppendLine("## НЕЛЬЗЯ");
         sb.AppendLine("- Не выходи за рамки задачи и не трогай несвязанное.");

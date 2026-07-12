@@ -90,6 +90,7 @@ export interface Task {
   personaId?: string;        // исполнение от лица персоны (assignee=claude)
   claudeStartedAt?: string;  // отметка запуска Claude-исполнителя
   claudeResult?: 'success' | 'error';  // итог последнего запуска (null — выполняется/не запускалась)
+  resultMarkdown?: string;            // Markdown-итог выполнения (прикрепляет исполнитель через MCP)
   linkedFiles: string[];
   subtasks: TaskSubtask[];
   labels: string[];
@@ -153,6 +154,7 @@ export interface CreateTaskDto {
   recurrence?: TaskRecurrence;
   linkedSessionId?: string;
   personaId?: string;        // исполнение от лица персоны
+  resultMarkdown?: string;
   linkedFiles?: string[];
   subtasks?: { title: string }[];
   labels?: string[];
@@ -174,6 +176,7 @@ export interface UpdateTaskDto {
   linkedSessionId?: string;
   // Персона-исполнитель: '' = убрать, undefined = не менять
   personaId?: string;
+  resultMarkdown?: string;    // '' = очистить, undefined = не менять
   linkedFiles?: string[];
   subtasks?: TaskSubtask[];
   labels?: string[];

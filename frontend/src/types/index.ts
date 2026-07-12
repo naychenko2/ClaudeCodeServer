@@ -866,6 +866,7 @@ export interface PersonaMemoryEntry {
   tags?: string[];
   salience: number;           // значимость (для приоритизации/забывания)
   sourceSessionId?: string;   // чат, из которого запомнилось
+  pending?: boolean;          // предложено autolearn, ждёт подтверждения (③-3.2)
   createdAt: string;
   lastAccessedAt: string;
 }

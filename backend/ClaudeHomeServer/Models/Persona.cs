@@ -193,6 +193,9 @@ public class PersonaMemoryEntry
     public double Salience { get; set; } = 1.0;
     // Сессия, из которой факт был запомнен (для трассировки)
     public string? SourceSessionId { get; set; }
+    // Предложено autolearn и ждёт подтверждения пользователя (③-3.2): в recall не попадает,
+    // пока не подтверждено. false у явно добавленных и у legacy-записей (миграция не нужна).
+    public bool Pending { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime LastAccessedAt { get; set; } = DateTime.UtcNow;
 }

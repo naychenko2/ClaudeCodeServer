@@ -1232,6 +1232,16 @@ public class PersonasController : ControllerBase
         return NoContent();
     }
 
+    // Подтвердить предложенную autolearn запись (③-3.2) — снимает pending, попадает в recall
+    [HttpPost("{id}/memory/{entryId}/confirm")]
+    public async Task<IActionResult> ConfirmMemory(string id, string entryId)
+    {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+        if (!_memory.Confirm(UserId, id, entryId)) return NotFound();
+        await Broadcast("memory", id);
+        return NoContent();
+    }
+
     // Превратить запись памяти в заметку (③-3.3): инсайт выходит из личного датасета
     // персоны в общий vault — виден/доступен всей команде и вне чата с персоной.
     [HttpPost("{id}/memory/{entryId}/to-note")]

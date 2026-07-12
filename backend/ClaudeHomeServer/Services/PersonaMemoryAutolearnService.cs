@@ -81,9 +81,10 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
             var saved = 0;
             foreach (var item in result.Items)
             {
-                // Семантический write-path: близкий факт усилит существующую запись, а не создаст дубль
+                // Семантический write-path: близкий факт усилит существующую запись, а не создаст дубль.
+                // Новые факты — pending (предложены), попадают в recall только после подтверждения (③-3.2)
                 if (await _memory.RememberAsync(persona.OwnerId, persona.Id, item.Type, item.Text,
-                        null, sessionId, item.Salience) is not null)
+                        null, sessionId, item.Salience, pending: true) is not null)
                     saved++;
             }
             // Рабочий фокус: null от модели = разговор не про дело, фокус НЕ трогаем.

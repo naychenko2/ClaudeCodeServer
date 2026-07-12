@@ -313,6 +313,11 @@ export const api = {
       request<void>(`/personas/${encodeURIComponent(id)}/memory/${encodeURIComponent(entryId)}`, {
         method: 'DELETE',
       }),
+    // Подтвердить предложенную autolearn запись (③-3.2)
+    confirmMemory: (id: string, entryId: string) =>
+      request<void>(`/personas/${encodeURIComponent(id)}/memory/${encodeURIComponent(entryId)}/confirm`, {
+        method: 'POST',
+      }),
 
     // Рабочий фокус персоны («что я сейчас делаю»): 204 без фокуса → null
     focus: (id: string) =>

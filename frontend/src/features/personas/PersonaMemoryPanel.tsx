@@ -131,6 +131,16 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
     }
   };
 
+  // Подтвердить предложенную autolearn запись (③-3.2): снимает pending → попадает в recall
+  const confirmEntry = async (entryId: string) => {
+    try {
+      await api.personas.confirmMemory(persona.id, entryId);
+      setEntries(prev => prev.map(e => e.id === entryId ? { ...e, pending: false } : e));
+    } catch {
+      showToast('Память', 'Не удалось подтвердить запись.');
+    }
+  };
+
   const isEmpty = !loading && !error && entries.length === 0;
 
   return (
@@ -196,7 +206,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {groups[t].map(e => (
-                      <MemoryCard key={e.id} entry={e} color={meta.color} onRemove={() => remove(e.id)} removing={removingId === e.id} onToNote={() => toNote(e.id)} />
+                      <MemoryCard key={e.id} entry={e} color={meta.color} onRemove={() => remove(e.id)} removing={removingId === e.id} onToNote={() => toNote(e.id)} onConfirm={e.pending ? () => confirmEntry(e.id) : undefined} />
                     ))}
                   </div>
                 </div>
@@ -241,12 +251,13 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
 }
 
 // Карточка одной записи памяти
-function MemoryCard({ entry, color, onRemove, removing, onToNote }: {
+function MemoryCard({ entry, color, onRemove, removing, onToNote, onConfirm }: {
   entry: PersonaMemoryEntry;
   color: string;
   onRemove: () => void;
   removing: boolean;
   onToNote?: () => void;
+  onConfirm?: () => void;   // подтвердить предложенную (pending) запись (③-3.2)
 }) {
   return (
     <div style={{
@@ -256,6 +267,9 @@ function MemoryCard({ entry, color, onRemove, removing, onToNote }: {
     }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
+          {entry.pending && (
+            <span style={{ display: 'inline-block', fontSize: 10.5, fontWeight: 600, color: C.accent, background: C.accentSoft, borderRadius: R.sm, padding: '1px 7px', marginBottom: 6 }}>предложено</span>
+          )}
           <div style={{ fontSize: 13.5, color: C.textPrimary, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {entry.text}
           </div>
@@ -272,6 +286,18 @@ function MemoryCard({ entry, color, onRemove, removing, onToNote }: {
           <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>{shortAgo(entry.createdAt)}</div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
+          {onConfirm && (
+            <button
+              onClick={onConfirm}
+              aria-label="Подтвердить"
+              title="Подтвердить — запомнить"
+              style={{ ...forgetBtn, color: C.success }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </button>
+          )}
           {onToNote && (
             <button
               onClick={onToNote}

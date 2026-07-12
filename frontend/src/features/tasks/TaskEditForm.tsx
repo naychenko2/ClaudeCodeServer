@@ -12,8 +12,8 @@ import { PRIORITY_LABEL, PRIORITY_ORDER, RECURRENCE_TYPE_LABEL, REMINDER_PRESETS
 import { ExtBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
 import { ExecutorPicker } from './ExecutorPicker';
-import { MarkdownEditor } from './MarkdownEditor';
-import { FilePicker } from './FilePicker';
+import { NoteEditor } from '../notes/NoteEditor';
+import { AttachPicker } from '../../components/chat/AttachPicker';
 
 interface Props {
   task: Task;
@@ -477,7 +477,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
           </div>
           <div style={{ marginBottom: 22 }}>
             {descEditing ? (
-              <MarkdownEditor
+              <NoteEditor
                 value={description}
                 onChange={setDescription}
                 placeholder="Описание задачи (markdown)…"
@@ -524,11 +524,11 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
           </div>
           <div style={{ marginBottom: 22 }}>
             {resultEditing ? (
-              <MarkdownEditor
+              <NoteEditor
                 value={result}
                 onChange={setResult}
                 placeholder="Итог выполнения (markdown)…"
-                minHeight={120}
+                minHeight={160}
               />
             ) : (
               <div style={{
@@ -726,10 +726,10 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
         </div>
       </div>
       {filePickerOpen && task.projectId && (
-        <FilePicker
+        <AttachPicker
           projectId={task.projectId}
-          exclude={files}
-          onSelect={p => setFiles(prev => prev.includes(p) ? prev : [...prev, p])}
+          selected={files}
+          onToggle={p => setFiles(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])}
           onClose={() => setFilePickerOpen(false)}
         />
       )}

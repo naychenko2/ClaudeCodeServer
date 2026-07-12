@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -680,6 +680,9 @@ export const api = {
     },
     removeDocument: (id: string, docId: string) =>
       request<void>(`/knowledge/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`, { method: 'DELETE' }),
+    // Содержимое документа — сегменты (чанки) по порядку
+    getDocument: (id: string, docId: string) =>
+      request<KnowledgeDocumentContent>(`/knowledge/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`),
     // method: semantic (по смыслу) | fulltext (точный полнотекстовый)
     search: (id: string, q: string, method: 'semantic' | 'fulltext', topK = 8) =>
       request<{ items: KnowledgeSearchHit[] }>(

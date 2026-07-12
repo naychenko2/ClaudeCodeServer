@@ -154,6 +154,25 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
         return NoContent();
     }
 
+    // GET /api/knowledge/{id}/documents/{docId} — содержимое документа (сегменты-чанки).
+    [HttpGet("{id}/documents/{docId}")]
+    public async Task<IActionResult> GetDocument(string id, string docId)
+    {
+        var d = await ResolveReadableAsync(id);
+        if (d is null) return NotFound();
+        try
+        {
+            var segments = await knowledge.ListSegmentsAsync(id, docId);
+            return Ok(new
+            {
+                id = docId,
+                segments = segments.OrderBy(s => s.Position)
+                    .Select(s => new KnowledgeSegmentDto(s.Position, s.Content, s.WordCount)).ToList(),
+            });
+        }
+        catch (HttpRequestException ex) { return StatusCode(502, new { error = $"Dify недоступен: {ex.Message}" }); }
+    }
+
     // GET /api/knowledge/{id}/search — семантический (method=semantic) либо
     // полнотекстовый (method=fulltext) поиск по базе.
     [HttpGet("{id}/search")]
@@ -280,3 +299,5 @@ public record CreateKnowledgeBaseRequest(string Title, string? Description, stri
 public record AddDocumentTextRequest(string Name, string Text);
 
 public record KnowledgeSearchHit(double Score, string Content, string DocumentName);
+
+public record KnowledgeSegmentDto(int Position, string Content, int WordCount);

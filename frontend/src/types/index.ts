@@ -669,6 +669,19 @@ export interface KnowledgeListResponse {
   items: KnowledgeBaseSummary[];
 }
 
+// Сегмент (чанк) документа базы знаний — порция текста для просмотра/поиска
+export interface KnowledgeSegment {
+  position: number;
+  content: string;
+  wordCount: number;
+}
+
+// Содержимое документа (GET /api/knowledge/{id}/documents/{docId}) — сегменты по порядку
+export interface KnowledgeDocumentContent {
+  id: string;
+  segments: KnowledgeSegment[];
+}
+
 // ===== Персоны (олицетворённые ИИ-собеседники) =====
 
 // Зона контекста персоны: глобально (личное пространство) или в рамках проекта

@@ -22,6 +22,17 @@ public record DifyDocumentsPage(
     [property: JsonPropertyName("has_more")] bool HasMore,
     [property: JsonPropertyName("total")] int Total);
 
+// Сегмент (чанк) документа — порция текста, по которой идёт поиск. Dify хранит документ
+// по сегментам, поэтому «содержимое документа» — это последовательность чанков.
+public record DifySegmentItem(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("position")] int Position,
+    [property: JsonPropertyName("content")] string Content,
+    [property: JsonPropertyName("word_count")] int WordCount);
+
+public record DifySegmentsPage(
+    [property: JsonPropertyName("data")] List<DifySegmentItem> Data);
+
 public record DifyMetadataField(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("name")] string Name,
@@ -458,6 +469,18 @@ public class KnowledgeService
             page++;
         }
         return new DifyDocumentsPage(all, false, total);
+    }
+
+    // Сегменты документа (чанки с текстом) — для просмотра содержимого. Без пагинации:
+    // эндпоинт Dify не отдаёт has_more, а документы обычно разбиты на немного чанков.
+    public async Task<IReadOnlyList<DifySegmentItem>> ListSegmentsAsync(string datasetId, string documentId)
+    {
+        if (!IsConfigured) return [];
+        var client = CreateClient();
+        var resp = await client.GetAsync($"datasets/{datasetId}/documents/{documentId}/segments?limit=100");
+        resp.EnsureSuccessStatusCode();
+        var p = await resp.Content.ReadFromJsonAsync<DifySegmentsPage>();
+        return p?.Data ?? [];
     }
 
     public async Task DeleteDocumentAsync(string datasetId, string documentId)

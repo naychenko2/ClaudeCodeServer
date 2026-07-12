@@ -125,8 +125,6 @@ function KnowledgeCard({ kb, active, isMobile, onSelect, onAddDocument, onDelete
           <span>{kb.type}</span>
           <Dot />
           <span>{kb.documentCount} {pluralDocs(kb.documentCount)}</span>
-          <Dot />
-          <VisibilityBadge visibility={kb.visibility} />
         </div>
       </div>
 

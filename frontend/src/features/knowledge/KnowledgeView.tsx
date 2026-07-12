@@ -5,7 +5,6 @@ import { api } from '../../lib/api';
 import { bumpKnowledge, useKnowledgeVersion } from '../../lib/knowledge';
 import { Toolbar, ToolbarIconButton, tbBtnPrimary } from '../../components/Toolbar';
 import { typeIcon, IconBack, IconPlus, IconDots, IconFile, IconTrash, IconSearch, IconLock } from './shared';
-import { VisibilityBadge } from './KnowledgeList';
 import { KbActionsMenu } from './KbActionsMenu';
 
 // Детальная зона базы: тулбар (симметричный другим разделам) + описание + документы +
@@ -94,7 +93,6 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>{kb.title}</span>
           {!isMobile && <TypeChip>{kb.type}</TypeChip>}
-          {!isMobile && <VisibilityBadge visibility={kb.visibility} variant="header" />}
         </div>
 
         {/* Десктоп/планшет: поиск, кол-во документов и пометка привязки — прямо в тулбаре */}
@@ -201,7 +199,7 @@ function DocumentsList({ docs, err, onRemove }: {
   if (docs.length === 0) return <div style={{ padding: '24px 18px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans }}>В базе нет документов — добавьте первый.</div>;
   return (
     <div style={{ padding: '4px 12px 28px' }}>
-      <SectionLabel>Документы · {docs.length}</SectionLabel>
+      <SectionLabel>Документы</SectionLabel>
       {docs.map(d => {
         const st = docStatus(d.indexingStatus);
         return (

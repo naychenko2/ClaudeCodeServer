@@ -298,6 +298,17 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    // Насосы Memory↔Notes (③-3.3)
+    memoryToNote: (id: string, entryId: string) =>
+      request<{ noteId: string; noteTitle: string }>(
+        `/personas/${encodeURIComponent(id)}/memory/${encodeURIComponent(entryId)}/to-note`,
+        { method: 'POST' },
+      ),
+    noteToMemory: (id: string, noteId: string) =>
+      request<void>(`/personas/${encodeURIComponent(id)}/memory/from-note`, {
+        method: 'POST',
+        body: JSON.stringify({ noteId }),
+      }),
     forget: (id: string, entryId: string) =>
       request<void>(`/personas/${encodeURIComponent(id)}/memory/${encodeURIComponent(entryId)}`, {
         method: 'DELETE',

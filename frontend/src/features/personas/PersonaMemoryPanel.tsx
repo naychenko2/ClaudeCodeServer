@@ -121,6 +121,16 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
     }
   };
 
+  // Превратить запись памяти в заметку (③-3.3): инсайт выходит в общий vault
+  const toNote = async (entryId: string) => {
+    try {
+      const res = await api.personas.memoryToNote(persona.id, entryId);
+      showToast('Память', `Создана заметка «${res.noteTitle}».`, 'info');
+    } catch {
+      showToast('Память', 'Не удалось создать заметку.');
+    }
+  };
+
   const isEmpty = !loading && !error && entries.length === 0;
 
   return (
@@ -186,7 +196,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {groups[t].map(e => (
-                      <MemoryCard key={e.id} entry={e} color={meta.color} onRemove={() => remove(e.id)} removing={removingId === e.id} />
+                      <MemoryCard key={e.id} entry={e} color={meta.color} onRemove={() => remove(e.id)} removing={removingId === e.id} onToNote={() => toNote(e.id)} />
                     ))}
                   </div>
                 </div>
@@ -231,11 +241,12 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
 }
 
 // Карточка одной записи памяти
-function MemoryCard({ entry, color, onRemove, removing }: {
+function MemoryCard({ entry, color, onRemove, removing, onToNote }: {
   entry: PersonaMemoryEntry;
   color: string;
   onRemove: () => void;
   removing: boolean;
+  onToNote?: () => void;
 }) {
   return (
     <div style={{
@@ -260,17 +271,33 @@ function MemoryCard({ entry, color, onRemove, removing }: {
           )}
           <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>{shortAgo(entry.createdAt)}</div>
         </div>
-        <button
-          onClick={onRemove}
-          disabled={removing}
-          aria-label="Забыть"
-          title="Забыть"
-          style={forgetBtn}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M18 6L6 18M6 6l12 12" />
-          </svg>
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
+          {onToNote && (
+            <button
+              onClick={onToNote}
+              aria-label="Превратить в заметку"
+              title="Превратить в заметку"
+              style={forgetBtn}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="9" y1="13" x2="15" y2="13" />
+              </svg>
+            </button>
+          )}
+          <button
+            onClick={onRemove}
+            disabled={removing}
+            aria-label="Забыть"
+            title="Забыть"
+            style={forgetBtn}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   );

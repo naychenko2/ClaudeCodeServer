@@ -1232,6 +1232,44 @@ public class PersonasController : ControllerBase
         return NoContent();
     }
 
+    // Превратить запись памяти в заметку (③-3.3): инсайт выходит из личного датасета
+    // персоны в общий vault — виден/доступен всей команде и вне чата с персоной.
+    [HttpPost("{id}/memory/{entryId}/to-note")]
+    public IActionResult MemoryToNote(string id, string entryId)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        var entry = _memory.List(UserId, id, null).FirstOrDefault(e => e.Id == entryId);
+        if (entry is null) return NotFound("Запись памяти не найдена");
+        var title = TitleFromText(entry.Text, "Из памяти персоны");
+        var body = entry.Text.Trim() + $"\n\n— _из памяти персоны «{PersonaManager.PersonaLabel(persona)}»_";
+        var note = _notes.Create(UserId, new CreateNoteRequest(Title: title, Content: body));
+        return Ok(new { noteId = note.Id, noteTitle = note.Title });
+    }
+
+    // Закрепить заметку в памяти персоны (③-3.3): важное подчёркивается, попадает в recall
+    // с высоким salience (1.0) как semantic-факт.
+    [HttpPost("{id}/memory/from-note")]
+    public async Task<IActionResult> NoteToMemory(string id, [FromBody] NoteToMemoryRequest req)
+    {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+        var note = _notes.GetDetail(UserId, req.NoteId);
+        if (note is null) return NotFound("Заметка не найдена");
+        var text = string.IsNullOrWhiteSpace(note.Content) ? note.Title : note.Content;
+        await _memory.RememberAsync(UserId, id, PersonaMemoryType.Semantic, text, null, null, 1.0);
+        _memory.EnforceCap(UserId, id);
+        await Broadcast("memory", id);
+        return Ok();
+    }
+
+    // Первая непустая строка текста (до ~60 символов) — как заголовок заметки из памяти
+    private static string TitleFromText(string text, string fallback)
+    {
+        var first = text.Replace("\r", "").Split('\n').FirstOrDefault(l => !string.IsNullOrWhiteSpace(l))?.Trim();
+        if (string.IsNullOrEmpty(first)) return fallback;
+        return first.Length <= 60 ? first : first[..60].TrimEnd() + "…";
+    }
+
     // --- @упоминания: спросить персону (persona_ask из MCP personas-server) ---
 
     // One-shot ответ персоны от своего лица (PersonaAskService): слой персоны + recall
@@ -1333,6 +1371,9 @@ public record ConnectPantheonRequest(List<string>? Keys = null);
 
 public record RememberRequest(string Type, string Text, List<string>? Tags = null,
     string? SourceSessionId = null, double? Salience = null);
+
+// Закрепить заметку в памяти персоны (③-3.3)
+public record NoteToMemoryRequest(string NoteId);
 
 public record GenerateAvatarRequest(string? Prompt = null, int? Count = null);
 

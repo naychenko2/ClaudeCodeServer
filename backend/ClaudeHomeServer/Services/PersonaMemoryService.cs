@@ -38,6 +38,7 @@ public sealed class PersonaMemoryService
     private readonly KnowledgeService _knowledge;
     private readonly PersonaManager _personas;
     private readonly UserStore _users;
+    private readonly TeamMemoryService? _teamMemory;
     private readonly ILogger<PersonaMemoryService> _logger;
     private readonly string _storePath;
     private readonly MemoryScoringOptions _scoring;
@@ -53,11 +54,13 @@ public sealed class PersonaMemoryService
     private readonly ConcurrentDictionary<string, Timer> _debounce = new();
 
     public PersonaMemoryService(KnowledgeService knowledge, PersonaManager personas, UserStore users,
-        IConfiguration config, ILogger<PersonaMemoryService> logger)
+        IConfiguration config, ILogger<PersonaMemoryService> logger,
+        TeamMemoryService? teamMemory = null)
     {
         _knowledge = knowledge;
         _personas = personas;
         _users = users;
+        _teamMemory = teamMemory;
         _logger = logger;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
@@ -301,7 +304,16 @@ public sealed class PersonaMemoryService
         }
 
         var top = hits.Where(h => h.Score >= minScore).Take(topK).ToList();
-        if (top.Count == 0 && focus is null) return null;
+
+        // Память команды проекта (③-3.4): проектная персона recall'ит общую память команды
+        string? teamBlock = null;
+        if (_teamMemory is not null && persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
+        {
+            try { teamBlock = _teamMemory.BuildRecallBlock(ownerId, persona.ProjectId!, query); }
+            catch (Exception ex) { _logger.LogDebug(ex, "team-memory recall {Project}", persona.ProjectId); }
+        }
+
+        if (top.Count == 0 && focus is null && teamBlock is null) return null;
 
         var sb = new StringBuilder();
         if (focus is not null)
@@ -321,6 +333,11 @@ public sealed class PersonaMemoryService
             }
             // Reinforcement: только записи, реально попавшие в блок, считаются «вспомненными»
             Touch(personaId, top.Select(h => h.Id).ToHashSet());
+        }
+        if (teamBlock is not null)
+        {
+            if (sb.Length > 0) sb.AppendLine();
+            sb.Append(teamBlock);
         }
         return sb.ToString();
     }

@@ -890,3 +890,12 @@ export interface PersonaMemoryHit {
   score: number;
   createdAt: string;
 }
+
+// Запись общей памяти команды проекта (③-3.4) — recall'ят все персоны команды
+export interface TeamMemoryEntry {
+  id: string;
+  ownerId: string;
+  projectId: string;
+  text: string;
+  createdAt: string;
+}

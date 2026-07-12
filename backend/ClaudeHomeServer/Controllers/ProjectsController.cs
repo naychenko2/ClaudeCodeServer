@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -59,6 +59,35 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
         return Ok(events.Query(id, UserId, since, type, actor, limit ?? 100));
+    }
+
+    // === Память команды проекта (③-3.4) === — общие факты/договорённости, которые recall'ят
+    // все персоны команды проекта наравне с личной памятью.
+
+    [HttpGet("{id}/team-memory")]
+    public IActionResult TeamMemory(string id)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        return Ok(teamMemory.List(UserId, id));
+    }
+
+    [HttpPost("{id}/team-memory")]
+    public IActionResult AddTeamMemory(string id, [FromBody] TeamMemoryRequest req)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
+        var entry = teamMemory.Add(UserId, id, req.Text);
+        return Ok(entry);
+    }
+
+    [HttpDelete("{id}/team-memory/{entryId}")]
+    public IActionResult RemoveTeamMemory(string id, string entryId)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        return teamMemory.Remove(UserId, id, entryId) ? NoContent() : NotFound();
     }
 
     [HttpPost]
@@ -111,3 +140,4 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null);
 public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, List<PermissionRule>? PermissionRules = null, string? GroupId = null);
 public record UpdateBoardColumnsRequest(List<BoardColumn>? Columns);
+public record TeamMemoryRequest(string Text);

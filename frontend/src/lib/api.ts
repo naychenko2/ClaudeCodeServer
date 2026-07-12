@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -100,6 +100,22 @@ export const api = {
 
   projects: {
     list: () => request<Project[]>('/projects'),
+    events: (id: string, opts?: { since?: string; type?: string; actor?: string; limit?: number }) => {
+      const qs = new URLSearchParams();
+      if (opts?.since) qs.set('since', opts.since);
+      if (opts?.type) qs.set('type', opts.type);
+      if (opts?.actor) qs.set('actor', opts.actor);
+      if (opts?.limit) qs.set('limit', String(opts.limit));
+      return request<unknown[]>(`/projects/${encodeURIComponent(id)}/events${qs.toString() ? `?${qs}` : ''}`);
+    },
+    // Память команды проекта (③-3.4)
+    teamMemory: (id: string) => request<TeamMemoryEntry[]>(`/projects/${encodeURIComponent(id)}/team-memory`),
+    addTeamMemory: (id: string, text: string) =>
+      request<TeamMemoryEntry>(`/projects/${encodeURIComponent(id)}/team-memory`, {
+        method: 'POST', body: JSON.stringify({ text }),
+      }),
+    removeTeamMemory: (id: string, entryId: string) =>
+      request<void>(`/projects/${encodeURIComponent(id)}/team-memory/${encodeURIComponent(entryId)}`, { method: 'DELETE' }),
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId }) }),
     update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null }) =>

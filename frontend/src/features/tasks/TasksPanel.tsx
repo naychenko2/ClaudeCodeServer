@@ -40,12 +40,19 @@ const STATUS_GROUP_ORDER: TaskStatus[] = ['inProgress', 'todo', 'done'];
 
 function groupByStatus(tasks: Task[]): Group[] {
   return STATUS_GROUP_ORDER
-    .map(s => ({
-      key: s,
-      label: STATUS_LABEL[s],
-      dot: STATUS_DOT[s],
-      tasks: tasks.filter(t => t.status === s),
-    }))
+    .map(s => {
+      let groupTasks = tasks.filter(t => t.status === s);
+      // «Готово» — недавно завершённые сверху: обратный хронологический порядок
+      // по completedAt (фолбэк updatedAt/createdAt для старых задач без completedAt)
+      if (s === 'done') {
+        groupTasks = [...groupTasks].sort((a, b) => {
+          const at = a.completedAt ?? a.updatedAt ?? a.createdAt;
+          const bt = b.completedAt ?? b.updatedAt ?? b.createdAt;
+          return at < bt ? 1 : at > bt ? -1 : 0;
+        });
+      }
+      return { key: s, label: STATUS_LABEL[s], dot: STATUS_DOT[s], tasks: groupTasks };
+    })
     .filter(g => g.tasks.length > 0);
 }
 

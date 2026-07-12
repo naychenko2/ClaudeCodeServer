@@ -66,12 +66,15 @@ public class TaskManager
             Assignee = req.Assignee,
             LinkedSessionId = req.LinkedSessionId,
             PersonaId = string.IsNullOrEmpty(req.PersonaId) ? null : req.PersonaId,
+            ResultMarkdown = req.ResultMarkdown,
             LinkedFiles = req.LinkedFiles ?? [],
             Subtasks = req.Subtasks?.Select(s => new TaskSubtask { Title = s.Title }).ToList() ?? [],
             Labels = req.Labels ?? [],
             SourceNoteId = req.SourceNoteId,
             SourceNoteLine = req.SourceNoteLine,
             Order = NextOrder(ownerId),
+            // Создаём задачу сразу готовой (редко) — фиксируем момент завершения
+            CompletedAt = req.Status == TaskItemStatus.Done ? DateTime.UtcNow : null,
         };
         // Серия регулярной задачи начинается с её первого экземпляра
         if (task.Recurrence is not null) task.SeriesId = task.Id;
@@ -100,6 +103,9 @@ public class TaskManager
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
 
+        // Запоминаем статус до правки — для фиксации момента завершения (CompletedAt)
+        var wasDone = task.Status == TaskItemStatus.Done;
+
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;
         if (req.Status is not null) task.Status = req.Status.Value;
@@ -126,6 +132,7 @@ public class TaskManager
         // Персона-исполнитель: null = не менять, "" = убрать (как у строковых полей)
         if (req.PersonaId is not null)
             task.PersonaId = req.PersonaId == "" ? null : req.PersonaId;
+        if (req.ResultMarkdown is not null) task.ResultMarkdown = req.ResultMarkdown;
         if (req.LinkedFiles is not null) task.LinkedFiles = req.LinkedFiles;
         if (req.Labels is not null) task.Labels = req.Labels;
         if (req.Order is not null) task.Order = req.Order.Value;
@@ -140,6 +147,23 @@ public class TaskManager
                 Title = s.Title,
                 IsDone = s.IsDone,
             }).ToList();
+
+        // Завершение/переоткрытие: фиксируем дату+время перехода в Done.
+        // Первый переход в Done → CompletedAt = сейчас; уход из Done → сброс.
+        if (task.Status == TaskItemStatus.Done && !wasDone) task.CompletedAt = DateTime.UtcNow;
+        else if (task.Status != TaskItemStatus.Done) task.CompletedAt = null;
+
+        // Смена проекта задачи (после блока columnId — колонки старого проекта
+        // в новом невалидны, сбрасываем). "" = личная, guid = проект.
+        if (req.ProjectId is not null)
+        {
+            var newPid = req.ProjectId == "" ? null : req.ProjectId;
+            if (task.ProjectId != newPid)
+            {
+                task.ProjectId = newPid;
+                task.ColumnId = null;
+            }
+        }
 
         // Инвариант «персона ⇒ Claude» — после того как учли и Assignee, и PersonaId
         NormalizePersonaAssignee(task);
@@ -290,6 +314,8 @@ public record CreateTaskRequest(
     string? LinkedSessionId = null,
     // Исполнение от лица персоны (assignee=Claude); null/пусто — обычный Claude
     string? PersonaId = null,
+    // Markdown-итог выполнения (null = не менять, "" = очистить)
+    string? ResultMarkdown = null,
     List<string>? LinkedFiles = null,
     List<CreateSubtaskRequest>? Subtasks = null,
     List<string>? Labels = null,
@@ -313,12 +339,16 @@ public record UpdateTaskRequest(
     string? LinkedSessionId = null,
     // Персона-исполнитель: null = не менять, "" = убрать
     string? PersonaId = null,
+    // Markdown-итог выполнения: null = не менять, "" = очистить
+    string? ResultMarkdown = null,
     List<string>? LinkedFiles = null,
     List<UpdateSubtaskRequest>? Subtasks = null,
     List<string>? Labels = null,
     // Порядок карточки на доске (drag внутри/между колонок); null = не менять
     double? Order = null,
     // Колонка доски проекта; null = не менять, "" = сброс на дефолт категории
-    string? ColumnId = null);
+    string? ColumnId = null,
+    // Смена проекта: null = не менять, "" = сделать личной (ProjectId=null), guid = привязать
+    string? ProjectId = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

@@ -90,6 +90,7 @@ export interface Task {
   personaId?: string;        // исполнение от лица персоны (assignee=claude)
   claudeStartedAt?: string;  // отметка запуска Claude-исполнителя
   claudeResult?: 'success' | 'error';  // итог последнего запуска (null — выполняется/не запускалась)
+  resultMarkdown?: string;            // Markdown-итог выполнения (прикрепляет исполнитель через MCP)
   linkedFiles: string[];
   subtasks: TaskSubtask[];
   labels: string[];
@@ -99,6 +100,7 @@ export interface Task {
   order: number;             // порядок карточки на Kanban-доске (ручная сортировка)
   createdAt: string;
   updatedAt: string;
+  completedAt?: string;      // дата+время завершения (статус стал done); null — не завершена
   // UI-проекция повторяющейся задачи в календаре (не приходит с бэка):
   // occurrenceOf — id реального экземпляра серии, который надо открыть по клику;
   // virtual — признак вычисленного будущего повтора (реально существует только один экземпляр)
@@ -153,6 +155,7 @@ export interface CreateTaskDto {
   recurrence?: TaskRecurrence;
   linkedSessionId?: string;
   personaId?: string;        // исполнение от лица персоны
+  resultMarkdown?: string;
   linkedFiles?: string[];
   subtasks?: { title: string }[];
   labels?: string[];
@@ -174,11 +177,13 @@ export interface UpdateTaskDto {
   linkedSessionId?: string;
   // Персона-исполнитель: '' = убрать, undefined = не менять
   personaId?: string;
+  resultMarkdown?: string;    // '' = очистить, undefined = не менять
   linkedFiles?: string[];
   subtasks?: TaskSubtask[];
   labels?: string[];
   order?: number;            // порядок карточки на доске (drag); undefined = не менять
   columnId?: string;         // колонка доски проекта; undefined = не менять, '' = сброс на дефолт
+  projectId?: string;        // смена проекта: guid = привязать, '' = сделать личной, undefined = не менять
 }
 
 // Тип доступа к Claude: подписка (стоимость ≈ API-эквивалент) или оплата по API-ключу (реальная цена)

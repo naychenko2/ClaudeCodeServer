@@ -1,20 +1,21 @@
 // Редактирование задачи — инлайн-экран вместо деталей (как в макете):
 // шапка «Редактирование задачи» с Отмена / ✓ Готово / корзина, ниже поля формы.
 
-import { useEffect, useState } from 'react';
-import { Check, Plus, SquarePen, Trash2, X } from 'lucide-react';
-import type { Task, TaskAssignee, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskSubtask, UpdateTaskDto } from '../../types';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, FilePlus2, Plus, SquarePen, Trash2, X } from 'lucide-react';
+import type { Project, Task, TaskAssignee, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskSubtask, UpdateTaskDto } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { IconButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
-import { PRIORITY_LABEL, PRIORITY_ORDER, RECURRENCE_TYPE_LABEL, REMINDER_PRESETS, reminderLabel } from '../../lib/tasks';
-import { PriorityFlag, SubtaskCheck } from './bits';
+import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, RECURRENCE_TYPE_LABEL, REMINDER_PRESETS, projectColor, reminderLabel } from '../../lib/tasks';
+import { ExtBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
 import { ExecutorPicker } from './ExecutorPicker';
-import { MarkdownEditor } from './MarkdownEditor';
+import { NoteEditor } from '../notes/NoteEditor';
+import { AttachPicker } from '../../components/chat/AttachPicker';
 
 interface Props {
   task: Task;
@@ -66,6 +67,23 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   const [personaId, setPersonaId] = useState(task.personaId ?? '');
   const [description, setDescription] = useState(task.description);
   const [descEditing, setDescEditing] = useState(!task.description);
+  // Markdown-итог выполнения (прикрепляет исполнитель; тут — ручная правка пользователем)
+  const [result, setResult] = useState(task.resultMarkdown ?? '');
+  const [resultEditing, setResultEditing] = useState(false);
+  // Ссылки на файлы проекта (только у проектных задач — есть где брать пути)
+  const [files, setFiles] = useState<string[]>(task.linkedFiles);
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
+  // Смена проекта задачи: null = «Личное» (вне проекта)
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectId, setProjectId] = useState<string | null>(task.projectId ?? null);
+  useEffect(() => { api.projects.list().then(setProjects).catch(() => {}); }, []);
+  // Текущий проект первым в ленте чипов (как в NewTaskDialog)
+  const orderedProjects = useMemo(() => {
+    const cur = task.projectId;
+    if (!cur) return projects;
+    const def = projects.find(p => p.id === cur);
+    return def ? [def, ...projects.filter(p => p.id !== cur)] : projects;
+  }, [projects, task.projectId]);
   const [subtasks, setSubtasks] = useState<TaskSubtask[]>(task.subtasks);
   const [newSubtask, setNewSubtask] = useState('');
   const [labels, setLabels] = useState<string[]>(task.labels);
@@ -134,7 +152,9 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   const handleSave = async () => {
     if (saving || !title.trim()) return;
     setSaving(true);
+    setAiError(null);
     try {
+      const projectChanged = (task.projectId ?? null) !== projectId;
       await onSave({
         title: title.trim(),
         priority,
@@ -147,10 +167,17 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
         assignee,
         // Персона-исполнитель имеет смысл только у Claude; '' = убрать на бэке
         personaId: assignee === 'claude' && personaId ? personaId : '',
+        // Смена проекта: '' = сделать личной, guid = привязать; отсутствие = не менять
+        ...(projectChanged ? { projectId: projectId ?? '' } : {}),
         description,
+        resultMarkdown: result,
+        // linkedFiles имеет смысл только у целевой проектной задачи
+        ...(projectId ? { linkedFiles: files } : {}),
         subtasks: subtasks.filter(s => s.title.trim()),
         labels,
       });
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'Не удалось сохранить задачу');
     } finally {
       setSaving(false);
     }
@@ -424,15 +451,60 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
             </>
           )}
 
-          {/* Исполнитель — единый пикер (Я / Claude / персона) */}
+          {/* Исполнитель — единый пикер (Я / Claude / персона). projectId = целевой
+              проект (state), чтобы список персон обновлялся при смене проекта ниже */}
           <div style={fieldLabelStyle()}>Исполнитель</div>
           <div style={{ marginBottom: 22 }}>
             <ExecutorPicker
               assignee={assignee}
               personaId={personaId || null}
-              projectId={task.projectId ?? null}
+              projectId={projectId}
               onChange={v => { setAssignee(v.assignee); setPersonaId(v.personaId ?? ''); }}
             />
+          </div>
+
+          {/* Проект — лента чипов (как в диалоге создания); «Личное» = вне проекта.
+              Смена проекта сбрасывает колонку доски (на бэке) и может требовать смены
+              проектной персоны-исполнителя — валидируется при сохранении. */}
+          <div style={fieldLabelStyle()}>Проект</div>
+          <div className="cc-hide-scrollbar" style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2, marginBottom: 22 }}>
+            <button
+              onClick={() => setProjectId(null)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
+                padding: '7px 13px', cursor: 'pointer',
+                border: `1px solid ${projectId === null ? C.accent : C.border}`,
+                borderRadius: 999,
+                background: projectId === null ? C.accentLight : C.bgWhite,
+                fontFamily: FONT.sans, fontSize: 13, fontWeight: projectId === null ? 600 : 500,
+                color: C.textPrimary, transition: 'border-color 0.12s, background 0.12s',
+              }}
+            >
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: NO_PROJECT_COLOR.main, flexShrink: 0 }} />
+              {NO_PROJECT_LABEL}
+            </button>
+            {orderedProjects.map(p => {
+              const active = p.id === projectId;
+              const color = projectColor(p.id);
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => setProjectId(p.id)}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
+                    padding: '7px 13px', cursor: 'pointer',
+                    border: `1px solid ${active ? C.accent : C.border}`,
+                    borderRadius: 999,
+                    background: active ? C.accentLight : C.bgWhite,
+                    fontFamily: FONT.sans, fontSize: 13, fontWeight: active ? 600 : 500,
+                    color: C.textPrimary, transition: 'border-color 0.12s, background 0.12s',
+                  }}
+                >
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: color.main, flexShrink: 0 }} />
+                  {p.name}
+                </button>
+              );
+            })}
           </div>
 
           {/* Описание */}
@@ -463,7 +535,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
           </div>
           <div style={{ marginBottom: 22 }}>
             {descEditing ? (
-              <MarkdownEditor
+              <NoteEditor
                 value={description}
                 onChange={setDescription}
                 placeholder="Описание задачи (markdown)…"
@@ -477,6 +549,51 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 {description
                   ? <MarkdownViewer content={description} />
                   : <span style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textMuted }}>Нет описания</span>}
+              </div>
+            )}
+          </div>
+
+          {/* Результат — Markdown-итог выполнения (обычно прикрепляет исполнитель; тут можно поправить) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 9 }}>
+            <div style={{ ...fieldLabelStyle(), marginBottom: 0 }}>Результат</div>
+            <div style={{ flex: 1 }} />
+            <button
+              onClick={() => setResultEditing(v => !v)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                border: 'none', background: 'none', cursor: 'pointer', padding: 0,
+                fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, color: C.accent,
+              }}
+            >
+              {resultEditing ? (
+                <>
+                  <Check size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                  Просмотр
+                </>
+              ) : (
+                <>
+                  <SquarePen size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                  Редактировать
+                </>
+              )}
+            </button>
+          </div>
+          <div style={{ marginBottom: 22 }}>
+            {resultEditing ? (
+              <NoteEditor
+                value={result}
+                onChange={setResult}
+                placeholder="Итог выполнения (markdown)…"
+                minHeight={160}
+              />
+            ) : (
+              <div style={{
+                background: C.bgWhite, border: `1px solid ${C.borderLight}`,
+                borderRadius: R.xl, padding: '14px 18px', fontSize: 14,
+              }}>
+                {result
+                  ? <MarkdownViewer content={result} />
+                  : <span style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textMuted }}>Итога ещё нет</span>}
               </div>
             )}
           </div>
@@ -604,8 +721,71 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
               Добавить
             </button>
           </div>
+
+          {/* Файлы проекта — только у проектных задач (у личных нет файлового контекста) */}
+          {task.projectId && (
+            <>
+              <div style={fieldLabelStyle()}>Файлы</div>
+              {files.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 10 }}>
+                  {files.map(f => (
+                    <span
+                      key={f}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '9px 12px', background: C.bgWhite,
+                        border: `1px solid ${C.borderLight}`, borderRadius: R.xl,
+                      }}
+                    >
+                      <ExtBadge filename={f} />
+                      <span style={{
+                        flex: 1, fontFamily: FONT.mono, fontSize: 13, color: C.textPrimary,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
+                        {f}
+                      </span>
+                      <button
+                        onClick={() => setFiles(prev => prev.filter(x => x !== f))}
+                        title="Убрать файл"
+                        style={{
+                          border: 'none', background: 'none', cursor: 'pointer', padding: 4,
+                          color: C.textMuted, fontSize: 15, lineHeight: 1, fontFamily: FONT.sans,
+                          display: 'flex', alignItems: 'center',
+                        }}
+                      >
+                        <X size={13} strokeWidth={ICON_STROKE} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div style={{ marginBottom: 22 }}>
+                <button
+                  onClick={() => setFilePickerOpen(true)}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 7,
+                    padding: '9px 14px', cursor: 'pointer',
+                    border: `1px solid ${C.border}`, borderRadius: R.lg,
+                    background: C.bgWhite, color: C.textPrimary,
+                    fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
+                  }}
+                >
+                  <FilePlus2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                  {files.length > 0 ? 'Добавить ещё файл' : 'Добавить файл'}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
+      {filePickerOpen && task.projectId && (
+        <AttachPicker
+          projectId={task.projectId}
+          selected={files}
+          onToggle={p => setFiles(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])}
+          onClose={() => setFilePickerOpen(false)}
+        />
+      )}
     </div>
   );
 }

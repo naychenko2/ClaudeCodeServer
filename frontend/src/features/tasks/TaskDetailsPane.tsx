@@ -392,6 +392,19 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         </div>
       )}
 
+      {/* Результат — Markdown-итог выполнения (прикрепляет исполнитель) */}
+      {task.resultMarkdown && (
+        <div style={{ marginBottom: 26 }}>
+          <SectionLabel style={{ marginBottom: 10 }}>Результат</SectionLabel>
+          <div style={{
+            background: C.bgWhite, border: `1px solid ${C.borderLight}`,
+            borderRadius: R.xl, padding: '14px 18px',
+          }}>
+            <MarkdownViewer content={task.resultMarkdown} />
+          </div>
+        </div>
+      )}
+
       {/* Метки */}
       {task.labels.length > 0 && (
         <div style={{ marginBottom: 26 }}>

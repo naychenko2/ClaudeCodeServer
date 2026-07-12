@@ -4,8 +4,9 @@ import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { bumpKnowledge, useKnowledgeVersion } from '../../lib/knowledge';
 import { Toolbar, ToolbarIconButton, tbBtnPrimary } from '../../components/Toolbar';
-import { typeIcon, IconBack, IconPlus, IconDots, IconFile, IconTrash, IconSearch, IconLock } from './shared';
+import { typeIcon, IconBack, IconPlus, IconDots, IconFile, IconTrash, IconSearch, IconLock, IconChevronRight } from './shared';
 import { KbActionsMenu } from './KbActionsMenu';
+import { DocumentViewer } from './DocumentViewer';
 
 // Детальная зона базы: тулбар (симметричный другим разделам) + описание + документы +
 // семантический/полнотекстовый поиск. На десктопе/планшете в тулбаре много места —
@@ -22,6 +23,8 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
   const [docs, setDocs] = useState<KnowledgeDocument[] | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
+  // Какой документ открыт для просмотра (содержимое). null — просмотр закрыт.
+  const [viewDoc, setViewDoc] = useState<KnowledgeDocument | null>(null);
 
   // Поиск: semantic (по смыслу) | fulltext (точный). Дебаунс.
   const [query, setQuery] = useState('');
@@ -40,6 +43,9 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
   useEffect(() => {
     setQuery(''); setHits(null);
   }, [kb.id]);
+
+  // Смена базы — закрываем просмотр документа (содержимое принадлежит старой базе)
+  useEffect(() => { setViewDoc(null); }, [kb.id]);
 
   useEffect(() => {
     const q = query.trim();
@@ -155,9 +161,14 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
         {query.trim() ? (
           <SearchResults hits={hits} searching={searching} query={query.trim()} mode={mode} />
         ) : (
-          <DocumentsList docs={docs} err={loadErr} onRemove={removeDoc} />
+          <DocumentsList docs={docs} err={loadErr} onOpen={setViewDoc} onRemove={removeDoc} />
         )}
       </div>
+
+      {/* Просмотр содержимого документа — модалка (десктоп: карточка, мобила: шторка) */}
+      {viewDoc && (
+        <DocumentViewer kbId={kb.id} doc={viewDoc} onClose={() => setViewDoc(null)} />
+      )}
     </div>
   );
 }
@@ -189,9 +200,10 @@ function docStatus(status: string): { label: string; dot: string; pulse: boolean
   return { label: 'Индексируется…', dot: C.accent, pulse: true };
 }
 
-function DocumentsList({ docs, err, onRemove }: {
+function DocumentsList({ docs, err, onOpen, onRemove }: {
   docs: KnowledgeDocument[] | null;
   err: string | null;
+  onOpen: (doc: KnowledgeDocument) => void;
   onRemove: (docId: string) => void;
 }) {
   if (err) return <div style={{ padding: '20px 18px', color: C.danger, fontSize: 13, fontFamily: FONT.sans }}>{err}</div>;
@@ -203,9 +215,11 @@ function DocumentsList({ docs, err, onRemove }: {
       {docs.map(d => {
         const st = docStatus(d.indexingStatus);
         return (
-          <div key={d.id} style={{
-            display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', borderRadius: R.lg,
-          }}
+          <div key={d.id} onClick={() => onOpen(d)} title="Открыть документ"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', borderRadius: R.lg,
+              cursor: 'pointer', transition: 'background 0.1s',
+            }}
             onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
             <span style={{
@@ -225,7 +239,11 @@ function DocumentsList({ docs, err, onRemove }: {
                 {st.label}
               </div>
             </div>
-            <button onClick={() => onRemove(d.id)} title="Удалить документ"
+            {/* Индикатор кликабельности — шеврон «раскрыть» */}
+            <span style={{ flex: 'none', color: C.textMuted, display: 'flex', alignItems: 'center' }}>
+              <IconChevronRight size={15} />
+            </span>
+            <button onClick={(e) => { e.stopPropagation(); onRemove(d.id); }} title="Удалить документ"
               style={{
                 width: 26, height: 26, borderRadius: R.sm, border: 'none', background: 'transparent', cursor: 'pointer',
                 color: C.textMuted, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none',

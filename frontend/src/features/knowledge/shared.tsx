@@ -22,6 +22,10 @@ export const IconDots = (p: { size?: number }) => <Svg size={p.size}><circle cx=
 export const IconChevronsLeft = (p: { size?: number }) => <Svg size={p.size}><path d="M11 18l-6-6 6-6M18 18l-6-6 6-6" /></Svg>;
 export const IconPin = (p: { size?: number }) => <Svg size={p.size}><path d="M12 17v5" /><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" /></Svg>;
 export const IconBack = (p: { size?: number }) => <Svg size={p.size}><path d="M19 12H5M12 19l-7-7 7-7" /></Svg>;
+// Закрытие модалки/просмотра
+export const IconClose = (p: { size?: number }) => <Svg size={p.size}><path d="M18 6 6 18M6 6l12 12" /></Svg>;
+// Индикатор кликабельности строки документа (раскрыть/подробнее)
+export const IconChevronRight = (p: { size?: number }) => <Svg size={p.size}><path d="m9 18 6-6-6-6" /></Svg>;
 export const IconUpload = (p: { size?: number }) => <Svg size={p.size}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" /></Svg>;
 export const IconTextDoc = (p: { size?: number }) => <Svg size={p.size}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" /></Svg>;
 

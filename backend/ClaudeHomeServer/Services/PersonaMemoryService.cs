@@ -553,6 +553,25 @@ public sealed class PersonaMemoryService
         lock (_saveLock) JsonFileStore.Save(_storePath, _store, JsonOpts);
     }
 
+    // Полное удаление памяти персоны — при удалении самой персоны: Dify-датасет + локальный
+    // стор (data/persona-memory.json). Локальное состояние снимаем сразу, даже если вызов
+    // Dify упадёт (чтобы не висеть сиротой); сбой Dify логируем, не роняем удаление персоны.
+    public async Task DeletePersonaAsync(string personaId)
+    {
+        string? datasetId;
+        lock (_saveLock)
+        {
+            datasetId = _store.GetValueOrDefault(personaId)?.DatasetId;
+            _store.Remove(personaId);
+        }
+        Save();
+        if (!string.IsNullOrEmpty(datasetId) && _knowledge.IsConfigured)
+        {
+            try { await _knowledge.DeleteDatasetAsync(datasetId); }
+            catch (Exception ex) { _logger?.LogWarning(ex, "Не удалось удалить Dify-датасет памяти персоны {PersonaId}", personaId); }
+        }
+    }
+
     private static string Hash(string s) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)));
 }

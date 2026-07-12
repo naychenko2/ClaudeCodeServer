@@ -195,10 +195,11 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
 
     // --- Классификация датасетов Dify под пользователя ---
     // Модель: «помеченные» (с префиксом {username}:) — личные; «без префикса» —
-    // публичные/глобальные (видны всем). Личные делятся по префиксу:
-    // {user}:notes / {user}:persona:{handle} / {user}:kb:{Title} / {user}:{project}.
-    // Чужие личные ({otheruser}:…) — скрыты (изоляция per-owner). Permission Dify
-    // здесь ни при чём: «публичность» определяется отсутствием префикса, а не all_team_members.
+    // публичные/глобальные (видны всем). Личные делятся по префиксу: {user}:notes /
+    // {user}:kb:{Title} / {user}:{project}; {user}:persona:{handle} — память персоны,
+    // внутренняя (скрыта из раздела, удаляется вместе с персоной). Чужие личные
+    // ({otheruser}:…) — скрыты (изоляция per-owner). Permission Dify здесь ни при чём:
+    // «публичность» определяется отсутствием префикса, а не all_team_members.
 
     // Имена других пользователей — чтобы отличить «без префикса = глобальная»
     // от «чужая {otheruser}:…» (иначе чужие утекли бы в публичные).
@@ -234,8 +235,12 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
 
     private bool IsRelevant(DifyDatasetListItem d, HashSet<string> others)
     {
-        var owner = OwnerOf(d.Name ?? "", Username, others);
-        return owner is null || owner.Equals(Username, StringComparison.OrdinalIgnoreCase);
+        var name = d.Name ?? "";
+        var owner = OwnerOf(name, Username, others);
+        if (owner is null) return true;                                                  // глобальная
+        if (!owner.Equals(Username, StringComparison.OrdinalIgnoreCase)) return false;   // чужая
+        // Своя, но память персоны — внутренняя (управляется удалением персоны), не показываем.
+        return !name[(Username.Length + 1)..].StartsWith("persona:", StringComparison.Ordinal);
     }
 
     // Удалять здесь можно самостоятельные ({user}:kb:…) и публичные (без префикса);
@@ -267,7 +272,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
         {
             var rest = name[(Username.Length + 1)..];
             if (rest == "notes") { type = "Заметки"; title = "Заметки"; deletable = false; }
-            else if (rest.StartsWith("persona:", StringComparison.Ordinal)) { type = "Память персоны"; title = rest["persona:".Length..]; deletable = false; }
+            else if (rest.StartsWith("persona:", StringComparison.Ordinal)) return null; // память персоны — внутренняя, скрыта
             else if (rest.StartsWith("kb:", StringComparison.Ordinal)) { type = "Самостоятельная"; title = rest["kb:".Length..]; deletable = true; }
             else { type = "Проект"; title = rest; deletable = false; } // {username}:{projectName}
             visibility = "personal";

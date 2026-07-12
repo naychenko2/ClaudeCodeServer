@@ -188,6 +188,8 @@ public class PersonasController : ControllerBase
     public async Task<IActionResult> Delete(string id)
     {
         if (!_personas.Delete(id, UserId)) return NotFound();
+        // Чистим долгую память персоны: Dify-датасет + data/persona-memory.json (иначе осиротят)
+        await _memory.DeletePersonaAsync(id);
         await Broadcast("deleted", id);
         return NoContent();
     }

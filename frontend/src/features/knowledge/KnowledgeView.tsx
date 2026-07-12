@@ -130,6 +130,10 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgMain }}>
+      {/* На мобиле при открытом документе базовый тулбар базы прячем — иначе он
+          дублируется с шапкой DocumentViewer (два тулбара). Возврат к списку — «назад»
+          в шапке документа (onClose). На десктопе просмотр — правая панель, тулбар нужен. */}
+      {!(isMobile && viewDoc) && (
       <Toolbar isMobile={isMobile}>
         {isMobile && (
           <ToolbarIconButton onClick={onBack} title="Назад"><IconBack size={18} /></ToolbarIconButton>
@@ -169,6 +173,7 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
           )}
         </span>
       </Toolbar>
+      )}
 
       {/* Тело под тулбаром: на десктопе — flex-строка [список | splitter | панель просмотра]
           (push-панель в потоке, как «Артефакты сессии»); на мобиле — один экран за раз:

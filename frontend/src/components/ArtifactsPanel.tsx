@@ -5,6 +5,7 @@ import { MarkdownViewer } from './MarkdownViewer';
 import { useSessionArtifacts, type AgentArtifact, type AgentToolCall, type ArtifactFile, type ArtifactLink, type PlanStatus, type TodoItem, type WorkflowGroup } from '../hooks/useSessionArtifacts';
 import { IconNotes } from '../features/notes/shared';
 import { saveChatNote, openNoteById } from '../features/notes/saveToNote';
+import { PersonaContextTab } from './PersonaContextTab';
 
 interface Props {
   sessionId: string | null;
@@ -14,9 +15,11 @@ interface Props {
   onOpenFile?: (path: string) => void;
   onClose: () => void;
   isMobile?: boolean;
+  // Собеседник-персона текущего чата — показывает вкладку «Контекст персоны» (①-L2a)
+  personaId?: string | null;
 }
 
-type TabKey = 'plan' | 'todos' | 'agents' | 'files' | 'links';
+type TabKey = 'plan' | 'todos' | 'agents' | 'files' | 'links' | 'context';
 
 function basename(p: string): string {
   const norm = p.replace(/\\/g, '/');
@@ -545,7 +548,7 @@ function NavArrow({ dir, disabled, onClick }: { dir: 'prev' | 'next'; disabled: 
   );
 }
 
-export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onClose, isMobile }: Props) {
+export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onClose, isMobile, personaId }: Props) {
   const { files, plans, todos, links, agents, workflows } = useSessionArtifacts(sessionId, projectId, rootPath);
   // Чат-режим (без проекта): файлы открывать некуда — вкладку «Файлы» не показываем.
   const isChat = !projectId;
@@ -569,6 +572,8 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
   }
   if (files.length && !isChat) tabs.push({ value: 'files', label: `Файлы · ${files.length}` });
   if (links.length) tabs.push({ value: 'links', label: `Ссылки · ${links.length}` });
+  // Контекст персоны-собеседника (①-L2a): память/знания/задачи рядом с чатом
+  if (personaId) tabs.push({ value: 'context', label: 'Контекст' });
 
   const [active, setActive] = useState<TabKey>('plan');
   const activeKey: TabKey | undefined = tabs.some(t => t.value === active) ? active : tabs[0]?.value;
@@ -780,6 +785,12 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
             {activeKey === 'links' && (
               <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
                 {links.map(l => <LinkRow key={l.url} link={l} />)}
+              </div>
+            )}
+
+            {activeKey === 'context' && personaId && (
+              <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+                <PersonaContextTab personaId={personaId} />
               </div>
             )}
           </div>

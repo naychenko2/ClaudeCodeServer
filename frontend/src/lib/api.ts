@@ -134,6 +134,9 @@ export const api = {
       return request<Task[]>(`/tasks${q ? `?${q}` : ''}`);
     },
     listByProject: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`),
+    // Задачи, порученные персоне-исполнителю (assignee=claude + personaId)
+    listByPersona: (personaId: string) =>
+      request<Task[]>(`/tasks?personaId=${encodeURIComponent(personaId)}`),
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>
       request<Task>(projectId ? `/projects/${projectId}/tasks` : '/tasks', { method: 'POST', body: JSON.stringify(dto) }),

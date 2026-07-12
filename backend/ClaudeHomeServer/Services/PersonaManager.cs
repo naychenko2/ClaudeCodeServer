@@ -22,10 +22,12 @@ public class PersonaManager
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
     private readonly ILogger<PersonaManager>? _log;
+    private readonly ProjectEventLogService? _events;
 
-    public PersonaManager(IConfiguration config, ILogger<PersonaManager>? log = null)
+    public PersonaManager(IConfiguration config, ILogger<PersonaManager>? log = null, ProjectEventLogService? events = null)
     {
         _log = log;
+        _events = events;
         // Стор — в каталоге DataPath (как у всех сервисов): в контейнере это /data (volume).
         // Прежний фолбэк AppContext.BaseDirectory/data жил ВНУТРИ контейнера, и персоны
         // с аватарами пропадали при каждом его пересоздании (деплое).
@@ -156,8 +158,16 @@ public class PersonaManager
             _personas[persona.Id] = persona;
         }
         Save();
+        // Проектная персона — член команды проекта; попадает в активность-ленту
+        if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
+            _events?.Append(persona.ProjectId, userId, ProjectEventTypes.TeamJoined, "user",
+                $"В команде: {PersonaLabel(persona)}", persona.Id);
         return persona;
     }
+
+    // Подпись персоны для логов: «Роль (Имя)» либо просто имя
+    internal static string PersonaLabel(Persona p) =>
+        string.IsNullOrEmpty(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
 
     // --- Подключаемая команда «Пантеон OmO» (built-in-подход, как у самих OmO) ---
 
@@ -348,12 +358,22 @@ public class PersonaManager
     {
         // Проверка владельца + удаление из словаря — атомарно под _saveLock (консистентно
         // с генерацией handle в Create и снапшотом в Save). Чистка ассетов/Save — вне лока.
+        string? projectId = null;
+        string? label = null;
         lock (_saveLock)
         {
             var persona = Get(id, userId);
             if (persona is null) return false;
+            // Запоминаем проектную принадлежность до удаления — для лога команды проекта
+            if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
+            {
+                projectId = persona.ProjectId;
+                label = PersonaLabel(persona);
+            }
             _personas.TryRemove(id, out _);
         }
+        if (projectId is not null && label is not null)
+            _events?.Append(projectId, userId, ProjectEventTypes.TeamLeft, "user", $"Из команды: {label}", id);
         // Чистим ассеты персоны (аватар)
         try
         {

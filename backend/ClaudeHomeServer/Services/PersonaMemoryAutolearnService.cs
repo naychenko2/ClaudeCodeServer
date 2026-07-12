@@ -22,11 +22,13 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
     private readonly Llm.OneShotClaudeRunner _runner;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaMemoryAutolearnService> _log;
+    private readonly ProjectEventLogService? _events;
 
     public PersonaMemoryAutolearnService(SessionManager sessions, PersonaManager personas,
         PersonaMemoryService memory, PersonaMemoryConsolidationService consolidation,
         Llm.OneShotClaudeRunner runner,
-        IConfiguration config, ILogger<PersonaMemoryAutolearnService> log)
+        IConfiguration config, ILogger<PersonaMemoryAutolearnService> log,
+        ProjectEventLogService? events = null)
     {
         _sessions = sessions;
         _personas = personas;
@@ -35,6 +37,7 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
         _runner = runner;
         _config = config;
         _log = log;
+        _events = events;
     }
 
     public Task StartAsync(CancellationToken ct)
@@ -100,8 +103,14 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
             }
 
             if (saved > 0)
+            {
                 _log.LogInformation("autolearn: персона {Persona}, сессия {Session} — сохранено {Count} записей памяти",
                     persona.Id, sessionId, saved);
+                // Проектная персона, узнав факты, попадает в активность-ленту проекта
+                if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
+                    _events?.Append(persona.ProjectId, persona.OwnerId, ProjectEventTypes.MemoryLearned,
+                        persona.Id, $"{PersonaManager.PersonaLabel(persona)}: узнал {saved} факт(ов)", sessionId);
+            }
 
             // Потолок памяти (P0/P3): механическое вытеснение хвоста — сразу, НЕ за флагом
             // консолидации. Так память не растёт неограниченно при одном лишь autolearn.

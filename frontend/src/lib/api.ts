@@ -513,12 +513,13 @@ export const api = {
       }),
     cancelMeeting: (id: string) =>
       request<void>(`/chats/${id}/meeting/cancel`, { method: 'POST' }),
-    // Конвейер пантеона (флаг persona-pipeline): анализ → план → ревью → авто-исполнение.
-    // executorKey — omo-sisyphus | omo-hephaestus (дефолт omo-hephaestus)
-    startPipeline: (id: string, task: string, executorKey?: string) =>
+    // Конвейер ролей (флаг persona-pipeline): анализ → план → ревью → авто-исполнение.
+    // Слоты опциональны (A): пустые резолвятся по Specialty → дефолт OmO на бэке.
+    startPipeline: (id: string, task: string,
+      slots?: { analystId?: string; plannerId?: string; reviewerId?: string; executorId?: string }) =>
       request<{ pipelineId: string }>(`/chats/${id}/pipeline`, {
         method: 'POST',
-        body: JSON.stringify({ task, executorKey }),
+        body: JSON.stringify({ task, ...(slots ?? {}) }),
       }),
     cancelPipeline: (id: string) =>
       request<void>(`/chats/${id}/pipeline/cancel`, { method: 'POST' }),

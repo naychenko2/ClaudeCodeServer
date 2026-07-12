@@ -170,13 +170,26 @@ public class TasksController(
         var task = tasks.GetById(taskId);
         if (task is null || task.OwnerId != UserId) return NotFound();
 
-        // Колонка доски → статус выводим из её категории (единый источник для MCP/Claude и доски)
-        var cat = BoardColumnHelper.Category(task.ProjectId is null ? null : projects.GetById(task.ProjectId), req.ColumnId);
+        // Целевой проект для валидации колонки/персоны: текущий, либо новый из req.ProjectId
+        // (null в req = не менять; "" = сделать личной; guid = привязать к проекту)
+        string? targetProjectId = task.ProjectId;
+        if (req.ProjectId is not null)
+        {
+            targetProjectId = req.ProjectId == "" ? null : req.ProjectId;
+            if (targetProjectId is not null && projects.GetById(targetProjectId)?.OwnerId != UserId)
+                return BadRequest(new { error = "Проект не найден или недоступен" });
+        }
+
+        // Колонка доски → статус выводим из её категории (единый источник для MCP/Claude и доски).
+        // Категорию берём по целевому проекту — колонка актуальна для него, а не для прежнего.
+        var cat = BoardColumnHelper.Category(
+            targetProjectId is null ? null : projects.GetById(targetProjectId), req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
 
-        // Персона-исполнитель: "" = убрать (валидировать нечего), непустая — проверяем
+        // Персона-исполнитель: "" = убрать (валидировать нечего), непустая — проверяем.
+        // Валидация по целевому проекту: проектная персона прежнего проекта в новом недействительна.
         if (!string.IsNullOrEmpty(req.PersonaId)
-            && TaskPersonaValidator.Error(personas, UserId, req.PersonaId, task.ProjectId) is { } personaError)
+            && TaskPersonaValidator.Error(personas, UserId, req.PersonaId, targetProjectId) is { } personaError)
             return BadRequest(new { error = personaError });
 
         var wasDone = task.Status == TaskItemStatus.Done;

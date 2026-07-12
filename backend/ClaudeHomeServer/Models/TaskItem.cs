@@ -52,6 +52,10 @@ public class TaskItem
     public double Order { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    // Дата+время завершения: когда статус стал Done. null — не завершена.
+    // Сбрасывается при переоткрытии (статус ≠ Done). Не переносится в следующий
+    // экземпляр регулярной задачи (как ClaudeResult/ResultMarkdown — серия начинается заново).
+    public DateTime? CompletedAt { get; set; }
 }
 
 public class TaskSubtask

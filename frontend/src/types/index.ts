@@ -100,6 +100,7 @@ export interface Task {
   order: number;             // порядок карточки на Kanban-доске (ручная сортировка)
   createdAt: string;
   updatedAt: string;
+  completedAt?: string;      // дата+время завершения (статус стал done); null — не завершена
   // UI-проекция повторяющейся задачи в календаре (не приходит с бэка):
   // occurrenceOf — id реального экземпляра серии, который надо открыть по клику;
   // virtual — признак вычисленного будущего повтора (реально существует только один экземпляр)
@@ -182,6 +183,7 @@ export interface UpdateTaskDto {
   labels?: string[];
   order?: number;            // порядок карточки на доске (drag); undefined = не менять
   columnId?: string;         // колонка доски проекта; undefined = не менять, '' = сброс на дефолт
+  projectId?: string;        // смена проекта: guid = привязать, '' = сделать личной, undefined = не менять
 }
 
 // Тип доступа к Claude: подписка (стоимость ≈ API-эквивалент) или оплата по API-ключу (реальная цена)

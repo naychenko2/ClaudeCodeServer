@@ -73,6 +73,8 @@ public class TaskManager
             SourceNoteId = req.SourceNoteId,
             SourceNoteLine = req.SourceNoteLine,
             Order = NextOrder(ownerId),
+            // Создаём задачу сразу готовой (редко) — фиксируем момент завершения
+            CompletedAt = req.Status == TaskItemStatus.Done ? DateTime.UtcNow : null,
         };
         // Серия регулярной задачи начинается с её первого экземпляра
         if (task.Recurrence is not null) task.SeriesId = task.Id;
@@ -100,6 +102,9 @@ public class TaskManager
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+
+        // Запоминаем статус до правки — для фиксации момента завершения (CompletedAt)
+        var wasDone = task.Status == TaskItemStatus.Done;
 
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;
@@ -142,6 +147,23 @@ public class TaskManager
                 Title = s.Title,
                 IsDone = s.IsDone,
             }).ToList();
+
+        // Завершение/переоткрытие: фиксируем дату+время перехода в Done.
+        // Первый переход в Done → CompletedAt = сейчас; уход из Done → сброс.
+        if (task.Status == TaskItemStatus.Done && !wasDone) task.CompletedAt = DateTime.UtcNow;
+        else if (task.Status != TaskItemStatus.Done) task.CompletedAt = null;
+
+        // Смена проекта задачи (после блока columnId — колонки старого проекта
+        // в новом невалидны, сбрасываем). "" = личная, guid = проект.
+        if (req.ProjectId is not null)
+        {
+            var newPid = req.ProjectId == "" ? null : req.ProjectId;
+            if (task.ProjectId != newPid)
+            {
+                task.ProjectId = newPid;
+                task.ColumnId = null;
+            }
+        }
 
         // Инвариант «персона ⇒ Claude» — после того как учли и Assignee, и PersonaId
         NormalizePersonaAssignee(task);
@@ -325,6 +347,8 @@ public record UpdateTaskRequest(
     // Порядок карточки на доске (drag внутри/между колонок); null = не менять
     double? Order = null,
     // Колонка доски проекта; null = не менять, "" = сброс на дефолт категории
-    string? ColumnId = null);
+    string? ColumnId = null,
+    // Смена проекта: null = не менять, "" = сделать личной (ProjectId=null), guid = привязать
+    string? ProjectId = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

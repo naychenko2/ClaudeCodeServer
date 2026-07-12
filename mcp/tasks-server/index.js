@@ -50,6 +50,9 @@ function brief(t) {
     personaId: t.personaId ?? null,
     projectId: t.projectId ?? null,
     columnId: t.columnId ?? null,
+    // Дата+время завершения (когда статус стал done); null — не завершена или неизвестно.
+    // В режиме списка «Готово» задачи идут сверху вниз от свежих к старым по этому полю.
+    completedAt: t.completedAt ?? null,
     labels: t.labels,
     subtasks: `${(t.subtasks ?? []).filter(s => s.isDone).length}/${(t.subtasks ?? []).length}`,
   };

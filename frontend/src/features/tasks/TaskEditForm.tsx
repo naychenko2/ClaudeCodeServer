@@ -1,14 +1,14 @@
 // Редактирование задачи — инлайн-экран вместо деталей (как в макете):
 // шапка «Редактирование задачи» с Отмена / ✓ Готово / корзина, ниже поля формы.
 
-import { useEffect, useState } from 'react';
-import type { Task, TaskAssignee, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskSubtask, UpdateTaskDto } from '../../types';
+import { useEffect, useMemo, useState } from 'react';
+import type { Project, Task, TaskAssignee, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskSubtask, UpdateTaskDto } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { IconButton } from '../../components/ui';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
-import { PRIORITY_LABEL, PRIORITY_ORDER, RECURRENCE_TYPE_LABEL, REMINDER_PRESETS, reminderLabel } from '../../lib/tasks';
+import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, RECURRENCE_TYPE_LABEL, REMINDER_PRESETS, projectColor, reminderLabel } from '../../lib/tasks';
 import { ExtBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
 import { ExecutorPicker } from './ExecutorPicker';
@@ -71,6 +71,17 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   // Ссылки на файлы проекта (только у проектных задач — есть где брать пути)
   const [files, setFiles] = useState<string[]>(task.linkedFiles);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
+  // Смена проекта задачи: null = «Личное» (вне проекта)
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectId, setProjectId] = useState<string | null>(task.projectId ?? null);
+  useEffect(() => { api.projects.list().then(setProjects).catch(() => {}); }, []);
+  // Текущий проект первым в ленте чипов (как в NewTaskDialog)
+  const orderedProjects = useMemo(() => {
+    const cur = task.projectId;
+    if (!cur) return projects;
+    const def = projects.find(p => p.id === cur);
+    return def ? [def, ...projects.filter(p => p.id !== cur)] : projects;
+  }, [projects, task.projectId]);
   const [subtasks, setSubtasks] = useState<TaskSubtask[]>(task.subtasks);
   const [newSubtask, setNewSubtask] = useState('');
   const [labels, setLabels] = useState<string[]>(task.labels);
@@ -139,7 +150,9 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   const handleSave = async () => {
     if (saving || !title.trim()) return;
     setSaving(true);
+    setAiError(null);
     try {
+      const projectChanged = (task.projectId ?? null) !== projectId;
       await onSave({
         title: title.trim(),
         priority,
@@ -152,13 +165,17 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
         assignee,
         // Персона-исполнитель имеет смысл только у Claude; '' = убрать на бэке
         personaId: assignee === 'claude' && personaId ? personaId : '',
+        // Смена проекта: '' = сделать личной, guid = привязать; отсутствие = не менять
+        ...(projectChanged ? { projectId: projectId ?? '' } : {}),
         description,
         resultMarkdown: result,
-        // linkedFiles имеет смысл только у проектной задачи (у личной нет файлов)
-        ...(task.projectId ? { linkedFiles: files } : {}),
+        // linkedFiles имеет смысл только у целевой проектной задачи
+        ...(projectId ? { linkedFiles: files } : {}),
         subtasks: subtasks.filter(s => s.title.trim()),
         labels,
       });
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'Не удалось сохранить задачу');
     } finally {
       setSaving(false);
     }
@@ -436,15 +453,60 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
             </>
           )}
 
-          {/* Исполнитель — единый пикер (Я / Claude / персона) */}
+          {/* Исполнитель — единый пикер (Я / Claude / персона). projectId = целевой
+              проект (state), чтобы список персон обновлялся при смене проекта ниже */}
           <div style={fieldLabelStyle()}>Исполнитель</div>
           <div style={{ marginBottom: 22 }}>
             <ExecutorPicker
               assignee={assignee}
               personaId={personaId || null}
-              projectId={task.projectId ?? null}
+              projectId={projectId}
               onChange={v => { setAssignee(v.assignee); setPersonaId(v.personaId ?? ''); }}
             />
+          </div>
+
+          {/* Проект — лента чипов (как в диалоге создания); «Личное» = вне проекта.
+              Смена проекта сбрасывает колонку доски (на бэке) и может требовать смены
+              проектной персоны-исполнителя — валидируется при сохранении. */}
+          <div style={fieldLabelStyle()}>Проект</div>
+          <div className="cc-hide-scrollbar" style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2, marginBottom: 22 }}>
+            <button
+              onClick={() => setProjectId(null)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
+                padding: '7px 13px', cursor: 'pointer',
+                border: `1px solid ${projectId === null ? C.accent : C.border}`,
+                borderRadius: 999,
+                background: projectId === null ? C.accentLight : C.bgWhite,
+                fontFamily: FONT.sans, fontSize: 13, fontWeight: projectId === null ? 600 : 500,
+                color: C.textPrimary, transition: 'border-color 0.12s, background 0.12s',
+              }}
+            >
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: NO_PROJECT_COLOR.main, flexShrink: 0 }} />
+              {NO_PROJECT_LABEL}
+            </button>
+            {orderedProjects.map(p => {
+              const active = p.id === projectId;
+              const color = projectColor(p.id);
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => setProjectId(p.id)}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
+                    padding: '7px 13px', cursor: 'pointer',
+                    border: `1px solid ${active ? C.accent : C.border}`,
+                    borderRadius: 999,
+                    background: active ? C.accentLight : C.bgWhite,
+                    fontFamily: FONT.sans, fontSize: 13, fontWeight: active ? 600 : 500,
+                    color: C.textPrimary, transition: 'border-color 0.12s, background 0.12s',
+                  }}
+                >
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: color.main, flexShrink: 0 }} />
+                  {p.name}
+                </button>
+              );
+            })}
           </div>
 
           {/* Описание */}

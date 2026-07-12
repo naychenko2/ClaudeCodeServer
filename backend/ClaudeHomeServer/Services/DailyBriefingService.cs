@@ -22,6 +22,7 @@ public sealed class DailyBriefingService
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
     private readonly PersonaManager _personas;
+    private readonly ProjectEventLogService? _events;
     private readonly Llm.OneShotClaudeRunner _runner;
     private readonly PushService _push;
     private readonly IHubContext<SessionHub> _hub;
@@ -38,7 +39,8 @@ public sealed class DailyBriefingService
         TaskManager tasks, NotesService notes, ProjectManager projects, UserStore users,
         PersonaManager personas,
         Llm.OneShotClaudeRunner runner, PushService push,
-        IHubContext<SessionHub> hub, IConfiguration config, ILogger<DailyBriefingService> log)
+        IHubContext<SessionHub> hub, IConfiguration config, ILogger<DailyBriefingService> log,
+        ProjectEventLogService? events = null)
     {
         _tasks = tasks;
         _notes = notes;
@@ -50,6 +52,7 @@ public sealed class DailyBriefingService
         _hub = hub;
         _config = config;
         _log = log;
+        _events = events;
 
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
@@ -154,6 +157,7 @@ public sealed class DailyBriefingService
         sb.AppendLine("- **Задачи** — что просрочено (выдели ⚠️), что на сегодня, предложи разумный порядок;");
         sb.AppendLine("- **Заметки** — если менялись, о чём коротко (названия оформляй ссылками [[Заголовок]]);");
         sb.AppendLine("- **Активность** — если есть коммиты, 1-2 фразы что происходило по проектам;");
+        sb.AppendLine("- **Команда** — если были командные события, что сделала команда (задачи, новые воспоминания, состав);");
         sb.AppendLine("- **План на день** — итоговый список из 3-5 конкретных шагов.");
         sb.AppendLine("Без воды. Пропускай пустые разделы. " +
                       "Если данных почти нет — сделай очень короткий бриф и мягко предложи запланировать день.");
@@ -184,6 +188,13 @@ public sealed class DailyBriefingService
 
         sb.AppendLine("== Git-активность за сутки ==");
         sb.AppendLine(git.Length == 0 ? "Нет коммитов." : git);
+        sb.AppendLine();
+
+        // Командная активность из лога событий (②-2.2): что сделали персоны в проектах за сутки
+        sb.AppendLine("== Команда (события проектов за сутки) ==");
+        var teamEvents = _events?.QueryByOwner(userId, DateTime.UtcNow.AddDays(-1)) ?? [];
+        if (teamEvents.Count == 0) sb.AppendLine("Нет командной активности.");
+        else foreach (var e in teamEvents.Take(30)) sb.AppendLine($"- [{e.Type}] {e.Summary}");
 
         var model = _runner.NormalizeModel(_config["Briefing:Model"] ?? "haiku");
         return await _runner.RunAsync(sb.ToString(), model, ct: ct);

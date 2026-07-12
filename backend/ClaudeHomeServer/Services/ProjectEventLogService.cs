@@ -171,4 +171,53 @@ public class ProjectEventLogService
             return [];
         }
     }
+
+    // Лента событий по ВСЕМ проектам владельца (для дайджеста «что сделала команда» ②-2.2):
+    // фильтр по типу/исполнителю опционален, свежие сверху. since ограничивает снизу (напр. день/неделя).
+    public IReadOnlyList<ProjectEvent> QueryByOwner(string ownerId, DateTime? since = null,
+        string? type = null, string? actor = null, int limit = 200)
+    {
+        var sb = new StringBuilder(
+            "SELECT id, project_id, owner_id, ts, type, actor, summary, entity_ref " +
+            "FROM project_events WHERE owner_id=@oid");
+        if (since.HasValue) sb.Append(" AND ts > @since");
+        if (!string.IsNullOrEmpty(type)) sb.Append(" AND type=@type");
+        if (!string.IsNullOrEmpty(actor)) sb.Append(" AND actor=@actor");
+        sb.Append(" ORDER BY ts DESC LIMIT @limit;");
+
+        try
+        {
+            using var c = OpenConnection();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = sb.ToString();
+            cmd.Parameters.AddWithValue("@oid", ownerId);
+            if (since.HasValue) cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+            if (!string.IsNullOrEmpty(type)) cmd.Parameters.AddWithValue("@type", type);
+            if (!string.IsNullOrEmpty(actor)) cmd.Parameters.AddWithValue("@actor", actor);
+            cmd.Parameters.AddWithValue("@limit", Math.Clamp(limit, 1, 1000));
+
+            var list = new List<ProjectEvent>();
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                list.Add(new ProjectEvent
+                {
+                    Id = r.GetInt64(0),
+                    ProjectId = r.GetString(1),
+                    OwnerId = r.GetString(2),
+                    Ts = DateTime.Parse(r.GetString(3), null, System.Globalization.DateTimeStyles.RoundtripKind),
+                    Type = r.GetString(4),
+                    Actor = r.GetString(5),
+                    Summary = r.GetString(6),
+                    EntityRef = r.IsDBNull(7) ? null : r.GetString(7),
+                });
+            }
+            return list;
+        }
+        catch (Exception ex)
+        {
+            _log?.LogError(ex, "Не удалось прочитать события владельца {OwnerId}", ownerId);
+            return [];
+        }
+    }
 }

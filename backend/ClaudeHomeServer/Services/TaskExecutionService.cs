@@ -259,7 +259,10 @@ public class TaskExecutionService
                 var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
                 if (updated is null) return;
                 await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
-                await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
+                // Финальное уведомление — только когда задача реально завершена (done) либо ход упал.
+                // Промежуточные успешные ходы многошаговой задачи не спамят «завершила работу» (②-2.1).
+                if (!ok || updated.Status == TaskItemStatus.Done)
+                    await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
                 break;
             }
             case PermissionRequestMessage or AskQuestionMessage:

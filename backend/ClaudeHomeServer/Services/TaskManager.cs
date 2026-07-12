@@ -11,10 +11,12 @@ public class TaskManager
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
     private readonly ProjectEventLogService? _events;
+    private readonly PersonaNotifyService? _notify;
 
-    public TaskManager(IConfiguration config, ProjectEventLogService? events = null)
+    public TaskManager(IConfiguration config, ProjectEventLogService? events = null, PersonaNotifyService? notify = null)
     {
         _events = events;
+        _notify = notify;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
         _storePath = Path.Combine(dataDir, "tasks.json");
@@ -194,6 +196,14 @@ public class TaskManager
         _tasks[task.Id] = task;
         Save();
         LogTask(task, ProjectEventTypes.TaskSpawned, $"Создан следующий экземпляр: «{task.Title}»");
+        // proactive-уведомление (②-2.1): персона-исполнитель подготовила следующий экземпляр
+        if (!string.IsNullOrEmpty(task.PersonaId) && !string.IsNullOrEmpty(task.OwnerId))
+        {
+            var label = _notify?.LabelOf(task.PersonaId);
+            _ = _notify?.SendAsync(task.OwnerId,
+                label is not null ? $"{label} подготовила следующую задачу" : "Создан следующий экземпляр задачи",
+                task.Title, TaskSchedulerService.TaskUrl(task), "info");
+        }
         return task;
     }
 

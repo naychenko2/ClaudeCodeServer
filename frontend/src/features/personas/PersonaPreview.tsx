@@ -98,6 +98,9 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   // Раскрытие длинного характера
   const [expanded, setExpanded] = useState(false);
   useEffect(() => { setExpanded(false); }, [persona.id]);
+  // Раскрытие длинной инструкции роли (в секции «Правила»)
+  const [instrOpen, setInstrOpen] = useState(false);
+  useEffect(() => { setInstrOpen(false); }, [persona.id]);
 
   // Характер: слот контракта (P1), для legacy-персон — старый единый systemPrompt
   const character = (persona.contract?.character ?? persona.systemPrompt ?? '').trim();
@@ -181,7 +184,14 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     </div>
   ) : null;
 
-  // === Факты-строка: модель / возможности / [умения] / память (+ происхождение из пантеона) ===
+  // Подпись доступа к файлам/инструментам (профиль P6)
+  const accessText = persona.access === 'readOnly'
+    ? 'Только чтение'
+    : persona.access === 'custom'
+      ? `Свой список${persona.disallowedTools?.length ? ` (${persona.disallowedTools.length})` : ''}`
+      : 'Полный';
+
+  // === Факты-строка: модель / возможности / [умения] / память / доступ (+ происхождение из пантеона) ===
   const facts: { label: string; value: string; title?: string }[] = [
     { label: 'Модель', value: persona.effort ? `${modelName} · ${effortLabel(persona.effort)}` : modelName },
     { label: 'Возможности', value: toolsText },
@@ -190,6 +200,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
       value: bindings === null ? '…' : bindings.length === 0 ? 'нет привязок' : bindingsCounter(bindings),
     },
     { label: 'Память', value: memoryText, title: memoryTitle },
+    { label: 'Доступ', value: accessText },
     ...(persona.templateKey
       ? [{ label: 'Происхождение', value: 'Пантеон OmO', title: `Подключена из шаблона «${persona.templateKey}»` }]
       : []),
@@ -270,6 +281,56 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
       )}
     </div>
   );
+
+  // === Правила (контракт роли, read-only): тон / всегда / никогда / формат / инструкция ===
+  const contract = persona.contract;
+  const hasRules = !!contract && !!(
+    contract.tone?.trim() || contract.mustDo?.length || contract.mustNot?.length
+    || contract.outputFormat?.trim() || contract.instructions?.trim()
+  );
+  const rulesSection = hasRules ? (
+    <div style={section}>
+      <SectionLabel style={{ marginBottom: 12 }}>Правила</SectionLabel>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {contract!.tone?.trim() && (
+          <div style={ruleText}><span style={ruleKey}>Тон: </span>{contract!.tone}</div>
+        )}
+        {contract!.mustDo && contract!.mustDo.length > 0 && (
+          <div>
+            <div style={ruleSub}>Всегда</div>
+            <ul style={ruleList}>
+              {contract!.mustDo.map((r, i) => <li key={i} style={ruleLi}>{r}</li>)}
+            </ul>
+          </div>
+        )}
+        {contract!.mustNot && contract!.mustNot.length > 0 && (
+          <div>
+            <div style={ruleSub}>Никогда</div>
+            <ul style={ruleList}>
+              {contract!.mustNot.map((r, i) => <li key={i} style={ruleLi}>{r}</li>)}
+            </ul>
+          </div>
+        )}
+        {contract!.outputFormat?.trim() && (
+          <div style={ruleText}><span style={ruleKey}>Формат ответов: </span>{contract!.outputFormat}</div>
+        )}
+        {contract!.instructions?.trim() && (
+          <div>
+            <div style={ruleSub}>Инструкция</div>
+            <div style={{
+              ...ruleText, whiteSpace: 'pre-wrap', overflowWrap: 'break-word',
+              maxHeight: instrOpen ? undefined : 44, overflow: 'hidden',
+            }}>
+              {contract!.instructions}
+            </div>
+            <button type="button" onClick={() => setInstrOpen(v => !v)} style={linkBtn}>
+              {instrOpen ? 'Свернуть' : 'Показать инструкцию'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null;
 
   // === Знания и правила (фича persona-bindings): компактная выжимка привязок ===
   const shownBindings = (bindings ?? []).filter(b => b.mode !== 'off').slice(0, 4);
@@ -454,6 +515,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
         )}
         {factsRow}
         {characterSection}
+        {rulesSection}
         {knowledgeSection}
         {chatsSection}
       </div>
@@ -475,4 +537,22 @@ const factChip: React.CSSProperties = {
 const linkBtn: React.CSSProperties = {
   background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
   fontSize: 13, fontWeight: 600, fontFamily: FONT.sans, padding: 0, marginTop: 8,
+};
+
+// Стили секции «Правила» — read-only текст в тоне соседних секций превью
+const ruleText: React.CSSProperties = {
+  fontSize: 14, lineHeight: 1.55, color: C.textPrimary, fontFamily: FONT.sans,
+};
+const ruleKey: React.CSSProperties = {
+  fontWeight: 600, color: C.textHeading,
+};
+const ruleSub: React.CSSProperties = {
+  fontSize: 12, fontWeight: 600, letterSpacing: '0.03em', textTransform: 'uppercase',
+  color: C.textMuted, fontFamily: FONT.sans, marginBottom: 6,
+};
+const ruleList: React.CSSProperties = {
+  margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 4,
+};
+const ruleLi: React.CSSProperties = {
+  fontSize: 14, lineHeight: 1.5, color: C.textPrimary, fontFamily: FONT.sans,
 };

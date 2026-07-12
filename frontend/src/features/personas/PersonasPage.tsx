@@ -347,9 +347,12 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSes
   onBack?: () => void;
   isMobile: boolean;
 }) {
-  // Активный вид: обзор (read-only визитка), профиль (форма) или память.
-  // Компонент перемонтируется по key={persona.id} — смена персоны сама сбрасывает вид на обзор.
+  // Активный вид: профиль (визитка/форма), умения, память или задачи.
+  // Компонент перемонтируется по key={persona.id} — смена персоны сама сбрасывает вид на профиль.
   const [view, setView] = useState<PersonaView>('preview');
+  // Развёрнута ли форма правки профиля (внутри вида «Профиль»). key={persona.id}
+  // перемонтирует компонент, так что смена персоны сбрасывает editing сама.
+  const [editing, setEditing] = useState(false);
 
   // Императивный доступ к форме профиля + её состояние (для кнопок тулбара)
   const formRef = useRef<PersonaFormHandle>(null);
@@ -357,6 +360,13 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSes
   const onStatus = useCallback((s: PersonaFormStatus) => {
     setStatus(prev => (prev.canSave === s.canSave && prev.saving === s.saving && prev.dirty === s.dirty ? prev : s));
   }, []);
+
+  // Навигация между вкладками: если правим и есть несохранённое — сначала спросить
+  const goView = (v: PersonaView) => {
+    if (editing && status.dirty && !window.confirm('Отменить несохранённые изменения?')) return;
+    setEditing(false);
+    setView(v);
+  };
 
   const isProjectScope = persona.scope === 'project';
   const zoneName = isProjectScope
@@ -379,21 +389,22 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSes
     ? <div style={{ flex: 1, minHeight: 0 }}>
         <PersonaBindingsPanel persona={persona} accent={accent} isMobile={isMobile} />
       </div>
-    : view === 'profile'
-    // Профиль — инлайн-форма настройки прямо в контентной зоне (действия — в тулбаре)
+    : editing
+    // Профиль в режиме правки — инлайн-форма (действия — в тулбаре); успешное
+    // сохранение возвращает к визитке
     ? <div style={{ flex: 1, minHeight: 0 }}>
         <PersonaForm ref={formRef} persona={persona} projects={projects} onStatus={onStatus}
-          onColorChange={setLiveColor} onOpenMemory={() => setView('memory')}
-          onOpenKnowledge={() => setView('knowledge')}
-          onSaved={() => {}} onDelete={() => onDelete()} />
+          onColorChange={setLiveColor} onOpenMemory={() => goView('memory')}
+          onOpenKnowledge={() => goView('knowledge')}
+          onSaved={() => setEditing(false)} onDelete={() => onDelete()} />
       </div>
-    // Обзор — read-only визитка со сводкой и недавними разговорами
+    // Профиль — read-only визитка со сводкой и недавними разговорами
     : <div style={{ flex: 1, minHeight: 0 }}>
         <PersonaPreview persona={persona} accent={accent} talking={talking}
           onTalk={onTalk} onOpenSession={onOpenSession}
-          onEditProfile={() => setView('profile')}
-          onOpenKnowledge={() => setView('knowledge')}
-          onOpenTasks={() => setView('tasks')} isMobile={isMobile} />
+          onEditProfile={() => setEditing(true)}
+          onOpenKnowledge={() => goView('knowledge')}
+          onOpenTasks={() => goView('tasks')} isMobile={isMobile} />
       </div>;
 
   return (
@@ -404,7 +415,10 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSes
         accent={accent}
         zoneLabel={zoneLabel}
         view={view}
-        onView={setView}
+        onView={goView}
+        editing={editing}
+        onEdit={() => setEditing(true)}
+        onCancelEdit={() => { if (!status.dirty || window.confirm('Отменить изменения?')) setEditing(false); }}
         status={status}
         talking={talking}
         onTalk={onTalk}

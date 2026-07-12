@@ -72,10 +72,12 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
   const persona = personaId ? personas.find(p => p.id === personaId) ?? null : null;
   const isMobile = useIsMobile();
 
-  // Активный вид (для существующей персоны): обзор (дефолт), профиль или память.
-  // Смена персоны в списке сбрасывает вид обратно на обзор.
+  // Активный вид (для существующей персоны): профиль (дефолт), умения, память, задачи.
+  // Смена персоны в списке сбрасывает вид обратно на профиль.
   const [view, setView] = useState<PersonaView>('preview');
-  useEffect(() => { setView('preview'); }, [personaId]);
+  // Развёрнута ли форма правки профиля (внутри вида «Профиль»)
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { setView('preview'); setEditing(false); }, [personaId]);
 
   // Создание: сначала экран быстрого создания по промпту, «Заполнить вручную» — пустая форма.
   // Сбрасываем на быстрый экран при каждом новом входе в режим создания.
@@ -91,6 +93,12 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
   const onStatus = useCallback((s: PersonaFormStatus) => {
     setStatus(prev => (prev.canSave === s.canSave && prev.saving === s.saving && prev.dirty === s.dirty ? prev : s));
   }, []);
+  // Навигация между вкладками: если правим и есть несохранённое — сначала спросить
+  const goView = (v: PersonaView) => {
+    if (editing && status.dirty && !window.confirm('Отменить несохранённые изменения?')) return;
+    setEditing(false);
+    setView(v);
+  };
   // Живой цвет из формы — мгновенная перекраска акцентной полосы/тулбара
   const [liveColor, setLiveColor] = useState<string | undefined>(undefined);
 
@@ -153,7 +161,10 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
           accent={accent}
           zoneLabel={`Проект · ${project.name}`}
           view={view}
-          onView={setView}
+          onView={goView}
+          editing={editing}
+          onEdit={() => setEditing(true)}
+          onCancelEdit={() => { if (!status.dirty || window.confirm('Отменить изменения?')) setEditing(false); }}
           status={status}
           talking={talking}
           onTalk={() => talk(persona)}
@@ -184,20 +195,8 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
           ) : view === 'knowledge' ? (
             // Знания — привязки источников и правил (фича persona-bindings)
             <PersonaBindingsPanel persona={persona} accent={accent} isMobile={isMobile} />
-          ) : view === 'preview' ? (
-            // Обзор — read-only визитка; чаты проектной персоны открываются на месте
-            <PersonaPreview
-              persona={persona}
-              accent={accent}
-              talking={talking}
-              onTalk={() => talk(persona)}
-              onOpenSession={onOpenChat}
-              onEditProfile={() => setView('profile')}
-              onOpenKnowledge={() => setView('knowledge')}
-              onOpenTasks={() => setView('tasks')}
-              isMobile={isMobile}
-            />
-          ) : (
+          ) : editing ? (
+            // Профиль в режиме правки — форма; успешное сохранение возвращает к визитке
             <PersonaForm
               ref={formRef}
               key={persona.id}
@@ -205,10 +204,23 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
               projects={[project]}
               onStatus={onStatus}
               onColorChange={setLiveColor}
-              onOpenMemory={() => setView('memory')}
-              onOpenKnowledge={() => setView('knowledge')}
-              onSaved={() => {}}
+              onOpenMemory={() => goView('memory')}
+              onOpenKnowledge={() => goView('knowledge')}
+              onSaved={() => setEditing(false)}
               onDelete={() => onDelete(persona)}
+            />
+          ) : (
+            // Профиль — read-only визитка; чаты проектной персоны открываются на месте
+            <PersonaPreview
+              persona={persona}
+              accent={accent}
+              talking={talking}
+              onTalk={() => talk(persona)}
+              onOpenSession={onOpenChat}
+              onEditProfile={() => setEditing(true)}
+              onOpenKnowledge={() => goView('knowledge')}
+              onOpenTasks={() => goView('tasks')}
+              isMobile={isMobile}
             />
           )
         ) : creating ? (

@@ -62,6 +62,7 @@ builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
 builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<ProjectGroupManager>();
+builder.Services.AddSingleton<ProjectEventLogService>();
 builder.Services.AddSingleton<PersonaManager>();
 builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();

@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, WorkspaceKnowledgeStore wkStore, TaskManager tasks) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -47,6 +47,18 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
         return Ok(WithCount(p));
+    }
+
+    // Лента событий проекта (активность команды): ходы, задачи, память, база, заметки, состав.
+    // Фильтры опциональны (since/type/actor/limit). Источник для командного центра (①-L1).
+    [HttpGet("{id}/events")]
+    public IActionResult GetEvents(string id,
+        [FromQuery] DateTime? since, [FromQuery] string? type,
+        [FromQuery] string? actor, [FromQuery] int? limit)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        return Ok(events.Query(id, UserId, since, type, actor, limit ?? 100));
     }
 
     [HttpPost]

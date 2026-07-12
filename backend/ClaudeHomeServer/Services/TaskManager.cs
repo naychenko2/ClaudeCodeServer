@@ -10,14 +10,21 @@ public class TaskManager
     private readonly ConcurrentDictionary<string, TaskItem> _tasks = new();
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
+    private readonly ProjectEventLogService? _events;
 
-    public TaskManager(IConfiguration config)
+    public TaskManager(IConfiguration config, ProjectEventLogService? events = null)
     {
+        _events = events;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
         _storePath = Path.Combine(dataDir, "tasks.json");
         Load();
     }
+
+    // Запись в проектный лог (только для задач с projectId — личные в лог не попадают).
+    // Actor — персона-исполнитель (по id, фронт резолвит в подпись) либо «user»/«system».
+    private void LogTask(TaskItem task, string type, string summary) =>
+        _events?.Append(task.ProjectId ?? "", task.OwnerId ?? "", type, task.PersonaId ?? "user", summary, task.Id);
 
     public TaskItem? GetById(string id) => _tasks.GetValueOrDefault(id);
 
@@ -79,6 +86,7 @@ public class TaskManager
         NormalizePersonaAssignee(task);
         _tasks[task.Id] = task;
         Save();
+        LogTask(task, ProjectEventTypes.TaskCreated, $"Создана задача «{task.Title}»");
         return task;
     }
 
@@ -99,6 +107,7 @@ public class TaskManager
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+        var statusBefore = task.Status;
 
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;
@@ -145,6 +154,9 @@ public class TaskManager
         NormalizePersonaAssignee(task);
         task.UpdatedAt = DateTime.UtcNow;
         Save();
+        // Завершение задачи фиксируем в логе (переход в Done — заметное командное событие)
+        if (task.Status == TaskItemStatus.Done && statusBefore != TaskItemStatus.Done)
+            LogTask(task, ProjectEventTypes.TaskCompleted, $"Завершена задача «{task.Title}»");
         return task;
     }
 
@@ -181,6 +193,7 @@ public class TaskManager
         };
         _tasks[task.Id] = task;
         Save();
+        LogTask(task, ProjectEventTypes.TaskSpawned, $"Создан следующий экземпляр: «{task.Title}»");
         return task;
     }
 
@@ -221,9 +234,10 @@ public class TaskManager
 
     public bool Delete(string id)
     {
-        var removed = _tasks.TryRemove(id, out _);
-        if (removed) Save();
-        return removed;
+        if (!_tasks.TryRemove(id, out var task)) return false;
+        Save();
+        LogTask(task, ProjectEventTypes.TaskDeleted, $"Удалена задача «{task.Title}»");
+        return true;
     }
 
     // Зачистка при удалении проекта

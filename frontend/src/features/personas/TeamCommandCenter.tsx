@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import type { Project, TeamMemoryEntry } from '../../types';
+import type { Project, Task, TeamMemoryEntry } from '../../types';
 import { api } from '../../lib/api';
 import { usePersonas, personaLabel } from '../../lib/personas';
 import { agentDotColor } from '../../components/AgentSelector';
@@ -15,6 +15,7 @@ export function TeamCommandCenter({ project }: { project: Project }) {
   const team = personas.filter(p => p.scope === 'project' && p.projectId === project.id);
   const [events, setEvents] = useState<EventRow[] | null>(null);
   const [mem, setMem] = useState<TeamMemoryEntry[] | null>(null);
+  const [tasks, setTasks] = useState<Task[] | null>(null);
   const [newMem, setNewMem] = useState('');
 
   const refresh = async () => {
@@ -23,6 +24,7 @@ export function TeamCommandCenter({ project }: { project: Project }) {
       setEvents(evs ?? []);
     } catch { setEvents([]); }
     try { setMem(await api.projects.teamMemory(project.id)); } catch { setMem([]); }
+    try { setTasks(await api.tasks.listByProject(project.id)); } catch { setTasks([]); }
   };
   useEffect(() => { void refresh(); }, [project.id]);
 
@@ -48,6 +50,13 @@ export function TeamCommandCenter({ project }: { project: Project }) {
     return p ? personaLabel(p) : a === 'user' ? 'Вы' : a;
   };
 
+  // Кто из команды сейчас исполняет задачу в фоне (②-2.4): запуск был, результата ещё нет
+  const inFlight = new Map<string, string>();
+  for (const t of tasks ?? []) {
+    if (t.personaId && t.claudeStartedAt && !t.claudeResult && t.status !== 'done')
+      inFlight.set(t.personaId, t.title);
+  }
+
   return (
     <div style={{ height: '100%', overflowY: 'auto', padding: '18px 20px', background: C.bgMain }}>
       <div style={{ maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 22 }}>
@@ -66,6 +75,9 @@ export function TeamCommandCenter({ project }: { project: Project }) {
                   <span style={{ fontSize: 13.5, color: C.textPrimary, fontFamily: FONT.sans }}>{personaLabel(p)}</span>
                   {p.specialty && p.specialty !== 'none' && (
                     <span style={badgeStyle}>{SPECIALTY_LABEL[p.specialty] ?? p.specialty}</span>
+                  )}
+                  {inFlight.has(p.id) && (
+                    <span title={inFlight.get(p.id)} style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 600, color: C.success, fontFamily: FONT.sans }}>● в работе</span>
                   )}
                 </div>
               ))}

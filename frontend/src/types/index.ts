@@ -691,6 +691,13 @@ export type PersonaScope = 'global' | 'project';
 // советует, но ничего не меняет; custom — свой список запрещённых инструментов
 export type PersonaAccess = 'full' | 'readOnly' | 'custom';
 
+// Специальность персоны — функциональная роль для оркестрации (НЕ отображаемое имя роли):
+// конвейер (analyst→planner→reviewer→executor), голос брифинга (secretary),
+// группировка/статус команды, роутинг памяти команды. none — не задана.
+export type PersonaSpecialty =
+  | 'none' | 'analyst' | 'planner' | 'reviewer' | 'executor' | 'secretary'
+  | 'coordinator' | 'mentor' | 'designer' | 'consultant' | 'librarian';
+
 // Параметры кропа загруженного аватара: масштаб + смещение центра окна
 // от центра картинки (в пикселях исходника)
 export interface AvatarCropStateDto {
@@ -739,6 +746,8 @@ export interface Persona {
   avatar: PersonaAvatar;
   greeting?: string;          // приветствие персоны в начале чата
   memoryEnabled: boolean;     // долгая память (этап 2)
+  // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана
+  specialty?: PersonaSpecialty;
   // Возможности персоны (ключи tasks/notes/web); null/отсутствие — без ограничений
   tools?: string[] | null;
   // Профиль доступа (P6); отсутствие — full
@@ -767,6 +776,8 @@ export interface PantheonTemplate {
   access?: PersonaAccess;
   model?: string;
   effort?: string;
+  // Специальность роли (функциональный тег) — ставится в specialty подключённой персоны
+  specialty?: PersonaSpecialty;
   connectedPersonaId?: string | null;
 }
 
@@ -832,6 +843,8 @@ export interface CreatePersonaDto {
   access?: PersonaAccess;
   // Свой список запрещённых инструментов (для custom)
   disallowedTools?: string[];
+  // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана
+  specialty?: PersonaSpecialty;
 }
 
 // Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны

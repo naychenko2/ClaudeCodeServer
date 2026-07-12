@@ -125,7 +125,7 @@ public class PersonaManager
         string? model, string? effort, PersonaScope scope, string? projectId,
         string? color, string? greeting, bool memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess access = PersonaAccess.Full,
-        List<string>? disallowedTools = null)
+        List<string>? disallowedTools = null, PersonaSpecialty specialty = PersonaSpecialty.None)
     {
         var persona = new Persona
         {
@@ -137,6 +137,7 @@ public class PersonaManager
             Contract = NormalizeContract(contract),
             Model = model,
             Effort = effort,
+            Specialty = specialty,
             Scope = scope,
             ProjectId = scope == PersonaScope.Project ? projectId : null,
             Greeting = greeting,
@@ -182,7 +183,8 @@ public class PersonaManager
 
             var persona = Create(userId, t.Name, t.Role, t.Description, systemPrompt: null,
                 t.Model, t.Effort, PersonaScope.Global, projectId: null,
-                t.Color, t.Greeting, memoryEnabled: true, t.Tools, t.Contract, t.Access);
+                t.Color, t.Greeting, memoryEnabled: true, t.Tools, t.Contract, t.Access,
+                specialty: t.Specialty);
             persona.TemplateKey = t.Key;
             persona.TemplateInstructionsHash = HashInstructions(t.Contract.Instructions);
             result.Add(persona);
@@ -227,7 +229,7 @@ public class PersonaManager
         string? systemPrompt, string? model, string? effort, PersonaScope? scope, string? projectId,
         string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess? access = null,
-        List<string>? disallowedTools = null)
+        List<string>? disallowedTools = null, PersonaSpecialty? specialty = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -244,6 +246,8 @@ public class PersonaManager
             if (contract is not null) persona.Contract = NormalizeContract(contract);
             if (model is not null) persona.Model = model.Length == 0 ? null : model;
             if (effort is not null) persona.Effort = effort.Length == 0 ? null : effort;
+            // Специальность (функциональная роль): null — не менять; None — сбросить явно
+            if (specialty is not null) persona.Specialty = specialty.Value;
             if (scope is not null)
             {
                 persona.Scope = scope.Value;

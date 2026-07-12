@@ -230,7 +230,7 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
             projects={[project]}
             defaultScope="project"
             defaultProjectId={project.id}
-            initial={template ? { name: template.namePlaceholder, role: template.role, description: template.description, contract: template.contract, greeting: template.greeting, color: template.avatarColor, tools: template.tools, access: template.access, model: template.model, effort: template.effort } : undefined}
+            initial={template ? { name: template.namePlaceholder, role: template.role, description: template.description, contract: template.contract, greeting: template.greeting, color: template.avatarColor, tools: template.tools, access: template.access, model: template.model, effort: template.effort, specialty: template.specialty } : undefined}
             onStatus={onStatus}
             onColorChange={setLiveColor}
             onSaved={p => onSelectPersona(p.id)}

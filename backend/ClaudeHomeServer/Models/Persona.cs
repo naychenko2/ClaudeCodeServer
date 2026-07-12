@@ -46,6 +46,17 @@ public class PersonaBinding
 // Custom — свой список запрещённых инструментов (Persona.DisallowedTools).
 public enum PersonaAccess { Full, ReadOnly, Custom }
 
+// Специальность персоны — функциональная роль для оркестрации (НЕ путать с Persona.Role —
+// то отображаемое имя «Роль (Имя)», это машинный тег способности). Используется: конвейером
+// (Аналитик→Планировщик→Ревьюер→Исполнитель), голосом брифинга (Secretary), группировкой/
+// статусом команды и роутингом памяти команды. None — не задана: оркестрация берёт явные
+// слоты либо дефолт каталога; работает с любыми персонами, не только OmO.
+public enum PersonaSpecialty
+{
+    None, Analyst, Planner, Reviewer, Executor, Secretary,
+    Coordinator, Mentor, Designer, Consultant, Librarian
+}
+
 // Состояние кропа загруженного аватара: масштаб и смещение центра окна
 // от центра картинки (в пикселях исходника) — для «Перекроить» без перезагрузки файла.
 public class AvatarCropState
@@ -123,6 +134,9 @@ public class Persona
     // Модель CLI (алиас/id любого провайдера); null = дефолт сервера
     public string? Model { get; set; }
     public string? Effort { get; set; }
+    // Специальность (функциональная роль) для оркестрации — конвейер, брифинг, статус
+    // команды, память команды. None — не задана. См. PersonaSpecialty.
+    public PersonaSpecialty Specialty { get; set; } = PersonaSpecialty.None;
     public PersonaScope Scope { get; set; } = PersonaScope.Global;
     // Для Scope == Project — id проекта, к которому привязана персона
     public string? ProjectId { get; set; }

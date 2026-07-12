@@ -100,6 +100,7 @@ public class PersonasController : ControllerBase
                 access = t.Access,
                 model = t.Model,
                 effort = t.Effort,
+                specialty = t.Specialty,
                 connectedPersonaId = _personas.GetByTemplateKey(UserId, t.Key)?.Id,
             }),
         });
@@ -154,7 +155,7 @@ public class PersonasController : ControllerBase
         var persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
             req.MemoryEnabled ?? true, req.Tools, req.Contract,
-            access ?? PersonaAccess.Full, req.DisallowedTools);
+            access ?? PersonaAccess.Full, req.DisallowedTools, req.Specialty ?? PersonaSpecialty.None);
         if (bindings.Count > 0)
             persona = _personas.UpdateBindings(persona.Id, UserId, bindings);
         // Авто-подбор привязок (autoBindings) — best-effort:
@@ -179,7 +180,7 @@ public class PersonasController : ControllerBase
 
         var persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools);
+            req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, req.Specialty);
         await Broadcast("updated", id);
         return Ok(persona);
     }
@@ -1296,6 +1297,8 @@ public record CreatePersonaRequest(
     string? Access = null,
     // Свой список запрещённых инструментов (для custom)
     List<string>? DisallowedTools = null,
+    // Специальность персоны (функциональная роль для оркестрации); null/None — не задана
+    PersonaSpecialty? Specialty = null,
     // Явные привязки при создании (валидируются до создания персоны)
     List<PersonaBindingRequest>? Bindings = null,
     // true — после создания подобрать привязки AI (за флагом persona-bindings, best-effort)
@@ -1319,7 +1322,9 @@ public record UpdatePersonaRequest(
     // Профиль доступа (P6): full | readOnly | custom; null — не менять
     string? Access = null,
     // Свой список запрещённых инструментов (для custom); null — не менять
-    List<string>? DisallowedTools = null);
+    List<string>? DisallowedTools = null,
+    // Специальность персоны (функциональная роль); null — не менять, None — сбросить
+    PersonaSpecialty? Specialty = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);

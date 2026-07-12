@@ -17,7 +17,10 @@ public sealed record PantheonTemplate(
     List<string>? Tools,
     PersonaAccess Access,
     string? Model,
-    string? Effort);
+    string? Effort,
+    // Специальность роли — функциональный тег для оркестрации (конвейер/брифинг/статус).
+    // Ставится в Specialty при подключении персоны из каталога.
+    PersonaSpecialty Specialty = PersonaSpecialty.None);
 
 // Каталог пантеона OmO: 8 ролей с полными переведёнными промптами oh-my-openagent
 // (по договорённости с авторами, соответствие — docs/omo-adoption.md). Полные
@@ -63,7 +66,8 @@ public static partial class OmoPantheonCatalog
             Tools: null,
             Access: PersonaAccess.Full,
             Model: "opus",
-            Effort: "high"),
+            Effort: "high",
+            Specialty: PersonaSpecialty.Coordinator),
 
         new(
             Key: "omo-hephaestus",
@@ -102,7 +106,8 @@ public static partial class OmoPantheonCatalog
             Tools: null,
             Access: PersonaAccess.Full,
             Model: "sonnet",
-            Effort: "high"),
+            Effort: "high",
+            Specialty: PersonaSpecialty.Executor),
 
         new(
             Key: "omo-prometheus",
@@ -141,7 +146,8 @@ public static partial class OmoPantheonCatalog
             Tools: ["tasks", "notes"],
             Access: PersonaAccess.ReadOnly,
             Model: "opus",
-            Effort: "high"),
+            Effort: "high",
+            Specialty: PersonaSpecialty.Planner),
 
         new(
             Key: "omo-atlas",
@@ -180,7 +186,8 @@ public static partial class OmoPantheonCatalog
             Tools: ["tasks"],
             Access: PersonaAccess.Full,
             Model: "sonnet",
-            Effort: null),
+            Effort: null,
+            Specialty: PersonaSpecialty.Coordinator),
 
         new(
             Key: "omo-metis",
@@ -220,7 +227,8 @@ public static partial class OmoPantheonCatalog
             Tools: ["notes"],
             Access: PersonaAccess.ReadOnly,
             Model: "sonnet",
-            Effort: null),
+            Effort: null,
+            Specialty: PersonaSpecialty.Analyst),
 
         new(
             Key: "omo-momus",
@@ -259,7 +267,8 @@ public static partial class OmoPantheonCatalog
             Tools: [],
             Access: PersonaAccess.ReadOnly,
             Model: "sonnet",
-            Effort: "high"),
+            Effort: "high",
+            Specialty: PersonaSpecialty.Reviewer),
 
         new(
             Key: "omo-oracle",
@@ -298,7 +307,8 @@ public static partial class OmoPantheonCatalog
             Tools: ["web"],
             Access: PersonaAccess.ReadOnly,
             Model: "opus",
-            Effort: "high"),
+            Effort: "high",
+            Specialty: PersonaSpecialty.Consultant),
 
         new(
             Key: "omo-librarian",
@@ -336,7 +346,8 @@ public static partial class OmoPantheonCatalog
             Tools: ["web", "notes"],
             Access: PersonaAccess.ReadOnly,
             Model: "haiku",
-            Effort: null),
+            Effort: null,
+            Specialty: PersonaSpecialty.Librarian),
     ];
 
     public static PantheonTemplate? Get(string key) =>

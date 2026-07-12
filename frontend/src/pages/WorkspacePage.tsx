@@ -26,8 +26,9 @@ import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
 import { resolveColumns, taskColumnKey } from '../lib/tasks';
 import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
-import { ensurePersonasLoaded, usePersonas } from '../lib/personas';
-import { ProjectPersonasPanel, ProjectPersonaPane, ProjectPersonaEmpty } from '../features/personas/ProjectPersonasPanel';
+import { ensurePersonasLoaded } from '../lib/personas';
+import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
+import { TeamCommandCenter } from '../features/personas/TeamCommandCenter';
 
 interface Props {
   project: Project;
@@ -137,8 +138,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // Стор персон — чтобы SessionList показал аватар/имя персоны у её сессий,
   // а вкладка «Команда» знала, есть ли персоны у проекта (для пустого стейта)
   useEffect(() => { void ensurePersonasLoaded(); }, []);
-  const personas = usePersonas();
-  const projectHasPersonas = personas.some(p => p.scope === 'project' && p.projectId === project.id);
 
   // Вкладка «Команда»: список персон — в сайдбаре, форма — в центральной зоне.
   // Состояние выбора поднято сюда, чтобы синхронизировать список ↔ форму.
@@ -800,7 +799,7 @@ const windowWidth = useWindowWidth();
           {personasMode
             ? ((selectedPersonaId || personaCreating)
                 ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />
-                : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите персону</div>)
+                : <TeamCommandCenter project={project} />)
             : tasksMode
             ? (selectedTask
                 ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={() => window.history.back()} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
@@ -931,7 +930,7 @@ const windowWidth = useWindowWidth();
               <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 {(selectedPersonaId || personaCreating)
                   ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} />
-                  : <ProjectPersonaEmpty hasPersonas={projectHasPersonas} onNew={handlePersonaNew} />}
+                  : <TeamCommandCenter project={project} />}
               </div>
             </div>
           );

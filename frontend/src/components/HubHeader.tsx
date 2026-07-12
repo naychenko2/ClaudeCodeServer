@@ -165,6 +165,8 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
           onShowHistory={isMobile ? openHistory : undefined}
           historyBadge={historyBadge}
           historyNeverSeen={neverSeen}
+          // На мобилке раздел «Знания» убран из хаб-таббара — открываем его из меню аватара
+          onOpenKnowledge={isMobile ? () => onTab('knowledge') : undefined}
         />
       </div>
 

@@ -34,7 +34,12 @@ export function HubTabs({ value, onChange, mobile }: {
     { value: 'notes' as HubTab, label: 'Заметки' },
     { value: 'personas' as HubTab, label: 'Персоны' },
     { value: 'knowledge' as HubTab, label: 'Знания' },
-  ].map(o => mobile ? { ...o, icon: TAB_ICONS[o.value] } : o);
+  ]
+    // На мобилке «Знания» уезжают в меню аватара (в компакт-таббар все разделы не влезают).
+    // Таб оставляем только когда раздел активен — иначе PillSwitch при value вне опций
+    // подсветил бы первый таб. Открытие «Знаний» на мобилке — из меню аватара.
+    .filter(o => !(mobile && o.value === 'knowledge' && value !== 'knowledge'))
+    .map(o => mobile ? { ...o, icon: TAB_ICONS[o.value] } : o);
   return (
     <PillSwitch<HubTab>
       value={value}

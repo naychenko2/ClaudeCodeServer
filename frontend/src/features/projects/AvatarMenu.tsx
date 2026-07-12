@@ -32,9 +32,11 @@ interface Props {
   onShowHistory?: () => void;
   historyBadge?: number;       // число новых изменений с последнего захода
   historyNeverSeen?: boolean;  // ещё ни разу не открывал историю — точка без числа
+  // «Знания» в меню (на мобилке, где раздел убран из хаб-таббара). undefined — пункт не показывать
+  onOpenKnowledge?: () => void;
 }
 
-export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false }: Props) {
+export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, onOpenKnowledge }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const themeMode = useThemeMode();
@@ -127,6 +129,18 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
                   {historyBadge > 0 ? (historyBadge > 99 ? '99+' : historyBadge) : ''}
                 </span>
               )}
+            </button>
+          )}
+          {onOpenKnowledge && (
+            <button
+              onClick={() => { setOpen(false); onOpenKnowledge(); }}
+              style={dropdownItem}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+              </svg>
+              Знания
             </button>
           )}
           {isAdmin && (

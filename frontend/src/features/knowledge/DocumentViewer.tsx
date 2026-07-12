@@ -98,11 +98,25 @@ export function DocumentViewer({ kbId, doc, onClose, isMobile }: {
   );
 }
 
-// Шапка панели: иконка-документ, имя (моноширинно, обрезается многоточием), действие справа.
-// Действие зависит от раскладки: мобила — «назад» (стрелка влево, list↔item take-over),
-// десктоп — «закрыть» (крестик, колонка в потоке). Слева от имени на мобиле — та же стрелка
-// влево, что и в шапках NoteView/Workspace при detail-режиме; на десктопе слева — иконка файла.
+// Шапка панели. На мобиле — кнопка «назад» (стрелка влево) СЛЕВА (take-over, как в
+// шапках NoteView/Workspace detail-режима) + имя; на десктопе — иконка-документ слева,
+// имя, «закрыть» (крестик) справа.
 function DocHeader({ doc, onClose, isMobile }: { doc: KnowledgeDocument; onClose: () => void; isMobile: boolean }) {
+  const actionBtn = (
+    <button onClick={onClose}
+      title={isMobile ? 'Назад к списку' : 'Закрыть просмотр'}
+      aria-label={isMobile ? 'Назад к списку' : 'Закрыть просмотр'}
+      style={{
+        width: 32, height: 32, flexShrink: 0, border: 'none', background: 'transparent',
+        cursor: 'pointer', color: C.textMuted, borderRadius: R.md,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        transition: 'background 0.12s, color 0.12s',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; e.currentTarget.style.color = C.textPrimary; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.textMuted; }}>
+      {isMobile ? <IconBack size={18} /> : <IconClose size={18} />}
+    </button>
+  );
   return (
     <div style={{
       flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10,
@@ -110,33 +124,23 @@ function DocHeader({ doc, onClose, isMobile }: { doc: KnowledgeDocument; onClose
       borderBottom: `1px solid ${C.borderLight}`,
       background: C.bgMain,
     }}>
-      {/* Иконка-документ (квадратный «плиточный» контейнер, как в строках списка) */}
-      <span style={{
-        width: 28, height: 28, borderRadius: R.sm, background: C.bgPanel, flex: 'none',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textSecondary,
-      }}>
-        <DocIcon />
-      </span>
+      {/* Мобила: «назад» слева. Десктоп: иконка-документ слева. */}
+      {isMobile ? actionBtn : (
+        <span style={{
+          width: 28, height: 28, borderRadius: R.sm, background: C.bgPanel, flex: 'none',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textSecondary,
+        }}>
+          <DocIcon />
+        </span>
+      )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{
           fontFamily: FONT.mono, fontSize: 13, fontWeight: 500, color: C.textHeading,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }} title={doc.name}>{doc.name}</div>
       </div>
-      {/* На мобиле — «назад» (take-over), на десктопе — «закрыть» колонку */}
-      <button onClick={onClose}
-        title={isMobile ? 'Назад к списку' : 'Закрыть просмотр'}
-        aria-label={isMobile ? 'Назад к списку' : 'Закрыть просмотр'}
-        style={{
-          width: 32, height: 32, flexShrink: 0, border: 'none', background: 'transparent',
-          cursor: 'pointer', color: C.textMuted, borderRadius: R.md,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          transition: 'background 0.12s, color 0.12s',
-        }}
-        onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; e.currentTarget.style.color = C.textPrimary; }}
-        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.textMuted; }}>
-        {isMobile ? <IconBack size={18} /> : <IconClose size={18} />}
-      </button>
+      {/* На десктопе «закрыть» справа (на мобиле кнопка уже слева) */}
+      {!isMobile && actionBtn}
     </div>
   );
 }

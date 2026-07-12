@@ -21,6 +21,7 @@ public sealed class DailyBriefingService
     private readonly NotesService _notes;
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
+    private readonly PersonaManager _personas;
     private readonly Llm.OneShotClaudeRunner _runner;
     private readonly PushService _push;
     private readonly IHubContext<SessionHub> _hub;
@@ -35,6 +36,7 @@ public sealed class DailyBriefingService
 
     public DailyBriefingService(
         TaskManager tasks, NotesService notes, ProjectManager projects, UserStore users,
+        PersonaManager personas,
         Llm.OneShotClaudeRunner runner, PushService push,
         IHubContext<SessionHub> hub, IConfiguration config, ILogger<DailyBriefingService> log)
     {
@@ -42,6 +44,7 @@ public sealed class DailyBriefingService
         _notes = notes;
         _projects = projects;
         _users = users;
+        _personas = personas;
         _runner = runner;
         _push = push;
         _hub = hub;
@@ -108,6 +111,12 @@ public sealed class DailyBriefingService
             ?? throw new InvalidOperationException("Дневниковая заметка не обновилась");
     }
 
+    // Голос брифа — первая персона владельца со специальностью «Секретарь» (F2).
+    // Бриф тогда идёт от её лица, с приветствием по имени. Нет секретаря — обезличенно,
+    // как раньше. Будущее: выбор конкретной персоны как «голос брифа» в настройках.
+    private Persona? FindSecretary(string userId) =>
+        _personas.GetByOwner(userId).FirstOrDefault(p => p.Specialty == PersonaSpecialty.Secretary);
+
     // Сбор данных + прогон через LLM → markdown-бриф
     private async Task<string> BuildBriefAsync(string userId, TimeZoneInfo tz, string day, CancellationToken ct)
     {
@@ -124,15 +133,29 @@ public sealed class DailyBriefingService
 
         var git = await GitActivityAsync(userId, ct);
 
+        var secretary = FindSecretary(userId);
         var sb = new StringBuilder();
-        sb.AppendLine("Ты — личный ассистент. Составь короткий полезный утренний бриф на день по-русски " +
-                      "в формате markdown. Структура:");
+        if (secretary is not null)
+        {
+            // Голос брифа — персона-секретарь: бриф от её лица, с коротким приветствием по имени
+            sb.AppendLine($"Ты — {PersonaManager.PersonaLabel(secretary)}, личный секретарь пользователя. " +
+                          "Составь короткий полезный утренний бриф на день по-русски в формате markdown " +
+                          "ОТ СВОЕГО ЛИЦА. Начни с короткого приветствия по имени и веди бриф в своём характере.");
+            if (!string.IsNullOrWhiteSpace(secretary.Contract?.Tone))
+                sb.AppendLine($"Твой тон: {secretary.Contract.Tone}.");
+        }
+        else
+        {
+            sb.AppendLine("Ты — личный ассистент. Составь короткий полезный утренний бриф на день по-русски " +
+                          "в формате markdown. Без вступления «вот ваш бриф».");
+        }
+        sb.AppendLine("Структура:");
         sb.AppendLine("- одно ориентирующее предложение о фокусе дня;");
         sb.AppendLine("- **Задачи** — что просрочено (выдели ⚠️), что на сегодня, предложи разумный порядок;");
         sb.AppendLine("- **Заметки** — если менялись, о чём коротко (названия оформляй ссылками [[Заголовок]]);");
         sb.AppendLine("- **Активность** — если есть коммиты, 1-2 фразы что происходило по проектам;");
         sb.AppendLine("- **План на день** — итоговый список из 3-5 конкретных шагов.");
-        sb.AppendLine("Без воды и без вступления «вот ваш бриф». Пропускай пустые разделы. " +
+        sb.AppendLine("Без воды. Пропускай пустые разделы. " +
                       "Если данных почти нет — сделай очень короткий бриф и мягко предложи запланировать день.");
         sb.AppendLine();
 
@@ -228,8 +251,11 @@ public sealed class DailyBriefingService
 
     private async Task NotifyAsync(string userId, string dailyNoteId)
     {
+        // Имя секретаря в заголовке — бриф приходит «от персонажа», а не от системы
+        var secretary = FindSecretary(userId);
+        var label = secretary is not null ? PersonaManager.PersonaLabel(secretary) : null;
         var msg = new NotificationMessage(
-            Title: "Утренний бриф готов",
+            Title: label is not null ? $"Доброе утро! Это {label}" : "Утренний бриф готов",
             Body: "План на день собран в дневнике",
             Url: $"/#/notes/{dailyNoteId}",
             Kind: "info");

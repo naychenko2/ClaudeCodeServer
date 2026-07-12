@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, X, File, Trash2, Maximize2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -41,6 +42,7 @@ import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from
 import { BackButton, Modal, ModalActions, Button, ConfirmDialog, useIsMobileModal } from './ui';
 import { DiffView } from './DiffView';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 const CodeEditor = lazy(() =>
   import('./CodeEditor').then(m => ({ default: m.CodeEditor }))
@@ -101,52 +103,6 @@ function streamUrl(projectId: string, filePath: string): string {
 
 type ViewTab = 'file' | 'diff';
 
-const FileSvg = () => (
-  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-    <polyline points="14 2 14 8 20 8" />
-  </svg>
-);
-
-const TrashIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="3 6 5 6 21 6" />
-    <path d="M19 6l-1 14H6L5 6" />
-    <path d="M10 11v6M14 11v6M9 6V4h6v2" />
-  </svg>
-);
-
-const ExpandIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="15 3 21 3 21 9"/>
-    <polyline points="9 21 3 21 3 15"/>
-    <line x1="21" y1="3" x2="14" y2="10"/>
-    <line x1="3" y1="21" x2="10" y2="14"/>
-  </svg>
-);
-
-const CloseIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-    <line x1="18" y1="6" x2="6" y2="18"/>
-    <line x1="6" y1="6" x2="18" y2="18"/>
-  </svg>
-);
-
-const RevertIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M1 4v6h6"/>
-    <path d="M3.5 15a9 9 0 1 0 2.1-9.4L1 10"/>
-  </svg>
-);
-
-const SaveIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-    <polyline points="17 21 17 13 7 13 7 21"/>
-    <polyline points="7 3 7 8 15 8"/>
-  </svg>
-);
-
 const DiscardIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 7v6h6"/>
@@ -157,14 +113,6 @@ const DiscardIcon = () => (
 const CloudGlyph = ({ filled }: { filled?: boolean }) => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
-  </svg>
-);
-
-const DownloadIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-    <polyline points="7 10 12 15 17 10" />
-    <line x1="12" y1="15" x2="12" y2="3" />
   </svg>
 );
 
@@ -237,9 +185,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
           width: 40, height: 40, borderRadius: 10, background: C.accent,
           display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
         }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.onAccent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
-          </svg>
+          <Music size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} color={C.onAccent} />
         </div>
         <span style={{ fontFamily: FONT.mono, fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
           {fileName}
@@ -567,12 +513,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             <>
               {!isMobile && onToggleFullscreen && (
                 <ToolbarIconButton isMobile={isMobile} onClick={onToggleFullscreen} title="На весь экран">
-                  <ExpandIcon />
+                  <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
                 </ToolbarIconButton>
               )}
               {!isMobile && (
                 <ToolbarIconButton isMobile={isMobile} onClick={onClose} title="Закрыть">
-                  <CloseIcon />
+                  <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
                 </ToolbarIconButton>
               )}
             </>
@@ -589,9 +535,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
         {/* Кнопка открытия сайдбара — только когда он свёрнут (не на мобиле) */}
         {onOpenSidebar && !isMobile && (
           <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-              <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-            </svg>
+            <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
           </ToolbarIconButton>
         )}
         {/* Кнопка назад — только на мобиле */}
@@ -642,10 +586,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
               onClick={() => setDrawioMode('edit')}
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textHeading, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.7 }}>
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
+              <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, opacity: 0.7 }} />
               {!isMobile && <span>Редактировать</span>}
             </button>
           ) : (
@@ -654,9 +595,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
               onClick={async () => { await drawioRef.current?.flush(); setDrawioMode('view'); }}
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.accent}`, background: C.accent, color: C.onAccent, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>
-              </svg>
+              <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
               {!isMobile && <span>Просмотр</span>}
             </button>
           )
@@ -677,10 +616,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
               onClick={() => { setOfficeCacheKey(undefined); setOfficeSwitching(true); setOfficeMode('edit'); }}
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textHeading, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.7 }}>
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
+              <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, opacity: 0.7 }} />
               {!isMobile && <span>Редактировать</span>}
             </button>
           ) : officeDiscardConfirm ? (
@@ -705,7 +641,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                 onClick={() => setOfficeDiscardConfirm(false)}
                 style={{ display: 'flex', alignItems: 'center', padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textHeading, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
-                {!isMobile ? 'Нет' : '✕'}
+                {!isMobile ? 'Нет' : <X size={13} strokeWidth={2} />}
               </button>
             </div>
           ) : (
@@ -732,7 +668,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                 }}
                 style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.accent}`, background: C.accent, color: C.onAccent, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
-                <SaveIcon />
+                <Save size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                 {!isMobile && <span>Сохранить</span>}
               </button>
             </div>
@@ -745,7 +681,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             <>
               {diff && (
                 isMobile
-                  ? <ToolbarIconButton isMobile={isMobile} onClick={handleRevert} title="Откатить"><RevertIcon /></ToolbarIconButton>
+                  ? <ToolbarIconButton isMobile={isMobile} onClick={handleRevert} title="Откатить"><RotateCcw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /></ToolbarIconButton>
                   : <button onClick={handleRevert} style={tbBtnGhost}>Откатить</button>
               )}
               {!isMobile && !isDrawio && (
@@ -769,7 +705,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   color={online ? C.accent : undefined}
                   disabled={!online}
                 >
-                  <SaveIcon />
+                  <Save size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                 </ToolbarIconButton>
               </>
             ) : (
@@ -816,28 +752,28 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
           {/* Скачать — для документов и картинок (когда есть данные) */}
           {!editing && fileContent?.base64 && (
             <ToolbarIconButton isMobile={isMobile} onClick={handleDownload} title="Скачать">
-              <DownloadIcon />
+              <Download size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
             </ToolbarIconButton>
           )}
 
           {/* Корзина */}
           {online && !editing && (
             <ToolbarIconButton isMobile={isMobile} onClick={() => setDeleteConfirm(true)} title="Удалить">
-              <TrashIcon />
+              <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
             </ToolbarIconButton>
           )}
 
           {/* Развернуть на весь экран — только в split-режиме */}
           {!isMobile && onToggleFullscreen && !editing && (
             <ToolbarIconButton isMobile={isMobile} onClick={onToggleFullscreen} title="На весь экран">
-              <ExpandIcon />
+              <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
             </ToolbarIconButton>
           )}
 
           {/* Закрыть — десктоп */}
           {!isMobile && (
             <ToolbarIconButton isMobile={isMobile} onClick={handleClose} title="Закрыть">
-              <CloseIcon />
+              <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
             </ToolbarIconButton>
           )}
         </div>
@@ -851,12 +787,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
           borderBottom: `1px solid ${C.dangerBorder}`,
           fontSize: 13, color: C.danger,
         }}>
-          <span style={{ flexShrink: 0 }}>⚠</span>
+          <span style={{ flexShrink: 0, color: C.danger, display: 'flex' }}><AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /></span>
           <span style={{ flex: 1 }}>{actionError}</span>
           <button
             onClick={() => setActionError(null)}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.danger, fontSize: 14, padding: 0, flexShrink: 0 }}
-          >✕</button>
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.danger, padding: 0, flexShrink: 0, display: 'flex' }}
+          ><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
         </div>
       )}
 
@@ -871,7 +807,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
 
         {!loading && loadError && (
           <EmptyState
-            icon={<FileSvg />}
+            icon={<File size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
             title={online ? 'Не удалось открыть файл' : 'Файл не синхронизирован'}
             subtitle={online
               ? `Не удалось загрузить ${fileName}`
@@ -936,9 +872,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                           width: 40, height: 40, borderRadius: 10, background: C.accent,
                           display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                         }}>
-                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.onAccent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
-                          </svg>
+                          <Music size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} color={C.onAccent} />
                         </div>
                         <span style={{ fontFamily: FONT.mono, fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                           {fileName}
@@ -963,7 +897,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
               fileContent.base64
                 ? <DocumentViewer base64={fileContent.base64} />
                 : <EmptyState
-                    icon={<FileSvg />}
+                    icon={<File size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
                     title="Документ слишком большой"
                     subtitle={`${fileName}${fileSizeMb ? ` — ${fileSizeMb} МБ` : ''}. Просмотр недоступен для файлов больше 25 МБ.`}
                   />
@@ -990,7 +924,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
 
             {fileContent?.isBinary && !fileContent.isImage && !fileContent.isVideo && !fileContent.isAudio && !fileContent.isDocument && (
               <EmptyState
-                icon={<FileSvg />}
+                icon={<File size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
                 title="Нельзя показать"
                 subtitle={`${fileName} — бинарный файл${fileSizeMb ? `, ${fileSizeMb} МБ` : ''}`}
                 action={
@@ -1104,10 +1038,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             boxShadow: SHADOW.fab, zIndex: 20,
           }}
         >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-          </svg>
+          <SquarePen size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />
         </button>
       )}
 

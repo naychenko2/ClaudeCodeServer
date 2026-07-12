@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { X } from 'lucide-react';
 import type { NoteDetail } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNotesVersion } from '../../lib/notes';
@@ -8,6 +9,7 @@ import { MarkdownViewer } from '../../components/MarkdownViewer';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
 const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
 import { BackButton, ConfirmDialog, IconButton, Splitter, Modal } from '../../components/ui';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { tbBtnPrimary, tbBtnGhost } from '../../components/Toolbar';
 import { useNotes } from '../../lib/notes';
 import type { NoteSource } from '../../types';
@@ -356,7 +358,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               {aiLinks === 'loading' ? 'Ищу связи…'
                 : aiLinks === 'error' ? 'ИИ недоступен (claude не залогинен на сервере)'
                 : aiLinks.length === 0 ? 'Подходящих связей не нашлось' : 'Предложенные связи'}
-              <button onClick={() => setAiLinks(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 13 }}>✕</button>
+              <button onClick={() => setAiLinks(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex' }}><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
             </div>
             {Array.isArray(aiLinks) && aiLinks.map(l => (
               <div key={l.title} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>

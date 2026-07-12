@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { Plus, X } from 'lucide-react';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, Session } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R, SHADOW } from '../../lib/design';
@@ -91,9 +93,7 @@ export function GroupParticipantsPopover({ session, participants, onUpdated, onC
                   color: C.textMuted, padding: 2, display: 'flex', borderRadius: 4,
                 }}
               >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-                  <path d="M18 6 6 18M6 6l12 12" />
-                </svg>
+                <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
               </button>
             )}
           </>
@@ -120,9 +120,7 @@ export function GroupParticipantsPopover({ session, participants, onUpdated, onC
                 <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {personaTitleLines(p).primary}
                 </span>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2.4" strokeLinecap="round" style={{ flexShrink: 0 }}>
-                  <path d="M12 5v14M5 12h14" />
-                </svg>
+                <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />
               </button>
             ))}
           </>

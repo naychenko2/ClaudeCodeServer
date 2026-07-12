@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
+import { MessageSquare } from 'lucide-react';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaBinding, PersonaMemoryEntry, Session } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R } from '../../lib/design';
@@ -507,9 +509,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
             padding: '12px 16px', fontSize: 14, fontWeight: 600, fontFamily: FONT.sans,
             cursor: talking ? 'default' : 'pointer', opacity: talking ? 0.6 : 1,
           }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 11.5a8.5 8.5 0 0 1-12 7.7L3 21l1.8-6A8.5 8.5 0 1 1 21 11.5z" />
-            </svg>
+            <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
             {talking ? 'Создаём…' : 'Поговорить'}
           </button>
         )}

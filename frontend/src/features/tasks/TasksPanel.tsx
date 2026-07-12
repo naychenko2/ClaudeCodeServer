@@ -2,9 +2,11 @@
 // Подвкладки «Список» (группировка по статусу) и «По дате» (готовые скрыты).
 
 import { useEffect, useMemo, useState } from 'react';
+import { ChevronRight, Plus } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { Project, Task, TaskStatus } from '../../types';
 import { C, FONT, R } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import {
   STATUS_DOT, STATUS_LABEL, daysFromToday, ensureTasksLoaded, useTasks,
 } from '../../lib/tasks';
@@ -131,9 +133,7 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
           }}
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
+          <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           Новая задача
         </button>
       </div>
@@ -153,7 +153,7 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
                 }}
               >
                 Открыть доску
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+                <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
               </button>
             </div>
           ) : (

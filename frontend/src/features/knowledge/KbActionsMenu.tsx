@@ -1,7 +1,10 @@
+import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
 import type { KnowledgeBaseSummary } from '../../types';
 import { C, FONT, R, MODAL_W } from '../../lib/design';
-import { Menu, MenuItem, Modal } from '../../components/ui';
+import { Menu, Modal } from '../../components/ui';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 
 type Action =
   | { sep: true }
@@ -12,6 +15,8 @@ type Action =
 // мобила — bottom-sheet (Modal сам становится шторкой на узком экране). Состав един
 // для всех баз: «Добавить документ», для удаляемых — разделитель + «Удалить базу».
 // «Открыть» здесь нет намеренно: клик по самой карте уже открывает базу.
+// Иконки — lucide-компоненты; поэтому десктоп рисует собственную строку-кнопку вместо
+// MenuItem (тот оборачивает icon в свой <svg> и ждет path-фрагменты, а не компонент).
 export function KbActionsMenu({ kb, isMobile, onClose, onAddDocument, onDelete }: {
   kb: KnowledgeBaseSummary;
   isMobile: boolean;
@@ -20,11 +25,11 @@ export function KbActionsMenu({ kb, isMobile, onClose, onAddDocument, onDelete }
   onDelete: () => void;
 }) {
   const actions: Action[] = [
-    { label: 'Добавить документ', icon: <><path d="M12 5v14M5 12h14" /></>, onClick: onAddDocument },
+    { label: 'Добавить документ', icon: <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, onClick: onAddDocument },
   ];
   if (kb.deletable) {
     actions.push({ sep: true });
-    actions.push({ label: 'Удалить базу', danger: true, icon: <><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></>, onClick: onDelete });
+    actions.push({ label: 'Удалить базу', danger: true, icon: <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, onClick: onDelete });
   }
 
   const run = (fn: () => void) => { onClose(); fn(); };
@@ -39,10 +44,7 @@ export function KbActionsMenu({ kb, isMobile, onClose, onAddDocument, onDelete }
             <div key={i} style={{ height: 1, background: C.border, margin: '6px 4px' }} />
           ) : (
             <button key={i} onClick={() => run(a.onClick)} style={sheetBtn(a.danger)}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                {a.icon}
-              </svg>
+              {a.icon}
               {a.label}
             </button>
           ))}
@@ -56,9 +58,36 @@ export function KbActionsMenu({ kb, isMobile, onClose, onAddDocument, onDelete }
       {actions.map((a, i) => 'sep' in a ? (
         <div key={i} style={{ height: 1, background: C.border, margin: '4px 2px' }} />
       ) : (
-        <MenuItem key={i} icon={a.icon} label={a.label} danger={a.danger} onClick={() => run(a.onClick)} />
+        <RowBtn key={i} danger={a.danger} icon={a.icon} label={a.label} onClick={() => run(a.onClick)} />
       ))}
     </Menu>
+  );
+}
+
+// Строка десктопного меню: визуально идентична MenuItem (та же сетка/отступы/наведение),
+// но иконка — lucide-компонент напрямую, без обёртки в <svg>.
+function RowBtn({ danger, icon, label, onClick }: {
+  danger?: boolean;
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const color = danger ? C.danger : C.textPrimary;
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+        background: hover ? C.bgSelected : 'none', border: 'none', borderRadius: R.md,
+        padding: '9px 10px', cursor: 'pointer', color, fontSize: 13.5, fontFamily: FONT.sans,
+      }}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 

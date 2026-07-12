@@ -3,6 +3,8 @@ import type { Project, ProjectGroup } from '../../../types';
 import { api } from '../../../lib/api';
 import { C, R, FONT, MODAL_W } from '../../../lib/design';
 import { Modal } from '../../../components/ui';
+import { Check } from 'lucide-react';
+import { ICON_SIZE } from '../../../components/ui/icons';
 
 interface Props {
   project: Project;
@@ -59,9 +61,7 @@ export function MoveToGroupDialog({ project, groups, onSuccess, onClose }: Props
                 {o.name}
               </span>
               {active && (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
+                <Check size={ICON_SIZE.sm} strokeWidth={2} color={C.accent} />
               )}
             </button>
           );

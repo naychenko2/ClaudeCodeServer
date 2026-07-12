@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ChevronDown, Users, X } from 'lucide-react';
 import type { ChatItem, MeetingEntryItem, MeetingPhaseKey, Persona } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { getPersonaById, personaLabel, usePersonasVersion } from '../../lib/personas';
@@ -38,11 +39,8 @@ function EntryRow({ entry, defaultOpen }: { entry: MeetingEntryItem; defaultOpen
         <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: entry.isError ? C.dangerText : C.textHeading, fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {label}{entry.isError ? ' — не ответил(а)' : ''}
         </span>
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.5"
-          strokeLinecap="round" strokeLinejoin="round"
-          style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
-          <path d="M6 9l6 6 6-6" />
-        </svg>
+        <ChevronDown size={11} color={C.textMuted} strokeWidth={2}
+          style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
       </button>
       {open && (
         <div style={{ padding: '0 12px 10px 42px', fontSize: 13 }}>
@@ -84,7 +82,7 @@ function PhaseSection({ phase, entries, running }: {
             </span>
             {status === 'running' && <Spinner />}
             {status === 'done' && <span style={{ color: C.success, fontSize: 13 }}>✓</span>}
-            {status === 'error' && <span style={{ color: C.dangerText, fontSize: 13 }}>✕</span>}
+            {status === 'error' && <X size={13} strokeWidth={2} style={{ color: C.dangerText, flexShrink: 0 }} />}
           </div>
         );
       })}
@@ -120,13 +118,7 @@ export function MeetingView({ item, onContinue, onCancel }: {
     }}>
       {/* Шапка: иконка + «Совещание» + вопрос */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 13px', borderBottom: `1px solid ${C.divider}` }}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2"
-          strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}>
-          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-          <circle cx="9" cy="7" r="4" />
-          <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-        </svg>
+        <Users size={16} color={C.accent} strokeWidth={2} style={{ flexShrink: 0, marginTop: 2 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>Совещание</span>
           {item.question && (

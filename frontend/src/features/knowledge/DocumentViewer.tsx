@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
+import { FileText } from 'lucide-react';
 import type { KnowledgeDocument, KnowledgeDocumentContent } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R } from '../../lib/design';
+import { ICON_SIZE } from '../../components/ui/icons';
 import { IconClose, IconBack } from './shared';
 
 // Просмотр содержимого документа базы знаний как встраиваемая правая панель.
@@ -203,15 +205,9 @@ function StateView({ text, tone }: { text: string; tone?: 'error' }) {
   );
 }
 
-// Иконка документа для шапки (Feather file-text, общий стиль раздела)
+// Иконка документа для шапки (lucide file-text)
 function DocIcon() {
-  return (
-    <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
-    </svg>
-  );
+  return <FileText size={ICON_SIZE.xs} strokeWidth={2} style={{ flexShrink: 0 }} />;
 }
 
 // --- Утилиты ---

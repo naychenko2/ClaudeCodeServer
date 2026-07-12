@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useContext } from 'react';
+import { ClipboardList, Check, RotateCcw } from 'lucide-react';
 import type { ChatItem } from '../../types';
 import { type Mode, MODE_META, ModeIcon } from '../../lib/modes';
 import { C, FONT, R, SHADOW } from '../../lib/design';
@@ -10,13 +11,7 @@ import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 
 // Иконка режима «План» — прямоугольник с линиями (как ModeIcon plan в Composer)
 function PlanIcon({ size = 13, color = 'currentColor', strokeWidth = 2 }: { size?: number; color?: string; strokeWidth?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-      <rect x="9" y="3" width="6" height="4" rx="1" />
-      <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
-      <path d="M9 12h6M9 16h4" />
-    </svg>
-  );
+  return <ClipboardList size={size} color={color} strokeWidth={strokeWidth} style={{ flexShrink: 0 }} />;
 }
 
 // Свёрнутый блок исходного плана (disclosure) — для решённых состояний карточки
@@ -76,7 +71,7 @@ function SavePlanButton({ plan, online }: { plan: string; online: boolean }) {
       <button onClick={save} disabled={busy} style={btn}
         title={savedId ? 'Сохранено в заметки' : 'Сохранить план в заметку'} aria-label="Сохранить план в заметку">
         {savedId
-          ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+          ? <Check size={14} color={C.success} strokeWidth={3} style={{ flexShrink: 0 }} />
           : <IconNotes size={14} />}
       </button>
     </span>
@@ -150,7 +145,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
         borderRadius: R.xl, padding: '11px 14px', background: C.bgWhite,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: C.textSecondary }}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 2v6h6" /><path d="M3 8a9 9 0 1 0 3-6.7L3 4" /></svg>
+          <RotateCcw size={15} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
           План{version ? ` v${version}` : ''} — отклонён
           <SavePlanButton plan={plan} online={online} />
         </div>
@@ -249,7 +244,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
               boxShadow: '0 4px 14px rgba(108,92,176,0.30)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
             }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+            <Check size={16} color="#FFF" strokeWidth={2.6} style={{ flexShrink: 0 }} />
             Одобрить и выполнить
           </button>
           <button onClick={() => setRejecting(true)}

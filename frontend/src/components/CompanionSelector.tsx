@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { Check, ChevronDown, MessageCircle, Users } from 'lucide-react';
 import type { Persona, AgentInfo, PantheonTemplate } from '../types';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { personaLabel } from '../lib/personas';
@@ -221,10 +222,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
           {personaLabel(persona)}
         </span>
         {active && (
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="3"
-            strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-            <path d="M20 6L9 17l-5-5" />
-          </svg>
+          <Check size={15} strokeWidth={2.5} stroke={C.accent} style={{ flexShrink: 0 }} />
         )}
       </button>
     );
@@ -257,10 +255,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
           )}
         </span>
         {active && (
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="3"
-            strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}>
-            <path d="M20 6L9 17l-5-5" />
-          </svg>
+          <Check size={15} strokeWidth={2.5} stroke={C.accent} style={{ flexShrink: 0, marginTop: 2 }} />
         )}
       </button>
     );
@@ -285,10 +280,8 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
           <span style={{ fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
             {personaLabel(selectedPersona)}
           </span>
-          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"
-            strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
-            <path d="M6 9l6 6 6-6" />
-          </svg>
+          <ChevronDown size={9} strokeWidth={2.5}
+            style={{ flexShrink: 0, opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
         </button>
       ) : selectedAgentName ? (
         // Выбран .md-агент — плашка с цветной точкой и именем (как триггер AgentSelector)
@@ -307,10 +300,8 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
           <span style={{ fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
             {agentDisplayName}
           </span>
-          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"
-            strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
-            <path d="M6 9l6 6 6-6" />
-          </svg>
+          <ChevronDown size={9} strokeWidth={2.5}
+            style={{ flexShrink: 0, opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
         </button>
       ) : (
         // Никто не выбран — компактная иконка «собеседник»
@@ -323,10 +314,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
             display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, flexShrink: 0,
           }}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-            strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 11.5a8.5 8.5 0 0 1-12 7.7L3 21l1.8-6A8.5 8.5 0 1 1 21 11.5z" />
-          </svg>
+          <MessageCircle size={16} strokeWidth={2} />
         </button>
       )}
 
@@ -486,12 +474,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
                 color: C.textSecondary, fontSize: 12.5, fontWeight: 600, fontFamily: FONT.sans,
               }}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-              </svg>
+              <Users size={16} strokeWidth={2} style={{ flexShrink: 0 }} />
               Групповой чат…
             </button>
           )}

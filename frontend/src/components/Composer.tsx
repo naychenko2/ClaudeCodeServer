@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
+import { AlertTriangle, ArrowUp, Check, ChevronDown, Mic, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { SkillsDropdown } from './SkillsDropdown';
 import { MentionsDropdown } from './MentionsDropdown';
@@ -8,6 +9,7 @@ import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/mode
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { showToast } from '../lib/toast';
 import type { SkillInfo, AgentInfo, Persona, WorkLoopState } from '../types';
 
@@ -73,27 +75,6 @@ function FileIcon({ name }: { name: string }) {
       <text x="6" y="9" textAnchor="middle" fontSize="4.5" fill={color} fontFamily="monospace" fontWeight="700">
         {ext.slice(0, 3).toUpperCase()}
       </text>
-    </svg>
-  );
-}
-
-// SVG микрофона
-function MicIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 17 17" fill="none">
-      <rect x="6" y="1" width="5" height="9" rx="2.5" fill="currentColor" />
-      <path d="M3 8.5C3 11.538 5.239 14 8.5 14C11.761 14 14 11.538 14 8.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <line x1="8.5" y1="14" x2="8.5" y2="16" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <line x1="6" y1="16" x2="11" y2="16" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-// SVG стрелки отправки
-function SendIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-      <path d="M8 13V3M8 3L4 7M8 3L12 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -477,10 +458,7 @@ export function Composer({
         justifyContent: 'center', flexShrink: 0,
       }}
     >
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-        <line x1="12" y1="5" x2="12" y2="19" />
-        <line x1="5" y1="12" x2="19" y2="12" />
-      </svg>
+      <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
   );
 
@@ -511,12 +489,7 @@ export function Composer({
         justifyContent: 'center', flexShrink: 0,
       }}
     >
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-        <circle cx="9" cy="7" r="4" />
-        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-      </svg>
+      <Users size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
   ) : null;
 
@@ -534,12 +507,7 @@ export function Composer({
         transition: 'color 0.15s, background 0.15s',
       }}
     >
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M23 4v6h-6" />
-        <path d="M1 20v-6h6" />
-        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
-        <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
-      </svg>
+      <RefreshCw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
   ) : null;
   const loopBadge = onToggleWorkLoop && loopActive && workLoop ? (
@@ -610,17 +578,18 @@ export function Composer({
         <ModeIcon mode={mode} />
         {/* На мобилке только иконка — длинные названия распирают строку контролов; полные подписи есть в списке */}
         {!isMobile && MODE_META[mode].label}
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"
-          style={{ opacity: 0.55, transform: modeMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
-          <path d="M6 9l6 6 6-6" />
-        </svg>
+        <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+          style={{ opacity: 0.55, transform: modeMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
       </button>
       {modeMenuOpen && (
         <div style={{
-          // Кнопка режима теперь слева в обеих раскладках → раскрываем меню вправо (left:0),
-          // иначе широкое меню ушло бы за левый край.
-          position: 'absolute', bottom: 'calc(100% + 6px)', left: 0,
-          minWidth: isMobile ? 260 : 248, maxWidth: 'calc(100vw - 32px)',
+          // Десктоп: absolute от кнопки (вправо). Мобил: fixed во всю ширину (left/right 16px),
+          // bottom — чуть выше кнопки по getBoundingClientRect, чтобы меню не уезжало за край
+          // экрана, когда кнопка сместилась из-за переноса строк.
+          ...(isMobile
+            ? (() => { const r = modeRef.current?.getBoundingClientRect(); return { position: 'fixed' as const, left: 16, right: 16, bottom: r ? window.innerHeight - r.top + 6 : 80 }; })()
+            : { position: 'absolute' as const, bottom: 'calc(100% + 6px)', left: 0, minWidth: 248 }),
+          maxWidth: 'calc(100vw - 32px)',
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
           boxShadow: SHADOW.dropdown, padding: 5, zIndex: Z.dropdown,
         }}>
@@ -640,11 +609,14 @@ export function Composer({
               >
                 <span style={{ color: danger ? C.danger : active ? C.accent : C.textMuted, display: 'flex', marginTop: 1, flexShrink: 0 }}><ModeIcon mode={m} /></span>
                 <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: danger ? C.danger : C.textHeading }}>{MODE_META[m].label}{danger ? ' ⚠️' : ''}</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, fontWeight: 600, color: danger ? C.danger : C.textHeading }}>
+                    <span>{MODE_META[m].label}</span>
+                    {danger && <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+                  </span>
                   <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, marginTop: 1, lineHeight: 1.35 }}>{MODE_META[m].desc}</span>
                 </span>
                 {active && (
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M20 6L9 17l-5-5" /></svg>
+                  <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0, marginTop: 2 }} />
                 )}
               </button>
             );
@@ -679,7 +651,7 @@ export function Composer({
         transition: 'color 0.15s, background 0.15s',
       }}
     >
-      <MicIcon />
+      <Mic size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
   ) : null;
 
@@ -687,13 +659,13 @@ export function Composer({
   const cancelRecBtn = (
     <button type="button" onClick={() => stopMic(false)} onContextMenu={(e) => e.preventDefault()} title="Отменить запись"
       style={{ ...iconBtnGuard, width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: C.dangerBg, color: C.danger, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+      <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
   );
   const confirmRecBtn = (
     <button type="button" onClick={() => stopMic(true)} onContextMenu={(e) => e.preventDefault()} title="Готово — вставить текст"
       style={{ ...iconBtnGuard, width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: R.pill, border: 'none', background: C.success, color: C.onAccent, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+      <Check size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
     </button>
   );
 
@@ -746,7 +718,7 @@ export function Composer({
         transition: 'background 0.15s, color 0.15s',
       }}
     >
-      <SendIcon />
+      <ArrowUp size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
   );
 
@@ -759,11 +731,7 @@ export function Composer({
         padding: '14px', borderRadius: 14, background: C.bgPanel,
         border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 13, fontWeight: 600,
       }}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M1 1l22 22" />
-          <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55M5 12.55a10.94 10.94 0 0 1 5.17-2.39M10.71 5.05A16 16 0 0 1 22.58 9M1.42 9a15.91 15.91 0 0 1 4.7-2.88M8.53 16.11a6 6 0 0 1 6.95 0" />
-          <line x1="12" y1="20" x2="12.01" y2="20" />
-        </svg>
+        <WifiOff size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
         Отправка недоступна офлайн
       </div>
     );
@@ -846,15 +814,21 @@ export function Composer({
                     cursor: 'pointer',
                     padding: 0,
                     marginLeft: 2,
+                    width: 24,
+                    height: 24,
+                    borderRadius: R.full,
                     color: C.textMuted,
                     lineHeight: 1,
                     fontSize: 13,
                     display: 'flex',
                     alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
                   }}
                   title="Удалить"
+                  aria-label={`Удалить вложение ${name}`}
                 >
-                  ✕
+                  <X size={13} strokeWidth={ICON_STROKE} />
                 </button>
               </div>
             );
@@ -867,15 +841,20 @@ export function Composer({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex' }}>{inputArea}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {attachButton}
-            {slashButton}
-            {discussButton}
-            {loopButton}
-            {loopBadge}
-            {modeButton}
-            {companionSelector}
-            <div style={{ flex: 1 }} />
-            {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
+            {/* Левая группа — переносится на 2-ю строку при нехватке места:
+                mode/companion уходят вниз, а не выпихивают mic/send */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
+              {attachButton}
+              {discussButton}
+              {loopButton}
+              {loopBadge}
+              {modeButton}
+              {companionSelector}
+            </div>
+            {/* Правая группа — всегда справа, не переносится: mic+send стоят на месте */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
+            </div>
           </div>
         </div>
       ) : (

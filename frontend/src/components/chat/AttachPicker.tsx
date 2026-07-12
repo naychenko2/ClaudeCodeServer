@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Check } from 'lucide-react';
 import type { FileEntry } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R, MODAL_W } from '../../lib/design';
@@ -72,7 +73,7 @@ export function AttachPicker({ projectId, selected, onToggle, onClose }: AttachP
                 width: 14, height: 14, flexShrink: 0, borderRadius: 3, border: `1.5px solid ${isSelected ? C.accent : C.border}`,
                 background: isSelected ? C.accent : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                {isSelected && <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.5 6L8 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                {isSelected && <Check size={9} color="white" strokeWidth={3} style={{ flexShrink: 0 }} />}
               </span>
               <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: FONT.mono }}>
                 {f.path}

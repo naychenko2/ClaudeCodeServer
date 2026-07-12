@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import { Lock, X } from 'lucide-react';
 import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '../../../types';
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
 import { C, R } from '../../../lib/design';
 import { Modal, ModalActions, TextField, TextArea, Field, Button } from '../../../components/ui';
+import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { GroupSelect } from '../GroupSelect';
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 
@@ -82,7 +84,7 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
           border: `1px dashed ${C.border}`,
           borderRadius: R.xl,
         }}>
-          <span style={{ fontSize: 14, lineHeight: 1, marginTop: 1, flexShrink: 0 }}>🔒</span>
+          <span style={{ flexShrink: 0, color: C.textMuted, marginTop: 1 }}><Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></span>
           <div style={{
             fontFamily: 'JetBrains Mono, monospace',
             fontSize: 12,
@@ -138,7 +140,7 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
                 border: `1px dashed ${C.border}`,
                 borderRadius: R.xl,
               }}>
-                <span style={{ fontSize: 14, lineHeight: 1, marginTop: 1, flexShrink: 0 }}>🔒</span>
+                <span style={{ flexShrink: 0, color: C.textMuted, marginTop: 1 }}><Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></span>
                 <div style={{
                   fontFamily: 'JetBrains Mono, monospace',
                   fontSize: 12,
@@ -199,9 +201,9 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
             <button
               onClick={() => setRules(rs => rs.filter((_, j) => j !== i))}
               title="Удалить"
-              style={{ flexShrink: 0, width: 30, height: 30, border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 14 }}
+              style={{ flexShrink: 0, width: 30, height: 30, border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             >
-              ✕
+              <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </button>
           </div>
         ))}

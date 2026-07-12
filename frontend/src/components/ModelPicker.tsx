@@ -1,7 +1,9 @@
 import { useState } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { ModelOption } from '../lib/models';
 import { modelProvider, providerLabel } from '../lib/models';
 import { C, R, FONT } from '../lib/design';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 // Выбор модели строками-карточками (как карточки режимов): название + бейдж окна
 // справа + описание подзаголовком. Группировка по провайдеру (Claude первой),
@@ -135,7 +137,7 @@ export function ModelPicker({ value, options, onChange, collapsible = true }: Pr
           }}
         >
           Сменить
-          <span style={{ fontSize: 10, display: 'inline-block', transform: 'rotate(90deg)' }}>▶</span>
+          <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
         </button>
       </div>
     );
@@ -154,7 +156,7 @@ export function ModelPicker({ value, options, onChange, collapsible = true }: Pr
             fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, color: C.textMuted,
           }}
         >
-          <span style={{ fontSize: 10, display: 'inline-block', transform: 'rotate(-90deg)' }}>▶</span>
+          <ChevronUp size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
           Свернуть
         </button>
       )}
@@ -185,12 +187,9 @@ export function ModelPicker({ value, options, onChange, collapsible = true }: Pr
                     fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, color: C.textMuted,
                   }}
                 >
-                  <span style={{
-                    display: 'inline-block', transition: 'transform 0.15s',
-                    transform: isOpen ? 'rotate(90deg)' : 'none', fontSize: 10,
-                  }}>
-                    ▶
-                  </span>
+                  {isOpen
+                    ? <ChevronUp size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                    : <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
                   {isOpen
                     ? `Скрыть другие модели ${providerLabel(key)}`
                     : `Другие модели ${providerLabel(key)} (${legacy.length})`}

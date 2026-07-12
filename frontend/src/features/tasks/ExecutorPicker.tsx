@@ -5,8 +5,10 @@
 // её проекта), гейт по флагу personas.
 
 import { useEffect, useRef, useState } from 'react';
+import { Check as CheckIcon, ChevronDown } from 'lucide-react';
 import type { Persona, TaskAssignee } from '../../types';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { api } from '../../lib/api';
 import { personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
@@ -88,9 +90,7 @@ export function ExecutorPicker({ assignee, personaId, projectId, onChange, disab
             {selectedPersona ? 'Выполнит от своего лица' : assignee === 'claude' ? 'Выполнит Claude' : 'Задача на вас'}
           </span>
         </span>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
-          <path d="M6 9l6 6 6-6" />
-        </svg>
+        <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
       </button>
 
       {open && (
@@ -191,9 +191,5 @@ function PersonaItem({ persona, active, onClick }: { persona: Persona; active: b
 }
 
 function Check() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-      <path d="M20 6L9 17l-5-5" />
-    </svg>
-  );
+  return <CheckIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />;
 }

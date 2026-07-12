@@ -2,9 +2,11 @@
 // шапка «Редактирование задачи» с Отмена / ✓ Готово / корзина, ниже поля формы.
 
 import { useEffect, useState } from 'react';
+import { Check, Plus, SquarePen, Trash2, X } from 'lucide-react';
 import type { Task, TaskAssignee, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskSubtask, UpdateTaskDto } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { IconButton } from '../../components/ui';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
@@ -189,15 +191,11 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
             opacity: saving || !title.trim() ? 0.6 : 1,
           }}
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
+          <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           Готово
         </button>
         <IconButton size="md" tone="danger" onClick={onDelete} title="Удалить задачу">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14" />
-          </svg>
+          <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
         </IconButton>
       </Toolbar>
 
@@ -452,14 +450,12 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
             >
               {descEditing ? (
                 <>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><polyline points="20 6 9 17 4 12" /></svg>
+                  <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                   Просмотр
                 </>
               ) : (
                 <>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                  </svg>
+                  <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                   Редактировать
                 </>
               )}
@@ -521,13 +517,14 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 </span>
                 <button
                   onClick={() => setSubtasks(prev => prev.filter((_, xi) => xi !== i))}
+                  aria-label="Удалить подзадачу"
                   title="Удалить подзадачу"
                   style={{
                     border: 'none', background: 'none', cursor: 'pointer', padding: 4,
-                    color: C.textMuted, fontSize: 15, lineHeight: 1, fontFamily: FONT.sans,
+                    color: C.textMuted, lineHeight: 1, fontFamily: FONT.sans, display: 'flex', alignItems: 'center',
                   }}
                 >
-                  ✕
+                  <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                 </button>
               </div>
             ))}
@@ -556,9 +553,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                   color: C.textSecondary, display: 'flex', alignItems: 'center', justifyContent: 'center',
                 }}
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-                  <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
+                <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
               </button>
             </div>
           </div>
@@ -576,9 +571,9 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                   {l}
                   <span
                     onClick={() => setLabels(prev => prev.filter(x => x !== l))}
-                    style={{ cursor: 'pointer', color: C.textMuted, fontSize: 12, lineHeight: 1 }}
+                    style={{ cursor: 'pointer', color: C.textMuted, lineHeight: 1, display: 'flex', alignItems: 'center' }}
                   >
-                    ✕
+                    <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                   </span>
                 </span>
               ))}

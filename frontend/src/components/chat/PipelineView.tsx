@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ChevronDown, Activity } from 'lucide-react';
 import type { ChatItem, PipelinePhaseItem, PipelinePhaseKey, Persona } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { getPersonaById, personaLabel, usePersonasVersion } from '../../lib/personas';
@@ -60,11 +61,8 @@ function PhaseRow({ entry, defaultOpen }: { entry: PipelinePhaseItem; defaultOpe
             {rejected ? 'Отклонено' : 'Одобрено'}
           </span>
         )}
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.5"
-          strokeLinecap="round" strokeLinejoin="round"
-          style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
-          <path d="M6 9l6 6 6-6" />
-        </svg>
+        <ChevronDown size={11} color={C.textMuted} strokeWidth={2}
+          style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
       </button>
       {open && (
         <div style={{ padding: '0 12px 10px 42px', fontSize: 13 }}>
@@ -97,10 +95,7 @@ export function PipelineView({ item, onCancel }: {
     }}>
       {/* Шапка: иконка + «Конвейер» + задача */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 13px', borderBottom: `1px solid ${C.divider}` }}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2"
-          strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}>
-          <path d="M3 12h4l3 8 4-16 3 8h4" />
-        </svg>
+        <Activity size={16} color={C.accent} strokeWidth={2} style={{ flexShrink: 0, marginTop: 2 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>Конвейер</span>
           {item.task && (

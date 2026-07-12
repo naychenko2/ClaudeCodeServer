@@ -4,7 +4,9 @@
 // без перезагрузки); без обработчика — фолбэк на полную загрузку по hash-URL.
 
 import { useEffect, useState } from 'react';
+import { X } from 'lucide-react';
 import { C, FONT, R, SHADOW, Z } from '../lib/design';
+import { ICON_STROKE } from './ui/icons';
 import { joinUser, onMessage, onReconnected } from '../lib/signalr';
 import type { LocalToast } from '../lib/toast';
 
@@ -111,9 +113,10 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
             style={{
               border: 'none', background: 'none', cursor: 'pointer', padding: 2,
               color: C.textMuted, fontSize: 13, lineHeight: 1, fontFamily: FONT.sans, flexShrink: 0,
+              display: 'flex', alignItems: 'center',
             }}
           >
-            ✕
+            <X size={13} strokeWidth={ICON_STROKE} />
           </button>
         </div>
       ))}

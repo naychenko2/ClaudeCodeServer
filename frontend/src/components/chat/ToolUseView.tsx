@@ -1,4 +1,5 @@
 import { memo, useState, useEffect, useMemo, useContext } from 'react';
+import { Plug, Eye, SquarePen, Terminal, Globe, CircleUser, Sparkles, SquareCheck, Wrench } from 'lucide-react';
 import type { ChatItem } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
@@ -13,27 +14,25 @@ function ToolSpinner() {
 // Иконка и цвет по типу инструмента — чтобы read/edit/bash/web/mcp различались с первого взгляда
 function toolMeta(name: string): { color: string; icon: React.ReactNode } {
   const n = name.toLowerCase();
-  const svg = (children: React.ReactNode) => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
-  );
+  const common = { size: 13, strokeWidth: 2 } as const;
   if (n.startsWith('mcp__'))
-    return { color: C.plan, icon: svg(<><path d="M9 2v6M15 2v6" /><path d="M6 8h12v3a6 6 0 0 1-12 0z" /><path d="M12 17v5" /></>) };
+    return { color: C.plan, icon: <Plug {...common} /> };
   if (['read', 'glob', 'grep', 'ls'].includes(n))
-    return { color: C.info, icon: svg(<><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></>) };
+    return { color: C.info, icon: <Eye {...common} /> };
   if (['edit', 'write', 'multiedit', 'notebookedit'].includes(n))
-    return { color: C.accent, icon: svg(<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></>) };
+    return { color: C.accent, icon: <SquarePen {...common} /> };
   if (n.startsWith('bash') || n.includes('shell'))
-    return { color: C.success, icon: svg(<><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></>) };
+    return { color: C.success, icon: <Terminal {...common} /> };
   if (['websearch', 'webfetch'].includes(n))
-    return { color: C.plan, icon: svg(<><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></>) };
+    return { color: C.plan, icon: <Globe {...common} /> };
   if (n === 'task')
-    return { color: C.accent, icon: svg(<><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>) };
+    return { color: C.accent, icon: <CircleUser {...common} /> };
   if (n === 'skill')
-    return { color: C.plan, icon: svg(<><path d="M12 3l1.9 5.2L19 10l-5.1 1.8L12 17l-1.9-5.2L5 10l5.1-1.8z" /><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" /></>) };
+    return { color: C.plan, icon: <Sparkles {...common} /> };
   // Todo-задачи — та же «галочка в рамке», что у карточки плана
   if (['taskcreate', 'taskupdate', 'tasklist', 'taskget'].includes(n))
-    return { color: C.accent, icon: svg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>) };
-  return { color: C.info, icon: svg(<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6 2 2 6-6a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3z" />) };
+    return { color: C.accent, icon: <SquareCheck {...common} /> };
+  return { color: C.info, icon: <Wrench {...common} /> };
 }
 
 // Статусы todo-задач (TaskUpdate) по-русски — для компактной строки в ленте

@@ -5,6 +5,8 @@
 // кнопка «Поручить задачу» создаёт настоящую задачу с предзаполненным исполнителем.
 
 import { useEffect, useMemo, useState } from 'react';
+import { Plus, SquareCheckBig } from 'lucide-react';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, Task, TaskStatus } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import {
@@ -51,9 +53,7 @@ export function PersonaTasksPanel({ persona, isMobile }: { persona: Persona; isM
             : 'Пока ничего не поручено'}
         </div>
         <button onClick={() => setShowCreate(true)} style={assignBtn}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
+          <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
           Поручить задачу
         </button>
       </div>
@@ -64,9 +64,7 @@ export function PersonaTasksPanel({ persona, isMobile }: { persona: Persona; isM
           <div style={{ padding: 24, textAlign: 'center', color: C.textMuted, fontFamily: FONT.sans, fontSize: 13 }}>Загрузка…</div>
         ) : tasks.length === 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: '50px 24px', textAlign: 'center' }}>
-            <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke={C.dashed} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-            </svg>
+            <SquareCheckBig size={46} strokeWidth={1.5} color={C.dashed} style={{ flexShrink: 0 }} />
             <div style={{ maxWidth: 320, fontFamily: FONT.sans, fontSize: 13.5, color: C.textMuted, lineHeight: 1.5 }}>
               Этой персоне пока ничего не поручено. Создайте задачу и выберите её исполнителем — задача появится здесь.
             </div>

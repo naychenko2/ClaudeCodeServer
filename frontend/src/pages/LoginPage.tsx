@@ -1,9 +1,11 @@
 import React, { useState, useRef } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import type { AuthState } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
 import { C, R, FONT } from '../lib/design';
 import { IconField, Toggle, Button } from '../components/ui';
+import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 
 interface LoginPageProps {
   onConnect: (auth: AuthState) => void;
@@ -182,7 +184,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
               background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, borderRadius: R.xl,
               padding: '12px 14px', display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16,
             }}>
-              <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>⚠</span>
+              <span style={{ flexShrink: 0, marginTop: 1, color: C.danger, display: 'flex' }}><AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /></span>
               <span style={{ fontSize: 13.5, color: C.danger, lineHeight: 1.45 }}>
                 {errorMessage}
               </span>

@@ -5,6 +5,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Project, Task } from '../../types';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
+import { useIsMobile } from '../../lib/breakpoints';
+import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
+import { ICON_SIZE } from '../../components/ui/icons';
 import { NO_PROJECT_LABEL, projectColor, todayIso, toIsoDate } from '../../lib/tasks';
 import { TaskCard } from './TaskCard';
 import { RepeatIcon } from './bits';
@@ -37,18 +40,20 @@ function monthCells(year: number, month: number): { iso: string; inMonth: boolea
 
 // Круглая кнопка навигации ‹ ›
 export function NavArrow({ dir, onClick }: { dir: -1 | 1; onClick: () => void }) {
+  const m = useIsMobile();
   return (
     <button
       onClick={onClick}
+      aria-label={dir < 0 ? 'Назад' : 'Вперёд'}
       style={{
-        width: 34, height: 34, padding: 0, cursor: 'pointer', flexShrink: 0,
+        width: m ? 40 : 34, height: m ? 40 : 34, padding: 0, cursor: 'pointer', flexShrink: 0,
         border: `1px solid ${C.border}`, borderRadius: '50%', background: C.bgWhite,
         color: C.textSecondary, display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
     >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-        {dir < 0 ? <path d="M15 18l-6-6 6-6" /> : <path d="M9 6l6 6-6 6" />}
-      </svg>
+      {dir < 0
+        ? <ChevronLeft size={ICON_SIZE.xs} strokeWidth={2} />
+        : <ChevronRight size={ICON_SIZE.xs} strokeWidth={2} />}
     </button>
   );
 }
@@ -494,9 +499,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
               whiteSpace: 'nowrap',
             }}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2.5" strokeLinecap="round">
-              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
+            <Plus size={ICON_SIZE.xs} strokeWidth={2} color={C.accent} />
             Задача на {fullDayLabel(ctxMenu.iso)}
           </button>
         </div>

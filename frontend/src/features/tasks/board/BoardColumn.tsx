@@ -2,10 +2,12 @@
 // ячейка-droppable (lane × status) со списком карточек и быстрым добавлением.
 
 import { useState } from 'react';
+import { Plus } from 'lucide-react';
 import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import type { Task } from '../../../types';
 import { C, FONT, R } from '../../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { setWip } from '../../../lib/boardControls';
 import { BoardCard } from './BoardCard';
 
@@ -160,9 +162,7 @@ export function BoardCell({ cellId, cards, projectNameOf, onOpen, onQuickAdd, mi
               fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, color: C.textMuted,
             }}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
+            <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             Добавить
           </button>
         )

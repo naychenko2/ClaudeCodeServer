@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { X, Check } from 'lucide-react';
 import type { NoteTask } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes } from '../../lib/notes';
 import { C, FONT, R } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 
 // Секция «Задачи из заметки» (флаг notes-task-sync): чекбоксы заметки с промоутом в
 // настоящую задачу (появится в календаре), синхронной отметкой и сроком через дейт-пикер.
@@ -68,9 +70,7 @@ export function NoteTasksSection({ noteId, version }: { noteId: string; version:
                   }}
                 >
                   {t.done && (
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.onAccent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
+                    <Check size={11} strokeWidth={ICON_STROKE} color={C.onAccent} />
                   )}
                 </button>
                 <span style={{
@@ -91,10 +91,10 @@ export function NoteTasksSection({ noteId, version }: { noteId: string; version:
                     title="Убрать срок" aria-label="Убрать срок"
                     style={{
                       flex: 'none', border: 'none', background: 'none', color: C.textMuted,
-                      cursor: disabled ? 'default' : 'pointer', fontSize: 12, lineHeight: 1, padding: '0 2px',
+                      cursor: disabled ? 'default' : 'pointer', lineHeight: 1, padding: '0 2px', display: 'flex', alignItems: 'center',
                     }}
                   >
-                    ✕
+                    <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                   </button>
                 )}
                 <span style={{ flex: 1 }} />

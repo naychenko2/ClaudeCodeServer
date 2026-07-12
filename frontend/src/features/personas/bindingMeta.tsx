@@ -1,35 +1,39 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { File, Layers, Pencil, Wrench, Zap } from 'lucide-react';
 import type { BindingTarget, PersonaBinding, PersonaBindingMode, PersonaBindingType } from '../../types';
 import { api } from '../../lib/api';
 import { C, R } from '../../lib/design';
+import { ICON_STROKE } from '../../components/ui/icons';
 
 // Общие метаданные привязок «Знания и правила» (фича persona-bindings):
 // иконки/тона типов, подписи режимов, счётчики и резолв человекочитаемых
 // подписей целей. Используется вкладкой «Знания» (PersonaBindingsPanel)
 // и выжимкой на «Обзоре» (PersonaPreview).
 
-// Иконка lucide-стиля (stroke 2) — как VIEW_OPTIONS в PersonaToolbar
-export const bindingSvg = (d: ReactNode, size = 16) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    {d}
-  </svg>
-);
-
-export const BINDING_ICONS: Record<PersonaBindingType, ReactNode> = {
-  // Проект — открытая папка
-  project: <><path d="M4 20V6a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v12" /><path d="M2 20h20" /><circle cx="9" cy="13" r="1" /><circle cx="15" cy="13" r="1" /></>,
+// Иконки типов привязок (lucide-react). project — составная «папка с лицом»
+// (нет точного lucide-аналога), остальные — канонические lucide-компоненты.
+export const BINDING_ICONS: Record<PersonaBindingType, (size: number) => ReactNode> = {
+  // Проект — открытая папка с «глазами» (составная, без lucide-аналога)
+  project: size => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={ICON_STROKE} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 20V6a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v12" />
+      <path d="M2 20h20" />
+      <circle cx="9" cy="13" r="1" />
+      <circle cx="15" cy="13" r="1" />
+    </svg>
+  ),
   // Папка или файл — лист с загнутым углом
-  projectPath: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></>,
+  projectPath: size => <File size={size} strokeWidth={ICON_STROKE} />,
   // База знаний — слои
-  knowledge: <><path d="m12 2 9 5-9 5-9-5z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" /></>,
+  knowledge: size => <Layers size={size} strokeWidth={ICON_STROKE} />,
   // Заметки — карандаш
-  notes: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>,
+  notes: size => <Pencil size={size} strokeWidth={ICON_STROKE} />,
   // Инструмент — гаечный ключ
-  tool: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />,
+  tool: size => <Wrench size={size} strokeWidth={ICON_STROKE} />,
   // Навык — молния
-  skill: <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />,
+  skill: size => <Zap size={size} strokeWidth={ICON_STROKE} />,
 };
 
 // Тона круглой иконки типа + название и подсказка для сетки выбора типа
@@ -68,7 +72,7 @@ export function BindingTypeIcon({ type, size = 32, dim }: { type: PersonaBinding
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       background: dim ? C.bgSelected : meta.bg, color: dim ? C.textMuted : meta.fg,
     }}>
-      {bindingSvg(BINDING_ICONS[type], size >= 32 ? 16 : 13)}
+      {BINDING_ICONS[type](size >= 32 ? 16 : 13)}
     </span>
   );
 }

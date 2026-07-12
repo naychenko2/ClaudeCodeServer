@@ -1,6 +1,9 @@
 // Мелкие общие элементы задач: флаг приоритета, бейджи, чипы, лейблы секций
 
 import type { ReactNode } from 'react';
+import {
+  Calendar, Repeat, LayoutGrid, List, CalendarDays, CalendarRange, Rows3, CalendarCheck,
+} from 'lucide-react';
 import type { Task, TaskAssignee, TaskPriority } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { PRIORITY_COLOR, PRIORITY_FILL, dueLabel, isDueUrgent } from '../../lib/tasks';
@@ -51,71 +54,30 @@ export function AssigneeBadge({ assignee, size = 20 }: { assignee?: TaskAssignee
   return null;
 }
 
-// Общие пропсы stroke-иконок (единый стиль проекта: currentColor, round caps)
-function strokeIconProps(size: number) {
-  return {
-    width: size, height: size, viewBox: '0 0 24 24', fill: 'none' as const,
-    stroke: 'currentColor', strokeWidth: 2,
-    strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const,
-    style: { flexShrink: 0 },
-  };
-}
-
-// Иконки видов календаря и группировок списка задач
+// Иконки видов календаря и группировок списка задач (lucide-react, strokeWidth=2)
 export function MonthIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg {...strokeIconProps(size)}>
-      <rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" />
-      <rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" />
-    </svg>
-  );
+  return <CalendarDays size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
 }
 
 export function WeekIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg {...strokeIconProps(size)}>
-      <rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M9 9v12M15 9v12M8 2v4M16 2v4" />
-    </svg>
-  );
+  return <CalendarRange size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
 }
 
 export function AgendaIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg {...strokeIconProps(size)}>
-      <line x1="9" y1="6" x2="21" y2="6" /><line x1="9" y1="12" x2="21" y2="12" /><line x1="9" y1="18" x2="21" y2="18" />
-      <circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none" />
-      <circle cx="4.5" cy="12" r="1" fill="currentColor" stroke="none" />
-      <circle cx="4.5" cy="18" r="1" fill="currentColor" stroke="none" />
-    </svg>
-  );
+  return <Rows3 size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
 }
 
-// Иконка вида «Доска» (Kanban) — три вертикальные колонки
+// Иконка вида «Доска» (Kanban) — сетка колонок
 export function BoardIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg {...strokeIconProps(size)}>
-      <rect x="3" y="4" width="4.5" height="16" rx="1.5" />
-      <rect x="9.75" y="4" width="4.5" height="11" rx="1.5" />
-      <rect x="16.5" y="4" width="4.5" height="7" rx="1.5" />
-    </svg>
-  );
+  return <LayoutGrid size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
 }
 
 export function ListIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg {...strokeIconProps(size)}>
-      <rect x="3" y="4" width="18" height="6" rx="2" /><rect x="3" y="14" width="18" height="6" rx="2" />
-    </svg>
-  );
+  return <List size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
 }
 
 export function ByDateIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg {...strokeIconProps(size)}>
-      <rect x="3" y="4" width="18" height="18" rx="3" /><path d="M3 9h18M8 2v4M16 2v4" />
-      <circle cx="12" cy="15" r="1" fill="currentColor" stroke="none" />
-    </svg>
-  );
+  return <CalendarCheck size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
 }
 
 // Мобильный переключатель видов: сегменты «иконка сверху, подпись снизу»,
@@ -154,23 +116,12 @@ export function IconViewSwitcher<T extends string>({ value, options, onChange }:
 
 // Иконка повтора — маркер виртуального (вычисленного) экземпляра регулярной задачи в календаре
 export function RepeatIcon({ size = 11 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-      <path d="M17 2l4 4-4 4" /><path d="M3 11v-1a4 4 0 0 1 4-4h14" />
-      <path d="M7 22l-4-4 4-4" /><path d="M21 13v1a4 4 0 0 1-4 4H3" />
-    </svg>
-  );
+  return <Repeat size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
 }
 
 // Иконка календаря для чипов срока
 export function CalendarIcon({ size = 11 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-      <rect x="3" y="4" width="18" height="18" rx="3" /><path d="M3 9h18M8 2v4M16 2v4" />
-    </svg>
-  );
+  return <Calendar size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
 }
 
 // Чип срока: «Сегодня» / «Пн» / «18 июн» (+ время). Горящий срок — красным.

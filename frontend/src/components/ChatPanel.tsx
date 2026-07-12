@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from 'react';
+import { ArrowDown } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState } from '../types';
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, ensurePersonasLoaded, personaLabel } from '../lib/personas';
@@ -902,9 +903,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             boxShadow: SHADOW.card, zIndex: 15,
           }}
         >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 5v14" /><path d="m19 12-7 7-7-7" />
-          </svg>
+          <ArrowDown size={22} strokeWidth={2.2} />
         </button>
       )}
 

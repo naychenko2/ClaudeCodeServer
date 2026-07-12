@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronsLeft, Menu, Pin, User } from 'lucide-react';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
@@ -24,13 +26,7 @@ import type { PersonaTemplate } from './personaTemplates';
 
 // Иконка раздела для пустого состояния (персона)
 function IconPersonas() {
-  return (
-    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="8" r="4" />
-      <path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" />
-    </svg>
-  );
+  return <User size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />;
 }
 
 export function PersonasPage({ auth, onLogout, onHubTab }: {
@@ -166,12 +162,12 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const sidebarHeader = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px 0', minHeight: 28, flex: 'none' }}>
       <IconButton onClick={() => setSidebarMode('collapsed')} title="Свернуть панель" size="sm" style={{ marginLeft: -2 }}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 18l-6-6 6-6M18 18l-6-6 6-6" /></svg>
+        <ChevronsLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
       </IconButton>
       <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Персоны</span>
       {sidebarMode === 'open' && (
         <IconButton onClick={() => setSidebarMode('pinned')} title="Закрепить панель" size="sm">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="17" x2="12" y2="22" /><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" /></svg>
+          <Pin size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
         </IconButton>
       )}
     </div>
@@ -248,7 +244,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         {sidebarMode === 'collapsed' && (
           <div style={{ flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48, borderBottom: `1px solid ${C.divider}` }}>
             <IconButton onClick={() => setSidebarMode('open')} title="Открыть панель" size="md" variant="soft">
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+              <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
             </IconButton>
           </div>
         )}

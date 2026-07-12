@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Check, SquarePen, MessageCircle } from 'lucide-react';
 import type { ChatItem } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { useAssistantName } from './contexts';
@@ -61,7 +62,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {chosen.map((label, li) => (
                     <span key={li} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: C.successText, background: C.bgWhite, border: `1px solid ${C.success}`, borderRadius: 7, padding: '3px 9px' }}>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                      <Check size={11} color={C.success} strokeWidth={3.5} style={{ flexShrink: 0 }} />
                       {label}
                     </span>
                   ))}
@@ -148,7 +149,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
             <div style={{ borderRadius: 9, overflow: 'hidden', border: open ? `1.5px solid ${C.accent}` : `1px dashed ${C.dashed}`, background: open ? C.accentLight : 'transparent' }}>
               <div onClick={() => !disabled && toggleCustom(qi, !!q.multiSelect)}
                 style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', minHeight: 44, boxSizing: 'border-box', cursor: disabled ? 'default' : 'pointer' }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                <SquarePen size={14} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
                 <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: open ? C.textHeading : C.textMuted }}>Свой вариант{open ? '' : '…'}</span>
                 {q.multiSelect && <span style={{ flexShrink: 0, display: 'flex' }}><ChoiceMarker multi selected={filled} /></span>}
               </div>
@@ -190,9 +191,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
     <div style={{ border: `1px solid ${C.accentMuted}`, borderLeft: `3px solid ${C.accent}`, borderRadius: 12, padding: '13px 14px', background: C.accentLight }}>
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 11 }}>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 600, color: C.textHeading }}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-          </svg>
+          <MessageCircle size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />
           {asstName} уточняет
         </div>
         {multiQ && <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, fontFamily: FONT.mono }}>{activeTab + 1} / {questions.length}</span>}
@@ -214,7 +213,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
                 }}
               >
                 {ans
-                  ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                  ? <Check size={11} color={C.accent} strokeWidth={3.5} style={{ flexShrink: 0 }} />
                   : <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? C.accent : C.textMuted, flexShrink: 0 }} />}
                 {q.header || `Q${qi + 1}`}
               </button>

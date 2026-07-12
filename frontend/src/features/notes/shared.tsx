@@ -1,4 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import {
+  Search, Plus, Eye, SquarePen, MessageCircle, Share2, StickyNote, Undo2, ExternalLink,
+  Trash2, ArrowLeft, CalendarDays, Folder, FolderOutput, Sparkles, Link2,
+} from 'lucide-react';
 import { C, FONT, R } from '../../lib/design';
 import { projectColor } from '../../lib/tasks';
 
@@ -12,26 +16,26 @@ export function usePanelWidth(storageKey: string, def: number, min: number, max:
   useEffect(() => { localStorage.setItem(storageKey, String(width)); }, [width, storageKey]);
   const [dragging, setDragging] = useState(false);
 
-  const startDrag = (e: React.MouseEvent) => {
+  const startDrag = (e: React.PointerEvent) => {
     e.preventDefault();
     setDragging(true);
     const startX = e.clientX;
     const startW = width;
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       const d = ev.clientX - startX;
       setWidth(Math.max(min, Math.min(max, rightSide ? startW - d : startW + d)));
     };
     const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       setDragging(false);
     };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
   };
 
   return [width, dragging, startDrag] as const;
@@ -42,34 +46,26 @@ export function sourceColor(source: string): string {
   return source === 'personal' ? C.accent : projectColor(source).main;
 }
 
-// --- Иконки (inline SVG, стиль Feather: stroke=currentColor) ---
+// --- Иконки (lucide-react, Feather-стиль: stroke=currentColor, strokeWidth=2) ---
+// Экспортные имена/сигнатуры сохранены — потребители не меняются.
 
-const svg = (children: ReactNode, size = 16) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
-);
-
-export const IconSearch = () => svg(<><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></>);
-export const IconPlus = () => svg(<><path d="M12 5v14M5 12h14" /></>);
-export const IconEye = () => svg(<><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>);
-export const IconPencil = () => svg(<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></>);
-export const IconChat = () => svg(<><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /></>);
-export const IconGraph = () => svg(<><circle cx="5" cy="6" r="2.5" /><circle cx="18" cy="7" r="2.5" /><circle cx="12" cy="18" r="2.5" /><path d="M7 7.5 10.5 16M15.8 8.6 13.5 16" /></>);
-// Единая иконка «Заметки» (связанные ноды базы знаний) — та же в дереве файлов,
-// пустом состоянии раздела и карточке заметки в чате
-export const IconNotes = ({ size = 16 }: { size?: number }) => svg(<>
-  <circle cx="6" cy="7" r="2.5" /><circle cx="18" cy="8" r="2.5" /><circle cx="12" cy="18" r="2.5" />
-  <path d="M7.7 9 10.7 16M16.6 10 13.4 16M8.5 7.4 15.5 7.8" />
-</>, size);
-export const IconBacklink = () => svg(<><path d="M9 14 4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 5 5v6" /></>);
-export const IconOutlink = () => svg(<><path d="M7 17 17 7M8 7h9v9" /></>);
-export const IconTrash = () => svg(<><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></>);
-export const IconBack = () => svg(<><path d="M19 12H5M12 19l-7-7 7-7" /></>);
-export const IconCalendarDay = () => svg(<><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /><circle cx="12" cy="16" r="1.5" fill="currentColor" stroke="none" /></>);
-export const IconFolder = ({ size = 14 }: { size?: number }) => svg(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />, size);
-export const IconFolderMove = () => svg(<><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M10 13h6M13.5 10.5 16 13l-2.5 2.5" /></>);
-export const IconSparkle = () => svg(<><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8" /></>);
-export const IconLink = () => svg(<><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></>);
+export const IconSearch = ({ size = 16 }: { size?: number }) => <Search size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconPlus = ({ size = 16 }: { size?: number }) => <Plus size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconEye = ({ size = 16 }: { size?: number }) => <Eye size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconPencil = ({ size = 16 }: { size?: number }) => <SquarePen size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconChat = ({ size = 16 }: { size?: number }) => <MessageCircle size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconGraph = ({ size = 16 }: { size?: number }) => <Share2 size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+// Единая иконка «Заметки» — та же в дереве файлов, пустом состоянии раздела и карточке заметки в чате
+export const IconNotes = ({ size = 16 }: { size?: number }) => <StickyNote size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconBacklink = ({ size = 16 }: { size?: number }) => <Undo2 size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconOutlink = ({ size = 16 }: { size?: number }) => <ExternalLink size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconTrash = ({ size = 16 }: { size?: number }) => <Trash2 size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconBack = ({ size = 16 }: { size?: number }) => <ArrowLeft size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconCalendarDay = ({ size = 16 }: { size?: number }) => <CalendarDays size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconFolder = ({ size = 14 }: { size?: number }) => <Folder size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconFolderMove = ({ size = 16 }: { size?: number }) => <FolderOutput size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconSparkle = ({ size = 16 }: { size?: number }) => <Sparkles size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+export const IconLink = ({ size = 16 }: { size?: number }) => <Link2 size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
 
 // Точка-индикатор источника
 export function SourceDot({ source, size = 8 }: { source: string; size?: number }) {

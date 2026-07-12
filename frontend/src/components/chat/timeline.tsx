@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { ChevronUp, ChevronDown } from 'lucide-react';
 import type { ChatItem } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { toolWord, type ToolUseItem } from './ToolUseView';
@@ -29,9 +30,9 @@ export function ToolGroupBlock({ isGroupDone, toolCount, children }: {
           <span style={{ fontSize: 11.5, color: C.textMuted, flex: 1, fontFamily: FONT.sans }}>
             {toolCount} {toolWord(toolCount)}
           </span>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            {expanded ? <path d="M18 15l-6-6-6 6"/> : <path d="M6 9l6 6 6-6"/>}
-          </svg>
+          {expanded
+            ? <ChevronUp size={12} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
+            : <ChevronDown size={12} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />}
         </button>
       )}
       {(!isGroupDone || expanded) && children}

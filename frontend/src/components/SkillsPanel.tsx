@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Search, Trash2 } from 'lucide-react';
 import type { AgentInfo, SkillInfo, SkillsData } from '../types';
 import { C, R, FONT } from '../lib/design';
 import { api } from '../lib/api';
 import { agentDotColor } from './AgentSelector';
 import { SkillSearchDialog } from './SkillSearchDialog';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 interface Props {
   projectId: string;
@@ -42,10 +44,7 @@ export function SkillsPanel({ projectId }: Props) {
             cursor: 'pointer', fontFamily: FONT.sans, transition: 'border-color 0.15s, color 0.15s',
           }}
         >
-          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
-          </svg>
+          <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           Найти навык
         </button>
       </div>
@@ -189,10 +188,7 @@ function SkillCard({ skill, onRemove }: { skill: SkillInfo; onRemove?: () => voi
             color: C.textMuted, display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}
         >
-          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-          </svg>
+          <Trash2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </button>
       )}
       {/* Описание */}

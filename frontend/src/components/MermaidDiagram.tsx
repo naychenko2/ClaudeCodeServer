@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { X, AlertTriangle } from 'lucide-react';
 import { C, FONT } from '../lib/design';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { getEffectiveTheme, subscribeThemeMode } from '../lib/themeMode';
 
 // Диаграмма Mermaid: клиентский рендер в SVG. Библиотека грузится лениво (тяжёлая),
@@ -146,7 +148,7 @@ function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void })
         <button type="button" title="Уменьшить" style={btn} onClick={() => zoomCenter(0.8)}>−</button>
         <button type="button" title="Сбросить" style={{ ...btn, fontSize: 13 }} onClick={reset}>1:1</button>
         <button type="button" title="Увеличить" style={btn} onClick={() => zoomCenter(1.25)}>+</button>
-        <button type="button" title="Закрыть (Esc)" style={btn} onClick={onClose}>✕</button>
+        <button type="button" title="Закрыть (Esc)" style={btn} onClick={onClose}><X size={ICON_SIZE.md} strokeWidth={ICON_STROKE} /></button>
       </div>
       {/* Область с диаграммой: зум/пан */}
       <div
@@ -264,7 +266,7 @@ export function MermaidDiagram({ code }: { code: string }) {
     return (
       <div style={{ margin: '6px 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontFamily: FONT.sans, fontSize: 12, color: C.warningText }}>
-          ⚠ Не удалось построить диаграмму — показан исходный код
+          <AlertTriangle size={13} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> Не удалось построить диаграмму — показан исходный код
         </div>
         {codeBlock}
       </div>

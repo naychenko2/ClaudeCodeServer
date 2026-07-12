@@ -1,4 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { Pencil } from 'lucide-react';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaWorkingFocus, Project } from '../../types';
 import { api } from '../../lib/api';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem } from '../../components/ui';
@@ -440,9 +442,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               boxShadow: SHADOW.thumb,
             }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-            </svg>
+            <Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
           </button>
 
           {/* Мини-меню внешности: генерация / загрузка файла / перекроп / цвет */}

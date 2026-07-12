@@ -1,7 +1,9 @@
 // Карточка задачи в списках (сайдбар проекта, агенда, список дня в календаре)
 
 import type { Task } from '../../types';
+import { Repeat } from 'lucide-react';
 import { C, FONT, SHADOW } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { projectColor } from '../../lib/tasks';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
@@ -62,12 +64,7 @@ export function TaskCard({ task, selected, onClick, compact, projectName }: Prop
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
             <DueChip task={task} />
             {task.recurrence && (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                <path d="M17 1l4 4-4 4" />
-                <path d="M3 11V9a4 4 0 0 1 4-4h14" />
-                <path d="M7 23l-4-4 4-4" />
-                <path d="M21 13v2a4 4 0 0 1-4 4H3" />
-              </svg>
+              <Repeat size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
             )}
             {!compact && task.subtasks.length > 0 && (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>

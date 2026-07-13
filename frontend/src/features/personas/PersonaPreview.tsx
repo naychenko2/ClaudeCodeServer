@@ -499,20 +499,19 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
       }}>
         <div>
           {hero}
-          {greeting}
-        </div>
-        {/* «Поговорить» — на мобиле переезжает сюда из тулбара (там тесно) */}
-        {isMobile && (
+          {/* Поговорить — после описания, до фактов и настроек */}
           <button type="button" onClick={onTalk} disabled={talking} style={{
             width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
             background: accent, color: C.onAccent, border: 'none', borderRadius: R.xl,
-            padding: '12px 16px', fontSize: 14, fontWeight: 600, fontFamily: FONT.sans,
+            padding: '11px 16px', fontSize: 14, fontWeight: 600, fontFamily: FONT.sans,
             cursor: talking ? 'default' : 'pointer', opacity: talking ? 0.6 : 1,
+            marginTop: 18,
           }}>
             <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
             {talking ? 'Создаём…' : 'Поговорить'}
           </button>
-        )}
+          {greeting}
+        </div>
         {factsRow}
         {characterSection}
         {rulesSection}

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Bell, Book, Calendar, Folder, MessageCircle, Share2, Users } from 'lucide-react';
+import { Book, Calendar, Folder, MessageCircle, Share2, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
 
 export type HubTab = 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
@@ -12,7 +12,7 @@ const TAB_ICONS: Record<HubTab, ReactNode> = {
   notes: <Share2 size={18} strokeWidth={2} />,
   personas: <Users size={18} strokeWidth={2} />,
   knowledge: <Book size={18} strokeWidth={2} />,
-  notifications: <Bell size={18} strokeWidth={2} />,
+  notifications: <MessageCircle size={18} strokeWidth={2} />,
 };
 
 // Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки | Персоны» — на общем PillSwitch.
@@ -30,11 +30,11 @@ export function HubTabs({ value, onChange, mobile }: {
     { value: 'notes' as HubTab, label: 'Заметки' },
     { value: 'personas' as HubTab, label: 'Персоны' },
     { value: 'knowledge' as HubTab, label: 'Знания' },
-    { value: 'notifications' as HubTab, label: 'Уведомления' },
   ]
     // Все 6 разделов — в компакт-таббаре (compact-режим: неактивные иконками, подпись
     // только у активного). Раньше «Знания» прятали в меню аватара, но это ломало симметрию
     // с Заметками/Персонами; на узком экране контейнер в HubHeader скроллится, не обрезается.
+    // «Уведомления» — только через колокольчик в тулбаре, таба в хабе нет.
     .map(o => mobile ? { ...o, icon: TAB_ICONS[o.value] } : o);
   return (
     <PillSwitch<HubTab>

@@ -1,4 +1,5 @@
 import { onMessage } from './signalr';
+import { request } from './offline';
 import type { NotificationItem, NotificationKind, NotificationListResponse, CreateNotificationRequest } from '../types';
 
 // Стор уведомлений: получает реальтайм-уведомления через SignalR,
@@ -15,22 +16,10 @@ function notify() {
 }
 
 // ====== API helpers ======
-const BASE = '/api/notifications';
+const BASE = '/notifications';
 
-async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      ...(init?.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`HTTP ${res.status}: ${body || res.statusText}`);
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json();
+function api<T>(url: string, init?: RequestInit): Promise<T> {
+  return request<T>(url, init ?? {});
 }
 
 // ====== Public API ======

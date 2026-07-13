@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { MessageSquare } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import type { Persona, PersonaBinding, PersonaMemoryEntry, Session } from '../../types';
+import type { AutomationTriggerType, Persona, PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Session, Task } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
@@ -23,6 +23,23 @@ const TOOL_TITLES: Record<string, string> = {
   web: 'Веб',
 };
 
+// Подписи типов триггеров автоматизации (краткая сводка в обзоре «Активность»)
+const TRIGGER_LABELS: Record<AutomationTriggerType, string> = {
+  timer: 'Таймер',
+  file: 'Файлы',
+  note: 'Заметки',
+  gitCommit: 'Коммиты',
+  taskStatus: 'Статус задачи',
+  mention: 'Упоминание',
+};
+
+// Подписи типов памяти для мини-бейджа у записи
+const MEMORY_TYPE_LABEL: Record<PersonaMemoryType, string> = {
+  semantic: 'факт',
+  episodic: 'эпизод',
+  procedural: 'приём',
+};
+
 // Порог, после которого длинный характер сворачивается с «Показать полностью»
 const CHARACTER_CLAMP_CHARS = 420;
 const CHARACTER_CLAMP_LINES = 7;
@@ -35,7 +52,7 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
-export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking, onEditProfile, onOpenKnowledge, onOpenTasks, isMobile }: {
+export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking, onEditProfile, onOpenKnowledge, onOpenTasks, onOpenAutomation, onOpenMemory, isMobile }: {
   persona: Persona;
   // Цвет персоны (уже разрезолвленный из палитры) — тот же, что в тулбаре
   accent: string;
@@ -50,6 +67,10 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   onOpenKnowledge?: () => void;
   // Перейти во вкладку «Задачи» (поручения персоне-исполнителю)
   onOpenTasks?: () => void;
+  // Перейти во вкладку «Проактивность» (правила автоматизации)
+  onOpenAutomation?: () => void;
+  // Перейти во вкладку «Память» (долгая память персоны)
+  onOpenMemory?: () => void;
   isMobile?: boolean;
 }) {
   const modelName = useModelLabel(persona.model);
@@ -201,6 +222,14 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
       label: 'Умения',
       value: bindings === null ? '…' : bindings.length === 0 ? 'нет привязок' : bindingsCounter(bindings),
     },
+    {
+      label: 'Задачи',
+      value: taskCounts.total === 0
+        ? 'нет поручений'
+        : taskCounts.active > 0
+          ? `${taskCounts.active} в работе · ${taskCounts.total} всего`
+          : `${taskCounts.total} всего`,
+    },
     { label: 'Память', value: memoryText, title: memoryTitle },
     { label: 'Доступ', value: accessText },
     ...(persona.templateKey
@@ -217,26 +246,6 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
           <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading }}>{f.value}</span>
         </div>
       ))}
-      {/* Задачи — кликабельный чип, ведёт на вкладку «Задачи» персоны */}
-      {onOpenTasks && (
-        <button
-          type="button"
-          onClick={onOpenTasks}
-          title="Открыть задачи персоны"
-          style={{ ...factChip, cursor: 'pointer', textAlign: 'left', border: `1px solid ${C.border}` }}
-        >
-          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: C.textMuted }}>
-            Задачи
-          </span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading }}>
-            {taskCounts.total === 0
-              ? 'нет поручений'
-              : taskCounts.active > 0
-                ? `${taskCounts.active} в работе · ${taskCounts.total} всего`
-                : `${taskCounts.total} всего`}
-          </span>
-        </button>
-      )}
     </div>
   );
 
@@ -410,6 +419,208 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     </div>
   );
 
+  // === Активность (правила автоматизации): сводка триггеров проактивности ===
+  const automationRules = persona.automationRules ?? [];
+  const enabledRulesCount = automationRules.filter(r => r.enabled).length;
+  const triggerTypes = Array.from(new Set(automationRules.map(r => r.trigger.type)));
+  const automationSection = (
+    <div style={section}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+        <SectionLabel>Активность</SectionLabel>
+        {automationRules.length > 0 && (
+          <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>
+            {enabledRulesCount === automationRules.length
+              ? `${automationRules.length} ${plural(automationRules.length, 'правило', 'правила', 'правил')}`
+              : `${automationRules.length} ${plural(automationRules.length, 'правило', 'правила', 'правил')} · ${enabledRulesCount} активно`}
+          </span>
+        )}
+      </div>
+
+      {automationRules.length === 0 ? (
+        <div style={miniEmpty}>
+          <span style={miniEmptyText}>
+            Правил нет — персона откликается только на ваши сообщения.
+          </span>
+          {onOpenAutomation && (
+            <button type="button" onClick={onOpenAutomation} style={{ ...linkBtn, marginTop: 0 }}>
+              Настроить проактивность →
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <div style={{
+            background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+            padding: '12px 14px', display: 'flex', flexWrap: 'wrap', gap: 8,
+          }}>
+            {triggerTypes.map(t => (
+              <span key={t} style={triggerChip}>
+                {TRIGGER_LABELS[t] ?? t}
+              </span>
+            ))}
+          </div>
+          {onOpenAutomation && (
+            <button type="button" onClick={onOpenAutomation} style={linkBtn}>
+              Настроить проактивность →
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+
+  // === Задачи (поручения персоне-исполнителю): активные сверху ===
+  const myTasks: Task[] = allTasks.filter(t => t.personaId === persona.id);
+  const activeTasks = myTasks.filter(t => t.status !== 'done');
+  const shownTasks = activeTasks.slice(0, 3);
+  const moreTasks = activeTasks.length - shownTasks.length;
+  const tasksSection = (
+    <div style={section}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+        <SectionLabel>Задачи</SectionLabel>
+        {taskCounts.total > 0 && (
+          <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>
+            {taskCounts.total} всего{taskCounts.active > 0 ? ` · ${taskCounts.active} в работе` : ''}
+          </span>
+        )}
+      </div>
+
+      {activeTasks.length === 0 ? (
+        <div style={miniEmpty}>
+          <span style={miniEmptyText}>
+            {taskCounts.total === 0
+              ? 'Поручений нет — персона ждёт ваших сообщений в чате.'
+              : 'Активных поручений нет — всё выполнено.'}
+          </span>
+          {onOpenTasks && (
+            <button type="button" onClick={onOpenTasks} style={{ ...linkBtn, marginTop: 0 }}>
+              Все задачи →
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <div style={{ background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, overflow: 'hidden' }}>
+            {shownTasks.map((t, i) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={onOpenTasks}
+                title="Открыть задачи персоны"
+                onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+                  background: 'transparent', border: 'none', padding: '10px 14px', minHeight: 40,
+                  borderTop: i > 0 ? `1px solid ${C.borderLight}` : 'none',
+                  cursor: onOpenTasks ? 'pointer' : 'default', fontFamily: FONT.sans, boxSizing: 'border-box',
+                }}
+              >
+                <span style={{
+                  flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, color: C.textPrimary,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {t.title}
+                </span>
+                {t.status === 'inProgress' && (
+                  <span style={{ fontSize: 11, fontWeight: 600, color: C.accent, flexShrink: 0 }}>в работе</span>
+                )}
+              </button>
+            ))}
+          </div>
+          {moreTasks > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, textAlign: 'center' }}>
+              и ещё {moreTasks} {plural(moreTasks, 'задача', 'задачи', 'задач')}
+            </div>
+          )}
+          {onOpenTasks && (
+            <button type="button" onClick={onOpenTasks} style={linkBtn}>
+              Все задачи →
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+
+  // === Память: что персона запомнила (факты/эпизоды/приёмы) ===
+  const memoryEntries = memory ?? [];
+  const shownMemory = [...memoryEntries]
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 3);
+  const memorySection = (
+    <div style={section}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+        <SectionLabel>Память</SectionLabel>
+        {persona.memoryEnabled && memoryEntries.length > 0 && memoryTitle && (
+          <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>
+            {memoryTitle}
+          </span>
+        )}
+      </div>
+
+      {!persona.memoryEnabled ? (
+        <div style={miniEmpty}>
+          <span style={miniEmptyText}>
+            Память выключена — персона не запоминает контекст между разговорами.
+          </span>
+          {onOpenMemory && (
+            <button type="button" onClick={onOpenMemory} style={{ ...linkBtn, marginTop: 0 }}>
+              Открыть память →
+            </button>
+          )}
+        </div>
+      ) : memory === null ? (
+        <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans, padding: '6px 0' }}>Загружаю…</div>
+      ) : memoryEntries.length === 0 ? (
+        <div style={miniEmpty}>
+          <span style={miniEmptyText}>
+            Включена, пока пусто — персона запомнит важное по ходу разговоров.
+          </span>
+          {onOpenMemory && (
+            <button type="button" onClick={onOpenMemory} style={{ ...linkBtn, marginTop: 0 }}>
+              Открыть память →
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <div style={{ background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, overflow: 'hidden' }}>
+            {shownMemory.map((m, i) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={onOpenMemory}
+                title="Открыть память"
+                onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 10, width: '100%', textAlign: 'left',
+                  background: 'transparent', border: 'none', padding: '10px 14px', minHeight: 40,
+                  borderTop: i > 0 ? `1px solid ${C.borderLight}` : 'none',
+                  cursor: onOpenMemory ? 'pointer' : 'default', fontFamily: FONT.sans, boxSizing: 'border-box',
+                }}
+              >
+                <span style={memoryTypeBadge}>{MEMORY_TYPE_LABEL[m.type] ?? m.type}</span>
+                <span style={{
+                  flex: 1, minWidth: 0, fontSize: 13, color: C.textPrimary, lineHeight: 1.45,
+                  display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                }}>
+                  {m.text}
+                </span>
+              </button>
+            ))}
+          </div>
+          {onOpenMemory && (
+            <button type="button" onClick={onOpenMemory} style={linkBtn}>
+              Открыть память →
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+
   // === Недавние разговоры ===
   const chatsSection = (
     <div style={section}>
@@ -516,6 +727,9 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
         {characterSection}
         {rulesSection}
         {knowledgeSection}
+        {automationSection}
+        {tasksSection}
+        {memorySection}
         {chatsSection}
       </div>
     </div>
@@ -536,6 +750,28 @@ const factChip: React.CSSProperties = {
 const linkBtn: React.CSSProperties = {
   background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
   fontSize: 13, fontWeight: 600, fontFamily: FONT.sans, padding: 0, marginTop: 8,
+};
+
+// Мини-пустышка для обзорных секций (Активность/Задачи/Память) — пунктирная рамка
+const miniEmpty: React.CSSProperties = {
+  border: `1px dashed ${C.dashed}`, borderRadius: R.xl, padding: '18px 16px',
+  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center',
+};
+const miniEmptyText: React.CSSProperties = {
+  fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5,
+};
+
+// Чип типа триггера в сводке «Активность»
+const triggerChip: React.CSSProperties = {
+  fontSize: 12.5, fontWeight: 600, color: C.textSecondary, fontFamily: FONT.sans,
+  background: C.bgSelected, borderRadius: R.md, padding: '4px 10px',
+};
+
+// Бейдж типа записи памяти (факт/эпизод/приём)
+const memoryTypeBadge: React.CSSProperties = {
+  fontSize: 10.5, fontWeight: 600, letterSpacing: '0.03em', textTransform: 'uppercase',
+  color: C.textMuted, fontFamily: FONT.sans, background: C.bgSelected, borderRadius: R.sm,
+  padding: '3px 8px', flexShrink: 0, marginTop: 1,
 };
 
 // Стили секции «Правила» — read-only текст в тоне соседних секций превью

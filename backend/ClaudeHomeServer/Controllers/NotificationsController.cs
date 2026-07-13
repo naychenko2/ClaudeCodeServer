@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -15,8 +17,8 @@ public class NotificationsController(
     PushService push,
     ILogger<NotificationsController> log) : ControllerBase
 {
-    // Текущий пользователь из JWT (задаётся JwtAuthFilter / middleware)
-    private string UserId => HttpContext.Items["UserId"] as string ?? "";
+    // Текущий пользователь из JWT sub claim
+    private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
     /// <summary>GET /api/notifications — список уведомлений с фильтрацией и пагинацией</summary>
     [HttpGet]

@@ -77,6 +77,14 @@ public sealed class PersonaAutomationService : IDisposable
                 if (!_sources.TryGetValue(rule.Trigger.Type, out var source)) continue;
 
                 var state = _state.GetRule(persona.Id, rule.Id);
+
+                // Pre-throttling: не обновляем снапшот источника, если правило в кд.
+                // Иначе EvaluateAsync съест новый файл/заметку/коммит в снапшот, а FireAsync
+                // отклонит событие по троттлингу — и на следующем тике источник ничего не обнаружит.
+                var minInterval = rule.Condition?.MinIntervalMinutes ?? DefaultMinIntervalMinutes;
+                if (state.LastFiredAt is { } last && nowUtc - last < TimeSpan.FromMinutes(minInterval))
+                    continue;
+
                 var ctx = new TriggerContext(user, persona, rule, tz, nowUtc, state);
                 IReadOnlyList<TriggerEvent> events;
                 try { events = await source.EvaluateAsync(ctx, ct); }
@@ -202,22 +210,36 @@ public sealed class PersonaAutomationService : IDisposable
 
     private async Task OnSessionMessageAsync(Session session, ServerMessage msg)
     {
-        if (msg is not ResultMessage) return;
-        if (!_inflight.TryRemove(session.Id, out var ruleId)) return;
+        if (msg is not (ResultMessage or AskQuestionMessage)) return;
+        if (!_inflight.TryGetValue(session.Id, out var ruleId)) return;
         var ownerId = ResolveOwner(session);
         if (ownerId is null) return;
         var (persona, _) = FindRule(ownerId, ruleId);
         var label = persona is null
             ? "Персона"
             : (string.IsNullOrWhiteSpace(persona.Role) ? persona.Name : $"{persona.Role} ({persona.Name})");
+
         try
         {
-            await _notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
-                Title: $"{label} написала вам",
-                Body: "Новое сообщение по правилу автоматизации — откройте чат",
-                Url: $"/#/chats/{session.Id}",
-                Kind: "claude",
-                Tag: "Автоматизация"), sendPush: true);
+            if (msg is ResultMessage)
+            {
+                _inflight.TryRemove(session.Id, out _);
+                await _notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
+                    Title: $"{label} написала вам",
+                    Body: "Новое сообщение по правилу автоматизации — откройте чат",
+                    Url: $"/#/chats/{session.Id}",
+                    Kind: "claude",
+                    Tag: "Автоматизация"), sendPush: true);
+            }
+            else if (msg is AskQuestionMessage)
+            {
+                await _notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
+                    Title: $"{label} ждёт ответа на вопрос",
+                    Body: "Персона спрашивает — ответьте, чтобы продолжить",
+                    Url: $"/#/chats/{session.Id}",
+                    Kind: "claude",
+                    Tag: "Автоматизация"), sendPush: true);
+            }
         }
         catch { /* уведомление — best-effort */ }
     }

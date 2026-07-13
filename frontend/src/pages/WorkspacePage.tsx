@@ -501,15 +501,18 @@ const windowWidth = useWindowWidth();
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
     setPendingMessage(firstMessage);
-    // На мобиле явный выбор чата — переход «вглубь»: пишем запись истории (для кнопки «назад»)
-    if (isMobile && !autoSelect) {
-      setMobileView('chat');
-      navPush({ screen: 'project', project, view: 'chat', file: null });
-    }
     if (!autoSelect) {
       // явный выбор — закрываем файл и открытую задачу, показываем чат во весь экран
       setOpenFile(null);
       setSelectedTaskId(null);
+      // Пишем запись истории с chatId — для URL #/project/{id}/chat/{chatId}
+      // и кнопки «назад/вперёд» браузера.
+      if (isMobile) {
+        setMobileView('chat');
+        navPush({ screen: 'project', project, view: 'chat', file: null, chatId: session.id });
+      } else {
+        navPush({ screen: 'project', project, view: 'sidebar', file: null, chatId: session.id });
+      }
     }
   };
 
@@ -566,8 +569,9 @@ const windowWidth = useWindowWidth();
     });
   }, []);
 
-  // Кнопки «назад/вперёд» браузера внутри проекта: восстанавливаем вид (sidebar/chat)
-  // и открытый файл из снимка истории. Уровень проекта обрабатывает App из того же popstate.
+  // Кнопки «назад/вперёд» браузера внутри проекта: восстанавливаем вид (sidebar/chat),
+  // открытый файл, задачу, чат и доску из снимка истории. Уровень проекта обрабатывает App
+  // из того же popstate.
   useEffect(() => {
     const onPop = (e: PopStateEvent) => {
       const s = e.state as NavSnapshot | null;
@@ -583,6 +587,11 @@ const windowWidth = useWindowWidth();
         setLeftTab('personas');
         setSelectedPersonaId(s.persona ?? null);
         setPersonaCreating(false);
+      }
+      // Активный чат — восстанавливаем через существующий механизм pending (sessionStorage + событие)
+      if (s.chatId) {
+        sessionStorage.setItem('cc_pending_project_chat', `${project.id}|${s.chatId}`);
+        window.dispatchEvent(new Event('cc-pending-project-chat'));
       }
     };
     window.addEventListener('popstate', onPop);

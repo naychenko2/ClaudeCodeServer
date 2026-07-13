@@ -7,7 +7,7 @@ import type { Project } from '../types';
 export interface NavSnapshot {
   screen: 'projects' | 'project' | 'chats' | 'calendar' | 'notes' | 'personas' | 'knowledge';
   project?: Project;              // когда screen === 'project'
-  chatId?: string;                // активный чат вне проекта (screen === 'chats')
+  chatId?: string;                // активный чат: screen === 'chats' — глобальный, screen === 'project' — проектный
   view?: 'sidebar' | 'chat';     // мобильный вид внутри проекта / чатов
   file?: string | null;          // открытый файл (путь) или null
   task?: string | null;          // открытая задача (id) или null
@@ -32,6 +32,7 @@ function toHash(s: NavSnapshot): string {
       if (s.task) h += `/task/${s.task}`;
       else if (s.file) h += `/file/${encodeURIComponent(s.file)}`;
       else if (s.board) h += '/board';
+      else if (s.chatId) h += `/chat/${encodeURIComponent(s.chatId)}`;
       else if (s.persona) h += `/persona/${encodeURIComponent(s.persona)}`;
       return h;
     }
@@ -48,7 +49,7 @@ export interface HashTarget {
   noteId?: string;
   personaId?: string;
   knowledgeId?: string;
-  chatId?: string;   // #/chats/{id} — диплинк на конкретный чат вне проекта
+  chatId?: string;   // диплинк на конкретный чат: #/chats/{id} — глобальный, #/project/{id}/chat/{chatId} — проектный
 }
 
 export function parseHash(hash: string = window.location.hash): HashTarget | null {

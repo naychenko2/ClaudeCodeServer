@@ -259,9 +259,10 @@ export default function App() {
     const hashOtherProject = initialHash?.screen === 'project'
       && !!initialHash.projectId && initialHash.projectId !== project?.id
     if (hubTab === 'projects' && project && !hashOtherProject) {
-      navPush({ screen: 'project', project, view: 'sidebar', file: null })
+      const chatFromHash = initialHash?.screen === 'project' && initialHash.chatId ? initialHash.chatId : undefined
+      navPush({ screen: 'project', project, view: chatFromHash ? undefined : 'sidebar', file: null, chatId: chatFromHash })
       const ws = loadWorkspaceState(project.id)
-      if (ws?.openFile) navPush({ screen: 'project', project, view: 'sidebar', file: ws.openFile })
+      if (ws?.openFile && !chatFromHash) navPush({ screen: 'project', project, view: 'sidebar', file: ws.openFile })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -315,7 +316,7 @@ export default function App() {
           localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
           setProject(p)
           // Пишем проект из диплинка в историю (сид его пропустил из-за расхождения)
-          navPush({ screen: 'project', project: p, view: 'sidebar', file: null })
+          navPush({ screen: 'project', project: p, view: 'sidebar', file: null, chatId: initialHash.chatId || undefined })
         }
       })
       .catch(() => { /* офлайн/нет доступа — остаёмся на восстановленном состоянии */ })

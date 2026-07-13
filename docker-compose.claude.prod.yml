@@ -18,6 +18,8 @@ services:
       - "443:443"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
+      # Снять 600-сек потолок фоновых ходов claude --print (MCP-серверов много, промпт тяжёлый)
+      CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0"
       # Переопределяем пути сертов на контейнерные (в appsettings.Production.json — C:\certs\...)
       Kestrel__Endpoints__Https__Certificate__Path: /certs/fullchain.pem
       Kestrel__Endpoints__Https__Certificate__KeyPath: /certs/privkey.pem

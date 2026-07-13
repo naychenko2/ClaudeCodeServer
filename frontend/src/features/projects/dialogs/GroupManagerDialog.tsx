@@ -3,6 +3,8 @@ import type { ProjectGroup } from '../../../types';
 import { api } from '../../../lib/api';
 import { C, R, FONT, GROUP_COLORS, MODAL_W } from '../../../lib/design';
 import { Modal, Button } from '../../../components/ui';
+import { ChevronUp, ChevronDown, Trash2 } from 'lucide-react';
+import { ICON_SIZE } from '../../../components/ui/icons';
 
 interface Props {
   groups: ProjectGroup[];
@@ -119,18 +121,16 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
               {/* Порядок */}
               <button onClick={() => handleMove(g.id, -1)} disabled={i === 0} title="Выше"
                 style={arrowBtn(i === 0)}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15" /></svg>
+                <ChevronUp size={ICON_SIZE.xs} strokeWidth={2} />
               </button>
               <button onClick={() => handleMove(g.id, 1)} disabled={i === list.length - 1} title="Ниже"
                 style={arrowBtn(i === list.length - 1)}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+                <ChevronDown size={ICON_SIZE.xs} strokeWidth={2} />
               </button>
               {/* Удаление */}
               <button onClick={() => setConfirmDelete(g.id)} title="Удалить группу"
                 style={{ ...arrowBtn(false), color: C.textMuted }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                </svg>
+                <Trash2 size={ICON_SIZE.xs} strokeWidth={2} />
               </button>
             </div>
 

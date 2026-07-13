@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { ChevronDown, User, Check } from 'lucide-react';
 import type { AgentInfo } from '../types';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 
@@ -120,10 +121,8 @@ export function AgentSelector({ agents, selectedAgent, onSelect, isMobile }: Pro
             minWidth: 0,
             flex: 1,
           }}>{selectedAgent.name}</span>
-          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"
-            strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
-            <path d="M6 9l6 6 6-6" />
-          </svg>
+          <ChevronDown size={9} strokeWidth={2.5}
+            style={{ flexShrink: 0, opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
         </button>
       ) : (
         // Агент не выбран — компактная иконка
@@ -145,11 +144,7 @@ export function AgentSelector({ agents, selectedAgent, onSelect, isMobile }: Pro
             flexShrink: 0,
           }}
         >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-            strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="8" r="4"/>
-            <path d="M6 20v-2a6 6 0 0 1 12 0v2"/>
-          </svg>
+          <User size={15} strokeWidth={2} />
         </button>
       )}
 
@@ -226,10 +221,7 @@ export function AgentSelector({ agents, selectedAgent, onSelect, isMobile }: Pro
                   )}
                 </span>
                 {active && (
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="3"
-                    strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}>
-                    <path d="M20 6L9 17l-5-5" />
-                  </svg>
+                  <Check size={15} strokeWidth={2.5} stroke={C.accent} style={{ flexShrink: 0, marginTop: 2 }} />
                 )}
               </button>
             );

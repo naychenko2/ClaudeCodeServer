@@ -1,17 +1,9 @@
 import type { Persona } from '../../types';
+import { Plus } from 'lucide-react';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { C, FONT, R } from '../../lib/design';
 import { personaTitleLines } from '../../lib/personas';
 import { PersonaAvatar } from './PersonaAvatar';
-
-// Иконка «плюс» для кнопки создания
-function IconPlus() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  );
-}
 
 // Сайдбар раздела «Персоны»: кнопка создания сверху, ниже — список персон.
 export function PersonaList({ personas, selectedId, onSelect, onNew }: {
@@ -24,7 +16,7 @@ export function PersonaList({ personas, selectedId, onSelect, onNew }: {
     <>
       <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
         <button onClick={onNew} style={newBtn}>
-          <IconPlus />Новая персона
+          <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />Новая персона
         </button>
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 6 }}>

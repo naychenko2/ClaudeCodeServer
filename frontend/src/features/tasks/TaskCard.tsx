@@ -1,7 +1,9 @@
 // Карточка задачи в списках (сайдбар проекта, агенда, список дня в календаре)
 
 import type { Task } from '../../types';
+import { Repeat } from 'lucide-react';
 import { C, FONT, SHADOW } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { projectColor } from '../../lib/tasks';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
@@ -43,31 +45,28 @@ export function TaskCard({ task, selected, onClick, compact, projectName }: Prop
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
           <span style={{ marginTop: 2, display: 'flex' }}><PriorityFlag priority={task.priority} /></span>
           <span style={{
-            flex: 1, fontFamily: FONT.sans, fontSize: 13.5, fontWeight: 600, lineHeight: 1.35,
+            flex: 1, minWidth: 0,
+            fontFamily: FONT.sans, fontSize: 13.5, fontWeight: 600, lineHeight: 1.35,
             color: done ? C.textMuted : C.textPrimary,
             textDecoration: done ? 'line-through' : 'none',
-            overflowWrap: 'anywhere',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             {task.title}
           </span>
-          {/* В компактных карточках сайдбара показываем только Claude (как в макете).
-              У задачи с персоной-исполнителем — её мини-плашка вместо значка Claude */}
-          {task.personaId
-            ? <TaskPersonaBadge personaId={task.personaId} />
-            : <AssigneeBadge assignee={compact && task.assignee === 'me' ? undefined : task.assignee} />}
+          {/* Значок Claude/Я — только когда исполнитель не персона (персона
+              переезжает в нижнюю строку чипов, чтобы не теснить заголовок) */}
+          {!task.personaId && (
+            <AssigneeBadge assignee={compact && task.assignee === 'me' ? undefined : task.assignee} />
+          )}
         </div>
 
         {/* Нижняя строка: чипы */}
-        {(task.dueDate || (!compact && (task.subtasks.length > 0 || task.labels.length > 0)) || projectName) && (
+        {(task.personaId || task.dueDate || (!compact && (task.subtasks.length > 0 || task.labels.length > 0)) || projectName) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+            {task.personaId && <TaskPersonaBadge personaId={task.personaId} />}
             <DueChip task={task} />
             {task.recurrence && (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                <path d="M17 1l4 4-4 4" />
-                <path d="M3 11V9a4 4 0 0 1 4-4h14" />
-                <path d="M7 23l-4-4 4-4" />
-                <path d="M21 13v2a4 4 0 0 1-4 4H3" />
-              </svg>
+              <Repeat size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
             )}
             {!compact && task.subtasks.length > 0 && (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>

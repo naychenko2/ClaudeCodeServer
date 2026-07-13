@@ -40,7 +40,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
               <>
                 {/* Приветствие чата вне проекта — general-purpose ассистент */}
                 <div style={{
-                  fontFamily: '"PT Serif", Georgia, serif',
+                  fontFamily: FONT.serif,
                   fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
                 }}>
                   Чем помочь?
@@ -74,7 +74,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
               <>
                 {/* Заголовок */}
                 <div style={{
-                  fontFamily: '"PT Serif", Georgia, serif',
+                  fontFamily: FONT.serif,
                   fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
                 }}>
                   Новый проект
@@ -105,7 +105,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
               <>
                 {/* Заголовок */}
                 <div style={{
-                  fontFamily: '"PT Serif", Georgia, serif',
+                  fontFamily: FONT.serif,
                   fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
                 }}>
                   Чем помочь?

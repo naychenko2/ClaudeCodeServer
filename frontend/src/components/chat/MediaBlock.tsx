@@ -1,4 +1,5 @@
 import { useState, useRef, useContext } from 'react';
+import { X } from 'lucide-react';
 import { getExplorerCreateInDir } from '../FileExplorer';
 import { api } from '../../lib/api';
 import { C, FONT, SHADOW } from '../../lib/design';
@@ -303,7 +304,7 @@ export function MediaBlock({
               lineHeight: 1, fontWeight: 300,
             }}
           >
-            ✕
+            <X size={20} strokeWidth={2} />
           </button>
           <img
             src={proxyUrl(m.url)}

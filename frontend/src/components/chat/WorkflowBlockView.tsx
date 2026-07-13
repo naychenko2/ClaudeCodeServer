@@ -1,4 +1,5 @@
 import { memo, useState, useEffect, useRef } from 'react';
+import { Check, Terminal, SquarePen, Search, CircleUser } from 'lucide-react';
 import { api, type WorkflowAgentInfo } from '../../lib/api';
 import { parseWorkflowMeta } from '../../lib/workflowMeta';
 import { C, FONT, R } from '../../lib/design';
@@ -101,7 +102,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   });
 
   const DoneIcon = () => (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+    <Check size={14} color={C.success} strokeWidth={2.5} style={{ flexShrink: 0 }} />
   );
 
   return (
@@ -175,7 +176,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                 <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '5px 0', borderBottom: idx < phases.length - 1 ? `1px solid ${C.borderLight}` : undefined }}>
                   <span style={{ flexShrink: 0, width: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 2 }}>
                     {phaseDone
-                      ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                      ? <Check size={13} color={C.success} strokeWidth={2.5} style={{ flexShrink: 0 }} />
                       : phaseActive
                       ? <div className="tool-spinner" style={{ width: 10, height: 10 }} />
                       : <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.border }} />}
@@ -213,7 +214,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                     >
                       <span style={{ flexShrink: 0, width: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         {agentDone
-                          ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                          ? <Check size={13} color={C.success} strokeWidth={2.5} style={{ flexShrink: 0 }} />
                           : <div className="tool-spinner" style={{ width: 11, height: 11 }} />}
                       </span>
                       <span style={{ flex: 1, fontFamily: FONT.sans, fontSize: 12.5, color: label ? C.textPrimary : C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -273,22 +274,14 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                     const hasRead = toolNames.some(n => n.includes('read') || n.includes('grep') || n.includes('glob') || n.includes('search'));
                     const hasWrite = toolNames.some(n => n.includes('write') || n.includes('edit') || n.includes('create'));
 
-                    // Иконка типа агента (SVG inline)
+                    // Иконка типа агента
                     const agentIconSvg = hasBash
-                      ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                          <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
-                        </svg>
+                      ? <Terminal size={13} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
                       : hasWrite
-                      ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                        </svg>
+                      ? <SquarePen size={13} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
                       : hasRead
-                      ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                          <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-                        </svg>
-                      : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                          <circle cx="12" cy="8" r="4" /><path d="M6 20v-2a6 6 0 0 1 12 0v2" />
-                        </svg>;
+                      ? <Search size={13} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
+                      : <CircleUser size={13} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />;
 
                     // Заголовок строки: первый md-заголовок из summary, иначе первая строка, иначе prompt
                     const summaryFirstLine = agent.summary
@@ -309,7 +302,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                         >
                           {/* Галочка только если агент завершён (isDone=true), иначе спиннер */}
                           {agent.isDone === true
-                            ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.success} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="20 6 9 17 4 12" /></svg>
+                            ? <Check size={13} color={C.success} strokeWidth={2.5} style={{ flexShrink: 0 }} />
                             : <div className="tool-spinner" style={{ width: 11, height: 11, flexShrink: 0 }} />}
                           {/* Иконка типа агента */}
                           {agentIconSvg}

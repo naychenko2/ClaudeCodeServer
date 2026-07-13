@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { X, Link, Plus, Search, Check as CheckIcon, SquarePen, CheckCircle2, Power, Trash2 } from 'lucide-react';
 import type { BindingTarget, Persona, PersonaBinding, PersonaBindingDto, PersonaBindingMode, PersonaBindingType, ServerMessage, SkillSuggestion } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { Button, IconField, Menu, MenuItem } from '../../components/ui';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { SkillSearchDialog } from '../../components/SkillSearchDialog';
 import { PillSwitch } from '../../components/Toolbar';
 import { SectionLabel } from '../tasks/bits';
 import {
   BINDING_ICONS, BINDING_TYPE_META, BINDING_TYPE_ORDER, MODE_HINT,
-  BindingModeBadge, BindingTypeIcon, bindingSvg, bindingsCounter,
+  BindingModeBadge, BindingTypeIcon, bindingsCounter,
   fetchBindingTargets, useBindingLabels,
 } from './bindingMeta';
 
@@ -314,7 +316,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             padding: '24px 22px', textAlign: 'center',
           }}>
             <div style={{ color: C.textMuted, marginBottom: 8, display: 'flex', justifyContent: 'center' }}>
-              {bindingSvg(<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />, 22)}
+              <Link size={22} strokeWidth={ICON_STROKE} />
             </div>
             <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>
               Подключи персоне источники и инструменты
@@ -388,21 +390,21 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
                           {menuId === b.id && (
                             <Menu onClose={() => setMenuId(null)} align="right" top={30} minWidth={180}>
                               <MenuItem
-                                icon={<><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></>}
+                                icon={<SquarePen size={15} strokeWidth={ICON_STROKE} />}
                                 label="Редактировать"
                                 onClick={() => { setMenuId(null); toggleCard(b); }}
                               />
                               <MenuItem
                                 icon={b.mode === 'off'
-                                  ? <><circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" /></>
-                                  : <><path d="M18.36 6.64A9 9 0 1 1 5.64 6.64" /><path d="M12 2v10" /></>}
+                                  ? <CheckCircle2 size={15} strokeWidth={ICON_STROKE} />
+                                  : <Power size={15} strokeWidth={ICON_STROKE} />}
                                 label={b.mode === 'off' ? 'Включить' : 'Выключить'}
                                 onClick={() => { setMenuId(null); setMode(b, b.mode === 'off' ? 'auto' : 'off'); }}
                               />
                               <div style={{ height: 1, background: C.borderLight, margin: '4px 6px' }} />
                               <MenuItem
                                 danger
-                                icon={<><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></>}
+                                icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
                                 label="Удалить"
                                 onClick={() => {
                                   setMenuId(null);
@@ -642,7 +644,7 @@ function AddPanel({ panel, accent, isMobile, aiBusy, onChange, onClose, onCommit
     <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 14, paddingTop: 18 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>Добавить привязку</span>
-        <button onClick={onClose} aria-label="Закрыть" style={xBtn}>✕</button>
+        <button onClick={onClose} aria-label="Закрыть" style={xBtn}><X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /></button>
       </div>
 
       <Stepper step={panel.step} accent={accent}
@@ -685,7 +687,7 @@ function AddPanel({ panel, accent, isMobile, aiBusy, onChange, onClose, onCommit
       {panel.step === 3 && panel.type && (
         <>
           <Crumb onClick={() => onChange({ ...panel, step: 2, targetId: undefined, targetLabel: undefined, notesSource: null })}>
-            {bindingSvg(BINDING_ICONS[panel.type], 13)} {BINDING_TYPE_META[panel.type].name} · {panel.targetLabel}{panel.path ? ` · ${panel.path}` : ''}
+            {BINDING_ICONS[panel.type](13)} {BINDING_TYPE_META[panel.type].name} · {panel.targetLabel}{panel.path ? ` · ${panel.path}` : ''}
           </Crumb>
           <div style={{ ...fLabel, marginTop: 16 }}>Когда пользоваться</div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
@@ -758,7 +760,7 @@ function TargetPicker({ panel, onChange }: {
   return (
     <>
       <Crumb onClick={() => onChange({ ...panel, step: 1, type: undefined, targetId: undefined, targetLabel: undefined, path: undefined, notesSource: null })}>
-        {bindingSvg(BINDING_ICONS[type], 13)} {BINDING_TYPE_META[type].name}
+        {BINDING_ICONS[type](13)} {BINDING_TYPE_META[type].name}
         {pathStage ? ` · ${panel.targetLabel}` : notesSource ? ` · ${notesSource.label}` : ''}
       </Crumb>
 
@@ -775,7 +777,7 @@ function TargetPicker({ panel, onChange }: {
             radius={R.lg}
             fontSize={12.5}
             onEnter={() => { if (pathInput.trim()) onChange({ ...panel, step: 3, path: pathInput.trim() }); }}
-            icon={bindingSvg(BINDING_ICONS.projectPath, 14)}
+            icon={BINDING_ICONS.projectPath(14)}
           />
           <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>
             Папка или файл относительно корня проекта
@@ -797,7 +799,7 @@ function TargetPicker({ panel, onChange }: {
               height={38}
               radius={R.lg}
               fontSize={13}
-              icon={bindingSvg(<><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></>, 15)}
+              icon={<Search size={15} strokeWidth={ICON_STROKE} />}
             />
           </div>
           <div style={{ background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, marginTop: 10, overflow: 'hidden' }}>
@@ -1016,7 +1018,7 @@ function AddBindingButton({ onClick }: { onClick: () => void }) {
         cursor: 'pointer', fontFamily: FONT.sans, transition: 'border-color 0.15s, color 0.15s',
       }}
     >
-      {bindingSvg(<><path d="M12 5v14" /><path d="M5 12h14" /></>, 14)}
+      <Plus size={14} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
       Добавить привязку
     </button>
   );
@@ -1049,7 +1051,7 @@ function Check({ on }: { on: boolean }) {
       background: on ? C.accent : C.bgWhite,
       display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
     }}>
-      {on && bindingSvg(<path d="M20 6 9 17l-5-5" />, 12)}
+      {on && <CheckIcon size={12} strokeWidth={ICON_STROKE} />}
     </span>
   );
 }
@@ -1071,7 +1073,8 @@ const linkBtn: React.CSSProperties = {
 
 const xBtn: React.CSSProperties = {
   width: 28, height: 28, border: 'none', background: 'transparent', borderRadius: R.md,
-  color: C.textMuted, fontSize: 15, cursor: 'pointer',
+  color: C.textMuted, cursor: 'pointer',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
 };
 
 const pulseDot: React.CSSProperties = {

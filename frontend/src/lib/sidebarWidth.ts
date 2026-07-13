@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 
 // Единая ширина боковых панелей для всех областей (чаты, проекты, воркспейс).
 // Меняешь в одном месте — синхронно меняется везде (общий localStorage-ключ +
@@ -54,23 +54,23 @@ export function useSidebarDrag() {
   const [width, setWidth] = useSidebarWidth();
   const [dragging, setDragging] = useState(false);
 
-  const startDrag = (e: ReactMouseEvent) => {
+  const startDrag = (e: ReactPointerEvent) => {
     e.preventDefault();
     setDragging(true);
     const startX = e.clientX;
     const startW = width;
-    const onMove = (ev: MouseEvent) => setWidth(startW + (ev.clientX - startX)); // стор клампит
+    const onMove = (ev: PointerEvent) => setWidth(startW + (ev.clientX - startX)); // стор клампит
     const onUp = () => {
       setDragging(false);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
   };
 
   return { width, setWidth, dragging, startDrag };

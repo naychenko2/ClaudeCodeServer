@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Menu as MenuIcon } from 'lucide-react';
 import type { AuthState, KnowledgeBaseSummary } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
@@ -7,6 +8,7 @@ import { useKnowledge, useKnowledgeConfigured, ensureKnowledgeLoaded, bumpKnowle
 import { api } from '../../lib/api';
 import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
 import { Splitter, IconButton, ConfirmDialog } from '../../components/ui';
+import { ICON_SIZE } from '../../components/ui/icons';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile } from '../../lib/breakpoints';
 import { KnowledgeList, KnowledgeEmptyState } from './KnowledgeList';
@@ -194,9 +196,7 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
             borderBottom: `1px solid ${C.divider}`,
           }}>
             <IconButton onClick={() => setSidebarMode('open')} title="Открыть панель" size="md" variant="soft">
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-              </svg>
+              <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
             </IconButton>
           </div>
         )}

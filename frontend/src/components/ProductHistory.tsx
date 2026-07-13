@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { AlertTriangle, ChevronRight, History, RefreshCw, Settings, Trash2, X } from 'lucide-react';
 import type { ChangelogDay, ChangelogItem, DaySummaryStub, ChangelogStatus } from '../types';
 import { api } from '../lib/api';
 import { C, FONT, R, MODAL_W, SHADOW } from '../lib/design';
+import { useIsMobile } from '../lib/breakpoints';
 import { EmptyState } from './EmptyState';
 import { Toolbar } from './Toolbar';
 import { IconButton, Modal, ModalActions } from './ui';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 // Продуктовая история — «что мы делали и чем это полезно», по всем проектам.
 // Одноколоночная лента по дням (Сегодня / Вчера / дата), карточки: что нового +
@@ -244,13 +247,13 @@ export function ProductHistory({ isMobile, onClose }: {
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           {configStatus && !configStatus.configured ? (
             <EmptyState
-              icon={<GearIcon size={26} />}
+              icon={<Settings size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
               title="Раздел не настроен"
               subtitle={configStatus.detail || 'Укажите источник changelog (git-репозиторий продукта) в настройках инстанса.'}
             />
           ) : (
             <EmptyState
-              icon={<ClockIcon size={26} />}
+              icon={<History size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
               title="Пока пусто"
               subtitle="Как только появятся изменения — здесь будет сводка, что нового и чем это полезно"
             />
@@ -383,16 +386,10 @@ export function ProductHistory({ isMobile, onClose }: {
         {/* Правая секция — очистить историю + закрыть */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
           <IconButton size={isMobile ? 'lg' : 'md'} onClick={askClearAll} title="Очистить всю историю">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="3 6 5 6 21 6" />
-              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-              <line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" />
-            </svg>
+            <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
           </IconButton>
           <IconButton size={isMobile ? 'lg' : 'md'} onClick={onClose} title="Закрыть">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
+            <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
           </IconButton>
         </div>
       </Toolbar>
@@ -459,11 +456,8 @@ function DegradedNotice({ reason, onRetry }: { reason?: string; onRetry: () => v
       padding: '11px 14px', borderRadius: R.xl,
       background: C.warningBg, border: `1px solid ${C.warning}`,
     }}>
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={C.warning}
-        strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
-        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-        <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
-      </svg>
+      <AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.warning}
+        style={{ flexShrink: 0, marginTop: 1 }} />
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: C.warningText, marginBottom: 2 }}>
           Сводка не собрана
@@ -734,35 +728,33 @@ function DayCalendar({ days, selected, onSelect, onNeedOlder, isMobile }: {
 
 // Кнопка перегенерации дня: иконка обновления, крутится пока идет генерация
 function RegenButton({ spinning, onClick }: { spinning: boolean; onClick: () => void }) {
+  const m = useIsMobile();
   return (
-    <button onClick={onClick} disabled={spinning} title="Собрать сводку заново"
+    <button onClick={onClick} disabled={spinning} title="Собрать сводку заново" aria-label="Собрать сводку заново"
       style={{
-        marginLeft: 'auto', width: 30, height: 30, borderRadius: 8, border: 'none',
+        marginLeft: 'auto', width: m ? 40 : 30, height: m ? 40 : 30, borderRadius: 8, border: 'none',
         background: 'none', cursor: spinning ? 'default' : 'pointer', flexShrink: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textSecondary,
       }}
       onMouseEnter={e => { if (!spinning) e.currentTarget.style.background = C.bgSelected; }}
       onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"
-        style={spinning ? { animation: 'cc-spin 0.8s linear infinite' } : undefined}>
-        <path d="M23 4v6h-6" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-      </svg>
+      <RefreshCw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE}
+        style={spinning ? { animation: 'cc-spin 0.8s linear infinite' } : undefined} />
     </button>
   );
 }
 
 function ArrowBtn({ dir, onClick }: { dir: 'left' | 'right'; onClick: () => void }) {
+  const m = useIsMobile();
   return (
-    <button onClick={onClick} style={{
-      width: 26, height: 26, borderRadius: 7, border: 'none', background: 'none', cursor: 'pointer',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textSecondary,
+    <button onClick={onClick} aria-label={dir === 'left' ? 'Предыдущий месяц' : 'Следующий месяц'} style={{
+      width: m ? 40 : 26, height: m ? 40 : 26, borderRadius: 7, border: 'none', background: 'none', cursor: 'pointer',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textSecondary, flexShrink: 0,
     }}
       onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
       onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}>
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
-        style={{ transform: dir === 'right' ? 'none' : 'rotate(180deg)' }}>
-        <path d="M9 6l6 6-6 6" />
-      </svg>
+      <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE}
+        style={{ transform: dir === 'right' ? 'none' : 'rotate(180deg)' }} />
     </button>
   );
 }
@@ -860,25 +852,5 @@ function Spinner() {
       border: `2px solid ${C.border}`, borderTopColor: C.accent,
       animation: 'cc-spin 0.8s linear infinite', display: 'inline-block',
     }} />
-  );
-}
-
-function ClockIcon({ size = 22 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-      <path d="M3 3v5h5" />
-      <polyline points="12 7 12 12 15 14" />
-    </svg>
-  );
-}
-
-// Иконка-шестерёнка для состояния «раздел не настроен»
-function GearIcon({ size = 22 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
   );
 }

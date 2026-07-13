@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
+import { BookOpen, Database, Folder, Info, RotateCcw, Search, Tag, Trash2, X } from 'lucide-react';
 import type { Project } from '../types';
 import type { DifyDocument } from '../lib/api';
 import { api } from '../lib/api';
 import { C, R, SHADOW, FONT, TB } from '../lib/design';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 interface Props {
   project: Project;
@@ -16,43 +18,6 @@ interface KnowledgeStatus {
   datasetId: string | null;
   documents: DifyDocument[];
   total: number;
-}
-
-function DatabaseIcon({ size = 20, color = C.textMuted }: { size?: number; color?: string }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <ellipse cx="12" cy="5" rx="9" ry="3"/>
-      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
-      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
-    </svg>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="3 6 5 6 21 6"/>
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-    </svg>
-  );
-}
-
-function RetryIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-      <path d="M3 3v5h5"/>
-    </svg>
-  );
-}
-
-function TagIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-      <line x1="7" y1="7" x2="7.01" y2="7"/>
-    </svg>
-  );
 }
 
 const TERMINAL_STATUSES = ['completed', 'available', 'error'];
@@ -164,7 +129,7 @@ function TagsDialog({ doc, existingTags, onClose, onSave }: TagsDialogProps) {
             onClick={onClose}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 4, borderRadius: R.sm }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
           </button>
         </div>
 
@@ -185,7 +150,7 @@ function TagsDialog({ doc, existingTags, onClose, onSave }: TagsDialogProps) {
                     onClick={() => removeTag(tag)}
                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.accent, padding: 0, display: 'flex', lineHeight: 1 }}
                   >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                   </button>
                 </span>
               ))}
@@ -359,7 +324,7 @@ function DocumentRow({ doc, deleting, retrying, isMobile, alwaysShowIcons, onDel
             transition: 'opacity 0.15s', borderRadius: R.sm, flexShrink: 0,
           }}
         >
-          <TagIcon />
+          <Tag size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </button>
 
         {/* Кнопка повтора */}
@@ -377,7 +342,7 @@ function DocumentRow({ doc, deleting, retrying, isMobile, alwaysShowIcons, onDel
               transition: 'opacity 0.15s', borderRadius: R.sm, flexShrink: 0,
             }}
           >
-            <RetryIcon />
+            <RotateCcw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </button>
         )}
 
@@ -394,7 +359,7 @@ function DocumentRow({ doc, deleting, retrying, isMobile, alwaysShowIcons, onDel
             transition: 'opacity 0.15s', borderRadius: R.sm, flexShrink: 0,
           }}
         >
-          <TrashIcon />
+          <Trash2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </button>
       </div>
 
@@ -552,7 +517,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
           {/* Поиск по знаниям */}
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
             <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+              <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </span>
             <input
               value={searchQuery}
@@ -568,7 +533,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
                 onClick={() => setSearchQuery('')}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', marginLeft: 4 }}
               >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
               </button>
             )}
           </div>
@@ -576,16 +541,11 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
           <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
             {/* Файлы — неактивна, возврат */}
             <button onClick={onBack} title="Файлы" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: onBack ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-              </svg>
+              <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
             </button>
             {/* Знания — активна */}
             <button title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bgMain, color: C.successText, boxShadow: TB.pillThumbShadow }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
-                <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
-              </svg>
+              <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
             </button>
           </div>
         </div>
@@ -619,7 +579,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
             onClick={() => setNotification(null)}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex', flexShrink: 0 }}
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </button>
         </div>
       )}
@@ -635,10 +595,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
             marginBottom: 2,
           }}>
             <div style={{ color: C.successText, display: 'flex', flexShrink: 0 }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
-                <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
-              </svg>
+              <BookOpen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </div>
             <span style={{ fontSize: 12, fontWeight: 600, color: C.successText, flex: 1 }}>
               База знаний
@@ -657,7 +614,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 16 }}>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
                 <div style={{ width: 48, height: 48, borderRadius: 14, background: C.bgInset, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <DatabaseIcon size={24} />
+                  <Database size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} color={C.textMuted} />
                 </div>
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>Нет документов</div>
@@ -670,11 +627,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
               {/* Подсказки о базе знаний */}
               <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
                 <KnowledgeTip
-                  icon={
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
-                    </svg>
-                  }
+                  icon={<Info size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
                   title="Что такое база знаний"
                   text="Большие документы — книги, статьи — ассистент обрабатывает медленно: ему нужно прочитать их целиком. В базе знаний документы индексируются заранее, поэтому ассистент ищет по ним быстро, не читая каждый раз с начала."
                 />
@@ -689,12 +642,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
                   text="В файловом менеджере нажмите иконку базы данных рядом с нужным файлом — он появится здесь и будет проиндексирован."
                 />
                 <KnowledgeTip
-                  icon={
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-                      <line x1="7" y1="7" x2="7.01" y2="7"/>
-                    </svg>
-                  }
+                  icon={<Tag size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
                   title="Зачем нужны теги"
                   text="Теги позволяют обращаться к базе знаний выборочно: когда ассистент ищет информацию, можно ограничить поиск только документами с нужными тегами — это сокращает объём обработки и повышает точность ответа."
                 />

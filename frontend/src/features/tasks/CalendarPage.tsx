@@ -2,12 +2,14 @@
 // Виды Месяц / Неделя / Агенда, фильтр по группам проектов, «+ Задача».
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Plus } from 'lucide-react';
 import type { AuthState, Project, ProjectGroup, Task } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../../lib/nav';
 import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
 import { C, FONT, R, SHADOW } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { api } from '../../lib/api';
 import { addDaysIso, DEFAULT_BOARD_COLUMNS, ensureTasksLoaded, expandRecurringTasks, todayIso, toIsoDate, useTasks } from '../../lib/tasks';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -287,9 +289,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
                     boxShadow: SHADOW.button,
                   }}
                 >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round">
-                    <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
+                  <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                   Задача
                 </button>
               </div>
@@ -314,9 +314,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
             boxShadow: SHADOW.fab,
           }}
         >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={C.onAccent} strokeWidth="2.4" strokeLinecap="round">
-            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
+          <Plus size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} color={C.onAccent} />
         </button>
       )}
 

@@ -5,6 +5,10 @@
 // событие cc-ai-run, без дублирования логики.
 
 import type { ReactNode } from 'react';
+import {
+  Link2, Tag, Calendar, MessageCircle, Play, Sun, Search, History, FileText, List, FilePlus2,
+} from 'lucide-react';
+import { ICON_SIZE } from '../../components/ui/icons';
 import type { NavSnapshot } from '../nav';
 import { api } from '../api';
 import { showToast } from '../toast';
@@ -46,21 +50,19 @@ export interface AiAction {
   run: (ctx: AiActionCtx) => void | Promise<void>;
 }
 
-// --- Иконки (локальные, чтобы реестр не зависел от иконок разделов) ---
-const sIco = (d: ReactNode) => (
-  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">{d}</svg>
-);
-const IcLink = sIco(<><path d="M9 15l6-6" /><path d="M10.5 6.5l1-1a4 4 0 015.6 5.6l-1 1" /><path d="M13.5 17.5l-1 1a4 4 0 01-5.6-5.6l1-1" /></>);
-const IcTag = sIco(<><path d="M3 12l8-8 9 9-8 8z" /><circle cx="8" cy="8" r="1.3" fill="currentColor" stroke="none" /></>);
-const IcCalendar = sIco(<><rect x="3" y="4" width="18" height="17" rx="2" /><path d="M3 9h18M8 2v4M16 2v4" /></>);
-const IcChat = sIco(<path d="M4 5h16v11H9l-4 4z" />);
-const IcPlay = sIco(<path d="M6 4l14 8-14 8z" fill="currentColor" stroke="none" />);
-const IcSun = sIco(<><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M19 19l-1.5-1.5M19 5l-1.5 1.5M5 19l1.5-1.5" /></>);
-const IcSearch = sIco(<><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></>);
-const IcHistory = sIco(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>);
-const IcDoc = sIco(<><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v4h4" /></>);
-const IcList = sIco(<><path d="M8 6h12M8 12h12M8 18h12" /><path d="M4 6h.01M4 12h.01M4 18h.01" /></>);
-const IcPlus = sIco(<><rect x="3" y="4" width="13" height="16" rx="2" /><path d="M7 9h6M7 13h3M18 14v6M15 17h6" /></>);
+// --- Иконки (lucide-react, единый стиль раздела; имена сохранены) ---
+const ico = { size: ICON_SIZE.sm, strokeWidth: 2, style: { flexShrink: 0 } as const };
+const IcLink = <Link2 {...ico} />;
+const IcTag = <Tag {...ico} />;
+const IcCalendar = <Calendar {...ico} />;
+const IcChat = <MessageCircle {...ico} />;
+const IcPlay = <Play {...ico} />;
+const IcSun = <Sun {...ico} />;
+const IcSearch = <Search {...ico} />;
+const IcHistory = <History {...ico} />;
+const IcDoc = <FileText {...ico} />;
+const IcList = <List {...ico} />;
+const IcPlus = <FilePlus2 {...ico} />;
 
 // --- Предикаты контекста ---
 const noteOpen = (c: AiActionCtx) => c.nav?.screen === 'notes' && !!c.nav.note;

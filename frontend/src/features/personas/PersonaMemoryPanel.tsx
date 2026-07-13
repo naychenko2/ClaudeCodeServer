@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronLeft, X } from 'lucide-react';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaMemoryEntry, PersonaMemoryType, ServerMessage } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
@@ -153,9 +155,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
         }}>
           {onBack && (
             <button onClick={onBack} aria-label="Назад" style={iconBtn}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M15 18l-6-6 6-6" />
-              </svg>
+              <ChevronLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
             </button>
           )}
           <PersonaAvatar persona={persona} size={30} />
@@ -319,9 +319,7 @@ function MemoryCard({ entry, color, onRemove, removing, onToNote, onConfirm }: {
             title="Забыть"
             style={forgetBtn}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
+            <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
           </button>
         </div>
       </div>

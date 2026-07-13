@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { ChevronLeft } from 'lucide-react';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { PantheonTemplate, Persona, PersonaScope } from '../../types';
 import { api } from '../../lib/api';
 import { bumpPersonas } from '../../lib/personas';
@@ -63,9 +65,7 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
       <Toolbar isMobile={isMobile} style={{ borderLeft: `3px solid ${C.accent}` }}>
         {onBack && (
           <IconButton onClick={onBack} title="Назад" size={isMobile ? 'lg' : 'md'}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 18l-6-6 6-6" />
-            </svg>
+            <ChevronLeft size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
           </IconButton>
         )}
         <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>

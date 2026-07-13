@@ -1,5 +1,8 @@
 import { useEffect, useRef } from 'react';
+import { Maximize } from 'lucide-react';
 import { C, FONT, R } from '../../../lib/design';
+import { useIsMobile } from '../../../lib/breakpoints';
+import { ICON_SIZE } from '../../../components/ui/icons';
 import type { GraphSettings } from './graphSettings';
 import type { SimApi, SimNode } from './useForceSimulation';
 import type { ThemeColors } from './useThemeColors';
@@ -411,21 +414,21 @@ export function GraphCanvas({ api, display, selectedId, focusId, colors, onSelec
     };
   }, [api]);
 
+  const m = useIsMobile();
   return (
     <div ref={wrapRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
       <canvas ref={canvasRef} style={{ display: 'block', touchAction: 'none', cursor: 'grab' }} />
       <button
         onClick={() => fitRef.current()}
         title="Показать весь граф (двойной клик по фону)"
+        aria-label="Показать весь граф"
         style={{
-          position: 'absolute', right: 10, bottom: 10, width: 30, height: 30,
+          position: 'absolute', right: 10, bottom: 10, width: m ? 40 : 30, height: m ? 40 : 30,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.md,
           color: C.textMuted, cursor: 'pointer', padding: 0,
         }}>
-        <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
-        </svg>
+        <Maximize size={ICON_SIZE.sm} strokeWidth={2} />
       </button>
     </div>
   );

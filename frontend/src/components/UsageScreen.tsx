@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { X, AlertTriangle } from 'lucide-react';
 import { api } from '../lib/api';
 import type { UsageResponse, FalAccountResponse } from '../types';
 import { C, FONT, SHADOW } from '../lib/design';
@@ -70,7 +71,7 @@ function WindowCard({ w }: { w: RateWindow }) {
       <div style={{ fontSize: 11, color: C.textMuted, marginTop: w.hasUtil ? 0 : 12 }}>{sub}</div>
       {overage && (
         <div style={{ fontSize: 11, color: C.dangerText, marginTop: 4 }}>
-          {w.isUsingOverage ? '⚠ перерасход' : `перерасход: ${w.overageStatus}`}
+          {w.isUsingOverage ? <><AlertTriangle size={11} strokeWidth={2} style={{ verticalAlign: '-1px', marginRight: 3 }} />перерасход</> : `перерасход: ${w.overageStatus}`}
           {w.overageResetsAt && ` · сброс ${fmtReset(w.overageResetsAt)}`}
         </div>
       )}
@@ -354,7 +355,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
         {/* Шапка */}
         <div style={{ padding: '13px 20px 6px', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexShrink: 0 }}>
           <span style={{ fontSize: 15, fontWeight: 700, color: C.textHeading, fontFamily: FONT.sans }}>Использование</span>
-          <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 18, padding: '0 4px', borderRadius: 6 }}>✕</button>
+          <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 18, padding: '0 4px', borderRadius: 6, display: 'flex', alignItems: 'center' }}><X size={18} strokeWidth={2} /></button>
         </div>
         {/* Строка-сводка */}
         <div style={{ padding: '0 20px 10px', fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, flexShrink: 0 }}>

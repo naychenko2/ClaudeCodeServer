@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { ChevronLeft, Menu as MenuIcon, MessageCircle, Pin, Plus } from 'lucide-react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
@@ -9,6 +10,7 @@ import { C, FONT } from '../lib/design';
 import { useSidebarDrag } from '../lib/sidebarWidth';
 import { useIsMobile } from '../lib/breakpoints';
 import { Button, IconButton, Splitter } from '../components/ui';
+import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ChatList } from '../components/ChatList';
@@ -201,17 +203,13 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, minHeight: 28 }}>
         {/* Свернуть панель (◀) */}
         <IconButton onClick={() => setSidebarMode('collapsed')} title="Свернуть панель" size="sm" style={{ marginLeft: -2 }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 6l-6 6 6 6" />
-          </svg>
+          <ChevronLeft size={ICON_SIZE.sm} strokeWidth={2} />
         </IconButton>
         <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Чаты</span>
         {/* В режиме open — закрепить (📌) */}
         {sidebarMode === 'open' && (
           <IconButton onClick={() => setSidebarMode('pinned')} title="Закрепить панель" size="sm">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="17" x2="12" y2="22" /><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-            </svg>
+            <Pin size={ICON_SIZE.sm} strokeWidth={2} />
           </IconButton>
         )}
       </div>
@@ -316,9 +314,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               {sidebarMode === 'collapsed' && (
                 <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}` }}>
                   <IconButton onClick={() => setSidebarMode('open')} title="Открыть панель" size="md" variant="soft">
-                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                      <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                    </svg>
+                    <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
                   </IconButton>
                 </div>
               )}
@@ -326,9 +322,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
                   {/* Иконка раздела */}
                   <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
-                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 11.5a8.5 8.5 0 0 1-12 7.7L3 21l1.8-6A8.5 8.5 0 1 1 21 11.5z" />
-                    </svg>
+                    <MessageCircle size={ICON_SIZE.xl} strokeWidth={2} />
                   </div>
                   <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 22, color: C.textHeading, letterSpacing: '-0.01em' }}>
                     О чём поговорим?
@@ -339,11 +333,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                   <Button
                     variant="primary" size="md" glow loading={creating}
                     onClick={newChat} style={{ marginTop: 10 }}
-                    leftIcon={
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                        <path d="M12 5v14M5 12h14" />
-                      </svg>
-                    }
+                    leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
                   >
                     Новый чат
                   </Button>

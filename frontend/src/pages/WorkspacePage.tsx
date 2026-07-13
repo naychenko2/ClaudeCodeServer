@@ -159,6 +159,12 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     setPersonaCreating(false);
     if (isMobile) setMobileView('sidebar');
   };
+  // Командный центр — сбросить выбор персоны и показать центр команды (①-L1)
+  const handleShowTeam = () => {
+    setSelectedPersonaId(null);
+    setPersonaCreating(false);
+    if (isMobile) setMobileView('chat');
+  };
   // После создания новой персоны переключаемся с «создания» на её редактирование
   const handlePersonaSelectAfterCreate = (id: string) => {
     setSelectedPersonaId(id);
@@ -733,7 +739,7 @@ const windowWidth = useWindowWidth();
         ) : leftTab === 'tasks' ? (
           <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
         ) : leftTab === 'personas' ? (
-          <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} />
+          <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
@@ -782,7 +788,7 @@ const windowWidth = useWindowWidth();
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
               : leftTab === 'personas'
-              ? <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} />
+              ? <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'

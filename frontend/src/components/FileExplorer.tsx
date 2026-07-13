@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type ReactNode } from 'react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
@@ -28,6 +29,7 @@ import { EmptyState } from './EmptyState';
 import { C, R, FONT, MODAL_W, TB, SHADOW } from '../lib/design';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem } from './ui';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 interface Props {
   project: Project;
@@ -173,24 +175,12 @@ function getExtMeta(name: string) {
 }
 
 function FolderIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={C.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-    </svg>
-  );
+  return <Folder size={ICON_SIZE.md} strokeWidth={ICON_STROKE} color={C.accent} />;
 }
 
 // Иконка папки «Заметки» (vault проекта) — единая IconNotes в accent-цвете
 function NotesFolderIcon() {
   return <span style={{ color: C.accent, display: 'flex' }}><IconNotes size={17} /></span>;
-}
-
-function ChevronRight() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-      <path d="m9 18 6-6-6-6" />
-    </svg>
-  );
 }
 
 function CloudIcon({ variant }: { variant: 'direct' | 'inherited' | 'idle' }) {
@@ -247,9 +237,7 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 16 }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
         <div style={{ width: 48, height: 48, borderRadius: 14, background: C.bgInset, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-          </svg>
+          <Folder size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />
         </div>
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>Проект пуст</div>
@@ -260,7 +248,7 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
             variant="primary"
             size="md"
             glow
-            leftIcon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>}
+            leftIcon={<Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
             onClick={onCreateFile}
           >
             Создать первый файл
@@ -271,9 +259,7 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
       <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
         <FilesTip
           icon={
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
-            </svg>
+            <Monitor size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           }
           title="Файлы и структура проекта"
           text="Создавайте и загружайте файлы, организуйте их по папкам. Ассистент видит всю структуру проекта при работе над задачами."
@@ -289,10 +275,7 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
         />
         <FilesTip
           icon={
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/>
-              <line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
-            </svg>
+            <Server size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           }
           title="Удалённый доступ к папке"
           text="Подключите как сетевой диск — все файлы будут доступны прямо в проводнике."
@@ -303,8 +286,8 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
               </span>
               <button onClick={handleCopyWebdav} title="Скопировать URL" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: copied ? C.successText : C.textMuted, flexShrink: 0 }}>
                 {copied
-                  ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                  : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  ? <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                  : <Copy size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                 }
               </button>
             </div>
@@ -317,24 +300,12 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
 
 // Иконка карандаша для переименования
 function RenameIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-    </svg>
-  );
+  return <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
 }
 
 // Иконка корзины для удаления
 function TrashIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="3 6 5 6 21 6"/>
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-      <path d="M10 11v6M14 11v6"/>
-      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-    </svg>
-  );
+  return <Trash2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
 }
 
 // Иконка книги с минусом — «удалить из знаний» (в строке файла, 15×15)
@@ -350,11 +321,7 @@ function BookMinusIcon() {
 
 // Иконки для контекстного меню — 16×16, currentColor, Lucide-style
 function MI_Attach() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-    </svg>
-  );
+  return <Paperclip size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 }
 function MI_BookPlus() {
   return (
@@ -383,29 +350,13 @@ function MI_Cloud() {
   );
 }
 function MI_Rename() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-    </svg>
-  );
+  return <SquarePen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 }
 function MI_Move() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M5 12h14M13 6l6 6-6 6"/>
-    </svg>
-  );
+  return <ArrowRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 }
 function MI_Trash() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="3 6 5 6 21 6"/>
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-      <path d="M10 11v6M14 11v6"/>
-      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-    </svg>
-  );
+  return <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 }
 // Иконка «Новая заметка» в контекстном меню: лист с плюсом
 function MI_NotePlus() {
@@ -420,13 +371,7 @@ function MI_NotePlus() {
 
 // Иконка папки с плюсом
 function FolderPlusIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-      <line x1="12" y1="11" x2="12" y2="17"/>
-      <line x1="9" y1="14" x2="15" y2="14"/>
-    </svg>
-  );
+  return <FolderPlus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 }
 
 interface ContextMenuState {
@@ -1150,9 +1095,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               onClick={e => { e.stopPropagation(); onAttachToChat(entry.path); }}
               title="Добавить в чат"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-              </svg>
+              <Paperclip size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </IconButton>
           ) : null
         )}
@@ -1179,10 +1122,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               </IconButton>
             ) : (
               <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.successText }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
-                  <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
-                </svg>
+                <BookOpen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
               </span>
             )
           ) : (
@@ -1194,10 +1134,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
                 title="Добавить в базу знаний"
               >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
-                  <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
-                </svg>
+                <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
               </IconButton>
             ) : null
           )
@@ -1229,7 +1166,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           return null;
         })()}
         {/* Намёк «войти в папку» — только мобильная навигация */}
-        {mobileNav && entry.isDirectory && <ChevronRight />}
+        {mobileNav && entry.isDirectory && <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
         </span>
       </div>
     );
@@ -1266,7 +1203,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
             <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+              <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </span>
             <input
               placeholder="Поиск…"
@@ -1275,7 +1212,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               style={{ flex: 1, border: 'none', background: 'none', fontSize: 13, fontFamily: FONT.mono, color: C.textHeading, outline: 'none' }}
             />
             {search && (
-              <button onClick={() => handleSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 13, padding: 0 }}>✕</button>
+              <button onClick={() => handleSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', alignItems: 'center' }}><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
             )}
           </div>
           {/* Сортировка дерева: по имени / по дате изменения */}
@@ -1312,17 +1249,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             {showSortMenu && (
               <Menu onClose={() => setShowSortMenu(false)} top={34} minWidth={200}>
                 <MenuItem
-                  icon={sortMode === 'name' ? <polyline points="20 6 9 17 4 12" /> : <g />}
+                  icon={sortMode === 'name' ? <Check size={15} strokeWidth={2} /> : <></>}
                   label="По имени"
                   onClick={() => changeSortMode('name')}
                 />
                 <MenuItem
-                  icon={sortMode === 'date-desc' ? <polyline points="20 6 9 17 4 12" /> : <g />}
+                  icon={sortMode === 'date-desc' ? <Check size={15} strokeWidth={2} /> : <></>}
                   label="Сначала новые"
                   onClick={() => changeSortMode('date-desc')}
                 />
                 <MenuItem
-                  icon={sortMode === 'date-asc' ? <polyline points="20 6 9 17 4 12" /> : <g />}
+                  icon={sortMode === 'date-asc' ? <Check size={15} strokeWidth={2} /> : <></>}
                   label="Сначала старые"
                   onClick={() => changeSortMode('date-asc')}
                 />
@@ -1332,15 +1269,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           {onOpenKnowledge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
               <button title="Файлы" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bgMain, color: C.accent, boxShadow: TB.pillThumbShadow }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                </svg>
+                <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
               </button>
               <button onClick={onOpenKnowledge} title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
-                  <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
-                </svg>
+                <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
               </button>
             </div>
           )}
@@ -1363,7 +1295,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               <Button
                 variant="dashed"
                 size="md"
-                leftIcon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>}
+                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
                 onClick={() => {
                   if (isMobile) setCreateInDir(mobileDir);
                   setShowCreateFile(true);
@@ -1400,7 +1332,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               {uploading ? (
                 <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} />
               ) : (
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <Upload size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
               )}
             </label>
           </div>
@@ -1411,7 +1343,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {/* Хинт целевой папки — только десктоп */}
         {online && !isMobile && (
           <div style={{ marginTop: 5, fontSize: 11.5, color: C.textMuted, fontFamily: FONT.mono, paddingLeft: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             {createInDir ? <span title={createInDir}>{notesDisplayPath(createInDir)}</span> : <span style={{ fontStyle: 'italic' }}>корень проекта</span>}
           </div>
         )}
@@ -1456,7 +1388,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         {searchResults !== null ? (
           searchResults.length === 0 ? (
             <EmptyState
-              icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>}
+              icon={<Search size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
               title={searchError ?? 'Ничего не найдено'}
               subtitle={searchError ? 'Подключитесь к серверу, чтобы искать файлы' : `Нет файлов по запросу «${search}»`}
             />
@@ -1469,7 +1401,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           ) : mobileEntries.length === 0 ? (
             mobileDir === '' ? <FilesRootEmptyState onCreateFile={online ? () => { setCreateInDir(mobileDir); setShowCreateFile(true); } : undefined} /> : (
               <EmptyState
-                icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
+                icon={<Folder size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
                 title="Папка пуста"
                 subtitle="Здесь пока нет файлов"
               />

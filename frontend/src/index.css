@@ -172,13 +172,17 @@ body {
   .cc-actions { opacity: 0; transition: opacity 0.15s ease; }
   .cc-msg:hover .cc-actions, .cc-actions:focus-within { opacity: 1; }
 }
-/* Тач (мобайл): действия «копировать/повторить» прячем — на тач они мешают и не нужны */
+/* Тач (мобайл): действия «копировать/повторить» всегда видимы — без hover до них не дотянуться */
 @media (hover: none), (pointer: coarse) {
-  .cc-actions { display: none !important; }
+  .cc-actions { opacity: 1; }
   /* Длинные пути обрезаем слева (видно имя файла/конец пути, а не начало) */
   .cc-trunc-left { direction: rtl; text-align: left; unicode-bidi: plaintext; }
 }
 
+/* Скрытый скроллбар: контейнер скроллится, но полоса не рисуется (мобильные таббары,
+   горизонтальные ленты). Firefox — scrollbar-width, Webkit — ::-webkit-scrollbar. */
+.cc-no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.cc-no-scrollbar::-webkit-scrollbar { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   .cc-pulse-ring { animation: none; }

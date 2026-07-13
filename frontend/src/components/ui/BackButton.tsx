@@ -1,4 +1,5 @@
 import type { ReactNode, CSSProperties, MouseEvent } from 'react';
+import { ChevronLeft } from 'lucide-react';
 import { C, R } from '../../lib/design';
 
 // Единая кнопка «назад» для тулбаров: chevron-влево + кликабельный текст.
@@ -22,9 +23,7 @@ export function BackButton({ onClick, title, children, iconColor = C.textSeconda
         borderRadius: R.md, flexShrink: 0, ...style,
       }}
     >
-      <svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none" stroke={iconColor} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-        <path d="M15 18l-6-6 6-6" />
-      </svg>
+      <ChevronLeft size={iconSize} strokeWidth={2} color={iconColor} style={{ flexShrink: 0 }} />
       {children}
     </button>
   );

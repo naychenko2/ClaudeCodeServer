@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Users } from 'lucide-react';
 import type { Persona, Project, Session } from '../../types';
 import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaTitleLines } from '../../lib/personas';
@@ -30,11 +31,14 @@ function useIsMobile(): boolean {
 // Проектная вкладка «Команда»: САЙДБАРНЫЙ СПИСОК персон этого проекта.
 // Форма редактирования/создания живёт отдельно — в центральной зоне (ProjectPersonaPane).
 // Выбор синхронизируется через контролируемые props (состояние поднято в WorkspacePage).
-export function ProjectPersonasPanel({ project, selectedId, onSelect, onNew }: {
+export function ProjectPersonasPanel({ project, selectedId, onSelect, onNew, onShowTeam, teamActive }: {
   project: Project;
   selectedId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
+  // Показать командный центр (сбросить выбор персоны) — кнопка вверху сайдбара, всегда достижима
+  onShowTeam?: () => void;
+  teamActive?: boolean;
 }) {
   const personas = usePersonas();
   useEffect(() => { void ensurePersonasLoaded(); }, []);
@@ -44,6 +48,22 @@ export function ProjectPersonasPanel({ project, selectedId, onSelect, onNew }: {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgPanel }}>
+      {onShowTeam && (
+        <button
+          onClick={onShowTeam}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 9, width: '100%',
+            padding: '9px 14px', border: 'none', cursor: 'pointer', textAlign: 'left',
+            background: teamActive ? C.accentLight : 'transparent',
+            color: teamActive ? C.accent : C.textSecondary,
+            fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
+            borderBottom: `1px solid ${C.border}`,
+          }}
+        >
+          <Users size={15} strokeWidth={2} />
+          Командный центр
+        </button>
+      )}
       <PersonaList
         personas={projectPersonas}
         selectedId={selectedId}

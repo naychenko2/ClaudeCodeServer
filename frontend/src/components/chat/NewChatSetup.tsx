@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Cpu, Zap, Hourglass, ChevronDown } from 'lucide-react';
 import type { Session } from '../../types';
 import { api } from '../../lib/api';
 import { useModels, useModelCaps, modelCaps, modelProvider, useModelLabel } from '../../lib/models';
@@ -16,33 +17,16 @@ import { C, R, FONT, SHADOW } from '../../lib/design';
 type Panel = 'model' | 'effort' | 'expiry' | null;
 
 // Иконка «чип» (модель)
-const IconModel = (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-    <rect x="4" y="4" width="16" height="16" rx="2" />
-    <rect x="9" y="9" width="6" height="6" />
-    <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
-  </svg>
-);
+const IconModel = <Cpu size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 // Иконка «молния» (усиление рассуждения)
-const IconEffort = (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-    <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
-  </svg>
-);
+const IconEffort = <Zap size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 // Иконка «песочные часы» (время жизни временного чата)
-const IconExpiry = (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-    <path d="M6 2h12M6 22h12M8 2v4l4 4 4-4V2M8 22v-4l4-4 4 4v4" />
-  </svg>
-);
+const IconExpiry = <Hourglass size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 
 function Chevron({ open }: { open: boolean }) {
   return (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"
-      strokeLinecap="round" strokeLinejoin="round"
-      style={{ flexShrink: 0, color: C.textMuted, transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'none' }}>
-      <path d="m6 9 6 6 6-6" />
-    </svg>
+    <ChevronDown size={11} color={C.textMuted} strokeWidth={2}
+      style={{ flexShrink: 0, transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'none' }} />
   );
 }
 

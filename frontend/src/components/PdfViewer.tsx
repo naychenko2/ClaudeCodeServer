@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
+import { Minus, Plus } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { base64ToBytes } from '../lib/binary';
 import { C, FONT, SHADOW } from '../lib/design';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -169,9 +171,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
               color: hover === 'minus' ? C.textPrimary : C.textSecondary,
             }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
+            <Minus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </button>
 
           {/* Процент — клик сбрасывает в 100% */}
@@ -207,10 +207,7 @@ export default function PdfViewer({ base64 }: { base64: string }) {
               color: hover === 'plus' ? C.textPrimary : C.textSecondary,
             }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <line x1="12" y1="5" x2="12" y2="19"/>
-              <line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
+            <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </button>
         </div>
       )}

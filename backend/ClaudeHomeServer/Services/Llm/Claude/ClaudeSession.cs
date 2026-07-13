@@ -56,6 +56,27 @@ public class ClaudeSession : ILlmSessionAdapter
     // через --disallowedTools; список задаётся из конфига (Claude:DisallowedTools).
     private readonly string[] _disallowedTools;
 
+    // Встроенные Task-инструменты Claude Code (Tasks-фича, синхронизация с claude.ai) —
+    // дублируют наш MCP tasks-server. Пока tasks-server подключён, блокируем их через
+    // --disallowedTools (см. сборку _disallowedTools в конструкторе), чтобы модель звала
+    // mcp__tasks__*, а не пустой встроенный трекер. ВНИМАНИЕ: «Task» (без суффикса) —
+    // это тул ЗАПУСКА СУБАГЕНТА (делегирование), его НЕ трогаем; только трекерные
+    // TaskGet/TaskList/TaskCreate/... Совпадающие с реальными именами сработают,
+    // несуществующие claude молча проигнорирует.
+    private static readonly string[] BuiltInTaskTools =
+        ["TaskGet", "TaskList", "TaskCreate", "TaskUpdate", "TaskComplete", "TaskDelete", "TaskSearch"];
+
+    // Префиксы встроенных MCP-серверов приложения (инструменты вида mcp__{server}__{tool}).
+    // Для сессии-исполнителя задачи разрешаем их автоматический выз — без пользователя,
+    // который ответит на карточку разрешения (см. DecidePermissionAsync).
+    private static readonly string[] AppMcpPrefixes =
+        ["mcp__tasks__", "mcp__notes__", "mcp__personas__", "mcp__memory__", "mcp__wsp__"];
+    private static bool IsAppMcpTool(string toolName)
+    {
+        foreach (var p in AppMcpPrefixes) if (toolName.StartsWith(p, StringComparison.Ordinal)) return true;
+        return false;
+    }
+
     // Отслеживание изменений файлов на время хода
     private readonly TurnFileWatcher _fileWatcher;
 
@@ -112,6 +133,12 @@ public class ClaudeSession : ILlmSessionAdapter
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
             ? [.. (disallowedTools ?? []), .. extra]
             : disallowedTools ?? [];
+        // Пока подключён наш MCP tasks-server, запрещаем встроенные Task-инструменты
+        // Claude Code (синхронизация с claude.ai — там пусто): они дублируют mcp__tasks__*
+        // и путают модель (особенно haiku зовёт TaskGet/TaskList вместо tasks_get/tasks_list,
+        // получает «No tasks» и бросает задачу). Без задач в сессии — не трогаем.
+        if (context.TasksMcp is not null)
+            _disallowedTools = [.. _disallowedTools, .. BuiltInTaskTools];
         _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage);
     }
 
@@ -478,6 +505,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // Правила проекта: deny приоритетнее; allow — авто-разрешить; null — спросить пользователя
         var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, inputEl);
         if (ruleDecision == "deny") return "deny";
+        // Сессия-исполнитель задачи работает автономно — отвечать на карточку разрешения
+        // некому, и без этого исполнитель вязнет на первом же mcp__tasks__* (status=Waiting
+        // до таймаута в 60 мин) и не может ни прочитать, ни завершить задачу. Встроенные
+        // MCP-серверы приложения (tasks/notes/personas/memory/wsp) — наши инструменты под
+        // сервисным токеном, неопасные; разрешаем их автоматически. deny-правило выше учтено.
+        if (ruleDecision == null && Info.TaskExecution && IsAppMcpTool(toolName)) return "allow";
         if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(toolName)) return "allow";
 
         var tcs = new TaskCompletionSource<string>();
@@ -642,12 +675,16 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? " Чтобы поручить задачу персоне-исполнителю, передай её personaId в tasks_create/tasks_update — " +
                       "задачу выполнит Claude от её лица; список персон и их id — personas_list."
                     : "";
+                // Прикрепление итога выполнения — задачи с проектом имеют файлы; результат полезен всегда
+                var resultHint = _tasksMcp.ProjectId is not null
+                    ? " Завершая задачу через tasks_complete, прикрепляй итог: resultMarkdown — короткое описание сделанного, linkedFiles — пути затронутых файлов проекта (от корня, через /)."
+                    : " Завершая задачу через tasks_complete, прикрепляй итог: resultMarkdown — короткое описание сделанного.";
                 var tasksHint =
                     "У пользователя есть встроенная система задач (вкладка «Задачи» в проекте и раздел «Календарь»). " +
                     "Управляй ею через MCP-инструменты mcp__tasks__* (tasks_list, tasks_search, tasks_get, tasks_create, " +
                     "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
-                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint;
+                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint + resultHint;
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? tasksHint
                     : basePrompt + "\n\n" + tasksHint;

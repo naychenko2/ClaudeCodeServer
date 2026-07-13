@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
+import { Lock, Plus, Trash2 } from 'lucide-react';
 import type { UserProfile } from '../types';
 import { api } from '../lib/api';
 import { C, R, FONT, SHADOW, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, TextField, Button, SegmentedControl } from './ui';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 const MOBILE_BP = 600;
 
@@ -104,9 +106,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
         variant="primary"
         onClick={() => setDialog({ kind: 'add' })}
         leftIcon={
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
+          <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         }
       >
         Добавить пользователя
@@ -120,9 +120,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
         variant="primary"
         onClick={() => setDialog({ kind: 'add' })}
         leftIcon={
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
+          <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         }
       >
         Добавить
@@ -194,10 +192,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
                           title="Сбросить пароль"
                           style={{ ...actionBtn(false), flex: 1, justifyContent: 'center' }}
                         >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                          </svg>
+                          <Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                           Сброс пароля
                         </button>
                         <button
@@ -205,12 +200,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
                           title="Удалить пользователя"
                           style={{ ...actionBtn(false, true), flex: 1, justifyContent: 'center' }}
                         >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <polyline points="3 6 5 6 21 6"/>
-                            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                            <path d="M10 11v6"/><path d="M14 11v6"/>
-                            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                          </svg>
+                          <Trash2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                           Удалить
                         </button>
                       </div>
@@ -255,10 +245,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
                       title="Сбросить пароль"
                       style={actionBtn(isSelf)}
                     >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                      </svg>
+                      <Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                       Сброс пароля
                     </button>
                     <button
@@ -267,12 +254,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
                       title="Удалить пользователя"
                       style={actionBtn(isSelf, true)}
                     >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <polyline points="3 6 5 6 21 6"/>
-                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                        <path d="M10 11v6"/><path d="M14 11v6"/>
-                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                      </svg>
+                      <Trash2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                     </button>
                   </div>
                 </div>

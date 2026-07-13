@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { History } from 'lucide-react';
 import type { AuthState } from '../types';
 import { C, FONT, TB, SHADOW } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
@@ -81,8 +82,8 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
       padding: `0 ${isMobile ? TB.padXMobile : TB.padX}px`,
       boxSizing: 'border-box', borderBottom: `1px solid ${C.border}`,
     }}>
-      {/* Левая секция — логотип (скрыт на мобилке; там распорка не нужна — иначе
-          4 вкладки не помещаются: правая секция не сжимается меньше аватара) */}
+      {/* Левая секция — логотип (скрыт на мобилке; распорка не нужна — иначе
+          6 разделов таббара не помещаются: правая секция не сжимается меньше аватара) */}
       {!isMobile && (
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
           {logo}
@@ -90,10 +91,12 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
       )}
 
       {/* Центр — переключатель вкладок. На мобиле — компакт-режим (иконки, подпись
-          у активного): 4 раздела помещаются даже на 320px без скролла и обрезания */}
+          у активного): 6 разделов; на узком экране таббар скроллится, не обрезается */}
       {isMobile ? (
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center', overflow: 'hidden' }}>
-          <HubTabs mobile value={value} onChange={onTab} />
+        <div className="cc-no-scrollbar" style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center', overflowX: 'auto', overflowY: 'hidden' }}>
+          <div style={{ flexShrink: 0, display: 'flex' }}>
+            <HubTabs mobile value={value} onChange={onTab} />
+          </div>
         </div>
       ) : (
         <HubTabs value={value} onChange={onTab} />
@@ -116,11 +119,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
             onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; setShowHistoryTip(true); }}
             onMouseLeave={e => { e.currentTarget.style.background = 'none'; setShowHistoryTip(false); }}
           >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-              <path d="M3 3v5h5" />
-              <polyline points="12 7 12 12 15 14" />
-            </svg>
+            <History size={17} strokeWidth={2} />
             {(historyBadge ?? 0) > 0 ? (
               <span style={{
                 position: 'absolute', top: -3, right: -5, minWidth: 15, height: 15,
@@ -165,8 +164,6 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
           onShowHistory={isMobile ? openHistory : undefined}
           historyBadge={historyBadge}
           historyNeverSeen={neverSeen}
-          // На мобилке раздел «Знания» убран из хаб-таббара — открываем его из меню аватара
-          onOpenKnowledge={isMobile ? () => onTab('knowledge') : undefined}
         />
       </div>
 

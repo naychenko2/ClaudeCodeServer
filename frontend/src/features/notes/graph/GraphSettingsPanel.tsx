@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { Settings, X } from 'lucide-react';
 import { C, FONT, R, SHADOW } from '../../../lib/design';
+import { ICON_SIZE } from '../../../components/ui/icons';
 import type { GraphSettings } from './graphSettings';
 import { GraphSettingsBody } from './GraphSettingsBody';
 
@@ -34,7 +36,7 @@ export function GraphSettingsPanel({ settings, onChange, sources, tags, localMod
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
         <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: C.textSecondary }}>Настройки графа</span>
         <button onClick={() => setOpen(false)} title="Свернуть" style={{ ...gearBtn, border: 'none', width: 22, height: 22 }}>
-          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+          <X size={ICON_SIZE.xs} strokeWidth={2} />
         </button>
       </div>
       <div style={{ overflowY: 'auto', padding: '8px 10px 10px' }}>
@@ -45,12 +47,7 @@ export function GraphSettingsPanel({ settings, onChange, sources, tags, localMod
 }
 
 function IconGear() {
-  return (
-    <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  );
+  return <Settings size={ICON_SIZE.sm} strokeWidth={2} />;
 }
 
 const gearBtn: React.CSSProperties = {

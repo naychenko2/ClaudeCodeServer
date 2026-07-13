@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { Check } from 'lucide-react';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PantheonTemplate } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { Modal, ModalActions, TextArea } from '../../components/ui';
@@ -126,10 +128,7 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
           {active && (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.onAccent}
-              strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
+            <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.onAccent} style={{ flexShrink: 0 }} />
           )}
         </span>
         <PersonaAvatar persona={p} size={30} />

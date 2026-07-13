@@ -1,4 +1,4 @@
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { C } from '../../lib/design';
 
 // Единый ресайз-сплиттер для всех областей: в покое — тонкая 1px-линия (как граница
@@ -6,14 +6,17 @@ import { C } from '../../lib/design';
 export function Splitter({ orientation = 'v', active, onMouseDown }: {
   orientation?: 'v' | 'h';
   active: boolean;
-  onMouseDown: (e: ReactMouseEvent) => void;
+  // Pointer Events (mouse + touch + pen). Имя onMouseDown сохранено для совместимости
+  // с потребителями; внутри вешается onPointerDown + touchAction:none (тач не скроллит, а тянет).
+  onMouseDown: (e: ReactPointerEvent) => void;
 }) {
   const vertical = orientation === 'v';
   return (
     <div
-      onMouseDown={onMouseDown}
+      onPointerDown={onMouseDown}
       style={{
         position: 'relative', flexShrink: 0, cursor: vertical ? 'col-resize' : 'row-resize',
+        touchAction: 'none',
         background: active ? C.accent : C.border, transition: 'background 0.15s ease',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         ...(vertical ? { flex: '0 0 1px', width: 1, alignSelf: 'stretch' } : { height: 1, width: '100%' }),

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { List, Menu as MenuIcon, Plus, Search } from 'lucide-react';
 import type { Project, ProjectGroup, Session, AuthState } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
@@ -7,6 +8,7 @@ import { C, R, FONT } from '../lib/design';
 import { useSidebarDrag } from '../lib/sidebarWidth';
 import { MOBILE_MAX } from '../lib/breakpoints';
 import { Button, IconButton, Splitter } from '../components/ui';
+import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ProjectCard } from '../features/projects/ProjectCard';
@@ -209,7 +211,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
       <div style={{ fontSize: 14, color: C.textSecondary, lineHeight: 1.5, marginBottom: 8 }}>Добавьте первый проект, чтобы начать.</div>
       {online && (
         <Button variant="primary" size="md" glow onClick={() => setActiveDialog({ type: 'add' })}
-          leftIcon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14"/></svg>}>
+          leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}>
           Добавить проект
         </Button>
       )}
@@ -274,9 +276,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             <div style={{ flexShrink: 0, padding: '20px 26px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
               {sidebarMode === 'collapsed' && (
                 <IconButton onClick={() => setSidebarMode('open')} title="Показать панель" size="md" variant="soft" style={{ marginLeft: -4 }}>
-                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                    <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                  </svg>
+                  <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
                 </IconButton>
               )}
               <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 24, color: C.textHeading, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -297,11 +297,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                 <Button
                   variant="primary" size="md"
                   onClick={() => setActiveDialog({ type: 'add' })}
-                  leftIcon={
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                      <path d="M12 5v14M5 12h14"/>
-                    </svg>
-                  }
+                  leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
                 >
                   Проект
                 </Button>
@@ -370,10 +366,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             border: `1px solid ${C.border}`, borderRadius: R.xl, padding: '0 13px', height: 44,
           }}>
             <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', alignItems: 'center' }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="11" cy="11" r="7"/>
-                <path d="m21 21-4.3-4.3"/>
-              </svg>
+              <Search size={ICON_SIZE.sm} strokeWidth={2} />
             </span>
             <input
               placeholder="Поиск проектов…"
@@ -391,10 +384,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                 background: C.bgWhite, color: C.textSecondary, border: `1px solid ${C.border}`, borderRadius: R.xl, cursor: 'pointer',
               }}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
-                <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
-              </svg>
+              <List size={ICON_SIZE.md} strokeWidth={2} />
             </button>
           )}
           {online && (
@@ -406,9 +396,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                 background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.xl, cursor: 'pointer',
               }}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-                <path d="M12 5v14M5 12h14"/>
-              </svg>
+              <Plus size={ICON_SIZE.md} strokeWidth={2} />
             </button>
           )}
         </div>

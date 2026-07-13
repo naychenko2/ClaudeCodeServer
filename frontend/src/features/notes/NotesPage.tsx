@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronLeft, Menu as MenuIcon, Pin } from 'lucide-react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
@@ -18,6 +19,7 @@ import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
 import { EmptyState } from '../../components/EmptyState';
 import { Splitter, IconButton, ConfirmDialog } from '../../components/ui';
+import { ICON_SIZE } from '../../components/ui/icons';
 import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot } from './shared';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile, useWindowWidth } from '../../lib/breakpoints';
@@ -297,16 +299,12 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const sidebarHeader = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px 0', minHeight: 28, flex: 'none' }}>
       <IconButton onClick={() => setSidebarMode('collapsed')} title="Свернуть панель" size="sm" style={{ marginLeft: -2 }}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M15 6l-6 6 6 6" />
-        </svg>
+        <ChevronLeft size={ICON_SIZE.sm} strokeWidth={2} />
       </IconButton>
       <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Заметки</span>
       {sidebarMode === 'open' && (
         <IconButton onClick={() => setSidebarMode('pinned')} title="Закрепить панель" size="sm">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="17" x2="12" y2="22" /><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-          </svg>
+          <Pin size={ICON_SIZE.sm} strokeWidth={2} />
         </IconButton>
       )}
     </div>
@@ -328,7 +326,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     ? <NotesGraph selectedId={selectedId} onSelectNode={id => { setMode('notes'); selectNote(id); }}
         maxNodes={isMobile ? 40 : undefined}
         settings={graphSettings} onSettingsChange={setGraphSettings}
-        hidePanel={!isMobile} onStats={setGraphStats} />
+        hidePanel={false} onStats={setGraphStats} />
     : selectedId
       ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink}
           onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} isMobile={isMobile}
@@ -388,9 +386,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         {sidebarMode === 'collapsed' && (
           <div style={{ flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48, borderBottom: `1px solid ${C.divider}` }}>
             <IconButton onClick={() => setSidebarMode('open')} title="Открыть панель" size="md" variant="soft">
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-              </svg>
+              <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
             </IconButton>
           </div>
         )}

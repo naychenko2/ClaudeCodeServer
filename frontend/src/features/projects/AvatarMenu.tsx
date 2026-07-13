@@ -3,6 +3,8 @@ import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
+import { History, Book, Users, Lock, FlaskConical, LogOut } from 'lucide-react';
+import { ICON_SIZE } from '../../components/ui/icons';
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: 'light', label: 'Светлая' },
@@ -109,11 +111,7 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
               onClick={() => { setOpen(false); onShowHistory(); }}
               style={dropdownItem}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                <path d="M3 3v5h5" />
-                <polyline points="12 7 12 12 15 14" />
-              </svg>
+              <History size={ICON_SIZE.xs} strokeWidth={2} />
               Что нового
               {(historyBadge > 0 || historyNeverSeen) && (
                 <span style={{
@@ -136,10 +134,7 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
               onClick={() => { setOpen(false); onOpenKnowledge(); }}
               style={dropdownItem}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-              </svg>
+              <Book size={ICON_SIZE.xs} strokeWidth={2} />
               Знания
             </button>
           )}
@@ -148,11 +143,7 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
               onClick={() => { setOpen(false); onShowUserManagement(); }}
               style={dropdownItem}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
-              </svg>
+              <Users size={ICON_SIZE.xs} strokeWidth={2} />
               Управление пользователями
             </button>
           )}
@@ -160,20 +151,14 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
             onClick={() => { setOpen(false); onShowChangePassword(); }}
             style={dropdownItem}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-            </svg>
+            <Lock size={ICON_SIZE.xs} strokeWidth={2} />
             Сменить пароль
           </button>
           <button
             onClick={() => { setOpen(false); onShowFeatureFlags(); }}
             style={dropdownItem}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="M9 3h6M10 3v6.5L5.5 17a2 2 0 0 0 1.7 3h9.6a2 2 0 0 0 1.7-3L14 9.5V3"/>
-              <path d="M7.5 14h9"/>
-            </svg>
+            <FlaskConical size={ICON_SIZE.xs} strokeWidth={2} />
             Экспериментальные функции
           </button>
           {/* Оформление: светлая / тёмная / системная тема */}
@@ -197,11 +182,7 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
             onClick={() => { setOpen(false); onLogout(); }}
             style={{ ...dropdownItem, color: C.danger }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-              <polyline points="16 17 21 12 16 7"/>
-              <line x1="21" y1="12" x2="9" y2="12"/>
-            </svg>
+            <LogOut size={ICON_SIZE.xs} strokeWidth={2} />
             Выйти
           </button>
         </div>

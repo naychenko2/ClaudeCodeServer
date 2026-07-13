@@ -49,9 +49,9 @@ export function MenuItem({ icon, label, onClick, danger, disabled }: {
       style={style}
     >
       {icon && (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', width: 15, height: 15, flexShrink: 0, color: 'inherit' }}>
           {icon}
-        </svg>
+        </span>
       )}
       {label}
     </button>

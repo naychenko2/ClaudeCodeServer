@@ -1,8 +1,10 @@
 import { useState } from 'react';
+import { Search, ExternalLink } from 'lucide-react';
 import type { RegistrySkill, SkillSuggestion } from '../types';
 import { C, R, FONT } from '../lib/design';
 import { api } from '../lib/api';
 import { Modal, Button, IconField } from './ui';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 // Контекст установки диалога определяет доступные действия:
 //  • persona     — «Установить персоне» (глобально + привязка Skill) и «✨ Подобрать под персону»;
@@ -125,7 +127,7 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
             radius={R.lg}
             fontSize={13.5}
             onEnter={runFind}
-            icon={svg(<><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></>)}
+            icon={<Search size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
           />
         </div>
         <Button variant="secondary" onClick={runFind} disabled={loading}>Найти</Button>
@@ -238,7 +240,7 @@ function SkillResultCard({
           }}
         >
           Подробнее о навыке
-          {svg(<><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></>, 13)}
+          <ExternalLink size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </a>
       )}
 
@@ -270,13 +272,4 @@ function formatInstalls(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
-}
-
-function svg(children: React.ReactNode, size = 15) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      {children}
-    </svg>
-  );
 }

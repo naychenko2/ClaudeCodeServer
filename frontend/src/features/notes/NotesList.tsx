@@ -1,17 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { FolderPlus } from 'lucide-react';
 import type { NoteSummary } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNoteFolders } from '../../lib/notes';
 import { C, FONT, R, SHADOW } from '../../lib/design';
+import { ICON_SIZE } from '../../components/ui/icons';
 import { ConfirmDialog, IconButton } from '../../components/ui';
 import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconTrash } from './shared';
 
-// Иконка «Новая папка» для меню (папка с плюсом)
+// Иконка «Новая папка» для меню (lucide folder-plus)
 const IconFolderPlus = () => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-    <path d="M12 11v4M10 13h4" />
-  </svg>
+  <FolderPlus size={ICON_SIZE.sm} strokeWidth={2} style={{ flexShrink: 0 }} />
 );
 
 interface Group { source: string; label: string; root: FolderNode }

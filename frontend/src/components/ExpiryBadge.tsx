@@ -1,3 +1,4 @@
+import { Hourglass } from 'lucide-react';
 import type { Session } from '../types';
 import { C, FONT } from '../lib/design';
 import { formatTimeLeft } from '../lib/expiry';
@@ -16,9 +17,7 @@ export function ExpiryBadge({ session }: { session: Pick<Session, 'updatedAt' | 
         lineHeight: 1, whiteSpace: 'nowrap',
       }}
     >
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M6 2h12M6 22h12M8 2v4l4 4 4-4V2M8 22v-4l4-4 4 4v4" />
-      </svg>
+      <Hourglass size={10} strokeWidth={2} style={{ flexShrink: 0 }} />
       {left.replace('через ', '')}
     </span>
   );

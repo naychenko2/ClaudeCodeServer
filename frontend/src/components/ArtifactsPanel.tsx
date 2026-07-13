@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
+import { Copy, File, FileText, ChevronRight, ChevronLeft, ChevronDown, ChevronsRight, List } from 'lucide-react';
 import { C, FONT, R, SHADOW } from '../lib/design';
 import { PillSwitch } from './Toolbar';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { MarkdownViewer } from './MarkdownViewer';
 import { useSessionArtifacts, type AgentArtifact, type AgentToolCall, type ArtifactFile, type ArtifactLink, type PlanStatus, type TodoItem, type WorkflowGroup } from '../hooks/useSessionArtifacts';
 import { IconNotes } from '../features/notes/shared';
@@ -109,16 +111,9 @@ function FileRow({ file, onOpen }: { file: ArtifactFile; onOpen: () => void }) {
       }}
     >
       {file.external ? (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"
-          strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-          <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-        </svg>
+        <Copy size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
       ) : (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"
-          strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-          <path d="M14 2v6h6" />
-        </svg>
+        <File size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
       )}
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontFamily: FONT.mono, fontSize: 12.5, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -242,11 +237,8 @@ function AgentSection({ title, children }: { title: string; children: ReactNode 
           cursor: 'pointer', padding: '2px 0', fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textSecondary,
         }}
       >
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6"
-          strokeLinecap="round" strokeLinejoin="round"
-          style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.12s' }}>
-          <path d="M9 6l6 6-6 6" />
-        </svg>
+        <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+          style={{ flexShrink: 0, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.12s' }} />
         {title}
       </button>
       {open && (
@@ -285,11 +277,8 @@ function AgentRow({ agent }: { agent: AgentArtifact }) {
           background: hover && expandable ? C.bgSelected : 'transparent',
         }}
       >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={expandable ? C.textMuted : 'transparent'}
-          strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
-          style={{ flexShrink: 0, marginTop: 4, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.12s' }}>
-          <path d="M9 6l6 6-6 6" />
-        </svg>
+        <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={expandable ? C.textMuted : 'transparent'}
+          style={{ flexShrink: 0, marginTop: 4, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.12s' }} />
         <span style={{ flexShrink: 0, marginTop: 2, display: 'flex' }}>
           <AgentStatusIcon status={agent.status} />
         </span>
@@ -395,11 +384,8 @@ function CollapseGroup({ title, tail, defaultOpen, variant = 'caption', icon, ch
           border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
         }}
       >
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2.6"
-          strokeLinecap="round" strokeLinejoin="round"
-          style={{ flexShrink: 0, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.12s' }}>
-          <path d="M9 6l6 6-6 6" />
-        </svg>
+        <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted}
+          style={{ flexShrink: 0, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.12s' }} />
         {icon}
         <span style={{ ...titleStyle, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={title}>
           {title}
@@ -541,9 +527,9 @@ function NavArrow({ dir, disabled, onClick }: { dir: 'prev' | 'next'; disabled: 
         color: disabled ? C.border : C.textSecondary, flexShrink: 0,
       }}
     >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-        {dir === 'prev' ? <path d="M15 6l-6 6 6 6" /> : <path d="M9 6l6 6-6 6" />}
-      </svg>
+      {dir === 'prev'
+        ? <ChevronLeft size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        : <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
     </button>
   );
 }
@@ -624,18 +610,15 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
           title="Скрыть панель"
           style={{ width: 30, height: 30, border: 'none', borderRadius: R.md, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, flexShrink: 0 }}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            {isMobile ? <path d="M6 9l6 6 6-6" /> : <path d="M9 6l6 6-6 6" />}
-          </svg>
+          {isMobile
+            ? <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+            : <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
         </button>
       </div>
 
       {isEmpty ? (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24, textAlign: 'center' }}>
-          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.6 }}>
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <path d="M14 2v6h6M9 13h6M9 17h3" />
-          </svg>
+          <FileText size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ opacity: 0.6 }} />
           <span style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textMuted, lineHeight: 1.5 }}>
             Пока ничего не менялось.<br />Здесь появятся план, задачи, агенты, файлы и ссылки.
           </span>
@@ -678,9 +661,7 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
                       title="К последнему плану"
                       style={navChip}
                     >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M13 17l5-5-5-5" /><path d="M6 17l5-5-5-5" />
-                      </svg>
+                      <ChevronsRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                       последний
                     </button>
                   )}
@@ -692,10 +673,7 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
                         ? { ...navChip, background: C.accentMuted, border: `1px solid ${C.accentMuted}`, color: C.accent }
                         : navChip}
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
-                        <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
-                      </svg>
+                      <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                       оглавление
                     </button>
                   )}

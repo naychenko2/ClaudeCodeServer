@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { RotateCcw, X } from 'lucide-react';
 import { C, FONT, GROUP_COLORS, R } from '../../../lib/design';
+import { ICON_SIZE } from '../../../components/ui/icons';
 import { Toggle } from '../../../components/ui';
 import { CollapseGroup, SourceDot } from '../shared';
 import type { GraphSettings } from './graphSettings';
@@ -119,7 +121,7 @@ export function GraphSettingsBody({ settings, onChange, sources, tags, localMode
             <button title="Удалить группу"
               onClick={() => onChange(s => ({ ...s, groups: s.groups.filter((_, j) => j !== i) }))}
               style={miniBtn}>
-              <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+              <X size={ICON_SIZE.xs} strokeWidth={2} />
             </button>
           </div>
         ))}
@@ -156,7 +158,7 @@ export function GraphSettingsBody({ settings, onChange, sources, tags, localMode
           <span role="button" tabIndex={0} title="Сбросить силы"
             onClick={e => { e.stopPropagation(); onChange(s => ({ ...s, forces: { ...GRAPH_DEFAULTS.forces } })); }}
             style={miniBtn}>
-            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" /><path d="M3 3v5h5" /></svg>
+            <RotateCcw size={ICON_SIZE.xs} strokeWidth={2} />
           </span>
         }>
         <SettingSlider label="Притяжение к центру" min={0} max={1} step={0.02}

@@ -4,9 +4,11 @@
 // инлайн, вместо деталей (TaskEditForm).
 
 import { useEffect, useMemo, useState } from 'react';
+import { Bell, ChevronRight, Check, MessageCircle, Repeat, SquarePen, Trash2, X } from 'lucide-react';
 import type { Project, Session, Task, TaskStatus, UpdateTaskDto } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { Button, IconButton, Modal, BackButton } from '../../components/ui';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
@@ -191,9 +193,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
       }}
     >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-      </svg>
+      <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       Изменить
     </button>
   );
@@ -320,21 +320,13 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         {task.dueDate && <DueChip task={task} withTime fontSize={12.5} />}
         {task.dueDate && task.reminderMinutes != null && (
           <HeaderChip>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.warning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-              <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-            </svg>
+            <Bell size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.warning} style={{ flexShrink: 0 }} />
             {reminderLabel(task.reminderMinutes)}
           </HeaderChip>
         )}
         {task.recurrence && (
           <HeaderChip>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.info} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <path d="M17 1l4 4-4 4" />
-              <path d="M3 11V9a4 4 0 0 1 4-4h14" />
-              <path d="M7 23l-4-4 4-4" />
-              <path d="M21 13v2a4 4 0 0 1-4 4H3" />
-            </svg>
+            <Repeat size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.info} style={{ flexShrink: 0 }} />
             {recurrenceLabel(task.recurrence)}
           </HeaderChip>
         )}
@@ -400,6 +392,19 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         </div>
       )}
 
+      {/* Результат — Markdown-итог выполнения (прикрепляет исполнитель) */}
+      {task.resultMarkdown && (
+        <div style={{ marginBottom: 26 }}>
+          <SectionLabel style={{ marginBottom: 10 }}>Результат</SectionLabel>
+          <div style={{
+            background: C.bgWhite, border: `1px solid ${C.borderLight}`,
+            borderRadius: R.xl, padding: '14px 18px',
+          }}>
+            <MarkdownViewer content={task.resultMarkdown} />
+          </div>
+        </div>
+      )}
+
       {/* Метки */}
       {task.labels.length > 0 && (
         <div style={{ marginBottom: 26 }}>
@@ -428,9 +433,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
               background: C.infoBg,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.info} strokeWidth="2" strokeLinecap="round">
-                <path d="M21 11.5a8.5 8.5 0 0 1-12 7.7L3 21l1.8-6A8.5 8.5 0 1 1 21 11.5z" />
-              </svg>
+              <MessageCircle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.info} />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: FONT.sans, fontSize: 13.5, fontWeight: 700, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -438,9 +441,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
               </div>
               <div style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textMuted }}>Открыть диалог</div>
             </div>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
+            <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
           </button>
         </div>
       )}
@@ -512,9 +513,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
                   }}
                 >
                   {s === 'done' && (
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
+                    <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                   )}
                   {STATUS_LABEL[s]}
                 </button>
@@ -537,15 +536,11 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         {executeButton}
         {editButton}
         <IconButton size="md" tone="danger" onClick={() => setConfirmDelete(true)} title="Удалить задачу">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14" />
-          </svg>
+          <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
         </IconButton>
         {onClose && (
           <IconButton size="md" onClick={onClose} title="Закрыть">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
+            <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
           </IconButton>
         )}
       </Toolbar>

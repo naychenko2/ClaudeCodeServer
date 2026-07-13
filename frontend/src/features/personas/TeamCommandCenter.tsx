@@ -449,7 +449,11 @@ function GroupChatPicker({ team, onClose, onCreated }: {
   const toggle = (id: string) => setSel(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 4 ? [...prev, id] : prev);
   const create = async () => {
     setBusy(true);
-    try { const s = await api.chats.createGroup(sel); onCreated(s); } finally { setBusy(false); }
+    try {
+      const s = await api.chats.createGroup(sel);
+      sessionStorage.setItem('cc_auto_discuss', s.id); // #3: автозапуск DiscussTeamDialog в новом чате
+      onCreated(s);
+    } finally { setBusy(false); }
   };
   return (
     <Modal width={420} title="Созвать команду" subtitle="Выберите 2–4 участниц. Первый — ведущий." onClose={onClose}

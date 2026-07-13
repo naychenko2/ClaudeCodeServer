@@ -913,3 +913,15 @@ export interface RecallItem {
   title: string;
   snippet?: string | null;
 }
+
+// Черновик персоны из AI-формирования команды (POST /api/personas/ai/team)
+export interface TeamMemberDraft {
+  name?: string;
+  role?: string;
+  description?: string;
+  character?: string;
+  tone?: string;
+  specialty?: string;
+  color?: string;
+  greeting?: string;
+}

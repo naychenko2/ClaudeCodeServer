@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   Users, MessageSquare, Mic, Workflow, Plus, CheckCircle2, Repeat, Trash2,
-  Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight, MoreHorizontal, Settings,
+  Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight, MoreHorizontal, Settings, Wand2,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
-import type { Persona, Project, Session, Task, TeamMemoryEntry } from '../../types';
+import type { Persona, Project, Session, Task, TeamMemoryEntry, TeamMemberDraft } from '../../types';
 import { api } from '../../lib/api';
 import { usePersonas, personaLabel } from '../../lib/personas';
 import { projectColor } from '../../lib/tasks';
@@ -37,6 +37,7 @@ export function TeamCommandCenter({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [formTeamOpen, setFormTeamOpen] = useState(false);
 
   const refresh = async () => {
     try { setEvents((await api.projects.events(project.id, { limit })) as unknown as EventRow[] ?? []); }
@@ -153,6 +154,7 @@ export function TeamCommandCenter({
               Создайте персон — задайте роль, характер и аватар. Они начнут работать вместе: чаты, задачи, совещания и конвейеры.
             </div>
             <button onClick={onNewPersona} style={primaryBtn}><UserPlus size={15} /> Новая персона</button>
+            <button onClick={() => setFormTeamOpen(true)} style={ghostBtn}><Wand2 size={15} /> Сформировать команду</button>
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
@@ -229,7 +231,109 @@ export function TeamCommandCenter({
       {newTaskOpen && (
         <NewTaskDialog defaultProjectId={project.id} onCreated={() => setNewTaskOpen(false)} onClose={() => setNewTaskOpen(false)} />
       )}
+      {formTeamOpen && (
+        <FormTeamDialog project={project} onClose={() => setFormTeamOpen(false)}
+          onCreated={() => { setFormTeamOpen(false); void refresh(); }} />
+      )}
     </div>
+  );
+}
+
+// AI-формирование команды: промпт → LLM предлагает состав → пользователь одобряет → создаёт
+function FormTeamDialog({ project, onClose, onCreated }: {
+  project: Project; onClose: () => void; onCreated: () => void;
+}) {
+  const [prompt, setPrompt] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [members, setMembers] = useState<TeamMemberDraft[] | null>(null);
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const generate = async () => {
+    if (!prompt.trim() || loading) return;
+    setLoading(true); setError(null); setMembers(null);
+    try {
+      const res = await api.personas.aiTeam(project.id, prompt.trim());
+      setMembers(res.members ?? []);
+      setSel(new Set((res.members ?? []).map((_, i) => i)));
+    } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось сформировать команду'); }
+    finally { setLoading(false); }
+  };
+  const toggle = (i: number) => setSel(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; });
+  const create = async () => {
+    if (creating || !members) return;
+    setCreating(true); setError(null);
+    try {
+      for (let i = 0; i < members.length; i++) {
+        if (!sel.has(i)) continue;
+        const m = members[i];
+        await api.personas.create({
+          name: m.name?.trim() || 'Персона',
+          role: m.role, description: m.description,
+          contract: { character: m.character, tone: m.tone },
+          specialty: m.specialty as Persona['specialty'] | undefined,
+          scope: 'project', projectId: project.id,
+          color: m.color, greeting: m.greeting, memoryEnabled: true,
+        });
+      }
+      onCreated();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось создать персон'); }
+    finally { setCreating(false); }
+  };
+
+  return (
+    <Modal width={480} title="Сформировать команду" onClose={onClose}
+      subtitle="Опишите команду — LLM проанализирует проект и предложит состав."
+      footer={members && members.length > 0 ? (
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>{sel.size} из {members.length}</span>
+          <button onClick={onClose} style={ghostBtn}>Отмена</button>
+          <button onClick={() => void create()} disabled={sel.size === 0 || creating} style={primaryBtn}>
+            {creating ? 'Создание…' : `Создать ${sel.size || ''}`}
+          </button>
+        </div>
+      ) : undefined}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {!members && (
+          <>
+            <textarea value={prompt} onChange={e => setPrompt(e.target.value)} autoFocus
+              placeholder="Напр.: команда для бэкенда на .NET — аналитик, разработчик, ревьюер и тестировщик. Покрыть архитектуру, имплементацию, код-ревью и QA."
+              style={{ ...inputStyle, minHeight: 80, resize: 'vertical', fontFamily: FONT.sans }} />
+            {error && <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>}
+            <button onClick={() => void generate()} disabled={!prompt.trim() || loading} style={primaryBtn}>
+              {loading ? 'Анализирую проект…' : 'Сформировать состав'}
+            </button>
+          </>
+        )}
+        {members && members.length === 0 && !loading && (
+          <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans }}>
+            Не удалось предложить состав. Уточните промпт.
+            <button onClick={() => setMembers(null)} style={{ ...linkBtn, display: 'block', margin: '8px auto 0' }}>← назад</button>
+          </div>
+        )}
+        {members && members.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {members.map((m, i) => {
+              const checked = sel.has(i);
+              return (
+                <button key={i} onClick={() => toggle(i)} style={{ ...memberCard, border: `1px solid ${checked ? C.accent : C.borderLight}` }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans }}>{m.role ?? 'Роль'}{m.name ? ` (${m.name})` : ''}</span>
+                      {m.specialty && <span style={specialtyBadge}>{SPECIALTY_LABEL[m.specialty] ?? m.specialty}</span>}
+                    </div>
+                    {m.description && <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, marginTop: 2 }}>{m.description}</div>}
+                  </div>
+                  <span style={{ ...checkDot, background: checked ? C.accent : 'transparent', border: `2px solid ${checked ? C.accent : C.border}` }} />
+                </button>
+              );
+            })}
+            {error && <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>}
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -348,7 +452,7 @@ function GroupChatPicker({ team, onClose, onCreated }: {
     try { const s = await api.chats.createGroup(sel); onCreated(s); } finally { setBusy(false); }
   };
   return (
-    <Modal width={420} title="Созвать команду" subtitle="Выберите 2–4 участниц. Первая — ведущая." onClose={onClose}
+    <Modal width={420} title="Созвать команду" subtitle="Выберите 2–4 участниц. Первый — ведущий." onClose={onClose}
       footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button onClick={onClose} style={ghostBtn}>Отмена</button>
         <button onClick={() => void create()} disabled={sel.length < 2 || busy} style={primaryBtn}>Создать чат</button>
@@ -361,7 +465,7 @@ function GroupChatPicker({ team, onClose, onCreated }: {
               <PersonaAvatar persona={p} size={28} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans }}>{personaLabel(p)}</div>
-                {i === 0 && sel[0] === p.id && <span style={{ fontSize: 11, color: C.accent, fontFamily: FONT.sans }}>ведущая</span>}
+                {i === 0 && sel[0] === p.id && <span style={{ fontSize: 11, color: C.accent, fontFamily: FONT.sans }}>ведущий</span>}
               </div>
               <span style={{ ...checkDot, background: checked ? C.accent : 'transparent', border: `2px solid ${checked ? C.accent : C.border}` }} />
             </button>

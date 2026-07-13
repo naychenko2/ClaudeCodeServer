@@ -3,7 +3,7 @@
 // выбирает карточку, правит имя и нюансы и сохраняет обычным POST /api/personas.
 // Поле tools — дефолтные возможности персоны (этап B, ключи tasks/notes/web).
 
-import type { PersonaAccess, PersonaContract } from '../../types';
+import type { PersonaAccess, PersonaContract, PersonaSpecialty } from '../../types';
 
 export interface PersonaTemplate {
   key: string;
@@ -20,11 +20,14 @@ export interface PersonaTemplate {
   // используются тяжёлыми ролями пантеона OmO, наши шаблоны модель не навязывают
   model?: string;
   effort?: string;
+  // Специальность (функциональная роль) — предзаполняет Persona.specialty при выборе шаблона
+  specialty?: PersonaSpecialty;
 }
 
 export const PERSONA_TEMPLATES: PersonaTemplate[] = [
   {
     key: 'reviewer',
+    specialty: 'reviewer',
     role: 'Ревьюер',
     namePlaceholder: 'Марк',
     description: 'Жёсткая проверка кода и текста, только по делу',
@@ -53,6 +56,7 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
   },
   {
     key: 'planner',
+    specialty: 'planner',
     role: 'Планировщик',
     namePlaceholder: 'Вера',
     description: 'Сначала вопросы, потом план — никакой работы вслепую',
@@ -79,6 +83,7 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
   },
   {
     key: 'analyst',
+    specialty: 'analyst',
     role: 'Аналитик',
     namePlaceholder: 'София',
     description: 'Данные, выводы, риски — без домыслов',
@@ -106,6 +111,7 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
   },
   {
     key: 'mentor',
+    specialty: 'mentor',
     role: 'Ментор',
     namePlaceholder: 'Григорий',
     description: 'Объясняет через наводящие вопросы, не решает за тебя',
@@ -134,6 +140,7 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
   },
   {
     key: 'secretary',
+    specialty: 'secretary',
     role: 'Секретарь',
     namePlaceholder: 'Полина',
     description: 'Задачи и заметки, короткие ответы, ничего не теряется',
@@ -161,6 +168,7 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
   },
   {
     key: 'designer',
+    specialty: 'designer',
     role: 'Дизайнер',
     namePlaceholder: 'Ева',
     description: 'UX и дизайн-система: сначала пользователь, потом красота',

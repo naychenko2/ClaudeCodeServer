@@ -36,18 +36,14 @@ public class PersonaPipelineService(
     // Максимум кругов доработки плана по вердикту REJECT
     private const int MaxReviewRounds = 2;
 
-    // Допустимые роли-исполнители финальной фазы
-    private static readonly string[] ExecutorKeys = ["omo-sisyphus", "omo-hephaestus"];
-
     // Запуск конвейера (fire-and-forget). Повторный Start в том же чате — InvalidOperationException.
-    public string Start(string ownerId, string sessionId, string task, string? executorKey)
+    // Слоты ролей опциональны (A): не задан — резолв по Specialty среди персон владельца,
+    // нет и её — дефолт-роль каталога OmO. Конвейер работает с любыми персонами, OmO — умолчание.
+    public string Start(string ownerId, string sessionId, string task,
+        string? analystId = null, string? plannerId = null, string? reviewerId = null, string? executorId = null)
     {
         if (string.IsNullOrWhiteSpace(task))
             throw new InvalidOperationException("Пустая задача конвейера");
-
-        var executor = string.IsNullOrWhiteSpace(executorKey) ? "omo-hephaestus" : executorKey.Trim();
-        if (!ExecutorKeys.Contains(executor))
-            throw new InvalidOperationException("Исполнитель — omo-sisyphus или omo-hephaestus");
 
         var handle = new PipelineHandle { Cts = new CancellationTokenSource() };
         if (!_active.TryAdd(sessionId, handle))
@@ -59,10 +55,11 @@ public class PersonaPipelineService(
         var totalMs = int.TryParse(config["Persona:PipelineTimeoutMs"], out var t) ? t : 900_000;
         handle.Cts.CancelAfter(totalMs);
 
+        var slots = new PipelineSlots(analystId, plannerId, reviewerId, executorId);
         var pipelineId = Guid.NewGuid().ToString("N");
         handle.Run = Task.Run(async () =>
         {
-            try { await RunAsync(ownerId, sessionId, pipelineId, task.Trim(), executor, handle.Cts.Token); }
+            try { await RunAsync(ownerId, sessionId, pipelineId, task.Trim(), slots, handle.Cts.Token); }
             catch (Exception ex)
             {
                 log.LogError(ex, "Конвейер {Pipeline} в чате {Session} упал", pipelineId, sessionId);
@@ -89,18 +86,33 @@ public class PersonaPipelineService(
     internal Task WhenDoneAsync(string sessionId) =>
         _active.TryGetValue(sessionId, out var handle) ? handle.Run : Task.CompletedTask;
 
+    // Слоты ролей конвейера (все опциональны — см. Start)
+    private sealed record PipelineSlots(string? AnalystId, string? PlannerId, string? ReviewerId, string? ExecutorId);
+
+    // Резолв роли: 1) явно указанная персона; 2) первая с нужной Specialty у владельца;
+    // 3) дефолт-роль каталога OmO (материализуется идемпотентно). Конвейер НЕ привязан к OmO —
+    // каталог лишь источник ролей по умолчанию, когда нет подходящей спец-персоны (A).
+    private Persona ResolveRole(string ownerId, PersonaSpecialty specialty, string omoKey, string? explicitId)
+    {
+        if (!string.IsNullOrEmpty(explicitId) && personas.Get(explicitId, ownerId) is { } explicitP)
+            return explicitP;
+        var bySpec = personas.GetByOwner(ownerId).FirstOrDefault(p => p.Specialty == specialty);
+        if (bySpec is not null) return bySpec;
+        return personas.ConnectPantheon(ownerId, [omoKey]).First(p => p.TemplateKey == omoKey);
+    }
+
     private async Task RunAsync(string ownerId, string sessionId, string pipelineId,
-        string task, string executorKey, CancellationToken ct)
+        string task, PipelineSlots slots, CancellationToken ct)
     {
         try
         {
-            // Материализуем роли эстафеты (идемпотентно): аналитик, планировщик, ревьюер, исполнитель
-            var roles = personas.ConnectPantheon(ownerId,
-                ["omo-metis", "omo-prometheus", "omo-momus", executorKey]);
-            var metis = roles.First(p => p.TemplateKey == "omo-metis");
-            var prometheus = roles.First(p => p.TemplateKey == "omo-prometheus");
-            var momus = roles.First(p => p.TemplateKey == "omo-momus");
-            var executor = roles.First(p => p.TemplateKey == executorKey);
+            // Роли эстафеты — ЛЮБАЯ персона (A): явный id → спец-роль владельца → дефолт OmO.
+            // Имена переменных исторические (metis/prometheus/momus), но holdят любую персону
+            // соответствующей специальности.
+            var metis = ResolveRole(ownerId, PersonaSpecialty.Analyst, "omo-metis", slots.AnalystId);
+            var prometheus = ResolveRole(ownerId, PersonaSpecialty.Planner, "omo-prometheus", slots.PlannerId);
+            var momus = ResolveRole(ownerId, PersonaSpecialty.Reviewer, "omo-momus", slots.ReviewerId);
+            var executor = ResolveRole(ownerId, PersonaSpecialty.Executor, "omo-hephaestus", slots.ExecutorId);
 
             // --- Фаза 1: анализ (Метида) ---
             var analysis = await AskPhaseAsync(sessionId, pipelineId, PhaseAnalysis, ownerId, metis, task,

@@ -199,6 +199,15 @@ export function Composer({
     return () => clearInterval(id);
   }, [isListening]);
 
+  // Автозапуск «Обсудить с командой» — чат открыт через «Созвать команду» из центра (#3)
+  useEffect(() => {
+    if (!sessionId) return;
+    if (sessionStorage.getItem('cc_auto_discuss') === sessionId) {
+      sessionStorage.removeItem('cc_auto_discuss');
+      setShowDiscuss(true);
+    }
+  }, [sessionId]);
+
   // Закрытие меню режимов по клику вне него
   useEffect(() => {
     if (!modeMenuOpen) return;

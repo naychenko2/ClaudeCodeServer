@@ -38,6 +38,7 @@ public sealed class PersonaMemoryService
     private readonly KnowledgeService _knowledge;
     private readonly PersonaManager _personas;
     private readonly UserStore _users;
+    private readonly TeamMemoryService? _teamMemory;
     private readonly ILogger<PersonaMemoryService> _logger;
     private readonly string _storePath;
     private readonly MemoryScoringOptions _scoring;
@@ -53,11 +54,13 @@ public sealed class PersonaMemoryService
     private readonly ConcurrentDictionary<string, Timer> _debounce = new();
 
     public PersonaMemoryService(KnowledgeService knowledge, PersonaManager personas, UserStore users,
-        IConfiguration config, ILogger<PersonaMemoryService> logger)
+        IConfiguration config, ILogger<PersonaMemoryService> logger,
+        TeamMemoryService? teamMemory = null)
     {
         _knowledge = knowledge;
         _personas = personas;
         _users = users;
+        _teamMemory = teamMemory;
         _logger = logger;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
@@ -86,7 +89,7 @@ public sealed class PersonaMemoryService
     // Записать факт/событие/приём в память персоны (явный write-path).
     // salience — значимость 0..1 (клампится в 0.05..1); null = 1.0
     public PersonaMemoryEntry? Remember(string ownerId, string personaId, PersonaMemoryType type,
-        string text, List<string>? tags, string? sourceSessionId, double? salience = null)
+        string text, List<string>? tags, string? sourceSessionId, double? salience = null, bool pending = false)
     {
         var persona = _personas.Get(personaId, ownerId);
         if (persona is null || string.IsNullOrWhiteSpace(text)) return null;
@@ -100,6 +103,7 @@ public sealed class PersonaMemoryService
             Tags = tags is { Count: > 0 } ? tags : null,
             Salience = salience is null ? 1.0 : Math.Clamp(salience.Value, 0.05, 1.0),
             SourceSessionId = sourceSessionId,
+            Pending = pending,
         };
         var state = GetState(personaId);
         lock (_saveLock)
@@ -120,7 +124,8 @@ public sealed class PersonaMemoryService
     // существующую (reinforcement важности + освежение + более полный текст) и возвращаем её.
     // Без Dify / без дубля — делегирует в точный Remember. Предпочтителен для авто-памяти.
     public async Task<PersonaMemoryEntry?> RememberAsync(string ownerId, string personaId,
-        PersonaMemoryType type, string text, List<string>? tags, string? sourceSessionId, double? salience = null)
+        PersonaMemoryType type, string text, List<string>? tags, string? sourceSessionId,
+        double? salience = null, bool pending = false)
     {
         var persona = _personas.Get(personaId, ownerId);
         if (persona is null || string.IsNullOrWhiteSpace(text)) return null;
@@ -142,7 +147,7 @@ public sealed class PersonaMemoryService
             catch (Exception ex) { _logger.LogDebug(ex, "Семантический дедуп памяти {Persona}", personaId); }
         }
 
-        return Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience);
+        return Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
     }
 
     // Найти запись того же типа, семантически близкую к тексту (Dify retrieve, порог DedupThreshold)
@@ -216,6 +221,23 @@ public sealed class PersonaMemoryService
         return removed;
     }
 
+    // Подтвердить предложенную (pending) запись autolearn — снимает флаг, попадает в recall (③-3.2).
+    // false — записи нет, она чужая или уже подтверждена.
+    public bool Confirm(string ownerId, string personaId, string entryId)
+    {
+        if (_personas.Get(personaId, ownerId) is null) return false;
+        var state = GetState(personaId);
+        lock (_saveLock)
+        {
+            var e = state.Entries.FirstOrDefault(x => x.Id == entryId);
+            if (e is null || !e.Pending) return false;
+            e.Pending = false;
+            JsonFileStore.Save(_storePath, _store, JsonOpts);
+        }
+        QueueSync(ownerId, personaId);
+        return true;
+    }
+
     // Поиск по памяти со скорингом взвешенной суммой (PersonaMemoryScorer):
     // wRel·relevance + wRec·recency + wSal·salience + wType·typeFactor.
     // С Dify — семантический retrieve; без — полнотекст по стору.
@@ -226,7 +248,8 @@ public sealed class PersonaMemoryService
         if (persona is null) return [];
         var state = GetState(personaId);
         List<PersonaMemoryEntry> entriesSnapshot;
-        lock (_saveLock) entriesSnapshot = state.Entries.ToList();
+        // Pending-записи (предложены autolearn, ждут подтверждения) в recall/поиск не попадают
+        lock (_saveLock) entriesSnapshot = state.Entries.Where(e => !e.Pending).ToList();
         if (entriesSnapshot.Count == 0) return [];
 
         // relevance по entryId (0..1)
@@ -260,10 +283,14 @@ public sealed class PersonaMemoryService
         return hits;
     }
 
+    // Результат recall памяти: markdown-блок для промпта + hits, реально попавшие в блок
+    // (для манифеста атрибуции F3 — «персона опирается на…»). Text=null — нечего подмешивать.
+    public sealed record PersonaRecallResult(string? Text, IReadOnlyList<PersonaMemoryHit> Hits);
+
     // Markdown-блок памяти для системного промпта хода (auto-recall персоны).
     // Рабочий фокус (если есть) — всегда первым блоком, без скоринга; при фокусе
-    // результат не-null даже без хитов. null — нечего подмешивать / память выключена.
-    public async Task<string?> BuildRecallAsync(string ownerId, string personaId, string query,
+    // результат не-null даже без хитов. Text=null — нечего подмешивать / память выключена.
+    public async Task<PersonaRecallResult> BuildRecallAsync(string ownerId, string personaId, string query,
         int topK, double minScore)
     {
         var persona = _personas.Get(personaId, ownerId);
@@ -281,7 +308,17 @@ public sealed class PersonaMemoryService
         }
 
         var top = hits.Where(h => h.Score >= minScore).Take(topK).ToList();
-        if (top.Count == 0 && focus is null) return null;
+
+        // Память команды проекта (③-3.4): проектная персона recall'ит общую память команды
+        string? teamBlock = null;
+        if (_teamMemory is not null && persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
+        {
+            try { teamBlock = _teamMemory.BuildRecallBlock(ownerId, persona.ProjectId!, query); }
+            catch (Exception ex) { _logger.LogDebug(ex, "team-memory recall {Project}", persona.ProjectId); }
+        }
+
+        if (top.Count == 0 && focus is null && teamBlock is null)
+            return new PersonaRecallResult(null, []);
 
         var sb = new StringBuilder();
         if (focus is not null)
@@ -302,7 +339,12 @@ public sealed class PersonaMemoryService
             // Reinforcement: только записи, реально попавшие в блок, считаются «вспомненными»
             Touch(personaId, top.Select(h => h.Id).ToHashSet());
         }
-        return sb.ToString();
+        if (teamBlock is not null)
+        {
+            if (sb.Length > 0) sb.AppendLine();
+            sb.Append(teamBlock);
+        }
+        return new PersonaRecallResult(sb.Length > 0 ? sb.ToString() : null, top);
     }
 
     // Reinforcement: отметить обращение к записям (LastAccessedAt = now). Dify не трогаем —

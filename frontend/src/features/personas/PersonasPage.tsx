@@ -324,7 +324,7 @@ function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {
       <div style={{ flex: 'none', height: 2, background: `${accent}55` }} />
       <div style={{ flex: 1, minHeight: 0 }}>
         <PersonaForm ref={formRef} persona={null} projects={projects}
-          initial={template ? { name: template.namePlaceholder, role: template.role, description: template.description, contract: template.contract, greeting: template.greeting, color: template.avatarColor, tools: template.tools, access: template.access, model: template.model, effort: template.effort } : undefined}
+          initial={template ? { name: template.namePlaceholder, role: template.role, description: template.description, contract: template.contract, greeting: template.greeting, color: template.avatarColor, tools: template.tools, access: template.access, model: template.model, effort: template.effort, specialty: template.specialty } : undefined}
           onStatus={onStatus} onColorChange={setLiveColor} onSaved={onSaved} />
       </div>
     </div>

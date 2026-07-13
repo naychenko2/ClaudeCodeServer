@@ -103,6 +103,7 @@ public class PersonasController : ControllerBase
                 access = t.Access,
                 model = t.Model,
                 effort = t.Effort,
+                specialty = t.Specialty,
                 connectedPersonaId = _personas.GetByTemplateKey(UserId, t.Key)?.Id,
             }),
         });
@@ -157,7 +158,7 @@ public class PersonasController : ControllerBase
         var persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
             req.MemoryEnabled ?? true, req.Tools, req.Contract,
-            access ?? PersonaAccess.Full, req.DisallowedTools);
+            access ?? PersonaAccess.Full, req.DisallowedTools, req.Specialty ?? PersonaSpecialty.None);
         if (bindings.Count > 0)
             persona = _personas.UpdateBindings(persona.Id, UserId, bindings);
         // Авто-подбор привязок (autoBindings) — best-effort:
@@ -182,7 +183,7 @@ public class PersonasController : ControllerBase
 
         var persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools);
+            req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, req.Specialty);
         await Broadcast("updated", id);
         return Ok(persona);
     }
@@ -593,6 +594,91 @@ public class PersonasController : ControllerBase
 
         await Broadcast("created", persona.Id);
         return Ok(persona);
+    }
+
+    // AI-формирование команды: по промпту + контексту проекта (CLAUDE.md) LLM предлагает набор
+    // персон (роль/имя/характер/специальность) для создания в команде проекта. Возвращает
+    // черновики — фронт показывает их для одобрения, затем создаёт через обычный POST /api/personas.
+    [HttpPost("ai/team")]
+    public async Task<ActionResult> AiTeam([FromBody] AiTeamRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Prompt))
+            return BadRequest(new { error = "Опишите, какая команда нужна" });
+        var project = _projects.GetById(req.ProjectId);
+        if (project is null || project.OwnerId != UserId)
+            return BadRequest(new { error = "Проект не найден" });
+
+        var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
+        try
+        {
+            var raw = await _oneShot.RunAsync(BuildTeamPrompt(project, req.Prompt), model,
+                TimeSpan.FromSeconds(120), HttpContext.RequestAborted);
+            var drafts = ParseTeamDrafts(raw);
+            if (drafts is null || drafts.Count == 0)
+            {
+                _log.LogWarning("ai/team: команда не распознана; сырой ответ: {Raw}",
+                    raw.Length > 600 ? raw[..600] + "…" : raw);
+                return StatusCode(502, new { error = "Модель не вернула состав команды — попробуйте уточнить промпт" });
+            }
+            return Ok(new { members = drafts });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { error = $"Не удалось сформировать команду: {ex.Message}" });
+        }
+    }
+
+    private static string BuildTeamPrompt(Models.Project project, string userPrompt)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Ты помогаешь сформировать команду AI-ассистентов (персон) для проекта. " +
+                      "Проанализируй проект и промпт пользователя и предложи сбалансированный состав " +
+                      "из 3-6 персон, перекрывающих ключевые роли команды.");
+        sb.AppendLine($"Проект: {project.Name}.");
+        if (!string.IsNullOrWhiteSpace(project.SystemPrompt))
+            sb.AppendLine($"Контекст проекта (CLAUDE.md):\n{project.SystemPrompt!.Trim()}");
+        sb.AppendLine($"Запрос пользователя: {userPrompt.Trim()}");
+        sb.AppendLine("\nВерни ТОЛЬКО JSON-массив (без пояснений и markdown) объектов с полями:");
+        sb.AppendLine("  role — роль по-русски, 1-3 слова (напр. «Аналитик», «Исполнитель»);");
+        sb.AppendLine("  name — русское имя-человека (одно слово);");
+        sb.AppendLine("  description — кратко «кто это», 3-8 слов;");
+        sb.AppendLine("  character — характер и стиль общения, обращение на «ты», 2-4 предложения;");
+        sb.AppendLine("  tone — тон одной короткой фразой;");
+        sb.AppendLine("  specialty — одна из: analyst, planner, reviewer, executor, secretary, coordinator, mentor, designer, consultant, librarian;");
+        sb.AppendLine("  color — один из: yellow, orange, blue, green, purple, red, brown, cyan, pink;");
+        sb.AppendLine("  greeting — первое приветствие персоны, 1-2 предложения.");
+        sb.AppendLine("По возможности включи роли для конвейера (аналитик/планировщик/ревьюер/исполнитель), если уместно проекту. Всё по-русски. НЕ упоминай имя модели.");
+        return sb.ToString();
+    }
+
+    // Парс JSON-массива черновиков команды (устойчиво к преамбуле/markdown; fallback — одиночный объект)
+    private static List<TeamMemberDraft>? ParseTeamDrafts(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var start = raw.IndexOf('[');
+        if (start < 0)
+        {
+            var single = ParseJsonObject<TeamMemberDraft>(raw);
+            return single is null ? null : [single];
+        }
+        int depth = 0; bool inStr = false, esc = false;
+        for (var i = start; i < raw.Length; i++)
+        {
+            var c = raw[i];
+            if (inStr) { if (esc) esc = false; else if (c == '\\') esc = true; else if (c == '"') inStr = false; continue; }
+            if (c == '"') inStr = true;
+            else if (c == '[') depth++;
+            else if (c == ']' && --depth == 0)
+            {
+                try
+                {
+                    return System.Text.Json.JsonSerializer.Deserialize<List<TeamMemberDraft>>(raw[start..(i + 1)],
+                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                }
+                catch (System.Text.Json.JsonException) { return null; }
+            }
+        }
+        return null;
     }
 
     private static string BuildDraftPrompt(string userPrompt)
@@ -1345,6 +1431,54 @@ public class PersonasController : ControllerBase
         return NoContent();
     }
 
+    // Подтвердить предложенную autolearn запись (③-3.2) — снимает pending, попадает в recall
+    [HttpPost("{id}/memory/{entryId}/confirm")]
+    public async Task<IActionResult> ConfirmMemory(string id, string entryId)
+    {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+        if (!_memory.Confirm(UserId, id, entryId)) return NotFound();
+        await Broadcast("memory", id);
+        return NoContent();
+    }
+
+    // Превратить запись памяти в заметку (③-3.3): инсайт выходит из личного датасета
+    // персоны в общий vault — виден/доступен всей команде и вне чата с персоной.
+    [HttpPost("{id}/memory/{entryId}/to-note")]
+    public IActionResult MemoryToNote(string id, string entryId)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        var entry = _memory.List(UserId, id, null).FirstOrDefault(e => e.Id == entryId);
+        if (entry is null) return NotFound("Запись памяти не найдена");
+        var title = TitleFromText(entry.Text, "Из памяти персоны");
+        var body = entry.Text.Trim() + $"\n\n— _из памяти персоны «{PersonaManager.PersonaLabel(persona)}»_";
+        var note = _notes.Create(UserId, new CreateNoteRequest(Title: title, Content: body));
+        return Ok(new { noteId = note.Id, noteTitle = note.Title });
+    }
+
+    // Закрепить заметку в памяти персоны (③-3.3): важное подчёркивается, попадает в recall
+    // с высоким salience (1.0) как semantic-факт.
+    [HttpPost("{id}/memory/from-note")]
+    public async Task<IActionResult> NoteToMemory(string id, [FromBody] NoteToMemoryRequest req)
+    {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+        var note = _notes.GetDetail(UserId, req.NoteId);
+        if (note is null) return NotFound("Заметка не найдена");
+        var text = string.IsNullOrWhiteSpace(note.Content) ? note.Title : note.Content;
+        await _memory.RememberAsync(UserId, id, PersonaMemoryType.Semantic, text, null, null, 1.0);
+        _memory.EnforceCap(UserId, id);
+        await Broadcast("memory", id);
+        return Ok();
+    }
+
+    // Первая непустая строка текста (до ~60 символов) — как заголовок заметки из памяти
+    private static string TitleFromText(string text, string fallback)
+    {
+        var first = text.Replace("\r", "").Split('\n').FirstOrDefault(l => !string.IsNullOrWhiteSpace(l))?.Trim();
+        if (string.IsNullOrEmpty(first)) return fallback;
+        return first.Length <= 60 ? first : first[..60].TrimEnd() + "…";
+    }
+
     // --- @упоминания: спросить персону (persona_ask из MCP personas-server) ---
 
     // One-shot ответ персоны от своего лица (PersonaAskService): слой персоны + recall
@@ -1410,6 +1544,8 @@ public record CreatePersonaRequest(
     string? Access = null,
     // Свой список запрещённых инструментов (для custom)
     List<string>? DisallowedTools = null,
+    // Специальность персоны (функциональная роль для оркестрации); null/None — не задана
+    PersonaSpecialty? Specialty = null,
     // Явные привязки при создании (валидируются до создания персоны)
     List<PersonaBindingRequest>? Bindings = null,
     // true — после создания подобрать привязки AI (за флагом persona-bindings, best-effort)
@@ -1433,7 +1569,9 @@ public record UpdatePersonaRequest(
     // Профиль доступа (P6): full | readOnly | custom; null — не менять
     string? Access = null,
     // Свой список запрещённых инструментов (для custom); null — не менять
-    List<string>? DisallowedTools = null);
+    List<string>? DisallowedTools = null,
+    // Специальность персоны (функциональная роль); null — не менять, None — сбросить
+    PersonaSpecialty? Specialty = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);
@@ -1460,6 +1598,9 @@ public record AutomationRulesSetRequest(List<AutomationRuleRequest>? Rules);
 public record RememberRequest(string Type, string Text, List<string>? Tags = null,
     string? SourceSessionId = null, double? Salience = null);
 
+// Закрепить заметку в памяти персоны (③-3.3)
+public record NoteToMemoryRequest(string NoteId);
+
 public record GenerateAvatarRequest(string? Prompt = null, int? Count = null);
 
 public record AiCharacterRequest(string? Name, string? Role, string? Description, string? Current, string? Instruction);
@@ -1468,6 +1609,11 @@ public record AiCharacterRequest(string? Name, string? Role, string? Description
 // false — не подбирать.
 public record AiQuickCreateRequest(string Prompt, PersonaScope? Scope = null, string? ProjectId = null,
     bool? AutoBindings = null);
+
+// AI-формирование команды: промпт + проект → LLM предлагает состав (черновики, без создания)
+public record AiTeamRequest(string ProjectId, string Prompt);
+public record TeamMemberDraft(string? Name, string? Role, string? Description, string? Character,
+    string? Tone, string? Specialty, string? Color, string? Greeting);
 
 // DTO привязки персоны: type/mode — строками (project|projectPath|knowledge|notes|tool|skill;
 // auto|always|off), парсятся без учёта регистра.

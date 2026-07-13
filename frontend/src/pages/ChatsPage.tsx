@@ -241,7 +241,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                 <div onClick={() => setArtifactsOpen(false)}
                   style={{ position: 'absolute', inset: 0, zIndex: 900, background: C.overlay }} />
                 <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 901, width: 'min(92vw, 380px)', boxShadow: '-4px 0 20px rgba(20,16,10,0.18)' }}>
-                  <ArtifactsPanel sessionId={activeChat.id} isMobile onClose={() => setArtifactsOpen(false)} />
+                  <ArtifactsPanel sessionId={activeChat.id} personaId={activeChat.personaId} isMobile onClose={() => setArtifactsOpen(false)} />
                 </div>
               </>
             )}
@@ -348,7 +348,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           <>
             <Splitter active={draggingArtifacts} onMouseDown={handleArtifactsSplitterMouseDown} />
             <div style={{ width: artifactsWidth, flexShrink: 0, height: '100%' }}>
-              <ArtifactsPanel sessionId={activeChat.id} onClose={() => setArtifactsOpen(false)} />
+              <ArtifactsPanel sessionId={activeChat.id} personaId={activeChat.personaId} onClose={() => setArtifactsOpen(false)} />
             </div>
           </>
         )}

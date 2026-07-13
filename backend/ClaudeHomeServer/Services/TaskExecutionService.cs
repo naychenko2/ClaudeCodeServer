@@ -92,7 +92,7 @@ public class TaskExecutionService
 
         if (auto)
             await NotifyAsync(updated, new NotificationMessage(
-                Title: persona is null ? "Claude взял задачу в работу" : $"{PersonaLabel(persona)} взяла задачу в работу",
+                Title: persona is null ? "Claude взял задачу в работу" : $"{PersonaLabel(persona)} взял задачу в работу",
                 Body: updated.Title,
                 Url: TaskSchedulerService.TaskUrl(updated),
                 Kind: "claude"));
@@ -265,7 +265,10 @@ public class TaskExecutionService
                 var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
                 if (updated is null) return;
                 await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
-                await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
+                // Финальное уведомление — только когда задача реально завершена (done) либо ход упал.
+                // Промежуточные успешные ходы многошаговой задачи не спамят «завершил работу» (②-2.1).
+                if (!ok || updated.Status == TaskItemStatus.Done)
+                    await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
                 break;
             }
             case PermissionRequestMessage or AskQuestionMessage:
@@ -295,8 +298,8 @@ public class TaskExecutionService
         {
             (true, null) => "Claude завершил работу над задачей",
             (false, null) => "Claude не смог выполнить задачу",
-            (true, not null) => $"{PersonaLabel(persona)} завершила работу над задачей",
-            (false, not null) => $"{PersonaLabel(persona)} не смогла выполнить задачу",
+            (true, not null) => $"{PersonaLabel(persona)} завершил работу над задачей",
+            (false, not null) => $"{PersonaLabel(persona)} не смог выполнить задачу",
         };
         return new NotificationMessage(
             Title: title,

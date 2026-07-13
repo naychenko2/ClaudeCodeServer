@@ -32,6 +32,7 @@ function toHash(s: NavSnapshot): string {
       if (s.task) h += `/task/${s.task}`;
       else if (s.file) h += `/file/${encodeURIComponent(s.file)}`;
       else if (s.board) h += '/board';
+      else if (s.persona) h += `/persona/${encodeURIComponent(s.persona)}`;
       return h;
     }
   }
@@ -93,6 +94,7 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
       if (parts[2] === 'task' && parts[3]) target.taskId = parts[3];
       else if (parts[2] === 'file' && parts[3]) target.file = decodeURIComponent(parts.slice(3).join('/'));
       else if (parts[2] === 'board') target.board = true;
+      else if (parts[2] === 'persona' && parts[3]) target.personaId = parts[3];
       return target;
     }
     default: return null;

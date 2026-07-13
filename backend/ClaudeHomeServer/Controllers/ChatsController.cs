@@ -144,8 +144,9 @@ public class ChatsController(SessionManager sessions, FileService files,
         return NoContent();
     }
 
-    // Конвейер пантеона (флаг persona-pipeline): эстафета ролей OmO — анализ → план →
-    // ревью → авто-исполнение. Работает в любом чате владельца (проектном и вне проекта).
+    // Конвейер ролей (флаг persona-pipeline): анализ → план → ревью → авто-исполнение.
+    // Работает с любыми персонами (A): слоты опциональны, пустые резолвятся по Specialty/OmO.
+    // Запускается в любом чате владельца (проектном и вне проекта).
     [HttpPost("{id}/pipeline")]
     public IActionResult StartPipeline(string id, [FromBody] StartPipelineRequest req)
     {
@@ -154,7 +155,8 @@ public class ChatsController(SessionManager sessions, FileService files,
             return BadRequest(new { error = "Пустая задача конвейера" });
         try
         {
-            var pipelineId = pipelines.Start(UserId, id, req.Task, req.ExecutorKey);
+            var pipelineId = pipelines.Start(UserId, id, req.Task,
+                req.AnalystId, req.PlannerId, req.ReviewerId, req.ExecutorId);
             return Ok(new { pipelineId });
         }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
@@ -238,4 +240,10 @@ public record StartMeetingRequest(string Question, List<string>? PersonaIds = nu
 
 public record SetWorkLoopRequest(bool Enabled);
 
-public record StartPipelineRequest(string Task, string? ExecutorKey = null);
+// Слоты ролей конвейера (все опциональны): пустые резолвятся по Specialty → дефолт OmO (A)
+public record StartPipelineRequest(
+    string Task,
+    string? AnalystId = null,
+    string? PlannerId = null,
+    string? ReviewerId = null,
+    string? ExecutorId = null);

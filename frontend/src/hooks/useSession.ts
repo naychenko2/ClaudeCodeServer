@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState } from '../types';
-import { joinSession, leaveSession, joinProject, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision } from '../lib/signalr';
+import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision } from '../lib/signalr';
+import { setRecallManifest } from '../lib/recallManifest';
 import { api } from '../lib/api';
 import { applyServerMessage, normalizeHistory, initialChatState, type ChatState } from '../lib/chatReducer';
 
@@ -105,6 +106,9 @@ function ensureHandler() {
       _store.set(sid, next);
       _listeners.get(sid)?.forEach(fn => fn());
     }
+
+    // Манифест recall (F3): что персона подтянула в ход — в отдельный стор для вкладки контекста
+    if (msg.type === 'recall_manifest') setRecallManifest(sid, msg.items);
 
     // Побочный эффект вне редьюсера: при переходе в active перезагружаем историю —
     // клиент мог пропустить text_delta/tool_use пока был оффлайн или не в группе

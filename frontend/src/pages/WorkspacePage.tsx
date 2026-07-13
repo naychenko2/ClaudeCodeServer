@@ -17,7 +17,7 @@ import { PillSwitch } from '../components/Toolbar';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { BackButton, IconButton, Splitter } from '../components/ui';
-import { navPush, parseHash, type NavSnapshot } from '../lib/nav';
+import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
@@ -26,8 +26,9 @@ import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
 import { resolveColumns, taskColumnKey } from '../lib/tasks';
 import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
-import { ensurePersonasLoaded, usePersonas } from '../lib/personas';
-import { ProjectPersonasPanel, ProjectPersonaPane, ProjectPersonaEmpty } from '../features/personas/ProjectPersonasPanel';
+import { ensurePersonasLoaded } from '../lib/personas';
+import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
+import { TeamCommandCenter } from '../features/personas/TeamCommandCenter';
 
 interface Props {
   project: Project;
@@ -137,8 +138,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // Стор персон — чтобы SessionList показал аватар/имя персоны у её сессий,
   // а вкладка «Команда» знала, есть ли персоны у проекта (для пустого стейта)
   useEffect(() => { void ensurePersonasLoaded(); }, []);
-  const personas = usePersonas();
-  const projectHasPersonas = personas.some(p => p.scope === 'project' && p.projectId === project.id);
 
   // Вкладка «Команда»: список персон — в сайдбаре, форма — в центральной зоне.
   // Состояние выбора поднято сюда, чтобы синхронизировать список ↔ форму.
@@ -148,6 +147,7 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const handlePersonaSelect = (id: string) => {
     setSelectedPersonaId(id);
     setPersonaCreating(false);
+    navPush({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, persona: id });
     if (isMobile) setMobileView('chat');
   };
   const handlePersonaNew = () => {
@@ -159,6 +159,13 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     setSelectedPersonaId(null);
     setPersonaCreating(false);
     if (isMobile) setMobileView('sidebar');
+  };
+  // Командный центр — сбросить выбор персоны и показать центр команды (①-L1)
+  const handleShowTeam = () => {
+    setSelectedPersonaId(null);
+    setPersonaCreating(false);
+    navPush({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, persona: null });
+    if (isMobile) setMobileView('chat');
   };
   // После создания новой персоны переключаемся с «создания» на её редактирование
   const handlePersonaSelectAfterCreate = (id: string) => {
@@ -226,6 +233,15 @@ const windowWidth = useWindowWidth();
     if (t && t.screen === 'project' && t.projectId === project.id && t.board) return true;
     try { return localStorage.getItem(`cc_proj_board_${project.id}`) === '1'; } catch { return false; }
   });
+
+  // P0-2: задача, ради которой запущен текущий чат (executingTask в ArtifactsPanel)
+  const [executingTask, setExecutingTask] = useState<Task | null>(null);
+  useEffect(() => {
+    if (!activeSession) { setExecutingTask(null); return; }
+    api.tasks.listByProject(project.id).then(tasks => {
+      setExecutingTask(tasks.find(t => t.linkedSessionId === activeSession.id) ?? null);
+    }).catch(() => setExecutingTask(null));
+  }, [activeSession?.id, project.id]);
   const showProjectBoard = tasksMode && projectBoard && !selectedTask;
   const handleProjectBoard = (on: boolean) => {
     setProjectBoard(on);
@@ -316,6 +332,7 @@ const windowWidth = useWindowWidth();
       const sessions = await api.sessions.list(project.id);
       const s = sessions.find(x => x.id === sessionId);
       if (!s) return;
+      if (!isMobile) navPush({ screen: 'project', project, view: 'sidebar', file: null, task: null });
       setLeftTab('sessions');
       handleSelectSession(s);
     } catch { /* офлайн — остаёмся на задаче */ }
@@ -561,10 +578,24 @@ const windowWidth = useWindowWidth();
       if (f === null) setFileFullscreen(false);
       setSelectedTaskId(s.task ?? null);
       setProjectBoard(!!s.board);   // режим доски проекта из снимка истории
+      // Персона / командный центр (вкладка «Команда») — восстанавливаем, если снимок несёт
+      if (s.persona !== undefined) {
+        setLeftTab('personas');
+        setSelectedPersonaId(s.persona ?? null);
+        setPersonaCreating(false);
+      }
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
+
+  // Командный центр активен → фиксируем в истории (persona: null), чтобы «назад» из
+  // любого диплинка (задача/чат/персона) возвращал именно в командный центр
+  useEffect(() => {
+    if (leftTab === 'personas' && !selectedPersonaId && !personaCreating) {
+      navReplace({ screen: 'project', project, view: isMobile ? mobileView : 'sidebar', file: null, task: null, persona: null });
+    }
+  }, [leftTab, selectedPersonaId, personaCreating]);
 
   // из дерева файлов → всегда полноэкранный режим
   const handleOpenFileFromTree = (filePath: string) => {
@@ -746,7 +777,7 @@ const windowWidth = useWindowWidth();
         ) : leftTab === 'tasks' ? (
           <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
         ) : leftTab === 'personas' ? (
-          <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} />
+          <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
@@ -795,7 +826,7 @@ const windowWidth = useWindowWidth();
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
               : leftTab === 'personas'
-              ? <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} />
+              ? <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'
@@ -812,7 +843,7 @@ const windowWidth = useWindowWidth();
           {personasMode
             ? ((selectedPersonaId || personaCreating)
                 ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />
-                : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите персону</div>)
+                : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />)
             : tasksMode
             ? (selectedTask
                 ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={() => window.history.back()} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
@@ -836,7 +867,7 @@ const windowWidth = useWindowWidth();
             <div onClick={() => setArtifactsOpen(false)}
               style={{ position: 'absolute', inset: 0, zIndex: 900, background: C.overlay }} />
             <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 901, width: 'min(92vw, 380px)', boxShadow: '-4px 0 20px rgba(20,16,10,0.18)' }}>
-              <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} isMobile
+              <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} isMobile personaId={activeSession.personaId} executingTask={executingTask}
                 onOpenFile={(f) => { setArtifactsOpen(false); handleOpenFileFromChat(f); }} onClose={() => setArtifactsOpen(false)} />
             </div>
           </>
@@ -943,7 +974,7 @@ const windowWidth = useWindowWidth();
               <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 {(selectedPersonaId || personaCreating)
                   ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} />
-                  : <ProjectPersonaEmpty hasPersonas={projectHasPersonas} onNew={handlePersonaNew} />}
+                  : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />}
               </div>
             </div>
           );
@@ -1001,7 +1032,7 @@ const windowWidth = useWindowWidth();
           <Splitter orientation="v" active={draggingSplitter === 'artifacts'}
             onMouseDown={e => { setDraggingSplitter('artifacts'); handleArtifactsSplitterMouseDown(e); }} />
           <div style={{ width: artifactsWidth, flexShrink: 0, height: '100%' }}>
-            <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath}
+            <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} personaId={activeSession.personaId} executingTask={executingTask}
               onOpenFile={handleOpenFileFromChat} onClose={() => setArtifactsOpen(false)} />
           </div>
         </>
@@ -1013,7 +1044,7 @@ const windowWidth = useWindowWidth();
           <div onClick={() => setArtifactsOpen(false)}
             style={{ position: 'absolute', inset: 0, zIndex: 19, background: C.overlay }} />
           <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 20, width: 'min(85vw, 360px)', boxShadow: '-4px 0 20px rgba(20,16,10,0.15)' }}>
-            <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath}
+            <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} personaId={activeSession.personaId} executingTask={executingTask}
               onOpenFile={(f) => { handleOpenFileFromChat(f); setArtifactsOpen(false); }} onClose={() => setArtifactsOpen(false)} />
           </div>
         </>

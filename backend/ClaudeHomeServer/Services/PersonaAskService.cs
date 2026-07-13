@@ -29,7 +29,7 @@ public sealed class PersonaAskService(
                 var minScore = double.TryParse(config["Persona:RecallMinScore"],
                     System.Globalization.CultureInfo.InvariantCulture, out var ms) ? ms : 0.30;
                 var recall = await memory.BuildRecallAsync(ownerId, persona.Id, question, topK: 5, minScore);
-                if (!string.IsNullOrWhiteSpace(recall)) sb.AppendLine().AppendLine(recall);
+                if (!string.IsNullOrWhiteSpace(recall?.Text)) sb.AppendLine().AppendLine(recall.Text);
             }
             catch (Exception ex) { log.LogWarning(ex, "persona_ask: recall памяти {Persona}", persona.Id); }
         }

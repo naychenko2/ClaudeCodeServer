@@ -300,6 +300,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'pipeline_progress'; pipelineId: string; phase: string; status?: string; error?: string }
   | { type: 'pipeline_phase'; pipelineId: string; phase: PipelinePhaseKey; task: string; personaId: string; text: string; round?: number }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string }
+  | { type: 'recall_manifest'; items: RecallItem[] }
 );
 
 export interface UsageInfo {
@@ -708,6 +709,13 @@ export type PersonaScope = 'global' | 'project';
 // советует, но ничего не меняет; custom — свой список запрещённых инструментов
 export type PersonaAccess = 'full' | 'readOnly' | 'custom';
 
+// Специальность персоны — функциональная роль для оркестрации (НЕ отображаемое имя роли):
+// конвейер (analyst→planner→reviewer→executor), голос брифинга (secretary),
+// группировка/статус команды, роутинг памяти команды. none — не задана.
+export type PersonaSpecialty =
+  | 'none' | 'analyst' | 'planner' | 'reviewer' | 'executor' | 'secretary'
+  | 'coordinator' | 'mentor' | 'designer' | 'consultant' | 'librarian';
+
 // Параметры кропа загруженного аватара: масштаб + смещение центра окна
 // от центра картинки (в пикселях исходника)
 export interface AvatarCropStateDto {
@@ -756,6 +764,8 @@ export interface Persona {
   avatar: PersonaAvatar;
   greeting?: string;          // приветствие персоны в начале чата
   memoryEnabled: boolean;     // долгая память (этап 2)
+  // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана
+  specialty?: PersonaSpecialty;
   // Возможности персоны (ключи tasks/notes/web); null/отсутствие — без ограничений
   tools?: string[] | null;
   // Профиль доступа (P6); отсутствие — full
@@ -786,6 +796,8 @@ export interface PantheonTemplate {
   access?: PersonaAccess;
   model?: string;
   effort?: string;
+  // Специальность роли (функциональный тег) — ставится в specialty подключённой персоны
+  specialty?: PersonaSpecialty;
   connectedPersonaId?: string | null;
 }
 
@@ -897,6 +909,8 @@ export interface CreatePersonaDto {
   access?: PersonaAccess;
   // Свой список запрещённых инструментов (для custom)
   disallowedTools?: string[];
+  // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана
+  specialty?: PersonaSpecialty;
 }
 
 // Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны
@@ -918,6 +932,7 @@ export interface PersonaMemoryEntry {
   tags?: string[];
   salience: number;           // значимость (для приоритизации/забывания)
   sourceSessionId?: string;   // чат, из которого запомнилось
+  pending?: boolean;          // предложено autolearn, ждёт подтверждения (③-3.2)
   createdAt: string;
   lastAccessedAt: string;
 }
@@ -940,6 +955,35 @@ export interface PersonaMemoryHit {
   tags: string[];
   score: number;
   createdAt: string;
+}
+
+// Запись общей памяти команды проекта (③-3.4) — recall'ят все персоны команды
+export interface TeamMemoryEntry {
+  id: string;
+  ownerId: string;
+  projectId: string;
+  text: string;
+  createdAt: string;
+}
+
+// Элемент манифеста recall (F3): что персона подтянула в ход. Kind ∈ memory|note|knowledge.
+export interface RecallItem {
+  kind: string;
+  ref?: string | null;
+  title: string;
+  snippet?: string | null;
+}
+
+// Черновик персоны из AI-формирования команды (POST /api/personas/ai/team)
+export interface TeamMemberDraft {
+  name?: string;
+  role?: string;
+  description?: string;
+  character?: string;
+  tone?: string;
+  specialty?: string;
+  color?: string;
+  greeting?: string;
 }
 
 // ===== Уведомления (центр уведомлений) =====

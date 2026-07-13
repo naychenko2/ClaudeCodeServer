@@ -74,7 +74,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
     void load();
   }, [load]);
 
-  // Realtime: память текущей персоны изменилась (персона запомнила/забыла) — перечитать.
+  // Realtime: память текущей персоны изменилась (персона запомнил/забыл) — перечитать.
   // joinUser уже сделан стором personas; здесь только слушаем сообщения.
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -123,6 +123,26 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
     }
   };
 
+  // Превратить запись памяти в заметку (③-3.3): инсайт выходит в общий vault
+  const toNote = async (entryId: string) => {
+    try {
+      const res = await api.personas.memoryToNote(persona.id, entryId);
+      showToast('Память', `Создана заметка «${res.noteTitle}».`, 'info');
+    } catch {
+      showToast('Память', 'Не удалось создать заметку.');
+    }
+  };
+
+  // Подтвердить предложенную autolearn запись (③-3.2): снимает pending → попадает в recall
+  const confirmEntry = async (entryId: string) => {
+    try {
+      await api.personas.confirmMemory(persona.id, entryId);
+      setEntries(prev => prev.map(e => e.id === entryId ? { ...e, pending: false } : e));
+    } catch {
+      showToast('Память', 'Не удалось подтвердить запись.');
+    }
+  };
+
   const isEmpty = !loading && !error && entries.length === 0;
 
   return (
@@ -166,7 +186,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
             <div style={{ fontSize: 30, opacity: 0.5 }}>🧠</div>
             <div style={{ fontFamily: FONT.serif, fontSize: 17, color: C.textHeading }}>Память пуста</div>
             <div style={{ fontSize: 13, color: C.textSecondary, maxWidth: 320, lineHeight: 1.5 }}>
-              Персона пока ничего не запомнила. Память пополняется во время разговоров.
+              Персона пока ничего не запомнил. Память пополняется во время разговоров.
             </div>
           </div>
         )}
@@ -186,7 +206,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {groups[t].map(e => (
-                      <MemoryCard key={e.id} entry={e} color={meta.color} onRemove={() => remove(e.id)} removing={removingId === e.id} />
+                      <MemoryCard key={e.id} entry={e} color={meta.color} onRemove={() => remove(e.id)} removing={removingId === e.id} onToNote={() => toNote(e.id)} onConfirm={e.pending ? () => confirmEntry(e.id) : undefined} />
                     ))}
                   </div>
                 </div>
@@ -231,11 +251,13 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
 }
 
 // Карточка одной записи памяти
-function MemoryCard({ entry, color, onRemove, removing }: {
+function MemoryCard({ entry, color, onRemove, removing, onToNote, onConfirm }: {
   entry: PersonaMemoryEntry;
   color: string;
   onRemove: () => void;
   removing: boolean;
+  onToNote?: () => void;
+  onConfirm?: () => void;   // подтвердить предложенную (pending) запись (③-3.2)
 }) {
   return (
     <div style={{
@@ -245,6 +267,9 @@ function MemoryCard({ entry, color, onRemove, removing }: {
     }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
+          {entry.pending && (
+            <span style={{ display: 'inline-block', fontSize: 10.5, fontWeight: 600, color: C.accent, background: C.accentSoft, borderRadius: R.sm, padding: '1px 7px', marginBottom: 6 }}>предложено</span>
+          )}
           <div style={{ fontSize: 13.5, color: C.textPrimary, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {entry.text}
           </div>
@@ -260,15 +285,43 @@ function MemoryCard({ entry, color, onRemove, removing }: {
           )}
           <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>{shortAgo(entry.createdAt)}</div>
         </div>
-        <button
-          onClick={onRemove}
-          disabled={removing}
-          aria-label="Забыть"
-          title="Забыть"
-          style={forgetBtn}
-        >
-          <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
+          {onConfirm && (
+            <button
+              onClick={onConfirm}
+              aria-label="Подтвердить"
+              title="Подтвердить — запомнить"
+              style={{ ...forgetBtn, color: C.success }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </button>
+          )}
+          {onToNote && (
+            <button
+              onClick={onToNote}
+              aria-label="Превратить в заметку"
+              title="Превратить в заметку"
+              style={forgetBtn}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="9" y1="13" x2="15" y2="13" />
+              </svg>
+            </button>
+          )}
+          <button
+            onClick={onRemove}
+            disabled={removing}
+            aria-label="Забыть"
+            title="Забыть"
+            style={forgetBtn}
+          >
+            <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+          </button>
+        </div>
       </div>
     </div>
   );

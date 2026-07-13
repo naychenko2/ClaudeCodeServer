@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, PersonaAutomationRule, AutomationRuleDto } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -100,6 +100,22 @@ export const api = {
 
   projects: {
     list: () => request<Project[]>('/projects'),
+    events: (id: string, opts?: { since?: string; type?: string; actor?: string; limit?: number }) => {
+      const qs = new URLSearchParams();
+      if (opts?.since) qs.set('since', opts.since);
+      if (opts?.type) qs.set('type', opts.type);
+      if (opts?.actor) qs.set('actor', opts.actor);
+      if (opts?.limit) qs.set('limit', String(opts.limit));
+      return request<unknown[]>(`/projects/${encodeURIComponent(id)}/events${qs.toString() ? `?${qs}` : ''}`);
+    },
+    // Память команды проекта (③-3.4)
+    teamMemory: (id: string) => request<TeamMemoryEntry[]>(`/projects/${encodeURIComponent(id)}/team-memory`),
+    addTeamMemory: (id: string, text: string) =>
+      request<TeamMemoryEntry>(`/projects/${encodeURIComponent(id)}/team-memory`, {
+        method: 'POST', body: JSON.stringify({ text }),
+      }),
+    removeTeamMemory: (id: string, entryId: string) =>
+      request<void>(`/projects/${encodeURIComponent(id)}/team-memory/${encodeURIComponent(entryId)}`, { method: 'DELETE' }),
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId }) }),
     update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null }) =>
@@ -134,6 +150,9 @@ export const api = {
       return request<Task[]>(`/tasks${q ? `?${q}` : ''}`);
     },
     listByProject: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`),
+    // Задачи, порученные персоне-исполнителю (assignee=claude + personaId)
+    listByPersona: (personaId: string) =>
+      request<Task[]>(`/tasks?personaId=${encodeURIComponent(personaId)}`),
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>
       request<Task>(projectId ? `/projects/${projectId}/tasks` : '/tasks', { method: 'POST', body: JSON.stringify(dto) }),
@@ -295,9 +314,25 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    // Насосы Memory↔Notes (③-3.3)
+    memoryToNote: (id: string, entryId: string) =>
+      request<{ noteId: string; noteTitle: string }>(
+        `/personas/${encodeURIComponent(id)}/memory/${encodeURIComponent(entryId)}/to-note`,
+        { method: 'POST' },
+      ),
+    noteToMemory: (id: string, noteId: string) =>
+      request<void>(`/personas/${encodeURIComponent(id)}/memory/from-note`, {
+        method: 'POST',
+        body: JSON.stringify({ noteId }),
+      }),
     forget: (id: string, entryId: string) =>
       request<void>(`/personas/${encodeURIComponent(id)}/memory/${encodeURIComponent(entryId)}`, {
         method: 'DELETE',
+      }),
+    // Подтвердить предложенную autolearn запись (③-3.2)
+    confirmMemory: (id: string, entryId: string) =>
+      request<void>(`/personas/${encodeURIComponent(id)}/memory/${encodeURIComponent(entryId)}/confirm`, {
+        method: 'POST',
       }),
 
     // Рабочий фокус персоны («что я сейчас делаю»): 204 без фокуса → null
@@ -387,6 +422,13 @@ export const api = {
       request<Persona>('/personas/ai/quick-create', {
         method: 'POST',
         body: JSON.stringify(body),
+        timeoutMs: 150_000,
+      }),
+    // AI-формирование команды: промпт + проект → LLM предлагает состав (черновики)
+    aiTeam: (projectId: string, prompt: string) =>
+      request<{ members: TeamMemberDraft[] }>('/personas/ai/team', {
+        method: 'POST',
+        body: JSON.stringify({ projectId, prompt }),
         timeoutMs: 150_000,
       }),
     // AI-редактирование характера: без current — генерация с нуля по имени/роли/описанию;
@@ -535,12 +577,13 @@ export const api = {
       }),
     cancelMeeting: (id: string) =>
       request<void>(`/chats/${id}/meeting/cancel`, { method: 'POST' }),
-    // Конвейер пантеона (флаг persona-pipeline): анализ → план → ревью → авто-исполнение.
-    // executorKey — omo-sisyphus | omo-hephaestus (дефолт omo-hephaestus)
-    startPipeline: (id: string, task: string, executorKey?: string) =>
+    // Конвейер ролей (флаг persona-pipeline): анализ → план → ревью → авто-исполнение.
+    // Слоты опциональны (A): пустые резолвятся по Specialty → дефолт OmO на бэке.
+    startPipeline: (id: string, task: string,
+      slots?: { analystId?: string; plannerId?: string; reviewerId?: string; executorId?: string }) =>
       request<{ pipelineId: string }>(`/chats/${id}/pipeline`, {
         method: 'POST',
-        body: JSON.stringify({ task, executorKey }),
+        body: JSON.stringify({ task, ...(slots ?? {}) }),
       }),
     cancelPipeline: (id: string) =>
       request<void>(`/chats/${id}/pipeline/cancel`, { method: 'POST' }),

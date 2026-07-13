@@ -22,10 +22,12 @@ public class PersonaManager
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
     private readonly ILogger<PersonaManager>? _log;
+    private readonly ProjectEventLogService? _events;
 
-    public PersonaManager(IConfiguration config, ILogger<PersonaManager>? log = null)
+    public PersonaManager(IConfiguration config, ILogger<PersonaManager>? log = null, ProjectEventLogService? events = null)
     {
         _log = log;
+        _events = events;
         // Стор — в каталоге DataPath (как у всех сервисов): в контейнере это /data (volume).
         // Прежний фолбэк AppContext.BaseDirectory/data жил ВНУТРИ контейнера, и персоны
         // с аватарами пропадали при каждом его пересоздании (деплое).
@@ -125,7 +127,7 @@ public class PersonaManager
         string? model, string? effort, PersonaScope scope, string? projectId,
         string? color, string? greeting, bool memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess access = PersonaAccess.Full,
-        List<string>? disallowedTools = null)
+        List<string>? disallowedTools = null, PersonaSpecialty specialty = PersonaSpecialty.None)
     {
         var persona = new Persona
         {
@@ -137,6 +139,7 @@ public class PersonaManager
             Contract = NormalizeContract(contract),
             Model = model,
             Effort = effort,
+            Specialty = specialty,
             Scope = scope,
             ProjectId = scope == PersonaScope.Project ? projectId : null,
             Greeting = greeting,
@@ -155,8 +158,16 @@ public class PersonaManager
             _personas[persona.Id] = persona;
         }
         Save();
+        // Проектная персона — член команды проекта; попадает в активность-ленту
+        if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
+            _events?.Append(persona.ProjectId, userId, ProjectEventTypes.TeamJoined, "user",
+                $"В команде: {PersonaLabel(persona)}", persona.Id);
         return persona;
     }
+
+    // Подпись персоны для логов: «Роль (Имя)» либо просто имя
+    internal static string PersonaLabel(Persona p) =>
+        string.IsNullOrEmpty(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
 
     // --- Подключаемая команда «Пантеон OmO» (built-in-подход, как у самих OmO) ---
 
@@ -182,7 +193,8 @@ public class PersonaManager
 
             var persona = Create(userId, t.Name, t.Role, t.Description, systemPrompt: null,
                 t.Model, t.Effort, PersonaScope.Global, projectId: null,
-                t.Color, t.Greeting, memoryEnabled: true, t.Tools, t.Contract, t.Access);
+                t.Color, t.Greeting, memoryEnabled: true, t.Tools, t.Contract, t.Access,
+                specialty: t.Specialty);
             persona.TemplateKey = t.Key;
             persona.TemplateInstructionsHash = HashInstructions(t.Contract.Instructions);
             result.Add(persona);
@@ -227,7 +239,7 @@ public class PersonaManager
         string? systemPrompt, string? model, string? effort, PersonaScope? scope, string? projectId,
         string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess? access = null,
-        List<string>? disallowedTools = null)
+        List<string>? disallowedTools = null, PersonaSpecialty? specialty = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -244,6 +256,8 @@ public class PersonaManager
             if (contract is not null) persona.Contract = NormalizeContract(contract);
             if (model is not null) persona.Model = model.Length == 0 ? null : model;
             if (effort is not null) persona.Effort = effort.Length == 0 ? null : effort;
+            // Специальность (функциональная роль): null — не менять; None — сбросить явно
+            if (specialty is not null) persona.Specialty = specialty.Value;
             if (scope is not null)
             {
                 persona.Scope = scope.Value;
@@ -369,12 +383,22 @@ public class PersonaManager
     {
         // Проверка владельца + удаление из словаря — атомарно под _saveLock (консистентно
         // с генерацией handle в Create и снапшотом в Save). Чистка ассетов/Save — вне лока.
+        string? projectId = null;
+        string? label = null;
         lock (_saveLock)
         {
             var persona = Get(id, userId);
             if (persona is null) return false;
+            // Запоминаем проектную принадлежность до удаления — для лога команды проекта
+            if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
+            {
+                projectId = persona.ProjectId;
+                label = PersonaLabel(persona);
+            }
             _personas.TryRemove(id, out _);
         }
+        if (projectId is not null && label is not null)
+            _events?.Append(projectId, userId, ProjectEventTypes.TeamLeft, "user", $"Из команды: {label}", id);
         // Чистим ассеты персоны (аватар)
         try
         {

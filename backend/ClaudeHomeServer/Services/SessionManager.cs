@@ -206,9 +206,10 @@ public class SessionManager
     }
 
     // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок релевантных
-    // записей (взвешенная сумма PersonaMemoryScorer) + рабочий фокус первым блоком.
+    // записей (взвешенная сумма PersonaMemoryScorer) + рабочий фокус первым блоком, а вдобавок —
+    // айтемы манифеста (что реально подтянулось) для «использовано сейчас» (F3).
     // Failsafe-таймаут; ошибки → null (ход без recall).
-    private Func<string, Task<string?>> BuildPersonaRecallProvider(string ownerId, string personaId)
+    private Func<string, Task<RecallBlock?>> BuildPersonaRecallProvider(string ownerId, string personaId)
     {
         var topK = int.TryParse(_config["Persona:RecallTopK"], out var k) ? k : 5;
         // Шкала скоринга — взвешенная сумма (PersonaMemoryScorer), порог ~0.30;
@@ -227,7 +228,11 @@ public class SessionManager
                 var recallTask = _personaMemory.BuildRecallAsync(ownerId, personaId, query, topK, minScore);
                 var completed = await Task.WhenAny(recallTask, Task.Delay(timeoutMs));
                 if (completed != recallTask) return null;   // таймаут — ход без recall
-                return await recallTask;
+                var recall = await recallTask;
+                if (recall?.Text is null) return null;
+                // Манифест: hits памяти → айтемы (F3)
+                var items = recall.Hits.Select(h => new RecallItem("memory", h.Id, h.Text, null)).ToList();
+                return new RecallBlock(recall.Text, items);
             }
             catch (Exception ex)
             {
@@ -241,7 +246,7 @@ public class SessionManager
     // формирует markdown-блок для системного промпта. Флаги проверяются ВНУТРИ (на
     // каждый ход — переключение действует без пересоздания процесса). null — если
     // подмешивать нечего/некому. Ошибки и таймаут Dify → null (ход идёт без recall).
-    private Func<string, Task<string?>>? BuildRecallProvider(string? ownerId)
+    private Func<string, Task<RecallBlock?>>? BuildRecallProvider(string? ownerId)
     {
         if (ownerId is null) return null;
         var topK = int.TryParse(_config["Notes:AutoRecallTopK"], out var k) ? k : 4;
@@ -262,7 +267,13 @@ public class SessionManager
                 var searchTask = _notesKb.SearchAsync(ownerId, query, Math.Max(topK, 8));
                 var completed = await Task.WhenAny(searchTask, Task.Delay(timeoutMs));
                 if (completed != searchTask) return null;   // таймаут — ход без recall
-                return NotesKnowledgeService.BuildRecallBlock(await searchTask, minScore, topK);
+                var hits = (await searchTask).Where(h => h.Score >= minScore).Take(topK).ToList();
+                if (hits.Count == 0) return null;
+                var blockText = NotesKnowledgeService.BuildRecallBlock(hits, minScore, topK);
+                if (string.IsNullOrWhiteSpace(blockText)) return null;
+                // Манифест: hits заметок → айтемы (F3)
+                var items = hits.Select(h => new RecallItem("note", h.Id, h.Title, h.Snippet)).ToList();
+                return new RecallBlock(blockText, items);
             }
             catch (Exception ex)
             {
@@ -583,7 +594,7 @@ public class SessionManager
     // для гейтов возможностей). Строится одинаково при первом старте и при восстановлении процесса.
     // Промпт — замыкание: адаптер зовёт его на каждый ход, поэтому правки персоны
     // (контракт/характер), смена модели сессии и флаг PersonaSwitched применяются сразу.
-    private (Func<string?>? Prompt, MemoryMcpContext? Memory, Func<string, Task<string?>>? Recall, Persona? Persona)
+    private (Func<string?>? Prompt, MemoryMcpContext? Memory, Func<string, Task<RecallBlock?>>? Recall, Persona? Persona)
         BuildPersonaLayer(Session session, string? ownerId)
     {
         if (session.PersonaId is null || ownerId is null) return (null, null, null, null);

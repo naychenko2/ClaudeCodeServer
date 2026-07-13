@@ -20,12 +20,6 @@ import { usePantheon, materializePantheon } from './usePantheon';
 //    авто-исполнение фиксированными ролями (POST /chats/{id}/pipeline).
 type DiscussMode = 'discuss' | 'meeting' | 'pipeline';
 
-// Роли-исполнители финальной фазы конвейера
-const EXECUTORS: { key: string; label: string; desc: string }[] = [
-  { key: 'omo-hephaestus', label: 'Мастер (Гефест)', desc: 'Автономный исполнитель: доводит план до конца' },
-  { key: 'omo-sisyphus', label: 'Оркестратор (Сизиф)', desc: 'Делегирует части плана субагентам и проверяет' },
-];
-
 export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingEnabled, pipelineEnabled, onSend, onClose }: {
   candidates: Persona[];
   // Персона самого чата — ведущая совещания (первая в списке участников)
@@ -60,7 +54,6 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
     candidates.length === 1 ? [candidates[0].id] : []
   );
   const [question, setQuestion] = useState('');
-  const [executorKey, setExecutorKey] = useState(EXECUTORS[0].key);
   const [starting, setStarting] = useState(false);
   // Обсуждение — до 2 собеседников; совещание — до 3 (плюс ведущая = максимум 4)
   const max = mode === 'meeting' ? 3 : 2;
@@ -198,7 +191,7 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
     if (mode === 'pipeline' && sessionId) {
       try {
         setStarting(true);
-        await api.chats.startPipeline(sessionId, question.trim(), executorKey);
+        await api.chats.startPipeline(sessionId, question.trim());
         onClose();
       } catch (e) {
         showToast('Конвейер', e instanceof Error ? e.message : 'Не удалось запустить конвейер', 'info');
@@ -239,7 +232,7 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
   const modeLabels: Record<DiscussMode, { title: string; desc: string }> = {
     discuss: { title: 'Обсуждение', desc: 'Ведущая опрашивает участников и сводит итог. Быстро.' },
     meeting: { title: 'Совещание', desc: 'Независимые позиции + перекрёстная критика. Глубже, но дольше.' },
-    pipeline: { title: 'Конвейер', desc: 'Анализ → план → ревью → авто-исполнение. Роли пантеона.' },
+    pipeline: { title: 'Конвейер', desc: 'Анализ → план → ревью → авто-исполнение. Роли — любые ваши.' },
   };
 
   const modeCard = (m: DiscussMode) => {
@@ -288,44 +281,12 @@ export function DiscussTeamDialog({ candidates, chatPersona, sessionId, meetingE
           </div>
         )}
 
-        {/* Конвейер: выбор роли-исполнителя финальной фазы */}
+        {/* Конвейер: роли подбираются автоматически по специальности (A) */}
         {mode === 'pipeline' ? (
-          <div>
-            <div style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, marginBottom: 6 }}>
-              Кто исполнит одобренный план
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {EXECUTORS.map(ex => {
-                const active = executorKey === ex.key;
-                return (
-                  <button
-                    key={ex.key}
-                    type="button"
-                    onClick={() => setExecutorKey(ex.key)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
-                      padding: '8px 10px', borderRadius: R.lg, cursor: 'pointer',
-                      border: `1.5px solid ${active ? C.accent : C.border}`,
-                      background: active ? C.accentLight : C.bgWhite, fontFamily: FONT.sans,
-                    }}
-                  >
-                    <span style={{
-                      flexShrink: 0, width: 18, height: 18, borderRadius: R.full,
-                      border: `2px solid ${active ? C.accent : C.border}`,
-                      background: active ? C.accent : C.bgWhite,
-                    }} />
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading }}>{ex.label}</span>
-                      <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted }}>{ex.desc}</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            <div style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, marginTop: 8, lineHeight: 1.4 }}>
-              Роли пантеона (Аналитик, Планировщик, Ревьюер, исполнитель) подключатся автоматически.
-              После одобрения плана включится цикл «до готово».
-            </div>
+          <div style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5, padding: '2px 2px' }}>
+            Роли анализа, плана и ревью подберутся автоматически — сначала по специальности
+            (Аналитик / Планировщик / Ревьюер / Исполнитель) среди ваших персон, нет подходящей —
+            роль пантеона OmO. После одобрения плана включится цикл «до готово».
           </div>
         ) : (
           <>

@@ -77,14 +77,14 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
     private readonly TasksMcpContext? _tasksMcp;
     private readonly NotesMcpContext? _notesMcp;
-    // Auto-recall заметок: по тексту хода возвращает markdown-блок для системного промпта
-    private readonly Func<string, Task<string?>>? _recallProvider;
+    // Auto-recall заметок: по тексту хода возвращает блок для системного промпта + манифест (F3)
+    private readonly Func<string, Task<RecallBlock?>>? _recallProvider;
     // Провайдер системного промпта персоны — вызывается на каждый ход
     // (свежие контракт/модель/PersonaSwitched без пересоздания адаптера)
     private readonly Func<string?>? _personaPromptProvider;
-    // MCP-сервер долгой памяти персоны + auto-recall её памяти
+    // MCP-сервер долгой памяти персоны + auto-recall её памяти (текст промпта + манифест F3)
     private readonly MemoryMcpContext? _memoryMcp;
-    private readonly Func<string, Task<string?>>? _personaRecallProvider;
+    private readonly Func<string, Task<RecallBlock?>>? _personaRecallProvider;
     // Блок «Привязанные знания и правила» персоны (флаг persona-bindings)
     private readonly Func<string, Task<string?>>? _bindingsProvider;
     // MCP-сервер персон: CRUD из любого чата + @упоминания/persona_ask
@@ -716,18 +716,26 @@ public class ClaudeSession : ILlmSessionAdapter
                     : basePrompt + "\n\n" + notesHint;
             }
 
+            // Манифест recall (F3): что персона подтянула в этот ход — заметки + память.
+            List<RecallItem>? manifestItems = null;
+
             // Auto-recall: релевантные заметки по тексту хода. Имеет смысл только когда
             // notes-server подключён (в блоке фигурирует notes_read по id). Провайдер сам
             // гейтит по флагу и failsafe-таймауту; исключения не должны ронять ход.
             if (_recallProvider is not null && _notesMcp is not null)
             {
-                string? recall = null;
-                try { recall = await _recallProvider(text); }
+                RecallBlock? recallBlock = null;
+                try { recallBlock = await _recallProvider(text); }
                 catch { /* recall не должен ронять ход */ }
-                if (!string.IsNullOrWhiteSpace(recall))
+                if (!string.IsNullOrWhiteSpace(recallBlock?.Text))
                     basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                        ? recall
-                        : basePrompt + "\n\n" + recall;
+                        ? recallBlock.Text
+                        : basePrompt + "\n\n" + recallBlock.Text;
+                if (recallBlock?.Items.Count > 0)
+                {
+                    manifestItems ??= new List<RecallItem>();
+                    manifestItems.AddRange(recallBlock.Items);
+                }
             }
 
             // Подсказка про раздел «Персоны» — только когда personas-server подключён
@@ -812,15 +820,21 @@ public class ClaudeSession : ILlmSessionAdapter
 
             // Auto-recall долгой памяти персоны: релевантные записи по тексту хода.
             // Независим от заметок; провайдер сам гейтит по MemoryEnabled/флагу, ошибки не роняют ход.
+            // Заодно собираем манифест (что подтянулось) для «использовано сейчас» (F3).
             if (_personaRecallProvider is not null && _memoryMcp is not null)
             {
-                string? memRecall = null;
+                RecallBlock? memRecall = null;
                 try { memRecall = await _personaRecallProvider(text); }
                 catch { /* recall памяти не должен ронять ход */ }
-                if (!string.IsNullOrWhiteSpace(memRecall))
+                if (!string.IsNullOrWhiteSpace(memRecall?.Text))
                     basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                        ? memRecall
-                        : basePrompt + "\n\n" + memRecall;
+                        ? memRecall.Text
+                        : basePrompt + "\n\n" + memRecall.Text;
+                if (memRecall?.Items.Count > 0)
+                {
+                    manifestItems ??= new List<RecallItem>();
+                    manifestItems.AddRange(memRecall.Items);
+                }
             }
 
             // Привязанные знания и правила персоны (флаг persona-bindings): индекс источников
@@ -851,6 +865,12 @@ public class ClaudeSession : ILlmSessionAdapter
 
             if (!string.IsNullOrWhiteSpace(combinedPrompt))
                 args.AddRange(["--append-system-prompt", combinedPrompt]);
+
+            // Манифест recall (F3): что персона подтянула из памяти в этот ход — клиенту,
+            // для «опирается на…» / «использовано сейчас» во вкладке контекста персоны.
+            if (manifestItems is { Count: > 0 })
+                _ = _onMessage(new RecallManifestMessage(
+                    manifestItems.Select(i => new RecallItemDto(i.Kind, i.Ref, i.Title, i.Snippet)).ToList()));
         }
 
         // claude.exe пишет/читает UTF-8. Без явной кодировки .NET берёт системную

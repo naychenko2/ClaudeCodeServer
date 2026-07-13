@@ -214,6 +214,7 @@ function pantheonToTemplate(t: PantheonTemplate): PersonaTemplate {
     access: t.access,
     model: t.model,
     effort: t.effort,
+    specialty: t.specialty,
   };
 }
 

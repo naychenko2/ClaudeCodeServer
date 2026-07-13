@@ -37,6 +37,13 @@ public record WorkspaceMcpContext(string ApiUrl, string Token, string? ProjectId
 public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId,
     string? SelfPersonaId = null, string? MentionsHint = null, bool BindingsEnabled = false);
 
+// Элемент манифеста recall — что персона подтянула в ход (память/заметка/база) для атрибуции
+// «опирается на…» / «использовано сейчас» (F3). Kind ∈ memory|note|knowledge; Ref — id/ссылка.
+public sealed record RecallItem(string Kind, string? Ref, string Title, string? Snippet);
+
+// Результат recall-провайдера: текст для системного промпта + айтемы манифеста (F3).
+public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items);
+
 // Контекст MCP-сервера уведомлений: адрес API и сервисный токен владельца.
 // Всегда подключается, когда есть владелец сессии — Claude и агенты могут
 // создавать уведомления через инструмент notifications_create.
@@ -52,19 +59,18 @@ public sealed record LlmSessionContext(
     Func<IReadOnlyList<PermissionRule>>? PermissionRules,
     TasksMcpContext? TasksMcp,
     NotesMcpContext? NotesMcp = null,
-    // Auto-recall заметок: по тексту хода возвращает готовый markdown-блок с
-    // релевантными заметками для системного промпта (null — не подмешивать).
-    // Провайдер-агностично; вычисляется каждый ход. Ошибки внутри — тихо в null.
-    Func<string, Task<string?>>? RecallProvider = null,
+    // Auto-recall заметок: по тексту хода возвращает блок релевантных заметок
+    // (текст для промпта + айтемы манифеста «использовано сейчас», F3). Ошибки → null.
+    Func<string, Task<RecallBlock?>>? RecallProvider = null,
     // Провайдер системного промпта персоны (имя, роль, контракт характера, дисциплина):
     // вызывается на КАЖДЫЙ ход — правки персоны и смена модели применяются без пересоздания
     // адаптера. null — обычная сессия; вызов может вернуть null (персону удалили).
     Func<string?>? PersonaPromptProvider = null,
     // MCP-сервер долгой памяти персоны (null — сессия без памяти персоны).
     MemoryMcpContext? MemoryMcp = null,
-    // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок
-    // релевантных записей памяти. Подмешивается независимо от заметок. Ошибки → null.
-    Func<string, Task<string?>>? PersonaRecallProvider = null,
+    // Auto-recall долгой памяти персоны: по тексту хода возвращает блок релевантных записей
+    // памяти (текст для промпта + айтемы манифеста «использовано сейчас», F3). Ошибки → null.
+    Func<string, Task<RecallBlock?>>? PersonaRecallProvider = null,
     // Дополнительные запрещённые инструменты сессии (поверх конфига Claude:DisallowedTools) —
     // например, WebSearch/WebFetch у персоны с выключенной возможностью «web».
     IReadOnlyList<string>? ExtraDisallowedTools = null,

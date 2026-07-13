@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Pencil } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaWorkingFocus, Project } from '../../types';
+import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project } from '../../types';
 import { api } from '../../lib/api';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem } from '../../components/ui';
 import { PillSwitch } from '../../components/Toolbar';
@@ -53,6 +53,8 @@ export interface PersonaFormInitial {
   // Дефолтная модель/усилие из шаблона (алиасы 'opus'|'sonnet'|'haiku'; effort 'high')
   model?: string;
   effort?: string;
+  // Специальность (функциональная роль) из шаблона — предзаполняет селектор
+  specialty?: PersonaSpecialty;
 }
 
 interface PersonaFormProps {
@@ -117,6 +119,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [instructionsOpen, setInstructionsOpen] = useState(false);
   const [model, setModel] = useState(persona?.model ?? initial?.model ?? '');
   const [effort, setEffort] = useState(persona?.effort ?? initial?.effort ?? '');
+  // Специальность (функциональная роль) для оркестрации — конвейер/брифинг/статус/память
+  const [specialty, setSpecialty] = useState<PersonaSpecialty>(
+    persona?.specialty ?? initial?.specialty ?? 'none');
   const [scope, setScope] = useState<PersonaScope>(persona?.scope ?? defaultScope ?? 'global');
   const [projectId, setProjectId] = useState(persona?.projectId ?? defaultProjectId ?? '');
   const [greeting, setGreeting] = useState(persona?.greeting ?? initial?.greeting ?? '');
@@ -327,6 +332,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     color, greeting: greeting.trim(), memoryEnabled,
     tools: [...tools].sort(),
     access,
+    specialty,
     disallowed: access === 'custom' ? parseDisallowed(disallowedText) : [],
   });
   // Исходный снимок считается от предзаполненного состояния: у legacy-персоны
@@ -355,9 +361,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       memoryEnabled: persona?.memoryEnabled ?? false,
       tools: [...(persona ? (persona.tools ?? ALL_TOOL_KEYS) : ALL_TOOL_KEYS)].sort(),
       access: persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'),
+      specialty: persona ? (persona.specialty ?? 'none') : (initial?.specialty ?? 'none'),
       disallowed: (persona?.access ?? 'full') === 'custom' ? (persona?.disallowedTools ?? []) : [],
     });
-  }, [persona, defaultScope, defaultProjectId, initial?.access]);
+  }, [persona, defaultScope, defaultProjectId, initial?.access, initial?.specialty]);
   const dirty = snapshot !== initialSnapshot;
 
   const save = async () => {
@@ -382,6 +389,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       tools,
       // Профиль доступа: свой список запретов уходит только при custom
       access,
+      // Специальность шлём всегда (включая 'none' — сброс); update на бэке None ставит явно
+      specialty,
       disallowedTools: access === 'custom' ? parseDisallowed(disallowedText) : [],
     };
     try {
@@ -851,6 +860,27 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
         <Field label="Приветствие" hint="С чего персона начинает разговор">
           <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" />
+        </Field>
+
+        <Field label="Специальность" hint="Функциональная роль для оркестрации: конвейер ролей, голос брифинга, статус команды.">
+          <select
+            value={specialty}
+            onChange={e => setSpecialty(e.target.value as PersonaSpecialty)}
+            style={selectStyle}
+            aria-label="Специальность"
+          >
+            <option value="none">Не задана</option>
+            <option value="analyst">Аналитик</option>
+            <option value="planner">Планировщик</option>
+            <option value="reviewer">Ревьюер</option>
+            <option value="executor">Исполнитель</option>
+            <option value="secretary">Секретарь</option>
+            <option value="coordinator">Координатор</option>
+            <option value="mentor">Ментор</option>
+            <option value="designer">Дизайнер</option>
+            <option value="consultant">Консультант</option>
+            <option value="librarian">Библиотекарь</option>
+          </select>
         </Field>
       </div>
     </div>

@@ -805,7 +805,7 @@ const windowWidth = useWindowWidth();
           {personasMode
             ? ((selectedPersonaId || personaCreating)
                 ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />
-                : <TeamCommandCenter project={project} />)
+                : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleSelectSession} onOpenSessionById={handleOpenTaskSession} />)
             : tasksMode
             ? (selectedTask
                 ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={() => window.history.back()} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
@@ -936,7 +936,7 @@ const windowWidth = useWindowWidth();
               <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 {(selectedPersonaId || personaCreating)
                   ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} />
-                  : <TeamCommandCenter project={project} />}
+                  : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleSelectSession} onOpenSessionById={handleOpenTaskSession} />}
               </div>
             </div>
           );

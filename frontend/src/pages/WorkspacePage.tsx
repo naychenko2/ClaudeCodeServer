@@ -17,7 +17,7 @@ import { PillSwitch } from '../components/Toolbar';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { BackButton, IconButton, Splitter } from '../components/ui';
-import { navPush, parseHash, type NavSnapshot } from '../lib/nav';
+import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
@@ -335,6 +335,7 @@ const windowWidth = useWindowWidth();
       const sessions = await api.sessions.list(project.id);
       const s = sessions.find(x => x.id === sessionId);
       if (!s) return;
+      if (!isMobile) navPush({ screen: 'project', project, view: 'sidebar', file: null, task: null });
       setLeftTab('sessions');
       handleSelectSession(s);
     } catch { /* офлайн — остаёмся на задаче */ }
@@ -566,6 +567,14 @@ const windowWidth = useWindowWidth();
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
+
+  // Командный центр активен → фиксируем в истории (persona: null), чтобы «назад» из
+  // любого диплинка (задача/чат/персона) возвращал именно в командный центр
+  useEffect(() => {
+    if (leftTab === 'personas' && !selectedPersonaId && !personaCreating) {
+      navReplace({ screen: 'project', project, view: isMobile ? mobileView : 'sidebar', file: null, task: null, persona: null });
+    }
+  }, [leftTab, selectedPersonaId, personaCreating]);
 
   // из дерева файлов → всегда полноэкранный режим
   const handleOpenFileFromTree = (filePath: string) => {

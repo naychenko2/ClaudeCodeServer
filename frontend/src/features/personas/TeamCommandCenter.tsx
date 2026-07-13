@@ -254,7 +254,7 @@ function OverviewPanel(props: {
         {/* Последняя активность */}
         <div style={cardStyle}>
           <SectionLabel>Последняя активность</SectionLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', marginTop: 8 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', marginTop: 8, paddingLeft: 26, position: 'relative' }}>
             {recent.length === 0 ? <Muted>Пока нет событий.</Muted> : recent.map(e => <EventCard key={e.id} e={e} personaById={personaById} onOpen={onOpenEvent} />)}
           </div>
           {events && events.length > 6 && <button onClick={() => onSwitchTab('activity')} style={{ ...linkBtn, marginTop: 8 }}>Вся активность →</button>}

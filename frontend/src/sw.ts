@@ -54,16 +54,17 @@ self.addEventListener('push', e => {
 // или открываем новое
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  // URL приходит в формате /chats/{id} или /notes/{id} — без #/
-  // Для hash-маршрутизации SPA добавляем # спереди
   const raw = e.notification.data?.url ?? '/';
-  const url = raw.startsWith('/') ? '#' + raw : raw;
+  // URL от бэка: /chats/{id} или /notes/{id}. Превращаем в абсолютный
+  // hash-URL для SPA: https://naychenko.me/#/chats/{id}
+  const baseUrl = self.location.origin.replace(/\/+$/, '');
+  const url = raw.startsWith('/') ? baseUrl + '/#' + raw.slice(1) : raw;
   e.waitUntil((async () => {
     const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const client of clientList) {
       if ('focus' in client) {
         await client.focus();
-        // navigate с #/chats/id корректно меняет хеш на той же странице
+        // navigate с полным абсолютным URL корректно меняет хеш
         if ('navigate' in client) await (client as WindowClient).navigate(url);
         return;
       }

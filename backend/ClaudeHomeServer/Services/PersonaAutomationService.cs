@@ -35,6 +35,11 @@ public sealed class PersonaAutomationService : IDisposable
     // sessionId → ruleId: ходы, запущенные движком. По ResultMessage шлём «персона написала вам».
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _inflight = new();
 
+    // Накопленные события файловых триггеров: ruleId → [относительные пути].
+    // Для батчинга: файлы скапливаются в течение minInterval (1 мин для файлов,
+    // 5 мин для остальных), затем отправляются одним ходом со сводкой по всем.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, List<string>> _pendingFileEvents = new();
+
     private int DefaultMinIntervalMinutes => _config.GetValue("Persona:AutomationMinIntervalMinutes", 5);
     private int HourlyCap => _config.GetValue("Persona:AutomationHourlyCap", 8);
 
@@ -78,25 +83,57 @@ public sealed class PersonaAutomationService : IDisposable
 
                 var state = _state.GetRule(persona.Id, rule.Id);
 
-                // Pre-throttling: не обновляем снапшот источника, если правило в кд.
-                // Иначе EvaluateAsync съест новый файл/заметку/коммит в снапшот, а FireAsync
-                // отклонит событие по троттлингу — и на следующем тике источник ничего не обнаружит.
+                // === File-триггер: батч-режим (1 мин кд, накопление) ===
+                // Для файлов pre-throttling НЕ применяем — всегда сканируем дерево и обновляем
+                // снапшот, чтобы не потерять изменения. Если правило в кд — накапливаем пути
+                // в _pendingFileEvents. Когда кд истекает — отправляем ОДИН ход со всеми
+                // накопленными файлами за раз.
+                if (rule.Trigger.Type == AutomationTriggerType.File)
+                {
+                    var ctx = new TriggerContext(user, persona, rule, tz, nowUtc, state);
+                    IReadOnlyList<TriggerEvent> events;
+                    try { events = await source.EvaluateAsync(ctx, ct); }
+                    catch (Exception ex) { _log.LogWarning(ex, "Ошибка File-триггера {Rule}", rule.Id); continue; }
+                    if (events.Count > 0)
+                    {
+                        _state.Save();  // персистим снапшот (чтобы не переобнаруживать те же файлы)
+                        AccumulateFileEvents(rule.Id, events);
+                    }
+
+                    var fileMinInterval = rule.Condition?.MinIntervalMinutes ?? 1;
+                    bool inCooldown = state.LastFiredAt is { } last && nowUtc - last < TimeSpan.FromMinutes(fileMinInterval);
+                    var pending = _pendingFileEvents.GetOrAdd(rule.Id, _ => new List<string>());
+
+                    // Всё ещё в кд — ничего не делаем, файлы копятся в pending
+                    if (inCooldown) continue;
+
+                    // Кд истёк — есть что отправить?
+                    if (pending.Count == 0) continue;
+
+                    // Формируем сводное событие из всех накопленных путей
+                    var merged = MergeFileEvents(rule, pending);
+                    pending.Clear();
+                    _ = FireAsync(persona, rule, tz, merged, CancellationToken.None);
+                    continue;
+                }
+
+                // === Остальные триггеры: pre-throttling с дефолтным кд ===
                 var minInterval = rule.Condition?.MinIntervalMinutes ?? DefaultMinIntervalMinutes;
-                if (state.LastFiredAt is { } last && nowUtc - last < TimeSpan.FromMinutes(minInterval))
+                if (state.LastFiredAt is { } lastFired && nowUtc - lastFired < TimeSpan.FromMinutes(minInterval))
                     continue;
 
-                var ctx = new TriggerContext(user, persona, rule, tz, nowUtc, state);
-                IReadOnlyList<TriggerEvent> events;
-                try { events = await source.EvaluateAsync(ctx, ct); }
+                var ctx2 = new TriggerContext(user, persona, rule, tz, nowUtc, state);
+                IReadOnlyList<TriggerEvent> events2;
+                try { events2 = await source.EvaluateAsync(ctx2, ct); }
                 catch (Exception ex)
                 {
                     _log.LogWarning(ex, "Ошибка источника {Type} правила {Rule}", rule.Trigger.Type, rule.Id);
                     continue;
                 }
-                if (events.Count > 0) _state.Save();   // персистим обновлённые источником снапшоты
+                if (events2.Count > 0) _state.Save();
 
-                foreach (var ev in events)
-                    _ = FireAsync(persona, rule, tz, ev, CancellationToken.None);  // тяжёлая работа в фоне, не блокирует тик
+                foreach (var ev in events2)
+                    _ = FireAsync(persona, rule, tz, ev, CancellationToken.None);
             }
         }
     }
@@ -315,6 +352,36 @@ public sealed class PersonaAutomationService : IDisposable
         sb.AppendLine("- Соблюдай свой характер и зону контекста.");
         sb.AppendLine("- Если нужно уточнить что-то у пользователя — используй инструмент AskUserQuestion с вариантами ответов (не пиши вопросы текстом). Он покажет ему кнопки для выбора.");
         return sb.ToString();
+    }
+
+    // ─── Хелперы батчинга файловых событий ───────────────────────────────────────
+
+    // Накопить пути из событий файлового триггера
+    private void AccumulateFileEvents(string ruleId, IReadOnlyList<TriggerEvent> events)
+    {
+        var list = _pendingFileEvents.GetOrAdd(ruleId, _ => new List<string>());
+        foreach (var ev in events)
+        {
+            if (ev.Details is null) continue;
+            if (ev.Details.TryGetValue("created", out var created))
+                foreach (var p in created.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    if (!list.Contains(p)) list.Add(p);
+            if (ev.Details.TryGetValue("changed", out var changed))
+                foreach (var p in changed.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    if (!list.Contains(p)) list.Add(p);
+        }
+    }
+
+    // Сформировать сводное TriggerEvent из накопленных путей
+    private static TriggerEvent MergeFileEvents(PersonaAutomationRule rule, List<string> paths)
+    {
+        var created = paths.Count;
+        var summary = $"Файлы в проекте изменились: {created} изменений";
+        var details = new Dictionary<string, string>
+        {
+            ["created"] = string.Join("\n", paths.Take(15)) + (paths.Count > 15 ? $"\n…и ещё {paths.Count - 15}" : ""),
+        };
+        return new TriggerEvent(rule.Id, AutomationTriggerType.File, summary, details);
     }
 
     private static string TriggerLabel(PersonaAutomationRule rule) => rule.Trigger.Type switch

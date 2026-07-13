@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState } from '../types';
-import { joinSession, joinProject, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision } from '../lib/signalr';
+import { joinSession, leaveSession, joinProject, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision } from '../lib/signalr';
 import { api } from '../lib/api';
 import { applyServerMessage, normalizeHistory, initialChatState, type ChatState } from '../lib/chatReducer';
 
@@ -191,7 +191,11 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
 
     return () => {
       listeners.delete(notify);
-      // leaveSession не вызываем — сессия продолжает работать в фоне
+      // Покидаем группу SignalR — сервер снимает счётчик зрителей и может слать
+      // уведомления (push/тост), когда персона задаёт вопрос или запрашивает разрешение.
+      // Сбрасываем isJoined, чтобы при возврате в этот чат гарантированно перезайти.
+      leaveSession(sessionId);
+      setState(sessionId, prev => ({ ...prev, isJoined: false }));
     };
   }, [sessionId, projectId, isGroup]);
 

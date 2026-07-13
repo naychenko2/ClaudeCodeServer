@@ -384,6 +384,30 @@ const windowWidth = useWindowWidth();
     return () => window.removeEventListener('cc-pending-task', consumePendingTask);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
+
+  // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
+  useEffect(() => {
+    const consumePendingProjectChat = async () => {
+      const raw = sessionStorage.getItem('cc_pending_project_chat');
+      if (!raw) return;
+      const sep = raw.indexOf('|');
+      const [pid, chatId] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
+      if (pid !== project.id) return;
+      sessionStorage.removeItem('cc_pending_project_chat');
+      try {
+        const sessions = await api.sessions.list(project.id);
+        const s = sessions.find(x => x.id === chatId);
+        if (s) {
+          setLeftTab('sessions');
+          handleSelectSession(s);
+        }
+      } catch { /* офлайн — остаёмся как есть */ }
+    };
+    consumePendingProjectChat();
+    window.addEventListener('cc-pending-project-chat', consumePendingProjectChat);
+    return () => window.removeEventListener('cc-pending-project-chat', consumePendingProjectChat);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
   // Ширина сайдбара — общая для всех областей (перетаскиваемая, персистится)
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
 

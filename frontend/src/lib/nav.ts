@@ -88,6 +88,8 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
     case 'project': {
       if (!parts[1]) return { screen: 'projects' };
       const target: HashTarget = { screen: 'project', projectId: parts[1] };
+      // #/project/{id}/chat/{chatId} — диплинк на конкретный чат внутри проекта
+      if (parts[2] === 'chat' && parts[3]) { target.chatId = parts[3]; return target; }
       if (parts[2] === 'task' && parts[3]) target.taskId = parts[3];
       else if (parts[2] === 'file' && parts[3]) target.file = decodeURIComponent(parts.slice(3).join('/'));
       else if (parts[2] === 'board') target.board = true;

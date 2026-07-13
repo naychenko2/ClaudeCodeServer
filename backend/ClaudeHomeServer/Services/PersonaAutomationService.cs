@@ -288,9 +288,13 @@ public sealed class PersonaAutomationService : IDisposable
                 body = "Персона предлагает план — согласуйте его";
             }
 
+	            var chatUrl = string.IsNullOrEmpty(session.ProjectId)
+                ? $"/chats/{session.Id}"
+                : $"/project/{session.ProjectId}/chat/{session.Id}";
+
             await _notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
                 Title: title, Body: body,
-                Url: $"/chats/{session.Id}",
+                Url: chatUrl,
                 Kind: "claude", Tag: "Автоматизация"), sendPush: true);
         }
         catch { /* уведомление — best-effort */ }

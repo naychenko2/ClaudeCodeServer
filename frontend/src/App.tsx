@@ -42,6 +42,8 @@ if (initialHash?.screen === 'project' && initialHash.projectId) {
   // Формат «projectId|taskId» — WorkspacePage чужого проекта не заберёт значение
   if (initialHash.taskId) sessionStorage.setItem('cc_pending_task', `${initialHash.projectId}|${initialHash.taskId}`)
   if (initialHash.file) sessionStorage.setItem('cc_pending_file', `${initialHash.projectId}|${initialHash.file}`)
+  // Диплинк на чат внутри проекта: #/project/{id}/chat/{chatId}
+  if (initialHash.chatId) sessionStorage.setItem('cc_pending_project_chat', `${initialHash.projectId}|${initialHash.chatId}`)
 }
 // Диплинк #/calendar/task/{id} — личная задача, модал деталей поверх календаря
 if (initialHash?.screen === 'calendar' && initialHash.taskId) {
@@ -416,6 +418,30 @@ export default function App() {
         window.dispatchEvent(new Event('cc-pending-task'))
       } else if (project?.id === pid) {
         // Проект «спит» в другой вкладке — возврат в «Проекты» смонтирует WorkspacePage
+        localStorage.setItem(HUB_TAB_KEY, 'projects')
+        setHubTab('projects')
+      } else {
+        api.projects.list()
+          .then(list => {
+            const p = list.find(x => x.id === pid)
+            if (p) {
+              localStorage.setItem(HUB_TAB_KEY, 'projects')
+              setHubTab('projects')
+              openProject(p)
+            }
+          })
+          .catch(() => {})
+      }
+      return
+    }
+    // Диплинк на конкретный чат внутри проекта (#/project/{id}/chat/{chatId}) —
+    // уведомления проактивных персон в проектных чатах.
+    if (target?.screen === 'project' && target.projectId && target.chatId) {
+      const pid = target.projectId
+      sessionStorage.setItem('cc_pending_project_chat', `${pid}|${target.chatId}`)
+      if (effectiveHubTab === 'projects' && project?.id === pid) {
+        window.dispatchEvent(new Event('cc-pending-project-chat'))
+      } else if (project?.id === pid) {
         localStorage.setItem(HUB_TAB_KEY, 'projects')
         setHubTab('projects')
       } else {

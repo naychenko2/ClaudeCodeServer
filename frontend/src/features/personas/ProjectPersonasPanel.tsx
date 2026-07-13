@@ -244,6 +244,8 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
               onEditProfile={() => setEditing(true)}
               onOpenKnowledge={() => goView('knowledge')}
               onOpenTasks={() => goView('tasks')}
+              onOpenAutomation={() => goView('automation')}
+              onOpenMemory={() => goView('memory')}
               isMobile={isMobile}
             />
           )

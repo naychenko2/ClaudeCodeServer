@@ -406,7 +406,9 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSes
           onTalk={onTalk} onOpenSession={onOpenSession}
           onEditProfile={() => setEditing(true)}
           onOpenKnowledge={() => goView('knowledge')}
-          onOpenTasks={() => goView('tasks')} isMobile={isMobile} />
+          onOpenTasks={() => goView('tasks')}
+          onOpenAutomation={() => goView('automation')}
+          onOpenMemory={() => goView('memory')} isMobile={isMobile} />
       </div>;
 
   return (

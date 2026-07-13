@@ -13,14 +13,14 @@ namespace ClaudeHomeServer.Services;
 // Collaborator внутри ЕДИНСТВЕННОГО тика TaskSchedulerService (НЕ отдельный BackgroundService —
 // иначе третий параллельный таймер, как у удалённой PersonaProactiveService). Источники-опросчики
 // (Timer/File/Note/GitCommit/TaskStatus) вызываются из MaybeRunAutomationsAsync; Mention — push
-// (подписка на SessionManager.OnUserMessage). Действие по умолчанию — one-shot гейт «стоит ли
-// реагировать?» через PersonaAskService, затем сообщение в закреплённый чат правила; полный ход —
-// при Action.Weight==Work. Троттлинг: тихие часы + MinInterval per-rule + потолок N/час per-persona.
+// (подписка на SessionManager.OnUserMessage). Запуск реакции — по образцу TaskExecutionService:
+// большой промпт с контекстом срабатывания (## секции + объекты-триггеры; для файлов — пути и
+// содержимое) запускает ход персоны в закреплённом чате правила (acceptEdits). Weight=Work —
+// действовать/править; Gate — оценить и ответить. Троттлинг: тихие часы + MinInterval + потолок N/час.
 public sealed class PersonaAutomationService : IDisposable
 {
     private readonly PersonaManager _personas;
     private readonly SessionManager _sessions;
-    private readonly PersonaAskService _ask;
     private readonly PushService _push;
     private readonly IHubContext<SessionHub> _hub;
     private readonly AutomationStateStore _state;
@@ -38,12 +38,12 @@ public sealed class PersonaAutomationService : IDisposable
     private int HourlyCap => _config.GetValue("Persona:AutomationHourlyCap", 8);
 
     public PersonaAutomationService(PersonaManager personas, SessionManager sessions,
-        PersonaAskService ask, PushService push, IHubContext<SessionHub> hub,
+        PushService push, IHubContext<SessionHub> hub,
         AutomationStateStore state, MentionTriggerSource mentions, ProjectManager projects,
         UserStore users, IEnumerable<ITriggerSource> sources, IConfiguration config,
         ILogger<PersonaAutomationService> log)
     {
-        _personas = personas; _sessions = sessions; _ask = ask; _push = push; _hub = hub;
+        _personas = personas; _sessions = sessions; _push = push; _hub = hub;
         _state = state; _mentions = mentions; _projects = projects; _users = users;
         _config = config; _log = log;
         _sources = sources.ToDictionary(s => s.Type);
@@ -110,9 +110,12 @@ public sealed class PersonaAutomationService : IDisposable
         catch (Exception ex) { _log.LogWarning(ex, "Mention-детекция"); }
     }
 
-    // ─── Executor: gate → send → escalate ───────────────────────────────────────
+    // ─── Executor: постановка-промпт → ход ──────────────────────────────────────
 
-    // Реакция персоны на событие. bypassThrottle=true для ручного теста (/test эндпоинт).
+    // Реакция персоны на событие: собираем большой промпт с контекстом срабатывания
+    // (по образцу TaskExecutionService — ## секции + объекты-триггеры; для файлов — пути и
+    // содержимое) и запускаем им ход в закреплённом чате правила. Характер персоны идёт
+    // системным слоем сессии. bypassThrottle=true для ручного теста (/test эндпоинт).
     private async Task FireAsync(Persona persona, PersonaAutomationRule rule, TimeZoneInfo tz,
         TriggerEvent ev, CancellationToken ct, bool bypassThrottle = false)
     {
@@ -142,24 +145,19 @@ public sealed class PersonaAutomationService : IDisposable
         var freshRule = freshPersona.AutomationRules?.FirstOrDefault(r => r.Id == rule.Id);
         if (freshRule is null || !freshRule.Enabled) return;
 
-        // 2. One-shot гейт: «стоит ли реагировать + что сказать?»
-        string gateAnswer;
-        try { gateAnswer = await _ask.AskAsync(freshPersona.OwnerId, freshPersona, BuildGatePrompt(freshRule, ev), ev.Summary, ct); }
-        catch (Exception ex) { _log.LogWarning(ex, "gate правило {Rule}", rule.Id); MarkResult(state, "error"); return; }
+        // 2. Большой промпт с контекстом срабатывания (как постановка задачи)
+        string prompt;
+        try { prompt = await BuildAutomationPromptAsync(freshRule, ev); }
+        catch (Exception ex) { _log.LogWarning(ex, "build-prompt правило {Rule}", rule.Id); MarkResult(state, "error"); return; }
 
-        if (!ParseGateYes(gateAnswer)) { MarkResult(state, "no"); return; }
-        var message = ExtractGateMessage(gateAnswer);
-        if (string.IsNullOrWhiteSpace(message)) message = ev.Summary;
-
-        // 3. Целевой чат — закреплённый чат правила (Phase 1 единообразно; OriginSessionId Mention
-        //    попадает в контекст gate-промпта через Summary). Same-chat-ответ Mention — Phase 2.
+        // 3. Закреплённый чат правила (acceptEdits — персона может править файлы/заводить задачи)
         string targetSessionId;
         try { targetSessionId = await EnsureRuleChatAsync(freshPersona, freshRule, state); }
         catch (Exception ex) { _log.LogWarning(ex, "создание чата правила {Rule}", rule.Id); MarkResult(state, "error"); return; }
 
-        // 4. gate-ответ → сообщение в чат (ход от лица персоны)
+        // 4. Промпт → ход от лица персоны (контекст срабатывания — внутри сообщения чата)
         _inflight[targetSessionId] = freshRule.Id;
-        try { await _sessions.SendMessageAsync(targetSessionId, message, [], auto: true, senderPersonaId: freshPersona.Id); }
+        try { await _sessions.SendMessageAsync(targetSessionId, prompt, [], auto: true, senderPersonaId: freshPersona.Id); }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "send правило {Rule}", rule.Id);
@@ -168,17 +166,7 @@ public sealed class PersonaAutomationService : IDisposable
             return;
         }
 
-        // 5. Эскалация в полный агентский ход (правка файлов/задач через MCP) — по явному Weight==Work
-        if (freshRule.Action.Weight == AutomationActionWeight.Work)
-        {
-            var workDirective = string.IsNullOrWhiteSpace(freshRule.Action.Instruction)
-                ? "Разберись с этим событием и сделай необходимое от моего имени."
-                : freshRule.Action.Instruction.Trim();
-            try { await _sessions.SendMessageAsync(targetSessionId, workDirective, [], auto: true, senderPersonaId: freshPersona.Id); }
-            catch (Exception ex) { _log.LogWarning(ex, "work-эскалация правило {Rule}", rule.Id); }
-        }
-
-        MarkResult(state, "yes");
+        MarkResult(state, "fired");
     }
 
     // Создать/переиспользовать закреплённый чат правила (один на правило, брендирован персоной).
@@ -187,7 +175,7 @@ public sealed class PersonaAutomationService : IDisposable
         if (state.SessionId is { } sid && _sessions.GetById(sid) is { } s && s.PersonaId == persona.Id)
             return sid;
         var title = string.IsNullOrWhiteSpace(persona.Role) ? persona.Name : persona.Role;
-        var chat = await _sessions.CreatePersonaChatAsync(persona.OwnerId, persona.Id, ClaudeMode.Auto,
+        var chat = await _sessions.CreatePersonaChatAsync(persona.OwnerId, persona.Id, ClaudeMode.AcceptEdits,
             name: $"{title}: {rule.Name}", automationRuleId: rule.Id);
         state.SessionId = chat.Id;
         _state.Save();
@@ -229,45 +217,131 @@ public sealed class PersonaAutomationService : IDisposable
         catch { /* уведомление — best-effort */ }
     }
 
-    // ─── Чистые предикаты (юнит-тесты) ──────────────────────────────────────────
+    // ─── Постановка-промпт (по образцу TaskExecutionService.BuildPrompt) ────────
 
-    internal static string BuildGatePrompt(PersonaAutomationRule rule, TriggerEvent ev)
+    // Большой промпт для хода персоны: ## секции + объекты, вызвавшие срабатывание.
+    // Характер персоны инжектится системным слоем сессии (как у персоны-исполнителя задач).
+    internal async Task<string> BuildAutomationPromptAsync(PersonaAutomationRule rule, TriggerEvent ev)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"Сработало правило автоматизации «{rule.Name}».");
-        sb.AppendLine($"Событие: {ev.Summary}");
+        sb.AppendLine("## СОБЫТИЕ");
+        sb.AppendLine($"Сработало правило автоматизации «{rule.Name}» ({TriggerLabel(rule)}).");
+        sb.AppendLine(ev.Summary);
         if (rule.Condition?.OnlyIf is { } only && !string.IsNullOrWhiteSpace(only))
-            sb.AppendLine($"Доп. условие: {only}");
-        if (ev.Details is { Count: > 0 } d)
         {
-            sb.AppendLine("Детали:");
-            foreach (var kv in d)
-            {
-                var val = kv.Value.Length > 500 ? kv.Value[..497] + "…" : kv.Value;
-                sb.AppendLine($"- {kv.Key}: {val}");
-            }
+            sb.AppendLine();
+            sb.AppendLine($"Доп. условие реакции: {only}");
         }
-        if (!string.IsNullOrWhiteSpace(rule.Action.Instruction))
-            sb.AppendLine($"\nТвоя инструкция к действию: {rule.Action.Instruction.Trim()}");
+
         sb.AppendLine();
-        sb.AppendLine("Реши, стоит ли тебе реагировать на это событие прямо сейчас. Если НЕ стоит — " +
-                      "ответь ровно одним словом NO. Если стоит — первой строкой YES, затем короткое " +
-                      "сообщение пользователю от своего лица (он увидит его в чате и, возможно, не у " +
-                      "экрана — сообщение должно быть самодостаточным).");
+        sb.AppendLine("## КОНТЕКСТ (что вызвало срабатывание)");
+        sb.AppendLine(await BuildContextBlockAsync(rule, ev));
+
+        sb.AppendLine("## ИНСТРУКЦИЯ");
+        var instruction = rule.Action.Instruction?.Trim();
+        if (string.IsNullOrWhiteSpace(instruction))
+            instruction = rule.Action.Weight == AutomationActionWeight.Work
+                ? "Действуй: разберись с событием и сделай необходимое от моего имени — можно править файлы, заводить задачи/заметки через инструменты. Итог — сообщением в этот чат."
+                : "Оцени событие и коротко ответь пользователю от своего лица в этом чате. Тяжёлых действий не предпринимай.";
+        sb.AppendLine(instruction);
+
+        sb.AppendLine();
+        sb.AppendLine("## ОЖИДАЕМЫЙ РЕЗУЛЬТАТ");
+        sb.AppendLine("- Ответь пользователю в этом чате от своего лица (он, возможно, не у экрана — сообщение самодостаточно).");
+        sb.AppendLine("- Если событие не стоит твоей реакции — кратко скажи об этом и не делай лишнего.");
+        sb.AppendLine("- Действуй конкретно по переданному контексту, не сканируй всё подряд.");
+
+        sb.AppendLine();
+        sb.AppendLine("## ПРАВИЛА");
+        sb.AppendLine("- Не выдумывай работу сверх события и инструкции.");
+        sb.AppendLine("- Соблюдай свой характер и зону контекста.");
         return sb.ToString();
     }
 
-    internal static bool ParseGateYes(string? answer)
+    private static string TriggerLabel(PersonaAutomationRule rule) => rule.Trigger.Type switch
     {
-        var first = (answer ?? "").Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
-        return first.StartsWith("YES", StringComparison.OrdinalIgnoreCase);
+        AutomationTriggerType.Timer => "таймер",
+        AutomationTriggerType.File => "изменение файлов",
+        AutomationTriggerType.Note => "заметки",
+        AutomationTriggerType.GitCommit => "новые коммиты",
+        AutomationTriggerType.TaskStatus => "смена статуса задачи",
+        AutomationTriggerType.Mention => "@упоминание",
+        _ => rule.Trigger.Type.ToString(),
+    };
+
+    // Блок объектов срабатывания. Для файлов — пути + содержимое (top-N, с ограничением);
+    // для остальных — детали события из источника.
+    private async Task<string> BuildContextBlockAsync(PersonaAutomationRule rule, TriggerEvent ev)
+    {
+        if (rule.Trigger.Type == AutomationTriggerType.File)
+            return await BuildFileContextAsync(rule, ev);
+
+        var sb = new StringBuilder();
+        if (ev.Details is { Count: > 0 })
+        {
+            foreach (var kv in ev.Details)
+                sb.AppendLine($"- {kv.Key}: {Truncate(kv.Value, 800)}");
+        }
+        else
+        {
+            sb.AppendLine("Дополнительного контекста нет.");
+        }
+        return sb.ToString();
     }
 
-    internal static string ExtractGateMessage(string answer)
+    private async Task<string> BuildFileContextAsync(PersonaAutomationRule rule, TriggerEvent ev)
     {
-        var idx = answer.IndexOf('\n');
-        return idx < 0 ? "" : answer[(idx + 1)..].Trim();
+        var sb = new StringBuilder();
+        var projectId = TriggerArgs.Of(rule.Trigger).GetString("projectId");
+        var project = projectId is null ? null : _projects.GetById(projectId);
+        if (project is not null)
+            sb.AppendLine($"Проект «{project.Name}» (корень: {project.RootPath}).");
+
+        var paths = new List<string>();
+        if (ev.Details?.TryGetValue("created", out var created) == true)
+            paths.AddRange(created.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        if (ev.Details?.TryGetValue("changed", out var changed) == true)
+            paths.AddRange(changed.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        if (paths.Count == 0) { sb.AppendLine("Файлы не переданы."); return sb.ToString(); }
+
+        sb.AppendLine(paths.Count == 1 ? "Файл:" : $"Файлы ({paths.Count}):");
+        var shown = 0;
+        foreach (var rel in paths)
+        {
+            if (shown >= 6) { sb.AppendLine($"- …и ещё {paths.Count - shown}"); break; }
+            sb.AppendLine($"- {rel}");
+            if (project is not null && await ReadSnippetAsync(project.RootPath, rel) is { } snippet)
+            {
+                sb.AppendLine("```");
+                sb.AppendLine(Truncate(snippet, 1500));
+                sb.AppendLine("```");
+            }
+            shown++;
+        }
+        sb.AppendLine("(целиком или diff — прочитай файловыми инструментами проекта)");
+        return sb.ToString();
     }
+
+    // Прочитать содержимое файла-фрагмента, если он текстовый и небольшой. null — пропустить
+    // (бинарник, большой, удалён, вне корня проекта — защита от path traversal).
+    private static async Task<string?> ReadSnippetAsync(string root, string rel)
+    {
+        try
+        {
+            var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var full = Path.GetFullPath(Path.Combine(rootFull, rel.TrimStart('/', '\\')));
+            if (!full.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                && !full.Equals(rootFull, StringComparison.OrdinalIgnoreCase)) return null;
+            if (!File.Exists(full)) return null;
+            if (new FileInfo(full).Length > 50_000) return null;
+            var text = await File.ReadAllTextAsync(full);
+            if (text.Contains('\0')) return null;   // бинарный
+            return text;
+        }
+        catch { return null; }
+    }
+
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
 
     internal static bool InQuietWindow(PersonaAutomationRule rule, DateTime localNow)
     {

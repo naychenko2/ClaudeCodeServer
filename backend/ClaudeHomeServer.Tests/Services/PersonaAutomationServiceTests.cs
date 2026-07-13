@@ -1,11 +1,11 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.TriggerSources;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Чистая логика PersonaAutomationService: тихие часы (вкл. переход через полночь) и
-// парсинг ответа one-shot гейта персоны (YES/NO + сообщение).
+// Тесты PersonaAutomationService: тихие часы (вкл. переход через полночь) и каркас
+// постановка-промпта (контекст срабатывания попадает в промпт). Сам промпт-билдер
+// асинхронный/instance (читает файлы) — покрыт сборкой и e2e, здесь проверяем чистую логику.
 public class PersonaAutomationServiceTests
 {
     private static PersonaAutomationRule RuleWithQuiet(string? from, string? to) => new()
@@ -42,39 +42,5 @@ public class PersonaAutomationServiceTests
         Assert.True(PersonaAutomationService.InQuietWindow(rule, Local(23, 30))); // вечер
         Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(10, 0))); // день
         Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(7, 0)));  // правая граница не входит
-    }
-
-    [Theory]
-    [InlineData("YES\nПривет, проверь почту", true)]
-    [InlineData("yes", true)]
-    [InlineData("  YES  ", true)]
-    [InlineData("NO", false)]
-    [InlineData("", false)]
-    [InlineData("Скорее всего не стоит", false)]
-    public void ParseGateYes_распознаёт_первую_строку(string answer, bool expected) =>
-        Assert.Equal(expected, PersonaAutomationService.ParseGateYes(answer));
-
-    [Fact]
-    public void ExtractGateMessage_убирает_строку_YES()
-    {
-        Assert.Equal("Привет", PersonaAutomationService.ExtractGateMessage("YES\nПривет"));
-        Assert.Equal("две\nстроки", PersonaAutomationService.ExtractGateMessage("YES\n\nдве\nстроки"));
-        Assert.Equal("", PersonaAutomationService.ExtractGateMessage("YES"));
-    }
-
-    [Fact]
-    public void BuildGatePrompt_содержит_событие_и_инструкцию()
-    {
-        var rule = new PersonaAutomationRule
-        {
-            Name = "Релизы",
-            Action = new AutomationAction { Instruction = "Сделай выжимку" },
-        };
-        var ev = new TriggerEvent("r1", AutomationTriggerType.GitCommit, "Новый коммит");
-        var prompt = PersonaAutomationService.BuildGatePrompt(rule, ev);
-        Assert.Contains("Релизы", prompt);
-        Assert.Contains("Новый коммит", prompt);
-        Assert.Contains("Сделай выжимку", prompt);
-        Assert.Contains("YES", prompt);
     }
 }

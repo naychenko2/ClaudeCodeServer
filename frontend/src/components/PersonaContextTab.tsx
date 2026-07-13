@@ -1,16 +1,18 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { api } from '../lib/api';
 import { usePersonas, personaLabel } from '../lib/personas';
+import { useRecallManifest } from '../lib/recallManifest';
 import type { PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Task } from '../types';
 import { C, FONT, R } from '../lib/design';
 import { agentDotColor } from './AgentSelector';
 
-// Вкладка «Контекст персоны» в ArtifactsPanel (①-L2a): показывает рядом с чатом то, что
-// делает персону «не stateless» — её долгую память, привязанные знания и активные задачи.
-// Стоячий контекст (без «использовано сейчас» — то ①-L2b после F3). Все данные — из готовых API.
-export function PersonaContextTab({ personaId }: { personaId: string }) {
+// Вкладка «Контекст персоны» в ArtifactsPanel (①-L2a + ①-L2b): показывает рядом с чатом то,
+// что делает персону «не stateless» — долгую память, привязанные знания и активные задачи,
+// а также «использовано сейчас» — что персона подтянула в последний ход (манифест recall, F3).
+export function PersonaContextTab({ personaId, sessionId }: { personaId: string; sessionId?: string | null }) {
   const personas = usePersonas();
   const persona = personas.find(p => p.id === personaId);
+  const usedNow = useRecallManifest(sessionId ?? null);
   const [mem, setMem] = useState<PersonaMemoryEntry[] | null>(null);
   const [tasks, setTasks] = useState<Task[] | null>(null);
 
@@ -44,6 +46,17 @@ export function PersonaContextTab({ personaId }: { personaId: string }) {
           ) : null}
         </div>
       </div>
+
+      {usedNow.length > 0 && (
+        <Section title="Использовано сейчас">
+          {usedNow.map((it, i) => (
+            <div key={it.ref ?? i} style={rowStyle}>
+              <span style={typeBadgeStyle}>{it.kind === 'memory' ? '🧠' : it.kind === 'note' ? '📚' : '📖'}</span>
+              <span style={rowTextStyle}>{it.title}</span>
+            </div>
+          ))}
+        </Section>
+      )}
 
       <Section title={`Память${mem && mem.length ? ` · ${mem.length}` : ''}`}>
         {memory.length === 0 ? (

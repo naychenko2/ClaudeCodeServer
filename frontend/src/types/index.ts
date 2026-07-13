@@ -289,6 +289,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'pipeline_progress'; pipelineId: string; phase: string; status?: string; error?: string }
   | { type: 'pipeline_phase'; pipelineId: string; phase: PipelinePhaseKey; task: string; personaId: string; text: string; round?: number }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' }
+  | { type: 'recall_manifest'; items: RecallItem[] }
 );
 
 export interface UsageInfo {
@@ -898,4 +899,12 @@ export interface TeamMemoryEntry {
   projectId: string;
   text: string;
   createdAt: string;
+}
+
+// Элемент манифеста recall (F3): что персона подтянула в ход. Kind ∈ memory|note|knowledge.
+export interface RecallItem {
+  kind: string;
+  ref?: string | null;
+  title: string;
+  snippet?: string | null;
 }

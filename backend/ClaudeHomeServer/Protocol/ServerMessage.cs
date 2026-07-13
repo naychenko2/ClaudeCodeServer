@@ -169,6 +169,12 @@ public record PipelinePhaseMessage(string PipelineId, string Phase, string Task,
 public record NotificationMessage(string Title, string Body, string? Url = null, string Kind = "info")
     : ServerMessage("notification");
 
+// Манифест recall (F3): что персона подтянула в ход из памяти/заметок/базы — для атрибуции
+// «опирается на…» / «использовано сейчас». Kind ∈ memory|note|knowledge.
+public record RecallItemDto(string Kind, string? Ref, string Title, string? Snippet);
+public record RecallManifestMessage(IReadOnlyList<RecallItemDto> Items)
+    : ServerMessage("recall_manifest");
+
 // Сообщения от клиента к серверу
 public record ClientMessage([property: JsonPropertyName("type")] string Type);
 

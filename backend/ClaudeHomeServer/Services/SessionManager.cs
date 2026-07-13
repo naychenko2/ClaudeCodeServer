@@ -169,9 +169,10 @@ public class SessionManager
     }
 
     // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок релевантных
-    // записей (взвешенная сумма PersonaMemoryScorer) + рабочий фокус первым блоком.
+    // записей (взвешенная сумма PersonaMemoryScorer) + рабочий фокус первым блоком, а вдобавок —
+    // айтемы манифеста (что реально подтянулось) для «использовано сейчас» (F3).
     // Failsafe-таймаут; ошибки → null (ход без recall).
-    private Func<string, Task<string?>> BuildPersonaRecallProvider(string ownerId, string personaId)
+    private Func<string, Task<RecallBlock?>> BuildPersonaRecallProvider(string ownerId, string personaId)
     {
         var topK = int.TryParse(_config["Persona:RecallTopK"], out var k) ? k : 5;
         // Шкала скоринга — взвешенная сумма (PersonaMemoryScorer), порог ~0.30;
@@ -190,7 +191,11 @@ public class SessionManager
                 var recallTask = _personaMemory.BuildRecallAsync(ownerId, personaId, query, topK, minScore);
                 var completed = await Task.WhenAny(recallTask, Task.Delay(timeoutMs));
                 if (completed != recallTask) return null;   // таймаут — ход без recall
-                return await recallTask;
+                var recall = await recallTask;
+                if (recall?.Text is null) return null;
+                // Манифест: hits памяти → айтемы (F3)
+                var items = recall.Hits.Select(h => new RecallItem("memory", h.Id, h.Text, null)).ToList();
+                return new RecallBlock(recall.Text, items);
             }
             catch (Exception ex)
             {
@@ -542,7 +547,7 @@ public class SessionManager
     // для гейтов возможностей). Строится одинаково при первом старте и при восстановлении процесса.
     // Промпт — замыкание: адаптер зовёт его на каждый ход, поэтому правки персоны
     // (контракт/характер), смена модели сессии и флаг PersonaSwitched применяются сразу.
-    private (Func<string?>? Prompt, MemoryMcpContext? Memory, Func<string, Task<string?>>? Recall, Persona? Persona)
+    private (Func<string?>? Prompt, MemoryMcpContext? Memory, Func<string, Task<RecallBlock?>>? Recall, Persona? Persona)
         BuildPersonaLayer(Session session, string? ownerId)
     {
         if (session.PersonaId is null || ownerId is null) return (null, null, null, null);

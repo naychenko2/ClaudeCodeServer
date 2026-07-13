@@ -37,6 +37,13 @@ public record WorkspaceMcpContext(string ApiUrl, string Token, string? ProjectId
 public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId,
     string? SelfPersonaId = null, string? MentionsHint = null, bool BindingsEnabled = false);
 
+// Элемент манифеста recall — что персона подтянула в ход (память/заметка/база) для атрибуции
+// «опирается на…» / «использовано сейчас» (F3). Kind ∈ memory|note|knowledge; Ref — id/ссылка.
+public sealed record RecallItem(string Kind, string? Ref, string Title, string? Snippet);
+
+// Результат recall-провайдера: текст для системного промпта + айтемы манифеста (F3).
+public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items);
+
 // Per-session контекст, общий для всех адаптеров — то, что SessionManager передаёт
 // при создании сессии независимо от провайдера. Claude-специфичные зависимости
 // (MCP-конфиг, скиллы, disallowed tools) живут в фабрике адаптеров.
@@ -57,9 +64,9 @@ public sealed record LlmSessionContext(
     Func<string?>? PersonaPromptProvider = null,
     // MCP-сервер долгой памяти персоны (null — сессия без памяти персоны).
     MemoryMcpContext? MemoryMcp = null,
-    // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок
-    // релевантных записей памяти. Подмешивается независимо от заметок. Ошибки → null.
-    Func<string, Task<string?>>? PersonaRecallProvider = null,
+    // Auto-recall долгой памяти персоны: по тексту хода возвращает блок релевантных записей
+    // памяти (текст для промпта + айтемы манифеста «использовано сейчас», F3). Ошибки → null.
+    Func<string, Task<RecallBlock?>>? PersonaRecallProvider = null,
     // Дополнительные запрещённые инструменты сессии (поверх конфига Claude:DisallowedTools) —
     // например, WebSearch/WebFetch у персоны с выключенной возможностью «web».
     IReadOnlyList<string>? ExtraDisallowedTools = null,

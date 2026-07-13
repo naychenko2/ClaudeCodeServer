@@ -790,7 +790,7 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
 
             {activeKey === 'context' && personaId && (
               <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
-                <PersonaContextTab personaId={personaId} />
+                <PersonaContextTab personaId={personaId} sessionId={sessionId} />
               </div>
             )}
           </div>

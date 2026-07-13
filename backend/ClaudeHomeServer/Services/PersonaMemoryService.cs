@@ -283,10 +283,14 @@ public sealed class PersonaMemoryService
         return hits;
     }
 
+    // Результат recall памяти: markdown-блок для промпта + hits, реально попавшие в блок
+    // (для манифеста атрибуции F3 — «персона опирается на…»). Text=null — нечего подмешивать.
+    public sealed record PersonaRecallResult(string? Text, IReadOnlyList<PersonaMemoryHit> Hits);
+
     // Markdown-блок памяти для системного промпта хода (auto-recall персоны).
     // Рабочий фокус (если есть) — всегда первым блоком, без скоринга; при фокусе
-    // результат не-null даже без хитов. null — нечего подмешивать / память выключена.
-    public async Task<string?> BuildRecallAsync(string ownerId, string personaId, string query,
+    // результат не-null даже без хитов. Text=null — нечего подмешивать / память выключена.
+    public async Task<PersonaRecallResult> BuildRecallAsync(string ownerId, string personaId, string query,
         int topK, double minScore)
     {
         var persona = _personas.Get(personaId, ownerId);
@@ -313,7 +317,8 @@ public sealed class PersonaMemoryService
             catch (Exception ex) { _logger.LogDebug(ex, "team-memory recall {Project}", persona.ProjectId); }
         }
 
-        if (top.Count == 0 && focus is null && teamBlock is null) return null;
+        if (top.Count == 0 && focus is null && teamBlock is null)
+            return new PersonaRecallResult(null, []);
 
         var sb = new StringBuilder();
         if (focus is not null)
@@ -339,7 +344,7 @@ public sealed class PersonaMemoryService
             if (sb.Length > 0) sb.AppendLine();
             sb.Append(teamBlock);
         }
-        return sb.ToString();
+        return new PersonaRecallResult(sb.Length > 0 ? sb.ToString() : null, top);
     }
 
     // Reinforcement: отметить обращение к записям (LastAccessedAt = now). Dify не трогаем —

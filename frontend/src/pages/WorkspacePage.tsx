@@ -147,6 +147,7 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const handlePersonaSelect = (id: string) => {
     setSelectedPersonaId(id);
     setPersonaCreating(false);
+    navPush({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, persona: id });
     if (isMobile) setMobileView('chat');
   };
   const handlePersonaNew = () => {
@@ -163,6 +164,7 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const handleShowTeam = () => {
     setSelectedPersonaId(null);
     setPersonaCreating(false);
+    navPush({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, persona: null });
     if (isMobile) setMobileView('chat');
   };
   // После создания новой персоны переключаемся с «создания» на её редактирование
@@ -554,6 +556,12 @@ const windowWidth = useWindowWidth();
       if (f === null) setFileFullscreen(false);
       setSelectedTaskId(s.task ?? null);
       setProjectBoard(!!s.board);   // режим доски проекта из снимка истории
+      // Персона / командный центр (вкладка «Команда») — восстанавливаем, если снимок несёт
+      if (s.persona !== undefined) {
+        setLeftTab('personas');
+        setSelectedPersonaId(s.persona ?? null);
+        setPersonaCreating(false);
+      }
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);

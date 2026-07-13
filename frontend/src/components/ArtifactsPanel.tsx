@@ -106,8 +106,10 @@ function FileRow({ file, onOpen }: { file: ArtifactFile; onOpen: () => void }) {
       title={file.external ? `${file.path} — скопировать путь` : file.path}
       style={{
         width: '100%', display: 'flex', alignItems: 'center', gap: 9,
-        padding: '7px 14px', border: 'none', cursor: 'pointer', textAlign: 'left',
-        background: hover ? C.bgSelected : 'transparent',
+        padding: '9px 12px', border: `1px solid ${hover ? C.accent : C.borderLight}`,
+        borderRadius: R.lg, boxShadow: hover ? `0 0 0 1px ${C.accent}` : SHADOW.card,
+        cursor: 'pointer', textAlign: 'left', background: C.bgWhite,
+        transition: 'border-color .12s, box-shadow .12s',
       }}
     >
       {file.external ? (
@@ -146,7 +148,7 @@ function TodoRow({ todo }: { todo: TodoItem }) {
   const isActive = todo.status === 'in_progress';
   const label = isActive && todo.activeForm ? todo.activeForm : todo.content;
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '5px 14px' }}>
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '9px 12px', border: `1px solid ${C.borderLight}`, borderRadius: R.lg, boxShadow: SHADOW.card, background: C.bgWhite }}>
       <span style={{ flexShrink: 0, marginTop: 2, display: 'flex' }}>
         {isDone ? (
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
@@ -499,9 +501,11 @@ function LinkRow({ link }: { link: ArtifactLink }) {
       onMouseLeave={() => setHover(false)}
       title={link.url}
       style={{
-        display: 'flex', flexDirection: 'column', gap: 1,
-        padding: '7px 14px', textDecoration: 'none',
-        background: hover ? C.bgSelected : 'transparent',
+        display: 'flex', flexDirection: 'column', gap: 2,
+        padding: '9px 12px', textDecoration: 'none',
+        border: `1px solid ${hover ? C.accent : C.borderLight}`, borderRadius: R.lg,
+        boxShadow: hover ? `0 0 0 1px ${C.accent}` : SHADOW.card, background: C.bgWhite,
+        transition: 'border-color .12s, box-shadow .12s',
       }}
     >
       <span style={{ fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, color: C.accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -617,17 +621,20 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
       </div>
 
       {isEmpty ? (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24, textAlign: 'center' }}>
-          <FileText size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ opacity: 0.6 }} />
-          <span style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textMuted, lineHeight: 1.5 }}>
-            Пока ничего не менялось.<br />Здесь появятся план, задачи, агенты, файлы и ссылки.
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 32, textAlign: 'center' }}>
+          <div style={{ width: 56, height: 56, borderRadius: R.xxl, background: C.bgPanel, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <FileText size={24} strokeWidth={ICON_STROKE} color={C.accent} />
+          </div>
+          <div style={{ fontFamily: FONT.serif, fontSize: 16, color: C.textHeading }}>Пока ничего не менялось</div>
+          <span style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textMuted, lineHeight: 1.5, maxWidth: 260 }}>
+            Здесь появятся план, задачи, агенты, файлы и ссылки по ходу разговора.
           </span>
         </div>
       ) : (
         <>
           {/* Переключатель вкладок (только непустые) */}
-          <div style={{ flexShrink: 0, padding: '10px 12px', borderBottom: `1px solid ${C.border}` }}>
-            <PillSwitch<TabKey> value={activeKey!} options={tabs} onChange={setActive} fill />
+          <div style={{ flexShrink: 0, padding: '8px 16px', borderBottom: `1px solid ${C.border}` }}>
+            <PillSwitch<TabKey> value={activeKey!} options={tabs} onChange={setActive} fill isMobile={isMobile} />
           </div>
 
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -718,7 +725,7 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
             )}
 
             {activeKey === 'todos' && (
-              <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 5 }}>
                 {todos.map((t, i) => <TodoRow key={i} todo={t} />)}
               </div>
             )}
@@ -755,19 +762,19 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
             })()}
 
             {activeKey === 'files' && (
-              <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 5 }}>
                 {files.map(f => <FileRow key={f.path} file={f} onOpen={() => onOpenFile?.(f.path)} />)}
               </div>
             )}
 
             {activeKey === 'links' && (
-              <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 5 }}>
                 {links.map(l => <LinkRow key={l.url} link={l} />)}
               </div>
             )}
 
             {activeKey === 'context' && personaId && (
-              <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px' }}>
                 <PersonaContextTab personaId={personaId} sessionId={sessionId} />
               </div>
             )}

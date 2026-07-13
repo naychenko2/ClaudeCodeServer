@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { Project, Session, AgentInfo, SkillsData, AuthState, Task } from '../types';
+import type { Project, Session, SkillsData, AuthState, Task } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
@@ -182,18 +182,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const handleAttachToChat = useCallback((path: string) => {
     setAttachedFiles(prev => prev.includes(path) ? prev : [...prev, path]);
   }, []);
-  const [selectedAgent, setSelectedAgent] = useState<AgentInfo | null>(() => {
-    try {
-      const raw = localStorage.getItem(`cc_agent_${project.id}`);
-      return raw ? JSON.parse(raw) : null;
-    } catch { return null; }
-  });
-
-  const handleAgentChange = (agent: AgentInfo | null) => {
-    setSelectedAgent(agent);
-    if (agent) localStorage.setItem(`cc_agent_${project.id}`, JSON.stringify(agent));
-    else localStorage.removeItem(`cc_agent_${project.id}`);
-  };
 
   useEffect(() => {
     api.knowledge.getStatus(project.id).then(s => {
@@ -730,7 +718,7 @@ const windowWidth = useWindowWidth();
       )}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {leftTab === 'sessions' ? (
-          <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
+          <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
         ) : leftTab === 'tasks' ? (
           <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
         ) : leftTab === 'personas' ? (
@@ -779,7 +767,7 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
-              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
+              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
               : leftTab === 'personas'

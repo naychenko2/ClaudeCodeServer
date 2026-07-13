@@ -17,6 +17,7 @@ public class TaskExecutionService
     private readonly PersonaManager _personas;
     private readonly IHubContext<SessionHub> _hub;
     private readonly PushService _push;
+    private readonly NotificationService _notif;
     private readonly NotesKnowledgeService _kb;
     private readonly ILogger<TaskExecutionService> _log;
     // Модель сессии-исполнителя (Tasks:ExecutorModel): null → дефолт Claude;
@@ -27,6 +28,7 @@ public class TaskExecutionService
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
         IHubContext<SessionHub> hub, PushService push,
         NotesKnowledgeService kb,
+        NotificationService notif,
         ILogger<TaskExecutionService> log, IConfiguration config)
     {
         _tasks = tasks;
@@ -36,6 +38,7 @@ public class TaskExecutionService
         _push = push;
         _kb = kb;
         _log = log;
+        _notif = notif;
         _executorModel = config["Tasks:ExecutorModel"];
         _sessions.OnSessionMessage += OnSessionMessageAsync;
     }
@@ -315,7 +318,6 @@ public class TaskExecutionService
 
     private async Task NotifyAsync(TaskItem task, NotificationMessage message)
     {
-        await _hub.Clients.Group("user_" + task.OwnerId).SendAsync("message", message);
-        await _push.SendToUserAsync(task.OwnerId!, message);
+        await _notif.SendNotificationMessageAsync(task.OwnerId!, message, sendPush: true);
     }
 }

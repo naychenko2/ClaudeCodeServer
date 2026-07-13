@@ -24,6 +24,7 @@ public sealed class DailyBriefingService
     private readonly Llm.OneShotClaudeRunner _runner;
     private readonly PushService _push;
     private readonly IHubContext<SessionHub> _hub;
+    private readonly NotificationService _notif;
     private readonly IConfiguration _config;
     private readonly ILogger<DailyBriefingService> _log;
 
@@ -36,7 +37,8 @@ public sealed class DailyBriefingService
     public DailyBriefingService(
         TaskManager tasks, NotesService notes, ProjectManager projects, UserStore users,
         Llm.OneShotClaudeRunner runner, PushService push,
-        IHubContext<SessionHub> hub, IConfiguration config, ILogger<DailyBriefingService> log)
+        IHubContext<SessionHub> hub, NotificationService notif,
+        IConfiguration config, ILogger<DailyBriefingService> log)
     {
         _tasks = tasks;
         _notes = notes;
@@ -45,6 +47,7 @@ public sealed class DailyBriefingService
         _runner = runner;
         _push = push;
         _hub = hub;
+        _notif = notif;
         _config = config;
         _log = log;
 
@@ -232,9 +235,9 @@ public sealed class DailyBriefingService
             Title: "Утренний бриф готов",
             Body: "План на день собран в дневнике",
             Url: $"/#/notes/{dailyNoteId}",
-            Kind: "info");
-        await _hub.Clients.Group("user_" + userId).SendAsync("message", msg);
-        await _push.SendToUserAsync(userId, msg);
+            Kind: "info",
+            Tag: "Дайджест");
+        await _notif.SendNotificationMessageAsync(userId, msg);
     }
 
     // Вставка/замена секции по заголовку без затирания остального содержимого дневника

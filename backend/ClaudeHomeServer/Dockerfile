@@ -61,6 +61,7 @@ COPY mcp/notes-server ./mcp/notes-server
 COPY mcp/memory-server ./mcp/memory-server
 COPY mcp/personas-server ./mcp/personas-server
 COPY mcp/workspace-server ./mcp/workspace-server
+COPY mcp/notifications-server ./mcp/notifications-server
 
 # Каталоги под volume (проекты, данные, креды claude)
 RUN mkdir -p /projects /data /home/app/.claude \

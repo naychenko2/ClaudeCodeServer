@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { History } from 'lucide-react';
+import { Bell, History } from 'lucide-react';
 import type { AuthState } from '../types';
 import { C, FONT, TB, SHADOW } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
@@ -9,6 +9,7 @@ import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { api } from '../lib/api';
+import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed } from '../lib/notifications';
 
 interface Props {
   value: HubTab;
@@ -44,6 +45,14 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
   const [historyBadge, setHistoryBadge] = useState(0);
   const [neverSeen, setNeverSeen] = useState(false);
   const [showHistoryTip, setShowHistoryTip] = useState(false);   // кастомный tooltip кнопки «Что нового»
+  const [notifBadge, setNotifBadge] = useState(0);
+
+  // Подписка на счётчик уведомлений
+  useEffect(() => {
+    ensureNotificationsSubscribed();
+    setNotifBadge(getUnreadCount());
+    return subscribeToNotifications(() => setNotifBadge(getUnreadCount()));
+  }, []);
   const historyTip = (historyBadge ?? 0) > 0
     ? `Что нового (${historyBadge! > 99 ? '99+' : historyBadge})`
     : neverSeen ? 'Что нового — есть свежее' : 'Что нового';
@@ -104,6 +113,32 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
 
       {/* Правая секция — меню аватара (управление пользователями — внутри меню, admin) */}
       <div style={{ flex: isMobile ? 'none' : 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+        {/* Колокольчик уведомлений — бейдж с числом непрочитанных */}
+        <button
+          onClick={() => onTab('notifications')}
+          aria-label={`Уведомления${notifBadge > 0 ? ` (${notifBadge})` : ''}`}
+          style={{
+            position: 'relative', width: 32, height: 32, borderRadius: 8, border: 'none',
+            background: 'none', color: value === 'notifications' ? C.accent : C.textSecondary,
+            cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+        >
+          <Bell size={17} strokeWidth={2} />
+          {notifBadge > 0 && (
+            <span style={{
+              position: 'absolute', top: -3, right: -5, minWidth: 15, height: 15,
+              padding: '0 4px', borderRadius: 8, background: C.accent, color: C.onAccent,
+              fontSize: 9.5, fontWeight: 700, lineHeight: '15px', textAlign: 'center',
+              boxSizing: 'border-box', pointerEvents: 'none',
+            }}>
+              {notifBadge > 99 ? '99+' : notifBadge}
+            </span>
+          )}
+        </button>
+
         {/* «Единый поиск» и «Утренний бриф» убраны из шапки — теперь только через AI-палитру (⌘/Ctrl+K). */}
         {/* «Что нового» — продуктовая история по всем проектам (во всех разделах).
             На мобилке кнопка наезжала бы на контент — там она уезжает в меню аватара. */}

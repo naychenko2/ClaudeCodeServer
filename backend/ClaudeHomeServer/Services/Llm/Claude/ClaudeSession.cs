@@ -91,6 +91,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly PersonasMcpContext? _personasMcp;
     // MCP-сервер рабочего пространства: проекты/файлы/знания/поиск владельца
     private readonly WorkspaceMcpContext? _workspaceMcp;
+    // MCP-сервер уведомлений: создание уведомлений из Claude/агентов
+    private readonly NotificationsMcpContext? _notificationsMcp;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -118,6 +120,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _bindingsProvider = context.BindingsProvider;
         _personasMcp = context.PersonasMcp;
         _workspaceMcp = context.WorkspaceMcp;
+        _notificationsMcp = context.NotificationsMcp;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
             ? [.. (disallowedTools ?? []), .. extra]
@@ -147,9 +150,11 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasPersonas = personasServerPath is not null;
         var workspaceServerPath = _workspaceMcp is not null ? WorkspaceServerLocator.FindWorkspaceServerPath() : null;
         var hasWorkspace = workspaceServerPath is not null;
+        var notificationsServerPath = _notificationsMcp is not null ? NotificationsServerLocator.FindNotificationsServerPath() : null;
+        var hasNotifications = notificationsServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var userServers = LoadUserScopeMcpServers();
-        if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasDataset && userServers is null) return null;
+        if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications && !hasDataset && userServers is null) return null;
 
         try
         {
@@ -288,6 +293,20 @@ public class ClaudeSession : ILlmSessionAdapter
                     // CLI в режим deferred-tools, где ленивые серверы прячут инструменты от модели.
                     // Персона-секретарь опирается на workspace-инструменты — держим их всегда видимыми.
                     ["alwaysLoad"] = true,
+                };
+            }
+
+            if (hasNotifications)
+            {
+                servers["notifications"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["command"] = "node",
+                    ["args"] = new System.Text.Json.Nodes.JsonArray { notificationsServerPath! },
+                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["NOTIFICATIONS_API_URL"] = _notificationsMcp!.ApiUrl,
+                        ["NOTIFICATIONS_API_TOKEN"] = _notificationsMcp.Token,
+                    },
                 };
             }
 

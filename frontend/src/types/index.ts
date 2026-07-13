@@ -299,7 +299,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'meeting_phase'; meetingId: string; phase: MeetingPhaseKey; question: string; entries: MeetingEntryItem[] }
   | { type: 'pipeline_progress'; pipelineId: string; phase: string; status?: string; error?: string }
   | { type: 'pipeline_phase'; pipelineId: string; phase: PipelinePhaseKey; task: string; personaId: string; text: string; round?: number }
-  | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' }
+  | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string }
 );
 
 export interface UsageInfo {
@@ -940,4 +940,44 @@ export interface PersonaMemoryHit {
   tags: string[];
   score: number;
   createdAt: string;
+}
+
+// ===== Уведомления (центр уведомлений) =====
+
+export type NotificationKind = 'reminder' | 'claude' | 'info' | 'success' | 'meeting';
+
+export interface NotificationItem {
+  id: string;
+  kind: NotificationKind;
+  type: string;
+  title: string;
+  body: string;
+  url?: string;
+  projectId?: string;
+  sessionId?: string;
+  taskId?: string;
+  source?: string;
+  tag?: string;
+  isRead: boolean;
+  createdAt: string;
+  readAt?: string;
+}
+
+export interface NotificationListResponse {
+  items: NotificationItem[];
+  totalCount: number;
+  unreadCount: number;
+}
+
+export interface CreateNotificationRequest {
+  kind: NotificationKind;
+  type: string;
+  title: string;
+  body: string;
+  url?: string;
+  projectId?: string;
+  sessionId?: string;
+  taskId?: string;
+  source?: string;
+  tag?: string;
 }

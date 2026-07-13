@@ -419,14 +419,14 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     </div>
   );
 
-  // === Активность (правила автоматизации): сводка триггеров проактивности ===
+  // === Проактивность (правила автоматизации): сводка триггеров ===
   const automationRules = persona.automationRules ?? [];
   const enabledRulesCount = automationRules.filter(r => r.enabled).length;
   const triggerTypes = Array.from(new Set(automationRules.map(r => r.trigger.type)));
   const automationSection = (
     <div style={section}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
-        <SectionLabel>Активность</SectionLabel>
+        <SectionLabel>Проактивность</SectionLabel>
         {automationRules.length > 0 && (
           <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>
             {enabledRulesCount === automationRules.length
@@ -728,8 +728,8 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
         {rulesSection}
         {knowledgeSection}
         {automationSection}
-        {tasksSection}
         {memorySection}
+        {tasksSection}
         {chatsSection}
       </div>
     </div>

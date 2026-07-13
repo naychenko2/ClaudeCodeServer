@@ -25,12 +25,12 @@ const VIEW_OPTIONS: { value: PersonaView; label: string; icon: React.ReactNode }
   { value: 'preview', label: 'Профиль', icon: <User size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
   // Умения — книга (фича persona-bindings): источники знаний, инструменты и правила
   { value: 'knowledge', label: 'Умения', icon: <Book size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
+  // Проактивность — молния (правила «событие → действие»)
+  { value: 'automation', label: 'Проактивность', icon: <Zap size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
   // Память — слои
   { value: 'memory', label: 'Память', icon: <Layers size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
   // Задачи — чек-лист (поручения персоне-исполнителю)
   { value: 'tasks', label: 'Задачи', icon: <CheckSquare size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
-  // Проактивность — молния (правила «событие → действие»)
-  { value: 'automation', label: 'Проактивность', icon: <Zap size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
 ];
 
 interface CommonProps {

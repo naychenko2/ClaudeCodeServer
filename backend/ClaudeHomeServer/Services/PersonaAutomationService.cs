@@ -252,10 +252,10 @@ public sealed class PersonaAutomationService : IDisposable
     private async Task OnSessionMessageAsync(Session session, ServerMessage msg)
     {
         if (msg is not (ResultMessage or AskQuestionMessage or PermissionRequestMessage or PlanReviewMessage)) return;
-        if (!_inflight.TryGetValue(session.Id, out var ruleId)) return;
+        if (string.IsNullOrEmpty(session.AutomationRuleId)) return;
         var ownerId = ResolveOwner(session);
         if (ownerId is null) return;
-        var (persona, _) = FindRule(ownerId, ruleId);
+        var (persona, _) = FindRule(ownerId, session.AutomationRuleId);
         var label = persona is null
             ? "Персона"
             : (string.IsNullOrWhiteSpace(persona.Role) ? persona.Name : $"{persona.Role} ({persona.Name})");

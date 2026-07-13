@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { Plus, SquarePen, Trash2 } from 'lucide-react';
-import type { Project, Session } from '../types';
+import type { Project, Session, AgentInfo, Persona } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
@@ -11,6 +11,7 @@ import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
 import { getPersonaById, usePersonas, usePersonasVersion, personaLabel } from '../lib/personas';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
+import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
 import { agentDotColor } from './AgentSelector';
 import { ExpiryBadge } from './ExpiryBadge';
 import { FilterBar } from './FilterBar';
@@ -32,13 +33,31 @@ interface Props {
   onSessionsChanged?: (count: number) => void;
   isMobile?: boolean;
   workflowRunningFor?: string;
+  // .md-агенты проекта — для единого селектора собеседника
+  agents?: AgentInfo[];
+  // Запомненный .md-агент проекта (localStorage в WorkspacePage) — начальный выбор
+  selectedAgent?: AgentInfo | null;
+  // Персист выбора .md-агента (WorkspacePage кладёт в localStorage)
+  onAgentChange?: (agent: AgentInfo | null) => void;
 }
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor }: Props) {
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor, agents = [], selectedAgent, onAgentChange }: Props) {
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий персон)
   usePersonasVersion();
   const personas = usePersonas();
+  // Доступные в контексте проекта персоны: проектные (этого проекта) + глобальные
+  const ctxPersonas = personas.filter(p => p.scope === 'global' || (p.scope === 'project' && p.projectId === project.id));
+  // Выбранный собеседник нового чата (локально): персона ИЛИ .md-агент.
+  // Агент инициализируется из запомненного выбора проекта (localStorage в WorkspacePage).
+  const [companion, setCompanion] = useState<{ persona: Persona | null; agent: AgentInfo | null }>(
+    () => ({ persona: null, agent: selectedAgent ?? null })
+  );
+  const handleCompanionSelect = (sel: CompanionSelection) => {
+    const next = { persona: sel.persona ?? null, agent: sel.agent ?? null };
+    setCompanion(next);
+    onAgentChange?.(next.agent); // персист .md-агента (персона в localStorage не запоминается)
+  };
   const [sessions, setSessions] = useState<Session[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [editTarget, setEditTarget] = useState<Session | null>(null);
@@ -52,7 +71,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { onSessionsChanged?.(sessions.length); }, [sessions.length, onSessionsChanged]);
 
   const createNew = async (): Promise<Session> => {
-    const s = await api.sessions.create(project.id, 'auto');
+    // Выбрана персона → чат от её лица в этом проекте (projectId кладёт сюда
+    // и чат глобальной персоны); выбран .md-агент → обычная сессия с агентом;
+    // никто → обычная сессия
+    const s = companion.persona
+      ? await api.personas.createChat(companion.persona.id, { mode: 'auto', projectId: project.id })
+      : await api.sessions.create(project.id, 'auto', undefined, undefined, undefined, companion.agent?.fileName);
+    // Чужую (глобальную) сессию в список этого проекта не добавляем — поллинг сам синхронит
     if (s.projectId === project.id) setSessions(prev => [s, ...prev]);
     onSelect(s);
     return s;
@@ -194,19 +219,35 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {online && (
-        <div style={{ padding: '10px 12px', borderBottom: `1px solid ${C.divider}` }}>
-          <Button variant="dashed" size="md" fullWidth onClick={createNew}
-            leftIcon={
-              <Plus size={15} strokeWidth={2.2} />
-            }
-          >
-            Новый чат
-          </Button>
+        <div style={{ padding: '10px 12px', borderBottom: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <Button variant="dashed" size="md" fullWidth onClick={createNew}
+              leftIcon={
+                <Plus size={15} strokeWidth={2.2} />
+              }
+            >
+              {companion.persona
+                ? `Чат с «${personaLabel(companion.persona)}»`
+                : companion.agent
+                ? `Чат с «${companion.agent.name}»`
+                : 'Новый чат'}
+            </Button>
+          </div>
+          {/* Выбор собеседника нового чата: персоны (проектные + глобальные) и .md-агенты */}
+          <CompanionSelector
+            personas={ctxPersonas}
+            agents={agents}
+            selectedPersona={companion.persona}
+            selectedAgentName={companion.agent?.fileName ?? null}
+            onSelect={handleCompanionSelect}
+            isMobile={isMobile}
+            dropUp={false}
+          />
         </div>
       )}
 
-      <div style={{ paddingLeft: 12, paddingRight: 12 }}>
-        <FilterBar
+      {/* Строка фильтров — всегда видна (для консистентности) */}
+      <FilterBar
         hideTaskChats={hideTaskChats}
         onChangeHideTaskChats={setHideTaskChats}
         activeOnly={activeOnly}
@@ -218,7 +259,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         hiddenCount={hiddenCount}
         isMobile={isMobile}
       />
-      </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
         {filteredSessions.length === 0 && sessions.length > 0 && (

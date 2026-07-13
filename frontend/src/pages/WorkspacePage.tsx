@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { Project, Session, SkillsData, AuthState, Task } from '../types';
+import type { Project, Session, AgentInfo, SkillsData, AuthState, Task } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
@@ -182,6 +182,19 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const handleAttachToChat = useCallback((path: string) => {
     setAttachedFiles(prev => prev.includes(path) ? prev : [...prev, path]);
   }, []);
+  const [selectedAgent, setSelectedAgent] = useState<AgentInfo | null>(() => {
+    try {
+      const raw = localStorage.getItem(`cc_agent_${project.id}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
+
+  const handleAgentChange = (agent: AgentInfo | null) => {
+    setSelectedAgent(agent);
+    if (agent) localStorage.setItem(`cc_agent_${project.id}`, JSON.stringify(agent));
+    else localStorage.removeItem(`cc_agent_${project.id}`);
+  };
+
   useEffect(() => {
     api.knowledge.getStatus(project.id).then(s => {
       const names = new Set<string>();
@@ -218,11 +231,6 @@ const windowWidth = useWindowWidth();
   const selectedTask = selectedTaskId
     ? allTasks.find(t => t.id === selectedTaskId && t.projectId === project.id) ?? null
     : null;
-  // Задача, для выполнения которой запущен текущий чат (LinkedSessionId → session)
-  const executingTask = useMemo(
-    () => activeSession ? allTasks.find(t => t.linkedSessionId === activeSession.id) ?? null : null,
-    [activeSession, allTasks],
-  );
 
   // Режим доски задач проекта: доска рендерится в основной области.
   const [projectBoard, setProjectBoard] = useState<boolean>(() => {
@@ -317,20 +325,11 @@ const windowWidth = useWindowWidth();
   // Переход из карточки задачи в связанный диалог
   const handleOpenTaskSession = async (sessionId: string) => {
     try {
-      if (project) {
-        const sessions = await api.sessions.list(project.id);
-        const s = sessions.find(x => x.id === sessionId);
-        if (s) {
-          setLeftTab('sessions');
-          handleSelectSession(s);
-          return;
-        }
-      }
-      // Для задач без проекта или глобальной сессии — чат вне проекта
-      const chat = await api.chats.get(sessionId);
-      if (chat) {
-        window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
-      }
+      const sessions = await api.sessions.list(project.id);
+      const s = sessions.find(x => x.id === sessionId);
+      if (!s) return;
+      setLeftTab('sessions');
+      handleSelectSession(s);
     } catch { /* офлайн — остаёмся на задаче */ }
   };
 
@@ -731,7 +730,7 @@ const windowWidth = useWindowWidth();
       )}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {leftTab === 'sessions' ? (
-          <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+          <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
         ) : leftTab === 'tasks' ? (
           <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
         ) : leftTab === 'personas' ? (
@@ -780,7 +779,7 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
-              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
               : leftTab === 'personas'
@@ -826,7 +825,7 @@ const windowWidth = useWindowWidth();
               style={{ position: 'absolute', inset: 0, zIndex: 900, background: C.overlay }} />
             <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 901, width: 'min(92vw, 380px)', boxShadow: '-4px 0 20px rgba(20,16,10,0.18)' }}>
               <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} isMobile
-                onOpenFile={(f) => { setArtifactsOpen(false); handleOpenFileFromChat(f); }} onClose={() => setArtifactsOpen(false)} executingTask={executingTask} />
+                onOpenFile={(f) => { setArtifactsOpen(false); handleOpenFileFromChat(f); }} onClose={() => setArtifactsOpen(false)} />
             </div>
           </>
         )}
@@ -991,7 +990,7 @@ const windowWidth = useWindowWidth();
             onMouseDown={e => { setDraggingSplitter('artifacts'); handleArtifactsSplitterMouseDown(e); }} />
           <div style={{ width: artifactsWidth, flexShrink: 0, height: '100%' }}>
             <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath}
-              onOpenFile={handleOpenFileFromChat} onClose={() => setArtifactsOpen(false)} executingTask={executingTask} />
+              onOpenFile={handleOpenFileFromChat} onClose={() => setArtifactsOpen(false)} />
           </div>
         </>
       )}
@@ -1003,7 +1002,7 @@ const windowWidth = useWindowWidth();
             style={{ position: 'absolute', inset: 0, zIndex: 19, background: C.overlay }} />
           <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 20, width: 'min(85vw, 360px)', boxShadow: '-4px 0 20px rgba(20,16,10,0.15)' }}>
             <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath}
-              onOpenFile={(f) => { handleOpenFileFromChat(f); setArtifactsOpen(false); }} onClose={() => setArtifactsOpen(false)} executingTask={executingTask} />
+              onOpenFile={(f) => { handleOpenFileFromChat(f); setArtifactsOpen(false); }} onClose={() => setArtifactsOpen(false)} />
           </div>
         </>
       )}

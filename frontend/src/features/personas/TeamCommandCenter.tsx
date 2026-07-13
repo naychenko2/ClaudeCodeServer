@@ -251,10 +251,11 @@ function OverviewPanel(props: {
           </div>
         </div>
 
-        {/* Последняя активность */}
-        <div style={cardStyle}>
+        {/* Последняя активность — без карточки, только линия + точки */}
+        <div>
           <SectionLabel>Последняя активность</SectionLabel>
           <div style={{ display: 'flex', flexDirection: 'column', marginTop: 8, paddingLeft: 26, position: 'relative' }}>
+            <div style={{ position: 'absolute', left: 4, top: 8, bottom: 8, width: 2, background: C.divider }} />
             {recent.length === 0 ? <Muted>Пока нет событий.</Muted> : recent.map(e => <EventCard key={e.id} e={e} personaById={personaById} onOpen={onOpenEvent} />)}
           </div>
           {events && events.length > 6 && <button onClick={() => onSwitchTab('activity')} style={{ ...linkBtn, marginTop: 8 }}>Вся активность →</button>}

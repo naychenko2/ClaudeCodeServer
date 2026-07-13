@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   Users, MessageSquare, Mic, Workflow, Plus, CheckCircle2, Repeat, Trash2,
-  Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight, MoreHorizontal, Settings, Wand2,
+  Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight, MoreHorizontal, Settings, Wand2, Search,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import type { Persona, Project, Session, Task, TeamMemoryEntry, TeamMemberDraft } from '../../types';
@@ -13,12 +13,18 @@ import { PersonaAvatar } from './PersonaAvatar';
 import { Modal, IconButton } from '../../components/ui';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
 
-// Командный центр проекта (①-L1, редизайн): приборная панель команды — hero со сводкой
-// live-статуса и командными действиями, сетка состава/памяти, кликабельная лента активности
-// по дням с фильтрами. Каждое событие с entityRef ведёт в свой раздел.
+// Командный центр проекта (①-L1, табовый): 3 вкладки — Обзор / Память команды / Активность-таймлайн.
+type Tab = 'overview' | 'memory' | 'activity';
+type FilterKey = 'all' | 'tasks' | 'memory' | 'chats' | 'content' | 'team';
+
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'overview', label: 'Обзор' },
+  { key: 'memory', label: 'Память' },
+  { key: 'activity', label: 'Активность' },
+];
+
 export function TeamCommandCenter({
-  project,
-  onOpenPersona, onNewPersona, onOpenSession, onOpenSessionById,
+  project, onOpenPersona, onNewPersona, onOpenSession, onOpenSessionById,
 }: {
   project: Project;
   onOpenPersona: (id: string) => void;
@@ -31,13 +37,18 @@ export function TeamCommandCenter({
   const [events, setEvents] = useState<EventRow[] | null>(null);
   const [mem, setMem] = useState<TeamMemoryEntry[] | null>(null);
   const [tasks, setTasks] = useState<Task[] | null>(null);
-  const [newMem, setNewMem] = useState('');
+  const [tab, setTab] = useState<Tab>(() => (sessionStorage.getItem('cc_team_tab') as Tab) || 'overview');
   const [filter, setFilter] = useState<FilterKey>('all');
+  const [actorFilter, setActorFilter] = useState<string | null>(null);
   const [limit, setLimit] = useState(40);
+  const [memSearch, setMemSearch] = useState('');
+  const [newMem, setNewMem] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [formTeamOpen, setFormTeamOpen] = useState(false);
+  const isMobile = useIsMobile();
+
+  useEffect(() => { sessionStorage.setItem('cc_team_tab', tab); }, [tab]);
 
   const refresh = async () => {
     try { setEvents((await api.projects.events(project.id, { limit })) as unknown as EventRow[] ?? []); }
@@ -47,209 +58,416 @@ export function TeamCommandCenter({
   };
   useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, [project.id, limit]);
 
-  // --- live-статус ---
   const inFlight = useMemo(() => {
     const m = new Map<string, string>();
     for (const t of tasks ?? []) if (t.personaId && t.claudeStartedAt && !t.claudeResult && t.status !== 'done') m.set(t.personaId, t.title);
     return m;
   }, [tasks]);
   const onlineSet = useMemo(() => {
-    const s = new Set<string>();
-    const now = Date.now();
-    for (const e of events ?? []) {
-      if (e.type !== 'chat_turn' || !e.actor || e.actor === 'user' || e.actor === 'system') continue;
-      if (now - new Date(e.ts).getTime() < 10 * 60_000) s.add(e.actor);
-    }
+    const s = new Set<string>(); const now = Date.now();
+    for (const e of events ?? []) if (e.type === 'chat_turn' && e.actor && e.actor !== 'user' && e.actor !== 'system' && now - new Date(e.ts).getTime() < 10 * 60_000) s.add(e.actor);
     return s;
   }, [events]);
   const live = useMemo(() => {
-    const now = Date.now();
-    let last: EventRow | null = null;
-    for (const e of events ?? []) {
-      if (e.type === 'meeting' || e.type === 'pipeline') {
-        if (now - new Date(e.ts).getTime() < 30 * 60_000 && (!last || e.ts > last.ts)) last = e;
-      }
-    }
-    return last; // MVP: последнее meeting/pipeline за 30 мин — считаем идущим
+    const now = Date.now(); let last: EventRow | null = null;
+    for (const e of events ?? []) if ((e.type === 'meeting' || e.type === 'pipeline') && now - new Date(e.ts).getTime() < 30 * 60_000 && (!last || e.ts > last.ts)) last = e;
+    return last;
   }, [events]);
   const tasksActive = (tasks ?? []).filter(t => t.status !== 'done').length;
   const chatsToday = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    const s = new Set<string>();
+    const today = new Date().toISOString().slice(0, 10); const s = new Set<string>();
     for (const e of events ?? []) if (e.type === 'chat_turn' && e.ts.slice(0, 10) === today && e.entityRef) s.add(e.entityRef);
     return s.size;
   }, [events]);
 
   const personaById = (id: string) => team.find(p => p.id === id);
-  const addMem = async () => {
-    const text = newMem.trim(); if (!text) return;
-    try { await api.projects.addTeamMemory(project.id, text); setNewMem(''); setMem(await api.projects.teamMemory(project.id)); } catch { /* тишина */ }
-  };
-  const removeMem = async (id: string) => {
-    try { await api.projects.removeTeamMemory(project.id, id); setMem(prev => (prev ?? []).filter(m => m.id !== id)); } catch { /* тишина */ }
-  };
+  const addMem = async () => { const t = newMem.trim(); if (!t) return; try { await api.projects.addTeamMemory(project.id, t); setNewMem(''); setMem(await api.projects.teamMemory(project.id)); } catch { /* тишина */ } };
+  const removeMem = async (id: string) => { try { await api.projects.removeTeamMemory(project.id, id); setMem(prev => (prev ?? []).filter(m => m.id !== id)); } catch { /* тишина */ } };
+  const openEvent = (e: EventRow) => onEventClick(e, project.id, onOpenSessionById, onOpenPersona);
+  const switchTab = (t: Tab) => setTab(t);
 
-  const filtered = useMemo(() => {
-    const list = events ?? [];
-    if (filter === 'all') return list;
-    return list.filter(e => CATEGORY[e.type] === filter);
-  }, [events, filter]);
-
-  const stripe = projectColor(project.id).main;
-  const isMobile = useIsMobile();
+  const counts = useMemo(() => {
+    const c: Record<FilterKey, number> = { all: 0, tasks: 0, memory: 0, chats: 0, content: 0, team: 0 };
+    for (const e of events ?? []) { c.all++; (c[CATEGORY[e.type] ?? 'all'])++; }
+    return c;
+  }, [events]);
 
   return (
-    <div style={{ height: '100%', overflowY: 'auto', background: C.bgMain, padding: isMobile ? '16px 14px 24px' : '20px 24px 32px' }}>
-      <div style={{ maxWidth: 920, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {/* HERO */}
-        <div style={{ ...cardStyle, borderTop: `3px solid ${stripe}` }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-            <div style={{ fontFamily: FONT.serif, fontSize: 18, color: C.textHeading }}>Команда · {project.name}</div>
-            <div style={{ marginLeft: 'auto', fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>{team.length} в команде</div>
+    <div style={{ height: '100%', overflowY: 'auto', background: C.bgMain, padding: isMobile ? '12px 14px 24px' : '16px 24px 32px' }}>
+      <div style={{ maxWidth: 920, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {/* TabBar (sticky) */}
+        <div style={tabBarStyle}>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {TABS.map(t => (
+              <button key={t.key} onClick={() => switchTab(t.key)} style={tab === t.key ? tabActive : tabIdle}>{t.label}</button>
+            ))}
           </div>
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 }}>
-            <StatusChip color={C.accent} dot>{inFlight.size} в работе</StatusChip>
-            <StatusChip color={C.success}>{onlineSet.size} на связи</StatusChip>
-            <StatusChip color={C.textSecondary}>{tasksActive} задач активно</StatusChip>
-            <StatusChip color={C.textSecondary}>{chatsToday} чатов сегодня</StatusChip>
-          </div>
-
-          {live && (
-            <div style={{ marginTop: 12, background: C.accentLight, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
-              {live.type === 'meeting' ? <Mic size={16} color={C.accent} /> : <Workflow size={16} color={C.accent} />}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, fontFamily: FONT.sans }}>{live.type === 'meeting' ? 'СОВЕЩАНИЕ ИДЁТ' : 'КОНВЕЙЕР ИДЁТ'}</div>
-                <div style={{ fontSize: 12, color: C.textSecondary, fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{live.summary}</div>
-              </div>
-              {live.entityRef && (
-                <button onClick={() => onOpenSessionById(live.entityRef!)} style={linkBtn}>Открыть →</button>
-              )}
-            </div>
-          )}
-
-          {/* ActionsRow */}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-            <button onClick={() => setPickerOpen(true)} disabled={team.length < 2} style={primaryBtn}>
-              <MessageSquare size={15} /> Созвать команду
-            </button>
-            <button onClick={() => setNewTaskOpen(true)} style={ghostBtn}><Plus size={15} /> Новая задача</button>
-            <button onClick={onNewPersona} style={ghostBtn}><UserPlus size={15} /> Новая персона</button>
-            <div style={{ position: 'relative' }}>
-              <IconButton variant="soft" size="sm" title="Ещё" onClick={() => setMenuOpen(v => !v)}><MoreHorizontal size={16} /></IconButton>
-              {menuOpen && (
-                <div style={menuStyle}>
-                  <button style={menuItem} onClick={() => { setMenuOpen(false); createTeamChat(team, onOpenSession); }}>Создать командный чат</button>
-                </div>
-              )}
-            </div>
-          </div>
+          <span style={tabCountStyle}>
+            {tab === 'overview' ? `${team.length} в команде` : tab === 'memory' ? `${mem?.length ?? 0} записей` : `${events?.length ?? 0} событий`}
+          </span>
         </div>
 
-        {/* Пустая команда */}
-        {team.length === 0 ? (
-          <div style={{ ...cardStyle, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '40px 24px', textAlign: 'center' }}>
-            <Users size={36} color={C.textMuted} style={{ opacity: 0.5 }} />
-            <div style={{ fontFamily: FONT.serif, fontSize: 16, color: C.textHeading }}>В этом проекте ещё нет команды</div>
-            <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans, maxWidth: 340, lineHeight: 1.5 }}>
-              Создайте персон — задайте роль, характер и аватар. Они начнут работать вместе: чаты, задачи, совещания и конвейеры.
-            </div>
-            <button onClick={onNewPersona} style={primaryBtn}><UserPlus size={15} /> Новая персона</button>
-            <button onClick={() => setFormTeamOpen(true)} style={ghostBtn}><Wand2 size={15} /> Сформировать команду</button>
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
-            {/* Состав */}
-            <div style={cardStyle}>
-              <SectionLabel>Состав · {team.length}</SectionLabel>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8, marginTop: 10 }}>
-                {team.map(p => {
-                  const status: 'work' | 'online' | 'idle' = inFlight.has(p.id) ? 'work' : onlineSet.has(p.id) ? 'online' : 'idle';
-                  return (
-                    <button key={p.id} onClick={() => onOpenPersona(p.id)} style={memberCard}>
-                      <PersonaAvatar persona={p} size={32} />
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{personaLabel(p)}</div>
-                        {p.specialty && p.specialty !== 'none' && (
-                          <span style={specialtyBadge}>{SPECIALTY_LABEL[p.specialty] ?? p.specialty}</span>
-                        )}
-                      </div>
-                      <StatusDot status={status} />
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Память команды */}
-            <div style={cardStyle}>
-              <SectionLabel>Память команды{mem && mem.length ? ` · ${mem.length}` : ''}</SectionLabel>
-              <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, margin: '8px 0 10px' }}>
-                Общие факты — их remember все персоны команды.
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                <input value={newMem} onChange={e => setNewMem(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void addMem(); }}
-                  placeholder="Напр.: ревью через PR; релизы по пятницам" style={inputStyle} />
-                <button onClick={() => void addMem()} disabled={!newMem.trim()} style={primaryBtn}>Добавить</button>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                {mem === null ? <Muted>Загрузка…</Muted>
-                  : mem.length === 0 ? <Muted>Пока пусто. Запишите общий факт.</Muted>
-                  : mem.map(m => (
-                    <div key={m.id} style={memRowStyle}>
-                      <span style={{ fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, flex: 1 }}>{m.text}</span>
-                      <button onClick={() => void removeMem(m.id)} aria-label="Удалить" style={iconBtnStyle}>×</button>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          </div>
+        {tab === 'overview' && (
+          <OverviewPanel project={project} team={team} events={events} mem={mem} tasks={tasks}
+            inFlight={inFlight} onlineSet={onlineSet} live={live} tasksActive={tasksActive} chatsToday={chatsToday}
+            personaById={personaById} onOpenPersona={onOpenPersona} onSwitchTab={switchTab} onOpenEvent={openEvent}
+            onPickerOpen={() => setPickerOpen(true)} onNewTaskOpen={() => setNewTaskOpen(true)} onNewPersona={onNewPersona}
+            onFormTeamOpen={() => setFormTeamOpen(true)} onOpenSessionById={onOpenSessionById} onMenuOpen={() => createTeamChat(team, onOpenSession)} />
         )}
 
-        {/* Активность */}
-        <div style={cardStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-            <SectionLabel>Активность проекта</SectionLabel>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-              {FILTERS.map(f => (
-                <button key={f.key} onClick={() => setFilter(f.key)} style={filter === f.key ? filterChipActive : filterChip}>{f.label}</button>
-              ))}
-            </div>
-          </div>
-          {events === null ? <Muted>Загрузка…</Muted>
-            : filtered.length === 0 ? <Muted>Пока нет событий.</Muted>
-            : <DayGroups events={filtered} personaById={personaById} onOpen={(e) => onEventClick(e, project.id, onOpenSessionById, onOpenPersona)} />}
-          {events && events.length >= limit && (
-            <button onClick={() => setLimit(n => n + 40)} style={{ ...linkBtn, margin: '10px auto 0', display: 'block' }}>Показать ещё</button>
-          )}
-        </div>
+        {tab === 'memory' && (
+          <MemoryPanel mem={mem} memSearch={memSearch} setMemSearch={setMemSearch} newMem={newMem} setNewMem={setNewMem} onAdd={addMem} onRemove={removeMem} />
+        )}
+
+        {tab === 'activity' && (
+          <ActivityPanel events={events} personaById={personaById} filter={filter} setFilter={setFilter}
+            actorFilter={actorFilter} setActorFilter={setActorFilter} counts={counts} limit={limit} onMore={() => setLimit(n => n + 40)} onOpenEvent={openEvent} />
+        )}
       </div>
 
-      {pickerOpen && (
-        <GroupChatPicker team={team} onClose={() => setPickerOpen(false)}
-          onCreated={s => { setPickerOpen(false); onOpenSession(s); }} />
-      )}
-      {newTaskOpen && (
-        <NewTaskDialog defaultProjectId={project.id} onCreated={() => setNewTaskOpen(false)} onClose={() => setNewTaskOpen(false)} />
-      )}
-      {formTeamOpen && (
-        <FormTeamDialog project={project} onClose={() => setFormTeamOpen(false)}
-          onCreated={() => { setFormTeamOpen(false); void refresh(); }} />
-      )}
+      {pickerOpen && <GroupChatPicker team={team} onClose={() => setPickerOpen(false)} onCreated={s => { setPickerOpen(false); onOpenSession(s); }} />}
+      {newTaskOpen && <NewTaskDialog defaultProjectId={project.id} onCreated={() => setNewTaskOpen(false)} onClose={() => setNewTaskOpen(false)} />}
+      {formTeamOpen && <FormTeamDialog project={project} onClose={() => setFormTeamOpen(false)} onCreated={() => { setFormTeamOpen(false); void refresh(); }} />}
     </div>
   );
 }
 
-// AI-формирование команды: промпт → LLM предлагает состав → пользователь одобряет → создаёт
-function FormTeamDialog({ project, onClose, onCreated }: {
-  project: Project; onClose: () => void; onCreated: () => void;
+// ===== Вкладка 1: Обзор =====
+function OverviewPanel(props: {
+  project: Project; team: Persona[]; events: EventRow[] | null; mem: TeamMemoryEntry[] | null; tasks: Task[] | null;
+  inFlight: Map<string, string>; onlineSet: Set<string>; live: EventRow | null; tasksActive: number; chatsToday: number;
+  personaById: (id: string) => Persona | undefined; onOpenPersona: (id: string) => void; onSwitchTab: (t: Tab) => void; onOpenEvent: (e: EventRow) => void;
+  onPickerOpen: () => void; onNewTaskOpen: () => void; onNewPersona: () => void; onFormTeamOpen: () => void; onOpenSessionById: (id: string) => void; onMenuOpen: () => void;
 }) {
+  const { project, team, events, mem, inFlight, onlineSet, live, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onOpenSessionById, onMenuOpen } = props;
+  const stripe = projectColor(project.id).main;
+  const recent = (events ?? []).slice(0, 6);
+  const topMem = (mem ?? []).slice(0, 3);
+
+  if (team.length === 0) {
+    return (
+      <div style={{ ...cardStyle, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '40px 24px', textAlign: 'center' }}>
+        <Users size={36} color={C.textMuted} style={{ opacity: 0.5 }} />
+        <div style={{ fontFamily: FONT.serif, fontSize: 16, color: C.textHeading }}>В этом проекте ещё нет команды</div>
+        <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans, maxWidth: 340, lineHeight: 1.5 }}>
+          Создайте персон — или попросите LLM сформировать команду по описанию.
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+          <button onClick={onNewPersona} style={primaryBtn}><UserPlus size={15} /> Новая персона</button>
+          <button onClick={onFormTeamOpen} style={ghostBtn}><Wand2 size={15} /> Сформировать команду</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {/* Hero */}
+      <div style={{ ...cardStyle, borderTop: `3px solid ${stripe}` }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ fontFamily: FONT.serif, fontSize: 18, color: C.textHeading }}>Команда · {project.name}</div>
+          <div style={{ marginLeft: 'auto', fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>{team.length} в команде</div>
+        </div>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 }}>
+          <StatusChip color={C.accent} dot>{inFlight.size} в работе</StatusChip>
+          <StatusChip color={C.success}>{onlineSet.size} на связи</StatusChip>
+          <StatusChip color={C.textSecondary}>{tasksActive} задач активно</StatusChip>
+          <StatusChip color={C.textSecondary}>{chatsToday} чатов сегодня</StatusChip>
+        </div>
+        {live && (
+          <div style={{ marginTop: 12, background: C.accentLight, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
+            {live.type === 'meeting' ? <Mic size={16} color={C.accent} /> : <Workflow size={16} color={C.accent} />}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, fontFamily: FONT.sans }}>{live.type === 'meeting' ? 'СОВЕЩАНИЕ ИДЁТ' : 'КОНВЕЙЕР ИДЁТ'}</div>
+              <div style={{ fontSize: 12, color: C.textSecondary, fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{live.summary}</div>
+            </div>
+            {live.entityRef && <button onClick={() => onOpenSessionById(live.entityRef!)} style={linkBtn}>Открыть →</button>}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+          <button onClick={onPickerOpen} disabled={team.length < 2} style={primaryBtn}><MessageSquare size={15} /> Созвать команду</button>
+          <button onClick={onNewTaskOpen} style={ghostBtn}><Plus size={15} /> Новая задача</button>
+          <button onClick={onNewPersona} style={ghostBtn}><UserPlus size={15} /> Новая персона</button>
+          <IconButton variant="soft" size="sm" title="Создать командный чат" onClick={onMenuOpen}><MoreHorizontal size={16} /></IconButton>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
+        {/* Состав */}
+        <div style={cardStyle}>
+          <SectionLabel>Состав · {team.length}</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8, marginTop: 10 }}>
+            {team.map(p => {
+              const status: 'work' | 'online' | 'idle' = inFlight.has(p.id) ? 'work' : onlineSet.has(p.id) ? 'online' : 'idle';
+              return (
+                <button key={p.id} onClick={() => onOpenPersona(p.id)} style={memberCard}>
+                  <PersonaAvatar persona={p} size={32} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{personaLabel(p)}</div>
+                    {p.specialty && p.specialty !== 'none' && <span style={specialtyBadge}>{SPECIALTY_LABEL[p.specialty] ?? p.specialty}</span>}
+                  </div>
+                  <StatusDot status={status} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Последняя активность */}
+        <div style={cardStyle}>
+          <SectionLabel>Последняя активность</SectionLabel>
+          <div style={{ display: 'flex', flexDirection: 'column', marginTop: 8 }}>
+            {recent.length === 0 ? <Muted>Пока нет событий.</Muted> : recent.map(e => <EventRowView key={e.id} e={e} personaById={personaById} onOpen={onOpenEvent} />)}
+          </div>
+          {events && events.length > 6 && <button onClick={() => onSwitchTab('activity')} style={{ ...linkBtn, marginTop: 8 }}>Вся активность →</button>}
+        </div>
+      </div>
+
+      {/* Память (топ-3) */}
+      <div style={cardStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <SectionLabel>Память команды{mem && mem.length ? ` · ${mem.length}` : ''}</SectionLabel>
+        </div>
+        <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, margin: '6px 0 10px' }}>Общие факты — их remember все персоны команды.</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {topMem.length === 0 ? <Muted>Пока пусто.</Muted> : topMem.map(m => (
+            <div key={m.id} style={memRowStyle}><span style={{ fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, flex: 1 }}>{m.text}</span></div>
+          ))}
+        </div>
+        {mem && mem.length > 3 && <button onClick={() => onSwitchTab('memory')} style={{ ...linkBtn, marginTop: 8 }}>Вся память ({mem.length}) →</button>}
+      </div>
+    </>
+  );
+}
+
+// ===== Вкладка 2: Память команды =====
+function MemoryPanel({ mem, memSearch, setMemSearch, newMem, setNewMem, onAdd, onRemove }: {
+  mem: TeamMemoryEntry[] | null; memSearch: string; setMemSearch: (s: string) => void;
+  newMem: string; setNewMem: (s: string) => void; onAdd: () => void; onRemove: (id: string) => void;
+}) {
+  const filtered = useMemo(() => {
+    const q = memSearch.trim().toLowerCase();
+    const list = [...(mem ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return q ? list.filter(m => m.text.toLowerCase().includes(q)) : list;
+  }, [mem, memSearch]);
+
+  return (
+    <>
+      <div style={cardStyle}>
+        <div style={{ fontFamily: FONT.serif, fontSize: 17, color: C.textHeading }}>Память команды</div>
+        <div style={{ fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.5, margin: '6px 0 12px' }}>
+          Общие факты проекта — их remember все персоны команды. Каждый recall в чате персон этого проекта подтягивает эти факты в системный промпт.
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10, position: 'relative' }}>
+          <Search size={15} color={C.textMuted} style={{ position: 'absolute', left: 10, top: 9, pointerEvents: 'none' }} />
+          <input value={memSearch} onChange={e => setMemSearch(e.target.value)} placeholder="Поиск по записям…" style={{ ...inputStyle, paddingLeft: 32 }} />
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input value={newMem} onChange={e => setNewMem(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') onAdd(); }} placeholder="Напр.: ревью через PR; релизы по пятницам" style={inputStyle} />
+          <button onClick={onAdd} disabled={!newMem.trim()} style={primaryBtn}>Добавить</button>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        {mem === null ? <Muted>Загрузка…</Muted>
+          : filtered.length === 0 ? (
+            <div style={{ ...cardStyle, textAlign: 'center', color: C.textMuted, fontFamily: FONT.sans, fontSize: 13 }}>
+              {mem.length === 0 ? 'Пока пусто. Запишите общий факт выше — его запомнят все персоны команды.' : 'Ничего не найдено. '}
+              {mem.length > 0 && <button onClick={() => setMemSearch('')} style={{ ...linkBtn, display: 'inline-block', marginLeft: 6 }}>Сбросить фильтр</button>}
+            </div>
+          ) : filtered.map(m => (
+            <div key={m.id} style={memRowStyle}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, lineHeight: 1.45 }}>{m.text}</div>
+                <div style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, marginTop: 3 }}>{fmtDate(m.createdAt)}</div>
+              </div>
+              <button onClick={() => onRemove(m.id)} aria-label="Удалить" title="Удалить запись" style={iconBtnStyle}>×</button>
+            </div>
+          ))}
+      </div>
+    </>
+  );
+}
+
+// ===== Вкладка 3: Активность — таймлайн =====
+function ActivityPanel({ events, personaById, filter, setFilter, actorFilter, setActorFilter, counts, limit, onMore, onOpenEvent }: {
+  events: EventRow[] | null; personaById: (id: string) => Persona | undefined;
+  filter: FilterKey; setFilter: (f: FilterKey) => void; actorFilter: string | null; setActorFilter: (a: string | null) => void;
+  counts: Record<FilterKey, number>; limit: number; onMore: () => void; onOpenEvent: (e: EventRow) => void;
+}) {
+  const filtered = useMemo(() => {
+    const list = events ?? [];
+    return list.filter(e => {
+      if (filter !== 'all' && (CATEGORY[e.type] ?? 'all') !== filter) return false;
+      if (actorFilter && e.actor !== actorFilter) return false;
+      return true;
+    });
+  }, [events, filter, actorFilter]);
+
+  const actors = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of events ?? []) if (e.actor && e.actor !== 'user' && e.actor !== 'system' && personaById(e.actor)) ids.add(e.actor);
+    return [...ids];
+  }, [events, personaById]);
+
+  return (
+    <>
+      {/* FilterBar */}
+      <div style={filterBarStyle}>
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+          {FILTERS.map(f => (
+            <button key={f.key} onClick={() => setFilter(f.key)} style={filter === f.key ? filterChipActive : filterChip}>
+              {f.label}{counts[f.key] ? ` ${counts[f.key]}` : ''}
+            </button>
+          ))}
+        </div>
+        {actors.length > 1 && (
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>исп.:</span>
+            <button onClick={() => setActorFilter(null)} style={actorFilter === null ? filterChipActive : filterChip}>Все</button>
+            {actors.map(id => {
+              const p = personaById(id)!;
+              return (
+                <button key={id} onClick={() => setActorFilter(id)} style={actorFilter === id ? filterChipActive : filterChip}>
+                  {personaLabel(p)}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {events === null ? <Muted>Загрузка…</Muted>
+        : filtered.length === 0 ? (
+          <div style={{ ...cardStyle, textAlign: 'center', color: C.textMuted, fontFamily: FONT.sans, fontSize: 13, padding: '32px 16px' }}>
+            {events.length === 0 ? 'Пока нет событий. Как только команда начнёт работать — здесь появится лента.' : 'Нет событий по фильтру. '}
+            {events.length > 0 && <button onClick={() => { setFilter('all'); setActorFilter(null); }} style={{ ...linkBtn, display: 'inline-block', marginLeft: 6 }}>Сбросить</button>}
+          </div>
+        ) : (
+          <Timeline events={filtered} personaById={personaById} onOpen={onOpenEvent} />
+        )}
+      {events && events.length >= limit && (
+        <button onClick={onMore} style={{ ...linkBtn, margin: '12px auto 0', display: 'block' }}>Показать ещё</button>
+      )}
+    </>
+  );
+}
+
+// ===== Таймлайн (вертикальная линия + цветные точки) =====
+function Timeline({ events, personaById, onOpen }: {
+  events: EventRow[]; personaById: (id: string) => Persona | undefined; onOpen: (e: EventRow) => void;
+}) {
+  const groups = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const yest = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const m = new Map<string, EventRow[]>();
+    for (const e of events) {
+      const d = e.ts.slice(0, 10);
+      const label = d === today ? 'Сегодня' : d === yest ? 'Вчера' : fmtDay(d);
+      (m.get(label) ?? m.set(label, []).get(label)!).push(e);
+    }
+    return [...m.entries()];
+  }, [events]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {groups.map(([label, rows]) => (
+        <div key={label} style={{ position: 'relative', paddingLeft: 26 }}>
+          <div style={dayHeaderStyle}>{label}</div>
+          {/* вертикальная линия таймлайна */}
+          <div style={{ position: 'absolute', left: 4, top: 30, bottom: 6, width: 2, background: C.divider }} />
+          {rows.map(e => <TimelineEvent key={e.id} e={e} personaById={personaById} onOpen={onOpen} />)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TimelineEvent({ e, personaById, onOpen }: {
+  e: EventRow; personaById: (id: string) => Persona | undefined; onOpen: (e: EventRow) => void;
+}) {
+  const target = eventTarget(e);
+  const meta = EVENT_META[e.type] ?? { Icon: Settings, color: C.textMuted };
+  const p = personaById(e.actor);
+  const clickable = !!target;
+  return (
+    <div style={{ position: 'relative' }}>
+      {/* точка-маркер цветом категории */}
+      <span style={{
+        position: 'absolute', left: -22, top: 12, width: 10, height: 10, borderRadius: '50%',
+        background: meta.color, border: `2px solid ${C.bgMain}`, boxSizing: 'border-box', boxShadow: `0 0 0 1px ${meta.color}`,
+      }} />
+      <button onClick={() => clickable && onOpen(e)} disabled={!clickable} style={clickable ? tlRowClickable : tlRowStatic}>
+        <meta.Icon size={15} color={meta.color} />
+        {p ? <PersonaAvatar persona={p} size={20} /> : <span style={actorDot}>{e.actor === 'user' ? 'Я' : <Settings size={13} color={C.textMuted} />}</span>}
+        <span style={{ fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.summary}</span>
+        <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>{shortAgo(e.ts)}</span>
+        {clickable && <ChevronRight size={14} color={C.border} />}
+      </button>
+    </div>
+  );
+}
+
+// ===== Compact EventRow (для обзора) =====
+function EventRowView({ e, personaById, onOpen }: {
+  e: EventRow; personaById: (id: string) => Persona | undefined; onOpen: (e: EventRow) => void;
+}) {
+  const target = eventTarget(e);
+  const meta = EVENT_META[e.type] ?? { Icon: Settings, color: C.textMuted };
+  const p = personaById(e.actor);
+  const clickable = !!target;
+  return (
+    <button onClick={() => clickable && onOpen(e)} disabled={!clickable} style={clickable ? evRowClickable : evRowStatic}>
+      <meta.Icon size={15} color={meta.color} />
+      {p ? <PersonaAvatar persona={p} size={20} /> : <span style={actorDot}>{e.actor === 'user' ? 'Я' : <Settings size={13} color={C.textMuted} />}</span>}
+      <span style={{ fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.summary}</span>
+      <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>{shortAgo(e.ts)}</span>
+      {clickable && <ChevronRight size={14} color={C.border} />}
+    </button>
+  );
+}
+
+// ===== Диалоги =====
+function GroupChatPicker({ team, onClose, onCreated }: { team: Persona[]; onClose: () => void; onCreated: (s: Session) => void; }) {
+  const [sel, setSel] = useState<string[]>(team.length >= 2 ? [team[0].id, team[1].id] : team.map(p => p.id));
+  const [busy, setBusy] = useState(false);
+  const toggle = (id: string) => setSel(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 4 ? [...prev, id] : prev);
+  const create = async () => {
+    setBusy(true);
+    try { const s = await api.chats.createGroup(sel); sessionStorage.setItem('cc_auto_discuss', s.id); onCreated(s); } finally { setBusy(false); }
+  };
+  return (
+    <Modal width={420} title="Созвать команду" subtitle="Выберите 2–4 участниц. Первый — ведущий." onClose={onClose}
+      footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button onClick={onClose} style={ghostBtn}>Отмена</button>
+        <button onClick={() => void create()} disabled={sel.length < 2 || busy} style={primaryBtn}>Создать чат</button>
+      </div>}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {team.map((p, i) => {
+          const checked = sel.includes(p.id);
+          return (
+            <button key={p.id} onClick={() => toggle(p.id)} style={{ ...memberCard, border: `1px solid ${checked ? C.accent : C.borderLight}` }}>
+              <PersonaAvatar persona={p} size={28} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans }}>{personaLabel(p)}</div>
+                {i === 0 && sel[0] === p.id && <span style={{ fontSize: 11, color: C.accent, fontFamily: FONT.sans }}>ведущий</span>}
+              </div>
+              <span style={{ ...checkDot, background: checked ? C.accent : 'transparent', border: `2px solid ${checked ? C.accent : C.border}` }} />
+            </button>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
+function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onClose: () => void; onCreated: () => void; }) {
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [members, setMembers] = useState<TeamMemberDraft[] | null>(null);
   const [sel, setSel] = useState<Set<number>>(new Set());
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const generate = async () => {
     if (!prompt.trim() || loading) return;
     setLoading(true); setError(null); setMembers(null);
@@ -269,41 +487,30 @@ function FormTeamDialog({ project, onClose, onCreated }: {
         if (!sel.has(i)) continue;
         const m = members[i];
         await api.personas.create({
-          name: m.name?.trim() || 'Персона',
-          role: m.role, description: m.description,
-          contract: { character: m.character, tone: m.tone },
-          specialty: m.specialty as Persona['specialty'] | undefined,
-          scope: 'project', projectId: project.id,
-          color: m.color, greeting: m.greeting, memoryEnabled: true,
+          name: m.name?.trim() || 'Персона', role: m.role, description: m.description,
+          contract: { character: m.character, tone: m.tone }, specialty: m.specialty as Persona['specialty'] | undefined,
+          scope: 'project', projectId: project.id, color: m.color, greeting: m.greeting, memoryEnabled: true,
         });
       }
       onCreated();
     } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось создать персон'); }
     finally { setCreating(false); }
   };
-
   return (
-    <Modal width={480} title="Сформировать команду" onClose={onClose}
-      subtitle="Опишите команду — LLM проанализирует проект и предложит состав."
+    <Modal width={480} title="Сформировать команду" onClose={onClose} subtitle="Опишите команду — LLM проанализирует проект и предложит состав."
       footer={members && members.length > 0 ? (
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
           <span style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>{sel.size} из {members.length}</span>
           <button onClick={onClose} style={ghostBtn}>Отмена</button>
-          <button onClick={() => void create()} disabled={sel.size === 0 || creating} style={primaryBtn}>
-            {creating ? 'Создание…' : `Создать ${sel.size || ''}`}
-          </button>
+          <button onClick={() => void create()} disabled={sel.size === 0 || creating} style={primaryBtn}>{creating ? 'Создание…' : `Создать ${sel.size || ''}`}</button>
         </div>
       ) : undefined}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {!members && (
           <>
-            <textarea value={prompt} onChange={e => setPrompt(e.target.value)} autoFocus
-              placeholder="Напр.: команда для бэкенда на .NET — аналитик, разработчик, ревьюер и тестировщик. Покрыть архитектуру, имплементацию, код-ревью и QA."
-              style={{ ...inputStyle, minHeight: 80, resize: 'vertical', fontFamily: FONT.sans }} />
+            <textarea value={prompt} onChange={e => setPrompt(e.target.value)} autoFocus placeholder="Напр.: команда для бэкенда на .NET — аналитик, разработчик, ревьюер и тестировщик." style={{ ...inputStyle, minHeight: 80, resize: 'vertical' }} />
             {error && <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>}
-            <button onClick={() => void generate()} disabled={!prompt.trim() || loading} style={primaryBtn}>
-              {loading ? 'Анализирую проект…' : 'Сформировать состав'}
-            </button>
+            <button onClick={() => void generate()} disabled={!prompt.trim() || loading} style={primaryBtn}>{loading ? 'Анализирую проект…' : 'Сформировать состав'}</button>
           </>
         )}
         {members && members.length === 0 && !loading && (
@@ -337,7 +544,11 @@ function FormTeamDialog({ project, onClose, onCreated }: {
   );
 }
 
-// --- кликабельность активности ---
+async function createTeamChat(team: Persona[], onOpenSession: (s: Session) => void) {
+  try { const s = await api.chats.createGroup(team.slice(0, 4).map(p => p.id)); onOpenSession(s); } catch { /* тишина */ }
+}
+
+// ===== Shared: мета событий, навигация, хелперы, стили =====
 type EventRow = { id: number; ts: string; type: string; actor: string; summary: string; entityRef?: string | null };
 type Nav = 'session' | 'task' | 'persona' | 'note' | 'knowledge' | null;
 function eventTarget(e: EventRow): { nav: Nav; id: string } | null {
@@ -345,11 +556,10 @@ function eventTarget(e: EventRow): { nav: Nav; id: string } | null {
   switch (e.type) {
     case 'chat_turn': case 'meeting': case 'pipeline': return { nav: 'session', id: e.entityRef };
     case 'task_created': case 'task_completed': case 'task_spawned': return { nav: 'task', id: e.entityRef };
-    case 'memory_learned': return { nav: 'persona', id: e.entityRef };
-    case 'team_joined': return { nav: 'persona', id: e.entityRef };
+    case 'memory_learned': case 'team_joined': return { nav: 'persona', id: e.entityRef };
     case 'note_changed': return { nav: 'note', id: e.entityRef };
     case 'knowledge_changed': return { nav: 'knowledge', id: e.entityRef };
-    default: return null; // task_deleted, team_left — не кликабельно
+    default: return null;
   }
 }
 function onEventClick(e: EventRow, projectId: string, openSession: (id: string) => void, openPersona: (id: string) => void) {
@@ -361,8 +571,6 @@ function onEventClick(e: EventRow, projectId: string, openSession: (id: string) 
   else if (t.nav === 'knowledge') window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: `#/knowledge/${t.id}` } }));
 }
 
-// --- мета событий ---
-type FilterKey = 'all' | 'tasks' | 'memory' | 'chats' | 'content' | 'team';
 const CATEGORY: Record<string, FilterKey> = {
   chat_turn: 'chats', meeting: 'chats', pipeline: 'chats',
   task_created: 'tasks', task_completed: 'tasks', task_spawned: 'tasks', task_deleted: 'tasks',
@@ -374,125 +582,18 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'chats', label: 'чаты' }, { key: 'content', label: 'контент' }, { key: 'team', label: 'команда' },
 ];
 const EVENT_META: Record<string, { Icon: ComponentType<{ size?: number; color?: string }>; color: string }> = {
-  chat_turn: { Icon: MessageSquare, color: C.accent },
-  meeting: { Icon: Mic, color: C.accent },
-  pipeline: { Icon: Workflow, color: C.accent },
-  task_created: { Icon: Plus, color: C.success },
-  task_completed: { Icon: CheckCircle2, color: C.success },
-  task_spawned: { Icon: Repeat, color: C.success },
-  task_deleted: { Icon: Trash2, color: C.danger },
-  memory_learned: { Icon: Brain, color: C.info },
-  knowledge_changed: { Icon: BookOpen, color: C.info },
-  note_changed: { Icon: FileText, color: C.info },
-  team_joined: { Icon: UserPlus, color: C.textSecondary },
-  team_left: { Icon: UserMinus, color: C.textSecondary },
+  chat_turn: { Icon: MessageSquare, color: C.accent }, meeting: { Icon: Mic, color: C.accent }, pipeline: { Icon: Workflow, color: C.accent },
+  task_created: { Icon: Plus, color: C.success }, task_completed: { Icon: CheckCircle2, color: C.success }, task_spawned: { Icon: Repeat, color: C.success }, task_deleted: { Icon: Trash2, color: C.danger },
+  memory_learned: { Icon: Brain, color: C.info }, knowledge_changed: { Icon: BookOpen, color: C.info }, note_changed: { Icon: FileText, color: C.info },
+  team_joined: { Icon: UserPlus, color: C.textSecondary }, team_left: { Icon: UserMinus, color: C.textSecondary },
 };
 const SPECIALTY_LABEL: Record<string, string> = {
   analyst: 'Аналитик', planner: 'Планировщик', reviewer: 'Ревьюер', executor: 'Исполнитель',
-  secretary: 'Секретарь', coordinator: 'Координатор', mentor: 'Ментор', designer: 'Дизайнер',
-  consultant: 'Консультант', librarian: 'Библиотекарь',
+  secretary: 'Секретарь', coordinator: 'Координатор', mentor: 'Ментор', designer: 'Дизайнер', consultant: 'Консультант', librarian: 'Библиотекарь',
 };
 
-// ---DayGroups: группировка по дням ---
-function DayGroups({ events, personaById, onOpen }: {
-  events: EventRow[];
-  personaById: (id: string) => Persona | undefined;
-  onOpen: (e: EventRow) => void;
-}) {
-  const groups = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    const yest = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-    const m = new Map<string, EventRow[]>();
-    for (const e of events) {
-      const d = e.ts.slice(0, 10);
-      const label = d === today ? 'Сегодня' : d === yest ? 'Вчера' : d;
-      (m.get(label) ?? m.set(label, []).get(label)!).push(e);
-    }
-    return [...m.entries()];
-  }, [events]);
-  return (
-    <div>
-      {groups.map(([label, rows]) => (
-        <div key={label}>
-          <div style={dayHeaderStyle}>{label}</div>
-          {rows.map(e => <EventRowView key={e.id} e={e} personaById={personaById} onOpen={onOpen} />)}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function EventRowView({ e, personaById, onOpen }: {
-  e: EventRow; personaById: (id: string) => Persona | undefined; onOpen: (e: EventRow) => void;
-}) {
-  const target = eventTarget(e);
-  const meta = EVENT_META[e.type] ?? { Icon: Settings, color: C.textMuted };
-  const p = personaById(e.actor);
-  const clickable = !!target;
-  return (
-    <button onClick={() => clickable && onOpen(e)} disabled={!clickable} style={clickable ? evRowClickable : evRowStatic}>
-      <meta.Icon size={15} color={meta.color} />
-      {p ? <PersonaAvatar persona={p} size={20} /> : <span style={actorDot}>{e.actor === 'user' ? 'Я' : <Settings size={13} color={C.textMuted} />}</span>}
-      <span style={{ fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.summary}</span>
-      <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>{shortAgo(e.ts)}</span>
-      {clickable && <ChevronRight size={14} color={C.border} />}
-    </button>
-  );
-}
-
-// --- GroupChatPicker ---
-function GroupChatPicker({ team, onClose, onCreated }: {
-  team: Persona[]; onClose: () => void; onCreated: (s: Session) => void;
-}) {
-  const [sel, setSel] = useState<string[]>(team.length >= 2 ? [team[0].id, team[1].id] : team.map(p => p.id));
-  const [busy, setBusy] = useState(false);
-  const toggle = (id: string) => setSel(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 4 ? [...prev, id] : prev);
-  const create = async () => {
-    setBusy(true);
-    try {
-      const s = await api.chats.createGroup(sel);
-      sessionStorage.setItem('cc_auto_discuss', s.id); // #3: автозапуск DiscussTeamDialog в новом чате
-      onCreated(s);
-    } finally { setBusy(false); }
-  };
-  return (
-    <Modal width={420} title="Созвать команду" subtitle="Выберите 2–4 участниц. Первый — ведущий." onClose={onClose}
-      footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <button onClick={onClose} style={ghostBtn}>Отмена</button>
-        <button onClick={() => void create()} disabled={sel.length < 2 || busy} style={primaryBtn}>Создать чат</button>
-      </div>}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {team.map((p, i) => {
-          const checked = sel.includes(p.id);
-          return (
-            <button key={p.id} onClick={() => toggle(p.id)} style={{ ...memberCard, border: `1px solid ${checked ? C.accent : C.borderLight}` }}>
-              <PersonaAvatar persona={p} size={28} />
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans }}>{personaLabel(p)}</div>
-                {i === 0 && sel[0] === p.id && <span style={{ fontSize: 11, color: C.accent, fontFamily: FONT.sans }}>ведущий</span>}
-              </div>
-              <span style={{ ...checkDot, background: checked ? C.accent : 'transparent', border: `2px solid ${checked ? C.accent : C.border}` }} />
-            </button>
-          );
-        })}
-      </div>
-    </Modal>
-  );
-}
-
-async function createTeamChat(team: Persona[], onOpenSession: (s: Session) => void) {
-  try { const s = await api.chats.createGroup(team.slice(0, 4).map(p => p.id)); onOpenSession(s); }
-  catch { /* тишина */ }
-}
-
-// --- мелкие компоненты ---
 function StatusChip({ children, color, dot }: { children: React.ReactNode; color: string; dot?: boolean }) {
-  return (
-    <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, fontFamily: FONT.sans, color }}>
-      {dot && <span style={{ width: 7, height: 7, borderRadius: '50%', background: color }} />}
-      {children}
-    </span>
-  );
+  return <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, fontFamily: FONT.sans, color }}>{dot && <span style={{ width: 7, height: 7, borderRadius: '50%', background: color }} />}{children}</span>;
 }
 function StatusDot({ status }: { status: 'work' | 'online' | 'idle' }) {
   const c = status === 'work' ? C.accent : status === 'online' ? C.success : C.border;
@@ -506,11 +607,7 @@ function Muted({ children }: { children: React.ReactNode }) {
 }
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const h = (e: MediaQueryListEvent) => setM(e.matches);
-    mq.addEventListener('change', h); return () => mq.removeEventListener('change', h);
-  }, []);
+  useEffect(() => { const mq = window.matchMedia('(max-width: 767px)'); const h = (e: MediaQueryListEvent) => setM(e.matches); mq.addEventListener('change', h); return () => mq.removeEventListener('change', h); }, []);
   return m;
 }
 function shortAgo(iso: string): string {
@@ -520,6 +617,12 @@ function shortAgo(iso: string): string {
   const hrs = Math.floor(mins / 60); if (hrs < 24) return `${hrs} ч`;
   return `${Math.floor(hrs / 24)} д`;
 }
+function fmtDate(iso: string): string {
+  try { return new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }); } catch { return ''; }
+}
+function fmtDay(d: string): string {
+  try { const dt = new Date(d); return dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }); } catch { return d; }
+}
 
 // --- стили ---
 const cardStyle: CSSProperties = { background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, boxShadow: SHADOW.card, padding: 16 };
@@ -528,15 +631,20 @@ const ghostBtn: CSSProperties = { display: 'inline-flex', alignItems: 'center', 
 const linkBtn: CSSProperties = { background: 'transparent', border: 'none', color: C.accent, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans, padding: '4px 8px' };
 const memberCard: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, padding: '10px 12px', cursor: 'pointer', transition: 'border-color .12s, box-shadow .12s' };
 const specialtyBadge: CSSProperties = { display: 'inline-block', fontSize: 10.5, fontWeight: 600, color: C.textSecondary, background: C.bgInset, borderRadius: R.sm, padding: '1px 7px', fontFamily: FONT.sans, marginTop: 3 };
-const inputStyle: CSSProperties = { flex: 1, padding: '7px 10px', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, color: C.textPrimary, fontFamily: FONT.sans, fontSize: 13, outline: 'none' };
-const memRowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderLeft: `3px solid ${C.accentMuted}`, borderRadius: R.md, padding: '7px 10px' };
+const inputStyle: CSSProperties = { flex: 1, padding: '8px 10px', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, color: C.textPrimary, fontFamily: FONT.sans, fontSize: 13, outline: 'none' };
+const memRowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderLeft: `3px solid ${C.accentMuted}`, borderRadius: R.md, padding: '10px 12px' };
 const iconBtnStyle: CSSProperties = { border: 'none', background: 'transparent', color: C.textMuted, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '2px 4px', flexShrink: 0 };
-const evRowClickable: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '7px 4px', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: R.sm };
-const evRowStatic: CSSProperties = { ...evRowClickable, cursor: 'default' };
-const actorDot: CSSProperties = { width: 20, height: 20, borderRadius: '50%', background: C.bgInset, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: C.textSecondary, flexShrink: 0 };
-const dayHeaderStyle: CSSProperties = { position: 'sticky', top: 0, background: C.bgWhite, padding: '8px 0 4px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.04, color: C.textMuted, fontFamily: FONT.sans, borderBottom: `1px solid ${C.borderLight}` };
-const filterChip: CSSProperties = { border: 'none', background: C.bgInset, color: C.textSecondary, borderRadius: R.sm, padding: '2px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans };
+const tabBarStyle: CSSProperties = { position: 'sticky', top: 0, zIndex: 5, background: C.bgMain, padding: '4px 0 10px', borderBottom: `1px solid ${C.borderLight}`, display: 'flex', alignItems: 'center', gap: 12 };
+const tabIdle: CSSProperties = { border: 'none', background: C.bgInset, color: C.textSecondary, borderRadius: R.lg, padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans };
+const tabActive: CSSProperties = { ...tabIdle, background: C.accentLight, color: C.accent };
+const tabCountStyle: CSSProperties = { marginLeft: 'auto', fontSize: 12, color: C.textMuted, fontFamily: FONT.sans };
+const filterBarStyle: CSSProperties = { position: 'sticky', top: 44, zIndex: 4, background: C.bgMain, padding: '8px 0 10px', borderBottom: `1px solid ${C.borderLight}` };
+const filterChip: CSSProperties = { border: 'none', background: C.bgInset, color: C.textSecondary, borderRadius: R.sm, padding: '3px 9px', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans };
 const filterChipActive: CSSProperties = { ...filterChip, background: C.accentLight, color: C.accent };
-const menuStyle: CSSProperties = { position: 'absolute', top: '100%', right: 0, marginTop: 4, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, boxShadow: SHADOW.dropdown, padding: 4, zIndex: 50, minWidth: 200 };
-const menuItem: CSSProperties = { display: 'block', width: '100%', textAlign: 'left', border: 'none', background: 'transparent', color: C.textPrimary, fontFamily: FONT.sans, fontSize: 13, padding: '7px 10px', borderRadius: R.sm, cursor: 'pointer' };
+const dayHeaderStyle: CSSProperties = { position: 'sticky', top: 88, zIndex: 3, background: C.bgMain, padding: '8px 0 6px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: C.textMuted, fontFamily: FONT.sans };
+const evRowClickable: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '6px 4px', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: R.sm };
+const evRowStatic: CSSProperties = { ...evRowClickable, cursor: 'default' };
+const tlRowClickable: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 4px 9px', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: R.sm, borderBottom: `1px solid ${C.divider}` };
+const tlRowStatic: CSSProperties = { ...tlRowClickable, cursor: 'default' };
+const actorDot: CSSProperties = { width: 20, height: 20, borderRadius: '50%', background: C.bgInset, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: C.textSecondary, flexShrink: 0 };
 const checkDot: CSSProperties = { width: 16, height: 16, borderRadius: '50%', flexShrink: 0 };

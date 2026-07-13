@@ -34,7 +34,8 @@ interface Props {
   onShowHistory?: () => void;
   historyBadge?: number;       // число новых изменений с последнего захода
   historyNeverSeen?: boolean;  // ещё ни разу не открывал историю — точка без числа
-  // «Знания» в меню (на мобилке, где раздел убран из хаб-таббара). undefined — пункт не показывать
+  // «Знания» (настройка баз знаний Dify) — раздел убран из хаб-таббара, вызов в меню аватара.
+  // undefined — пункт не показывать
   onOpenKnowledge?: () => void;
 }
 
@@ -135,7 +136,7 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
               style={dropdownItem}
             >
               <Book size={ICON_SIZE.xs} strokeWidth={2} />
-              Знания
+              Настройка знаний
             </button>
           )}
           {isAdmin && (

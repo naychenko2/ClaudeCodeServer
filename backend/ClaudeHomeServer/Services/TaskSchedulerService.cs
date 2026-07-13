@@ -16,6 +16,7 @@ public class TaskSchedulerService(
     PushService push,
     TaskExecutionService executor,
     DailyBriefingService briefing,
+    PersonaAutomationService automation,
     ILogger<TaskSchedulerService> log) : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
@@ -51,6 +52,8 @@ public class TaskSchedulerService(
             }
             // Утренний бриф раз в день в таймзоне юзера (быстрый выход, если не время/выключено)
             await briefing.MaybeRunScheduledAsync(user, tz, nowUtc);
+            // Проактивность персон (collaborator): оценка правил автоматизаций этого пользователя
+            await automation.MaybeRunAutomationsAsync(user, tz, nowUtc, CancellationToken.None);
         }
     }
 

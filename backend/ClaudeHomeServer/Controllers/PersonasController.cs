@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text.Json;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -28,6 +29,7 @@ public class PersonasController : ControllerBase
     private readonly Services.Llm.OneShotClaudeRunner _oneShot;
     private readonly PersonaPromptBuilder _promptBuilder;
     private readonly PersonaAskService _ask;
+    private readonly PersonaAutomationService _automation;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonasController> _log;
     private readonly IHubContext<SessionHub> _hub;
@@ -37,7 +39,7 @@ public class PersonasController : ControllerBase
         NotesService notes, SkillsService skills, KnowledgeService knowledge,
         FalImageService falImage,
         Services.Llm.OneShotClaudeRunner oneShot,
-        PersonaPromptBuilder promptBuilder, PersonaAskService ask, IConfiguration config,
+        PersonaPromptBuilder promptBuilder, PersonaAskService ask, PersonaAutomationService automation, IConfiguration config,
         ILogger<PersonasController> log, IHubContext<SessionHub> hub)
     {
         _personas = personas;
@@ -52,6 +54,7 @@ public class PersonasController : ControllerBase
         _oneShot = oneShot;
         _promptBuilder = promptBuilder;
         _ask = ask;
+        _automation = automation;
         _config = config;
         _log = log;
         _hub = hub;
@@ -760,6 +763,117 @@ public class PersonasController : ControllerBase
         return NoContent();
     }
 
+    // --- Автоматизации персоны (событийно-управляемая проактивность): правила «триггер → действие» ---
+
+    [HttpGet("{id}/automation")]
+    public ActionResult<IReadOnlyList<PersonaAutomationRule>> Automation(string id)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        return Ok(persona.AutomationRules ?? []);
+    }
+
+    // Добавить правило (мгновенное сохранение)
+    [HttpPost("{id}/automation")]
+    public async Task<ActionResult<PersonaAutomationRule>> AddAutomationRule(string id,
+        [FromBody] AutomationRuleRequest req)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        var rule = ParseRule(req);
+        var list = new List<PersonaAutomationRule>(persona.AutomationRules ?? []) { rule };
+        _personas.UpdateRules(id, UserId, list);
+        await Broadcast("updated", id);
+        return Ok(rule);
+    }
+
+    // Полная замена набора правил (PUT-семантика)
+    [HttpPut("{id}/automation")]
+    public async Task<ActionResult<IReadOnlyList<PersonaAutomationRule>>> SetAutomationRules(string id,
+        [FromBody] AutomationRulesSetRequest req)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        var list = (req.Rules ?? []).Select(r => ParseRule(r)).ToList();
+        var updated = _personas.UpdateRules(id, UserId, list);
+        await Broadcast("updated", id);
+        return Ok(updated.AutomationRules ?? []);
+    }
+
+    // Изменить одно правило (partial-merge: null-поля наследуются от текущего)
+    [HttpPut("{id}/automation/{ruleId}")]
+    public async Task<ActionResult<PersonaAutomationRule>> UpdateAutomationRule(string id, string ruleId,
+        [FromBody] AutomationRuleRequest req)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        var current = persona.AutomationRules?.FirstOrDefault(r => r.Id == ruleId);
+        if (current is null) return NotFound(new { error = "Правило не найдено" });
+
+        var merged = ParseRule(req, current);
+        var list = (persona.AutomationRules ?? []).Select(r => r.Id == ruleId ? merged : r).ToList();
+        _personas.UpdateRules(id, UserId, list);
+        await Broadcast("updated", id);
+        return Ok(merged);
+    }
+
+    [HttpDelete("{id}/automation/{ruleId}")]
+    public async Task<IActionResult> DeleteAutomationRule(string id, string ruleId)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        var list = persona.AutomationRules?.Where(r => r.Id != ruleId).ToList();
+        if (list is null || list.Count == (persona.AutomationRules?.Count ?? 0))
+            return NotFound(new { error = "Правило не найдено" });
+        _personas.UpdateRules(id, UserId, list);
+        await Broadcast("updated", id);
+        return NoContent();
+    }
+
+    // Ручной прогон правила (UX «Проверить»): синтетическое событие, байпас троттлинга.
+    [HttpPost("{id}/automation/{ruleId}/test")]
+    public async Task<IActionResult> TestAutomationRule(string id, string ruleId)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        if (persona.AutomationRules?.Any(r => r.Id == ruleId) != true) return NotFound();
+        _ = _automation.TestAsync(UserId, id, ruleId);   // в фон — ход может быть долгим
+        return Accepted();
+    }
+
+    // Маппинг DTO → модель правила. existing передаётся при обновлении — Id/CreatedAt и
+    // null-поля (Args/Condition/Weight/…) наследуются от текущего правила.
+    private static PersonaAutomationRule ParseRule(AutomationRuleRequest req, PersonaAutomationRule? existing = null)
+    {
+        var cond = new AutomationCondition
+        {
+            OnlyIf = req.ConditionOnlyIf,
+            QuietFrom = req.QuietFrom,
+            QuietTo = req.QuietTo,
+            MinIntervalMinutes = req.MinIntervalMinutes,
+        };
+        return new PersonaAutomationRule
+        {
+            Id = existing?.Id ?? Guid.NewGuid().ToString(),
+            CreatedAt = existing?.CreatedAt ?? DateTime.UtcNow,
+            Enabled = req.Enabled ?? existing?.Enabled ?? true,
+            Name = string.IsNullOrWhiteSpace(req.Name) ? (existing?.Name ?? "Правило") : req.Name.Trim(),
+            Trigger = new AutomationTrigger
+            {
+                Type = req.TriggerType ?? existing?.Trigger.Type ?? AutomationTriggerType.Timer,
+                Args = req.TriggerArgs ?? existing?.Trigger.Args,
+            },
+            Condition = cond.IsEmpty ? null : cond,
+            Action = new AutomationAction
+            {
+                Weight = req.ActionWeight ?? existing?.Action.Weight ?? AutomationActionWeight.Gate,
+                Instruction = req.ActionInstruction ?? existing?.Action.Instruction ?? "",
+                RememberInHistory = req.RememberInHistory ?? existing?.Action.RememberInHistory ?? false,
+            },
+            UpdatedAt = DateTime.UtcNow,
+        };
+    }
+
     // Каталог возможных целей привязки для пикера фронта: type = project | knowledge |
     // notes | tool | skill; для notes с ?source= — папки внутри источника.
     [HttpGet("binding-targets")]
@@ -1325,6 +1439,23 @@ public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessi
     string? ProjectId = null);
 
 public record ConnectPantheonRequest(List<string>? Keys = null);
+
+// Правило автоматизации персоны (CRUD /automation). TriggerArgs — гибкий JSON-мешок
+// (ключи зависят от TriggerType, см. комментарий к AutomationTrigger).
+public record AutomationRuleRequest(
+    bool? Enabled,
+    string? Name,
+    AutomationTriggerType? TriggerType,
+    Dictionary<string, JsonElement>? TriggerArgs,
+    string? ConditionOnlyIf,
+    string? QuietFrom,
+    string? QuietTo,
+    int? MinIntervalMinutes,
+    AutomationActionWeight? ActionWeight,
+    string? ActionInstruction,
+    bool? RememberInHistory);
+
+public record AutomationRulesSetRequest(List<AutomationRuleRequest>? Rules);
 
 public record RememberRequest(string Type, string Text, List<string>? Tags = null,
     string? SourceSessionId = null, double? Salience = null);

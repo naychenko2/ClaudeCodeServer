@@ -285,6 +285,31 @@ public class PersonaManager
         return persona;
     }
 
+    // Полная замена правил автоматизации персоны (событийно-управляемая проактивность);
+    // сохранение мгновенное. Пустой список → null (поведение как без правил).
+    // Конфигурация только: runtime-состояние (LastFiredAt/счётчики/снапшоты) живёт отдельно
+    // в PersonaAutomationService, чтобы не переписывать personas.json на каждом тике.
+    public Persona UpdateRules(string id, string userId, List<PersonaAutomationRule>? rules)
+    {
+        var persona = Get(id, userId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        lock (_saveLock)
+        {
+            if (rules is { Count: > 0 })
+            {
+                // Пустое условие нормализуется в null (как пустой контракт/набор инструментов)
+                foreach (var r in rules)
+                    if (r.Condition is { } c && c.IsEmpty) r.Condition = null;
+                persona.AutomationRules = rules;
+            }
+            else persona.AutomationRules = null;
+            persona.UpdatedAt = DateTime.UtcNow;
+        }
+        Save();
+        OnPersonaChanged?.Invoke(persona);
+        return persona;
+    }
+
     // Установить сгенерированный аватар-картинку. Оригинал/кроп загруженного файла
     // при этом теряют смысл — чистим (и файл оригинала тоже).
     public Persona SetAvatarImage(string id, string userId, string imageFile)

@@ -63,6 +63,11 @@ public class SessionManager
     // Вызывается после обновления статуса и broadcast; его ошибки не роняют пайплайн
     public event Func<Session, ServerMessage, Task>? OnSessionMessage;
 
+    // Текст пользовательского сообщения (ввод в чат) — для push-источников автоматизаций
+    // (детекция @упоминаний персон). Вызывается из SendMessageAsync после записи в Accumulator;
+    // fire-and-forget, ошибки наблюдателя не роняют ход. (session, text, senderPersonaId)
+    public event Func<Session, string, string?, Task>? OnUserMessage;
+
     // Auto-recall заметок (фича notes-auto-recall): семантический индекс + гейт по флагу
     private readonly NotesKnowledgeService _notesKb;
     private readonly FeatureFlagService _flags;
@@ -417,7 +422,7 @@ public class SessionManager
     // чат создаётся в нём, а не вне проекта (как давно позволяет смена собеседника SetPersona).
     public async Task<Session> CreatePersonaChatAsync(string ownerId, string personaId,
         ClaudeMode mode, string? resumeSessionId = null, string? name = null,
-        string? contextProjectId = null)
+        string? contextProjectId = null, string? automationRuleId = null)
     {
         var persona = _personas.Get(personaId, ownerId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {personaId}");
@@ -440,6 +445,7 @@ public class SessionManager
                 Name = name,
                 Model = persona.Model,
                 Effort = persona.Effort,
+                AutomationRuleId = automationRuleId,
             };
             await StartNewSessionAsync(projectSession, project.RootPath, project.SystemPrompt,
                 () => _projects.GetById(project.Id)?.PermissionRules
@@ -458,6 +464,7 @@ public class SessionManager
             Name = name,
             Model = persona.Model,
             Effort = persona.Effort,
+            AutomationRuleId = automationRuleId,
         };
         await StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);
         return session;
@@ -917,6 +924,20 @@ public class SessionManager
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
         entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId);
+
+        // Push-источники автоматизаций: @упоминание персоны в тексте пользователя.
+        // Fire-and-forget — обработчик не должен тормозить ход (он лишь детектит и ставит в очередь).
+        if (OnUserMessage is { } userMsgObservers)
+        {
+            _ = Task.Run(async () =>
+            {
+                try { await userMsgObservers(entry.Info, text, senderPersonaId); }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[SessionManager] Ошибка OnUserMessage ({sessionId}): {ex.Message}");
+                }
+            });
+        }
         // Обвязки хода (OmO) дописываются только к тексту для CLI —
         // история и UI хранят исходное сообщение пользователя
         await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths);

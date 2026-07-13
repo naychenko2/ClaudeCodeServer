@@ -11,8 +11,9 @@ public static class GroupChatRouter
     // AlsoMentioned — остальные упомянутые участники (спикеру стоит спросить их через persona_ask).
     public sealed record RouteResult(string SpeakerPersonaId, bool Switched, IReadOnlyList<string> AlsoMentioned);
 
-    // @handle по границе слова: не срабатывает внутри email (a@b) и на «слипшихся» токенах
-    private static readonly Regex MentionPattern =
+    // @handle по границе слова: не срабатывает внутри email (a@b) и на «слипшихся» токенах.
+    // internal — переиспользуется источником триггеров MentionTriggerSource.
+    internal static readonly Regex MentionPattern =
         new(@"(?<![\p{L}\p{N}_@-])@([\p{L}\p{N}_-]+)", RegexOptions.Compiled);
 
     // Первый @handle участника в тексте (без учёта регистра) → спикер; остальные упомянутые

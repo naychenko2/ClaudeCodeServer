@@ -210,6 +210,9 @@ export interface Session {
   // Привязка чата к персоне, если он ведётся от её лица.
   // В групповом чате — активный спикер (входит в participants)
   personaId?: string;
+  // Origin автоматизации: id правила PersonaAutomationRule, чат которого создан движком
+  // проактивности (отсутствие — обычный чат). Для фильтрации авто-чатов и трассировки.
+  automationRuleId?: string | null;
   // Участники группового чата (2-4 id персон; первый — ведущая). Отсутствует у обычного чата
   participants?: string[] | null;
   // Владелец чата вне проекта
@@ -762,6 +765,8 @@ export interface Persona {
   templateKey?: string | null;
   // Привязки к источникам знаний и правилам (фича persona-bindings); null — нет
   bindings?: PersonaBinding[] | null;
+  // Правила автоматизации (событийно-управляемая проактивность); null — нет
+  automationRules?: PersonaAutomationRule[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -787,6 +792,52 @@ export interface PantheonTemplate {
 // Тип источника: project — проект целиком; projectPath — папка/файл проекта;
 // knowledge — база знаний (Dify-датасет); notes — источник заметок; tool —
 // инструмент workspace; skill — глобальный навык.
+// ─── Проактивность/автоматизации персон: правила «событие → действие» ───
+export type AutomationTriggerType = 'timer' | 'file' | 'note' | 'gitCommit' | 'taskStatus' | 'mention';
+export type AutomationActionWeight = 'gate' | 'work';
+
+// Триггер: args — гибкий JSON-объект, ключи зависят от type
+// (см. AutomationTrigger на бэке: timer/file/note/gitCommit/taskStatus/mention).
+export interface AutomationTrigger {
+  type: AutomationTriggerType;
+  args?: Record<string, unknown> | null;
+}
+export interface AutomationCondition {
+  onlyIf?: string | null;       // текст-предикат для LLM-гейта
+  quietFrom?: string | null;    // "23:00"
+  quietTo?: string | null;      // "07:00" (переход через полночь допустим)
+  minIntervalMinutes?: number | null;
+}
+export interface AutomationAction {
+  weight: AutomationActionWeight; // gate — one-shot гейт+сообщение; work — полный агентский ход
+  instruction: string;
+  rememberInHistory: boolean;
+}
+export interface PersonaAutomationRule {
+  id: string;
+  enabled: boolean;
+  name: string;
+  trigger: AutomationTrigger;
+  condition?: AutomationCondition | null;
+  action: AutomationAction;
+  createdAt: string;
+  updatedAt: string;
+}
+// DTO для POST/PUT /api/personas/{id}/automation (partial-merge на бэке: null-поля наследуются).
+export interface AutomationRuleDto {
+  enabled?: boolean;
+  name?: string;
+  triggerType?: AutomationTriggerType;
+  triggerArgs?: Record<string, unknown> | null;
+  conditionOnlyIf?: string | null;
+  quietFrom?: string | null;
+  quietTo?: string | null;
+  minIntervalMinutes?: number | null;
+  actionWeight?: AutomationActionWeight;
+  actionInstruction?: string;
+  rememberInHistory?: boolean;
+}
+
 export type PersonaBindingType = 'project' | 'projectPath' | 'knowledge' | 'notes' | 'tool' | 'skill';
 
 // Режим привязки: auto — персона обращается по условию; always — выжимка в каждый ход; off — выключена

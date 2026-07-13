@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Book, CheckSquare, ChevronLeft, EllipsisVertical, Layers, MessageSquare, Pencil, Trash2, User } from 'lucide-react';
+import { Book, CheckSquare, ChevronLeft, EllipsisVertical, Layers, MessageSquare, Pencil, Trash2, User, Zap } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona } from '../../types';
 import { C, FONT, R } from '../../lib/design';
@@ -17,7 +17,7 @@ import type { PersonaFormStatus } from './PersonaForm';
 // скрыты, справа — [Отмена] и Сохранить (+точка dirty).
 // В режиме создания: «Новая персона» + [Отмена] [Создать].
 
-export type PersonaView = 'preview' | 'knowledge' | 'memory' | 'tasks';
+export type PersonaView = 'preview' | 'knowledge' | 'memory' | 'tasks' | 'automation';
 
 // Иконки видов — на мобиле пилюли компактные (подпись только у активного)
 const VIEW_OPTIONS: { value: PersonaView; label: string; icon: React.ReactNode }[] = [
@@ -29,6 +29,8 @@ const VIEW_OPTIONS: { value: PersonaView; label: string; icon: React.ReactNode }
   { value: 'memory', label: 'Память', icon: <Layers size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
   // Задачи — чек-лист (поручения персоне-исполнителю)
   { value: 'tasks', label: 'Задачи', icon: <CheckSquare size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
+  // Проактивность — молния (правила «событие → действие»)
+  { value: 'automation', label: 'Проактивность', icon: <Zap size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
 ];
 
 interface CommonProps {

@@ -70,11 +70,13 @@ public class TaskExecutionService
 
         var name = "Задача: " + (task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title);
         var model = persona?.Model ?? _executorModel;
+        // taskExecution: true — форсирует tasks-MCP даже у персоны с ограничением Persona.Tools
+        // (без «tasks»): исполнитель обязан управлять задачей через mcp__tasks__*.
         var session = task.ProjectId is not null
             ? await _sessions.CreateAsync(task.ProjectId, ClaudeMode.AcceptEdits, name: name, model: model,
-                personaId: persona?.Id)
+                personaId: persona?.Id, taskExecution: true)
             : await _sessions.CreateChatAsync(task.OwnerId, ClaudeMode.AcceptEdits, name: name, model: model,
-                personaId: persona?.Id);
+                personaId: persona?.Id, taskExecution: true);
 
         var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow)
             ?? throw new InvalidOperationException("Задача удалена");

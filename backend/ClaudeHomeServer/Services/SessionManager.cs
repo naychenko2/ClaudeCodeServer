@@ -132,6 +132,13 @@ public class SessionManager
         return addr.Replace("0.0.0.0", "localhost").Replace("[::]", "localhost").TrimEnd('/');
     }
 
+    // tasks-MCP доступен, когда разрешён персоной (Persona.Tools/привязки), ЛИБО сессия
+    // является исполнителем задачи — тогда tasks-MCP форсируется: исполнитель обязан
+    // управлять задачей через mcp__tasks__* (иначе ограниченная персона не сможет её
+    // ни прочитать, ни завершить и свалится в нерабочий встроенный Task-тул).
+    private bool TasksMcpEnabled(string? ownerId, Session session, Persona? persona) =>
+        session.TaskExecution || _bindings.EffectiveToolEnabled(ownerId, persona, "tasks");
+
     // Контекст MCP-сервера задач для сессии; null — только для чата без владельца
     private TasksMcpContext? BuildTasksContext(string? ownerId, string? projectId)
     {
@@ -352,7 +359,7 @@ public class SessionManager
 
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
-        string? effort = null, string? personaId = null)
+        string? effort = null, string? personaId = null, bool taskExecution = false)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -369,6 +376,7 @@ public class SessionManager
             // Персона-слой подхватится общим механизмом (BuildPersonaLayer).
             // Маршрутизация остаётся по вызывающему коду (задача), не по зоне персоны.
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
+            TaskExecution = taskExecution,
         };
 
         await StartNewSessionAsync(session, project.RootPath, project.SystemPrompt,
@@ -380,7 +388,7 @@ public class SessionManager
     // системный промпт — только встроенная часть (rawSystemPrompt=null), без проектных правил.
     public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,
-        string? personaId = null)
+        string? personaId = null, bool taskExecution = false)
     {
         var rootPath = ResolveChatRoot(ownerId);
 
@@ -395,6 +403,7 @@ public class SessionManager
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
             // Персона-слой подхватится общим механизмом (BuildPersonaLayer)
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
+            TaskExecution = taskExecution,
         };
 
         await StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);
@@ -849,7 +858,7 @@ public class SessionManager
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
             rawSystemPrompt, permissionRules,
-            TasksMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "tasks") ? BuildTasksContext(ownerId, session.ProjectId) : null,
+            TasksMcp: TasksMcpEnabled(ownerId, session, persona.Persona) ? BuildTasksContext(ownerId, session.ProjectId) : null,
             NotesMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes") ? BuildNotesContext(ownerId, session.ProjectId) : null,
             RecallProvider: BuildRecallProvider(ownerId),
             PersonaPromptProvider: persona.Prompt,
@@ -1044,7 +1053,7 @@ public class SessionManager
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 RawSystemPrompt: null, PermissionRules: null,
-                TasksMcp: _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "tasks") ? BuildTasksContext(entry.Info.OwnerId, null) : null,
+                TasksMcp: TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona) ? BuildTasksContext(entry.Info.OwnerId, null) : null,
                 NotesMcp: _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes") ? BuildNotesContext(entry.Info.OwnerId, null) : null,
                 RecallProvider: BuildRecallProvider(entry.Info.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
@@ -1065,7 +1074,7 @@ public class SessionManager
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                TasksMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "tasks") ? BuildTasksContext(project.OwnerId, project.Id) : null,
+                TasksMcp: TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona) ? BuildTasksContext(project.OwnerId, project.Id) : null,
                 NotesMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
                 RecallProvider: BuildRecallProvider(project.OwnerId),
                 PersonaPromptProvider: persona.Prompt,

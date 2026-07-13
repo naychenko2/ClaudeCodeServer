@@ -80,6 +80,11 @@ public class Session
     public int? ExpiresAfterMinutes { get; set; }
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
     public SessionWorkLoop? WorkLoop { get; set; }
+    // Сессия-исполнитель задачи (создана TaskExecutionService): tasks-MCP форсируется включённым
+    // независимо от Persona.Tools — исполнитель обязан управлять задачей через mcp__tasks__*.
+    // Иначе персона с ограничением tools (без «tasks») теряет tasks-сервер и не может ни прочитать,
+    // ни завершить задачу (fallback на встроенный Task-тул → «система задач недоступна»).
+    public bool TaskExecution { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

@@ -1,6 +1,12 @@
-// Диалог создания/редактирования правила автоматизации персоны. Форма: имя + тип источника →
-// параметры (зависят от типа) → условие (тихие часы/интервал/фильтр) → действие (гейт/полный ход
-// + инструкция). Сохранение мгновенное (POST/PUT), список обновится по realtime personas_changed.
+// Диалог создания/редактирования правила автоматизации персоны. Форма: имя + тип
+// источника → параметры (зависят от типа) → условие (тихие часы/интервал/фильтр) →
+// действие (гейт/полный ход + инструкция + запоминание). Сохранение мгновенное
+// (POST/PUT), список обновится по realtime personas_changed.
+//
+// Визуальный язык — тот же, что у формы задачи/привязок: секции Field, сегменты и
+// селекты через UI-кит, toggle-чипы для мультивыбора, нижний футер ModalActions.
+// Логика формы → AutomationRuleDto (buildArgs/initialForm) не менялась: ключи Args
+// и DTO остались прежними, бэкенд ждёт именно их.
 
 import { useState } from 'react';
 import { Modal, ModalActions, Field, TextField, TextArea, SegmentedControl, Toggle } from '../../components/ui';
@@ -151,24 +157,21 @@ export function AutomationRuleDialog({ persona, projects, rule, onClose }: {
 
   return (
     <Modal
-      width={540}
+      width={560}
       title={rule ? 'Правило автоматизации' : 'Новое правило автоматизации'}
       subtitle="Персона сама отреагирует на событие: решит, стоит ли вмешаться, и напишет в чат правила (или выполнит полный ход)."
       onClose={onClose}
       footer={<ModalActions confirmLabel={rule ? 'Сохранить' : 'Создать'} onConfirm={save} loading={saving} onCancel={onClose} />}
     >
       {/* Имя + активность */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div style={{ flex: 1 }}>
-          <Field label="Название правила">
+      <Field label="Название правила">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <TextField value={f.name} onChange={v => set('name', v)} placeholder="Напр. «Следить за релизами»" autoFocus />
-          </Field>
+          </div>
+          <ToggleLabel checked={f.enabled} onChange={v => set('enabled', v)} />
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, paddingTop: 18 }}>
-          <Toggle checked={f.enabled} onChange={v => set('enabled', v)} />
-          <span style={{ fontSize: 11, color: C.textMuted }}>{f.enabled ? 'вкл' : 'выкл'}</span>
-        </div>
-      </div>
+      </Field>
 
       {/* Тип источника */}
       <Field label="Событие" hint="Что запускает реакцию персоны.">
@@ -198,7 +201,7 @@ export function AutomationRuleDialog({ persona, projects, rule, onClose }: {
             {show(f.scheduleType === 'interval', (
               <TextField type="number" value={f.intervalMinutes} onChange={v => set('intervalMinutes', v)} placeholder="60" />
             )) || show(f.scheduleType !== 'interval', (
-              <TextField type="time" value={f.time} onChange={v => set('time', v)} style={{ maxWidth: 160 }} />
+              <TextField type="time" value={f.time} onChange={v => set('time', v)} style={{ maxWidth: 180 }} />
             ))}
           </div>
           {show(f.scheduleType === 'weekly', (
@@ -207,7 +210,8 @@ export function AutomationRuleDialog({ persona, projects, rule, onClose }: {
                 const iso = i + 1;
                 const active = f.weekdays.includes(iso);
                 return (
-                  <button key={iso} onClick={() => set('weekdays', active ? f.weekdays.filter(d => d !== iso) : [...f.weekdays, iso])}
+                  <button key={iso} type="button"
+                    onClick={() => set('weekdays', active ? f.weekdays.filter(d => d !== iso) : [...f.weekdays, iso])}
                     style={weekdayBtn(active)}>{lbl}</button>
                 );
               })}
@@ -222,9 +226,9 @@ export function AutomationRuleDialog({ persona, projects, rule, onClose }: {
           <div style={{ marginTop: 8 }}>
             <TextField value={f.glob} onChange={v => set('glob', v)} placeholder="**/*.md" mono />
           </div>
-          <div style={{ display: 'flex', gap: 14, marginTop: 8 }}>
-            <Check label="новые файлы" checked={f.watchCreated} onChange={v => set('watchCreated', v)} />
-            <Check label="изменённые" checked={f.watchChanged} onChange={v => set('watchChanged', v)} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <ToggleChip active={f.watchCreated} onClick={() => set('watchCreated', !f.watchCreated)}>Новые файлы</ToggleChip>
+            <ToggleChip active={f.watchChanged} onClick={() => set('watchChanged', !f.watchChanged)}>Изменённые</ToggleChip>
           </div>
         </Field>
       ))}
@@ -233,8 +237,8 @@ export function AutomationRuleDialog({ persona, projects, rule, onClose }: {
         <Field label="Заметки" hint="Источник: личный vault или notes/ проекта. Можно фильтровать по тегам/разделу.">
           <ProjectSelect value={f.noteSource} onChange={v => set('noteSource', v)} projects={projects} allowPersonal={true} />
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <div style={{ flex: 1 }}><TextField value={f.noteTags} onChange={v => set('noteTags', v)} placeholder="#тег1, #тег2" /></div>
-            <div style={{ flex: 1 }}><TextField value={f.noteSection} onChange={v => set('noteSection', v)} placeholder="папка/" /></div>
+            <div style={{ flex: 1, minWidth: 0 }}><TextField value={f.noteTags} onChange={v => set('noteTags', v)} placeholder="#тег1, #тег2" /></div>
+            <div style={{ flex: 1, minWidth: 0 }}><TextField value={f.noteSection} onChange={v => set('noteSection', v)} placeholder="папка/" /></div>
           </div>
         </Field>
       ))}
@@ -249,11 +253,11 @@ export function AutomationRuleDialog({ persona, projects, rule, onClose }: {
         <Field label="Смена статуса задачи" hint="Реакция на переход статуса (Todo/InProgress/Done). Пусто — любой.">
           <ProjectSelect value={f.taskProjectId} onChange={v => set('taskProjectId', v)} projects={projects} allowPersonal allowAny labelAny="Любой проект" />
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <SmallLabel>из статуса</SmallLabel>
               <StatusSelect value={f.taskFrom} onChange={v => set('taskFrom', v)} allowAny />
             </div>
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <SmallLabel>в статус</SmallLabel>
               <StatusSelect value={f.taskTo} onChange={v => set('taskTo', v)} allowAny />
             </div>
@@ -275,26 +279,32 @@ export function AutomationRuleDialog({ persona, projects, rule, onClose }: {
         <div style={{ marginTop: 8 }}>
           <TextArea value={f.instruction} onChange={v => set('instruction', v)} placeholder="Что делать персоне при срабатывании…" autoGrow maxHeight={160} />
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+          <Toggle checked={f.remember} onChange={v => set('remember', v)} />
+          <span style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans }}>
+            Запоминать в истории персоны
+          </span>
+        </div>
       </Field>
 
       {/* Условие */}
-      <Field label="Условие и троттлинг (опционально)" hint="Тихие часы и минимальный интервал между срабатываниями.">
+      <Field label="Условие и троттлинг" hint="Тихие часы и минимальный интервал между срабатываниями — опционально.">
         <div style={{ display: 'flex', gap: 8 }}>
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <SmallLabel>тихие часы с</SmallLabel>
             <TextField type="time" value={f.quietFrom} onChange={v => set('quietFrom', v)} style={{ maxWidth: 160 }} />
           </div>
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <SmallLabel>до</SmallLabel>
             <TextField type="time" value={f.quietTo} onChange={v => set('quietTo', v)} style={{ maxWidth: 160 }} />
           </div>
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <SmallLabel>интервал, мин</SmallLabel>
             <TextField type="number" value={f.minInterval} onChange={v => set('minInterval', v)} placeholder="5" />
           </div>
         </div>
         <div style={{ marginTop: 8 }}>
-          <TextField value={f.onlyIf} onChange={v => set('onlyIf', v)} placeholder="Доп. условие для персоны: «реагируй, только если касается деплоя»" />
+          <TextField value={f.onlyIf} onChange={v => set('onlyIf', v)} placeholder="Доп. условие: «реагируй, только если касается деплоя»" />
         </div>
       </Field>
     </Modal>
@@ -331,32 +341,50 @@ function StatusSelect({ value, onChange, allowAny }: { value: string; onChange: 
   );
 }
 
-function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+// Toggle + подпись «вкл/выкл» — используется в строке имени правила
+function ToggleLabel({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: FONT.sans, fontSize: 13, color: C.textSecondary }}>
-      <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} />
-      {label}
-    </label>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+      <Toggle checked={checked} onChange={onChange} />
+      <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>{checked ? 'вкл' : 'выкл'}</span>
+    </div>
+  );
+}
+
+// Мультивыбор-пилюля (новые/изменённые файлы, дни недели) — активный сегмент accent
+function ToggleChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} style={{
+      padding: '7px 12px', borderRadius: R.lg, cursor: 'pointer',
+      border: `1px solid ${active ? C.accent : C.border}`,
+      background: active ? C.accentLight : C.bgWhite,
+      color: active ? C.accent : C.textSecondary,
+      fontSize: 12.5, fontWeight: 600, fontFamily: FONT.sans,
+      transition: 'background 0.15s, border-color 0.15s, color 0.15s',
+    }}>
+      {children}
+    </button>
   );
 }
 
 function SmallLabel({ children }: { children: React.ReactNode }) {
-  return <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>{children}</div>;
+  return <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4, fontFamily: FONT.sans }}>{children}</div>;
 }
 
 // ─── Стили ──────────────────────────────────────────────────────────────────────
 
 const selectStyle: React.CSSProperties = {
-  width: '100%', padding: '9px 11px', borderRadius: R.md, border: `1px solid ${C.border}`,
-  background: C.bgWhite, color: C.textHeading, fontSize: 13.5, fontFamily: FONT.sans, outline: 'none',
-  boxSizing: 'border-box',
+  width: '100%', padding: '10px 13px', borderRadius: R.xl, border: `1px solid ${C.border}`,
+  background: C.bgWhite, color: C.textHeading, fontSize: 14, fontFamily: FONT.sans, outline: 'none',
+  boxSizing: 'border-box', height: 42, cursor: 'pointer',
 };
 
 function weekdayBtn(active: boolean): React.CSSProperties {
   return {
-    flex: 1, padding: '8px 0', borderRadius: R.md, border: 'none', cursor: 'pointer',
-    fontSize: 12, fontWeight: 600, fontFamily: FONT.sans,
-    background: active ? C.accent : C.bgPanel, color: active ? C.onAccent : C.textSecondary,
+    flex: 1, padding: '8px 0', borderRadius: R.lg, border: `1px solid ${active ? C.accent : C.border}`,
+    cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: FONT.sans,
+    background: active ? C.accentLight : C.bgWhite, color: active ? C.accent : C.textSecondary,
+    transition: 'background 0.15s, border-color 0.15s, color 0.15s',
   };
 }
 

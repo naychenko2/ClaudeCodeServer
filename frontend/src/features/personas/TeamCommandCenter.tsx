@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   Users, MessageSquare, Mic, Workflow, Plus, CheckCircle2, Repeat, Trash2,
-  Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight, MoreHorizontal, Settings, Wand2, Search,
+  Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight, ChevronDown, MoreHorizontal, Settings, Wand2, Search,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import type { Persona, Project, Session, Task, TeamMemoryEntry, TeamMemberDraft } from '../../types';
@@ -217,7 +217,7 @@ function OverviewPanel(props: {
         <div style={cardStyle}>
           <SectionLabel>Последняя активность</SectionLabel>
           <div style={{ display: 'flex', flexDirection: 'column', marginTop: 8 }}>
-            {recent.length === 0 ? <Muted>Пока нет событий.</Muted> : recent.map(e => <EventRowView key={e.id} e={e} personaById={personaById} onOpen={onOpenEvent} />)}
+            {recent.length === 0 ? <Muted>Пока нет событий.</Muted> : recent.map(e => <EventCard key={e.id} e={e} personaById={personaById} onOpen={onOpenEvent} compact />)}
           </div>
           {events && events.length > 6 && <button onClick={() => onSwitchTab('activity')} style={{ ...linkBtn, marginTop: 8 }}>Вся активность →</button>}
         </div>
@@ -376,55 +376,70 @@ function Timeline({ events, personaById, onOpen }: {
           <div style={dayHeaderStyle}>{label}</div>
           {/* вертикальная линия таймлайна */}
           <div style={{ position: 'absolute', left: 4, top: 30, bottom: 6, width: 2, background: C.divider }} />
-          {rows.map(e => <TimelineEvent key={e.id} e={e} personaById={personaById} onOpen={onOpen} />)}
+          {rows.map(e => <EventCard key={e.id} e={e} personaById={personaById} onOpen={onOpen} />)}
         </div>
       ))}
     </div>
   );
 }
 
-function TimelineEvent({ e, personaById, onOpen }: {
-  e: EventRow; personaById: (id: string) => Persona | undefined; onOpen: (e: EventRow) => void;
+// ===== EventCard — нарядная карточка события (full с expand + compact для обзора) =====
+function EventCard({ e, personaById, onOpen, compact }: {
+  e: EventRow; personaById: (id: string) => Persona | undefined; onOpen: (e: EventRow) => void; compact?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const target = eventTarget(e);
-  const meta = EVENT_META[e.type] ?? { Icon: Settings, color: C.textMuted };
+  const meta = EVENT_META[e.type] ?? { Icon: Settings, color: C.textMuted, bg: C.bgInset, label: e.type };
   const p = personaById(e.actor);
   const clickable = !!target;
+  const nav = navLabelFor(e.type);
+
+  const onCardClick = () => { if (compact) { if (clickable) onOpen(e); } else setExpanded(v => !v); };
+  const openObj = (ev: React.MouseEvent) => { ev.stopPropagation(); onOpen(e); };
+
   return (
     <div style={{ position: 'relative' }}>
       {/* точка-маркер цветом категории */}
-      <span style={{
-        position: 'absolute', left: -22, top: 12, width: 10, height: 10, borderRadius: '50%',
-        background: meta.color, border: `2px solid ${C.bgMain}`, boxSizing: 'border-box', boxShadow: `0 0 0 1px ${meta.color}`,
-      }} />
-      <button onClick={() => clickable && onOpen(e)} disabled={!clickable} style={clickable ? tlRowClickable : tlRowStatic}>
-        <meta.Icon size={15} color={meta.color} />
-        {p ? <PersonaAvatar persona={p} size={20} /> : <span style={actorDot}>{e.actor === 'user' ? 'Я' : <Settings size={13} color={C.textMuted} />}</span>}
-        <span style={{ fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.summary}</span>
-        <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>{shortAgo(e.ts)}</span>
-        {clickable && <ChevronRight size={14} color={C.border} />}
-      </button>
+      <span style={{ position: 'absolute', left: -22, top: 14, width: 10, height: 10, borderRadius: '50%', background: meta.color, border: `2px solid ${C.bgMain}`, boxSizing: 'border-box', boxShadow: `0 0 0 1px ${meta.color}` }} />
+      <div style={{ ...eventCardStyle, cursor: clickable || !compact ? 'pointer' : 'default' }} onClick={onCardClick}>
+        {/* цветная полоса категории */}
+        <div style={{ width: 3, borderRadius: 2, background: meta.color, flexShrink: 0, alignSelf: 'stretch' }} />
+        {/* чип-иконка */}
+        <div style={{ ...chipIconStyle, background: meta.bg }}><meta.Icon size={15} color={meta.color} /></div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={actionLabelStyle}>{meta.label}</span>
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>{shortAgo(e.ts)}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+            {p ? <PersonaAvatar persona={p} size={20} /> : <span style={actorDot}>{e.actor === 'user' ? 'Я' : <Settings size={12} color={C.textMuted} />}</span>}
+            <span style={objTitleStyle} onClick={clickable ? openObj : undefined}>{e.summary}</span>
+          </div>
+        </div>
+        {clickable ? (compact
+          ? <ChevronRight size={16} color={C.border} style={{ flexShrink: 0 }} />
+          : <ChevronDown size={16} color={C.textMuted} style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform .15s', flexShrink: 0 }} />)
+          : null}
+      </div>
+      {/* раскрытие (full only) */}
+      {!compact && expanded && (
+        <div style={expandBodyStyle}>
+          <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>{e.summary}</div>
+          {clickable && <button onClick={openObj} style={{ ...linkBtn, marginTop: 8 }}>Открыть {nav} →</button>}
+        </div>
+      )}
     </div>
   );
 }
 
-// ===== Compact EventRow (для обзора) =====
-function EventRowView({ e, personaById, onOpen }: {
-  e: EventRow; personaById: (id: string) => Persona | undefined; onOpen: (e: EventRow) => void;
-}) {
-  const target = eventTarget(e);
-  const meta = EVENT_META[e.type] ?? { Icon: Settings, color: C.textMuted };
-  const p = personaById(e.actor);
-  const clickable = !!target;
-  return (
-    <button onClick={() => clickable && onOpen(e)} disabled={!clickable} style={clickable ? evRowClickable : evRowStatic}>
-      <meta.Icon size={15} color={meta.color} />
-      {p ? <PersonaAvatar persona={p} size={20} /> : <span style={actorDot}>{e.actor === 'user' ? 'Я' : <Settings size={13} color={C.textMuted} />}</span>}
-      <span style={{ fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.summary}</span>
-      <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, flexShrink: 0 }}>{shortAgo(e.ts)}</span>
-      {clickable && <ChevronRight size={14} color={C.border} />}
-    </button>
-  );
+function navLabelFor(type: string): string {
+  if (type === 'chat_turn' || type === 'meeting' || type === 'pipeline') return 'чат';
+  if (type.startsWith('task_')) return 'задачу';
+  if (type === 'memory_learned') return 'память персоны';
+  if (type === 'note_changed') return 'заметку';
+  if (type === 'knowledge_changed') return 'базу';
+  if (type === 'team_joined' || type === 'team_left') return 'персону';
+  return '';
 }
 
 // ===== Диалоги =====
@@ -581,11 +596,19 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'всё' }, { key: 'tasks', label: 'задачи' }, { key: 'memory', label: 'память' },
   { key: 'chats', label: 'чаты' }, { key: 'content', label: 'контент' }, { key: 'team', label: 'команда' },
 ];
-const EVENT_META: Record<string, { Icon: ComponentType<{ size?: number; color?: string }>; color: string }> = {
-  chat_turn: { Icon: MessageSquare, color: C.accent }, meeting: { Icon: Mic, color: C.accent }, pipeline: { Icon: Workflow, color: C.accent },
-  task_created: { Icon: Plus, color: C.success }, task_completed: { Icon: CheckCircle2, color: C.success }, task_spawned: { Icon: Repeat, color: C.success }, task_deleted: { Icon: Trash2, color: C.danger },
-  memory_learned: { Icon: Brain, color: C.info }, knowledge_changed: { Icon: BookOpen, color: C.info }, note_changed: { Icon: FileText, color: C.info },
-  team_joined: { Icon: UserPlus, color: C.textSecondary }, team_left: { Icon: UserMinus, color: C.textSecondary },
+const EVENT_META: Record<string, { Icon: ComponentType<{ size?: number; color?: string }>; color: string; bg: string; label: string }> = {
+  chat_turn: { Icon: MessageSquare, color: C.accent, bg: C.accentLight, label: 'Ответ в чате' },
+  meeting: { Icon: Mic, color: C.accent, bg: C.accentLight, label: 'Совещание' },
+  pipeline: { Icon: Workflow, color: C.accent, bg: C.accentLight, label: 'Конвейер' },
+  task_created: { Icon: Plus, color: C.success, bg: C.successBg, label: 'Задача создана' },
+  task_completed: { Icon: CheckCircle2, color: C.success, bg: C.successBg, label: 'Задача завершена' },
+  task_spawned: { Icon: Repeat, color: C.accent, bg: C.accentLight, label: 'Следующий экземпляр' },
+  task_deleted: { Icon: Trash2, color: C.danger, bg: C.dangerBg, label: 'Задача удалена' },
+  memory_learned: { Icon: Brain, color: C.info, bg: C.infoBg, label: 'Запомнил(а) факт' },
+  knowledge_changed: { Icon: BookOpen, color: C.info, bg: C.infoBg, label: 'База знаний' },
+  note_changed: { Icon: FileText, color: C.info, bg: C.infoBg, label: 'Заметка' },
+  team_joined: { Icon: UserPlus, color: C.success, bg: C.successBg, label: 'В команде' },
+  team_left: { Icon: UserMinus, color: C.textSecondary, bg: C.bgInset, label: 'Покинул(а) команду' },
 };
 const SPECIALTY_LABEL: Record<string, string> = {
   analyst: 'Аналитик', planner: 'Планировщик', reviewer: 'Ревьюер', executor: 'Исполнитель',
@@ -641,10 +664,11 @@ const tabCountStyle: CSSProperties = { marginLeft: 'auto', fontSize: 12, color: 
 const filterBarStyle: CSSProperties = { position: 'sticky', top: 44, zIndex: 4, background: C.bgMain, padding: '8px 0 10px', borderBottom: `1px solid ${C.borderLight}` };
 const filterChip: CSSProperties = { border: 'none', background: C.bgInset, color: C.textSecondary, borderRadius: R.sm, padding: '3px 9px', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans };
 const filterChipActive: CSSProperties = { ...filterChip, background: C.accentLight, color: C.accent };
-const dayHeaderStyle: CSSProperties = { position: 'sticky', top: 88, zIndex: 3, background: C.bgMain, padding: '8px 0 6px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: C.textMuted, fontFamily: FONT.sans };
-const evRowClickable: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '6px 4px', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: R.sm };
-const evRowStatic: CSSProperties = { ...evRowClickable, cursor: 'default' };
-const tlRowClickable: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 4px 9px', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: R.sm, borderBottom: `1px solid ${C.divider}` };
-const tlRowStatic: CSSProperties = { ...tlRowClickable, cursor: 'default' };
+const dayHeaderStyle: CSSProperties = { position: 'sticky', top: 88, zIndex: 3, background: C.bgMain, padding: '8px 0 6px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: C.textMuted, fontFamily: FONT.sans, borderBottom: `1px solid ${C.borderLight}` };
 const actorDot: CSSProperties = { width: 20, height: 20, borderRadius: '50%', background: C.bgInset, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: C.textSecondary, flexShrink: 0 };
+const eventCardStyle: CSSProperties = { display: 'flex', alignItems: 'stretch', gap: 10, width: '100%', background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, boxShadow: SHADOW.card, padding: '10px 12px', transition: 'border-color .12s, box-shadow .12s' };
+const chipIconStyle: CSSProperties = { width: 28, height: 28, borderRadius: R.md, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 };
+const actionLabelStyle: CSSProperties = { fontSize: 11, fontWeight: 700, color: C.textSecondary, fontFamily: FONT.sans, textTransform: 'uppercase', letterSpacing: '0.04em' };
+const objTitleStyle: CSSProperties = { fontSize: 13.5, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' };
+const expandBodyStyle: CSSProperties = { padding: '10px 12px 12px 50px', background: C.bgInset, borderRadius: R.md, marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 };
 const checkDot: CSSProperties = { width: 16, height: 16, borderRadius: '50%', flexShrink: 0 };

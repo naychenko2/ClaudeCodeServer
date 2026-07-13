@@ -268,6 +268,7 @@ export interface WorkflowAgentInfo {
 export type ServerMessage = { sessionId: string } & (
   | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   | { type: 'text_delta'; text: string }
+  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean }
   | { type: 'thinking_delta'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown; parentToolUseId?: string }
   | { type: 'tool_input_delta'; toolUseId: string; partialJson: string }

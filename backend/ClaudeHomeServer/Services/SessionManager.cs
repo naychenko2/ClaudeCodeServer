@@ -905,6 +905,13 @@ public class SessionManager
         // ДО пересоздания процесса — новый персона-слой применяется уже к этому ходу
         await RouteGroupSpeakerAsync(sessionId, entry, text);
 
+        // Сервер-инициированная отправка (автоматизация/задача): клиент не добавлял сообщение
+        // оптимистично — покажем его сразу, до тяжёлого старта CLI-процесса, чтобы было видно,
+        // что именно обрабатывается. Ввод пользователя и внутренние директивы цикла не рассылаем.
+        if (auto && !systemDirective)
+            await BroadcastSessionMessageAsync(sessionId,
+                new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null, senderPersonaId, auto));
+
         await EnsureProcessAsync(sessionId, entry);
 
         // Авторство реплик хода: text-сообщения истории получают персону на момент хода

@@ -22,6 +22,13 @@ public record SessionStartedMessage(string ClaudeSessionId, bool IsResume, strin
 public record TextDeltaMessage(string Text)
     : ServerMessage("text_delta");
 
+// Текст пользовательского сообщения для сервер-инициированных отправок (автоматизация/задача):
+// клиент не добавлял его оптимистично — бродкастим, чтобы промпт появился в чате сразу,
+// а не по перезагрузке истории. Только для auto && !systemDirective (ввод пользователя уже
+// виден на клиенте, внутренние директивы цикла «до готово» показывать не нужно).
+public record UserMessageMessage(string Text, IReadOnlyList<string>? AttachedPaths, string? SenderPersonaId, bool Auto)
+    : ServerMessage("user_message");
+
 public record ThinkingDeltaMessage(string Text)
     : ServerMessage("thinking_delta");
 

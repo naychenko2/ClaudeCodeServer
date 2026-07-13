@@ -3,21 +3,24 @@
 // @упоминания). Правила живут в Persona.AutomationRules; мутации — мгновенно
 // через REST, список обновляется по realtime personas_changed (как привязки/память).
 //
-// Вёрстка повторяет соседние вкладки студии (Задачи/Умения/Память): хедер-сводка,
-// карточки сущностей с ясной иерархией, empty-state с lucide-иконкой. Карточка
-// правила — иконка триггера + имя + строки «Событие»/«Действие» + тумблер + ⋯-меню.
+// Вёрстка повторяет карточку привязки 1-в-1 (PersonaBindingsPanel): тот же
+// контейнер 680 по центру, плоский бордер без тени, hover→accent, однорядный
+// лейаут (круглая иконка типа + имя + сводка-подзаголовок + бейдж статуса + ⋯-меню).
 
 import { useState } from 'react';
+import type { CSSProperties } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import {
-  Plus, Zap, FlaskConical, Pencil, Trash2, MoreHorizontal,
+  Plus, Zap, FlaskConical, Pencil, Trash2,
   Clock, FileText, StickyNote, GitBranch, ListChecks, AtSign,
-  MessageSquare, Wrench,
+  CheckCircle2, Power,
 } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaAutomationRule, Project, AutomationTriggerType, AutomationActionWeight } from '../../types';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
-import { Toggle, Menu, MenuItem, ConfirmDialog } from '../../components/ui';
+import { Menu, MenuItem, ConfirmDialog } from '../../components/ui';
+import { SectionLabel } from '../tasks/bits';
 import { AutomationRuleDialog } from './AutomationRuleDialog';
 
 export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: {
@@ -28,9 +31,8 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [confirmRule, setConfirmRule] = useState<PersonaAutomationRule | null>(null);
-
-  const enabledCount = rules.filter(r => r.enabled).length;
 
   async function toggle(rule: PersonaAutomationRule, enabled: boolean) {
     try { await api.personas.updateAutomation(persona.id, rule.id, { enabled }); }
@@ -48,30 +50,26 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Шапка-сводка (как в «Задачах»): счётчик + кнопка добавления */}
+    <div style={{ height: '100%', overflowY: 'auto', background: C.bgMain }}>
       <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-        padding: isMobile ? '14px 16px 10px' : '18px 22px 12px', flexShrink: 0,
+        maxWidth: 680, margin: '0 auto', boxSizing: 'border-box',
+        padding: isMobile ? '20px 16px 32px' : '26px 32px 40px',
+        display: 'flex', flexDirection: 'column', gap: 0, fontFamily: FONT.sans,
       }}>
-        <div style={{ fontFamily: FONT.sans, fontSize: 13, color: C.textSecondary }}>
-          {rules.length > 0
-            ? <>Правил — <b style={{ color: C.textHeading }}>{rules.length}</b>
-              {enabledCount > 0 && <>, <b style={{ color: accent }}>{enabledCount}</b> активно</>}</>
-            : 'Правил автоматизации нет'}
+        {/* Заголовок секции + счётчик + подзаголовок (как в «Умениях и правилах») */}
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+          <SectionLabel>Проактивность</SectionLabel>
+          <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
+            {rulesCounter(rules)}
+          </span>
         </div>
-        <button onClick={() => setCreating(true)} style={addBtn(accent)}>
-          <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-          Добавить правило
-        </button>
-      </div>
+        <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.5, marginTop: 4 }}>
+          Персона сама реагирует на события — таймер, файлы, заметки, коммиты, смену статуса задач и @упоминания. Изменения сохраняются сразу.
+        </div>
 
-      {/* Список правил */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '4px 16px 20px' : '4px 22px 24px' }}>
-        {rules.length === 0 ? (
-          <EmptyState onCreate={() => setCreating(true)} />
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {/* Список правил */}
+        {rules.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
             {rules.map(rule => (
               <RuleCard
                 key={rule.id}
@@ -81,14 +79,28 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
                 isMobile={isMobile}
                 busy={busyId === rule.id}
                 menuOpen={menuId === rule.id}
-                onToggle={v => toggle(rule, v)}
+                hovered={hoveredId === rule.id}
+                onHover={v => setHoveredId(h => (v ? rule.id : (h === rule.id ? null : h)))}
+                onToggle={v => { setMenuId(null); void toggle(rule, v); }}
                 onTest={() => { setMenuId(null); void test(rule); }}
                 onEdit={() => { setMenuId(null); setEditing(rule); }}
                 onAskDelete={() => { setMenuId(null); setConfirmRule(rule); }}
-                onToggleMenu={() => setMenuId(menuId === rule.id ? null : rule.id)}
+                onToggleMenu={() => setMenuId(m => m === rule.id ? null : rule.id)}
                 onCloseMenu={() => setMenuId(null)}
               />
             ))}
+          </div>
+        )}
+
+        {/* Пустое состояние — внутри 680-контейнера, в духе привязок */}
+        {rules.length === 0 && (
+          <EmptyState onCreate={() => setCreating(true)} />
+        )}
+
+        {/* Кнопка добавления под списком (как «Добавить привязку» в соседней вкладке) */}
+        {rules.length > 0 && (
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
+            <AddRuleButton onClick={() => setCreating(true)} accent={accent} />
           </div>
         )}
       </div>
@@ -116,9 +128,9 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
   );
 }
 
-// ─── Карточка правила ──────────────────────────────────────────────────────────
+// ─── Карточка правила (хром 1-в-1 как карточка привязки) ───────────────────────
 
-function RuleCard({ rule, accent, projects, isMobile, busy, menuOpen,
+function RuleCard({ rule, accent, projects, isMobile, busy, menuOpen, hovered, onHover,
   onToggle, onTest, onEdit, onAskDelete, onToggleMenu, onCloseMenu,
 }: {
   rule: PersonaAutomationRule;
@@ -127,6 +139,8 @@ function RuleCard({ rule, accent, projects, isMobile, busy, menuOpen,
   isMobile?: boolean;
   busy: boolean;
   menuOpen: boolean;
+  hovered: boolean;
+  onHover: (v: boolean) => void;
   onToggle: (v: boolean) => void;
   onTest: () => void;
   onEdit: () => void;
@@ -135,161 +149,183 @@ function RuleCard({ rule, accent, projects, isMobile, busy, menuOpen,
   onCloseMenu: () => void;
 }) {
   const trig = TRIGGER_META[rule.trigger.type] ?? TRIGGER_META.timer;
-  const TriggerIcon = trig.Icon;
-  const act = ACTION_META[rule.action.weight];
-  const ActionIcon = act.Icon;
+  const act = ACTION_META[rule.action.weight] ?? ACTION_META.gate;
   const details = triggerDetails(rule, projects);
-  const disabled = !rule.enabled;
+  const dim = !rule.enabled;
+  const subtitle = `${trig.label}${details ? ' · ' + details : ''} · ${act.label}`;
 
   return (
-    <div style={{
-      display: 'flex', gap: 11,
-      background: C.bgWhite, border: `1px solid ${C.borderLight}`,
-      boxShadow: SHADOW.card, borderRadius: R.xl,
-      padding: '11px 12px', opacity: disabled ? 0.6 : 1,
-      transition: 'opacity 0.15s',
-    }}>
-      {/* Плитка-иконка триггера (цветная) */}
-      <div style={{
-        width: 38, height: 38, borderRadius: R.md, flexShrink: 0,
-        background: `${accent}1A`, color: accent,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        <TriggerIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-      </div>
+    <div
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
+      style={{
+        background: C.bgWhite,
+        border: `1px solid ${hovered || menuOpen ? accent : C.border}`,
+        borderRadius: R.xl, padding: '10px 14px',
+        transition: 'border-color 0.15s, background 0.6s',
+      }}
+    >
+      {/* Однорядный лейаут: иконка типа · имя+сводка · бейдж+⋯ */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <TriggerTypeIcon type={rule.trigger.type} dim={dim} />
 
-      {/* Контент: имя + строки «Событие» / «Действие» */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontFamily: FONT.sans, fontSize: 14, fontWeight: 600, color: C.textHeading,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
-          {rule.name || 'Без названия'}
+        <div style={{ flex: 1, minWidth: 0, opacity: dim ? 0.55 : 1 }}>
+          <div style={{
+            fontSize: 13.5, fontWeight: 600, color: C.textHeading,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {rule.name || 'Без названия'}
+          </div>
+          <div style={{
+            fontSize: 12, color: C.textSecondary, marginTop: 1,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {subtitle}
+          </div>
         </div>
 
-        {/* Событие */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 8, flexWrap: 'wrap' }}>
-          <MetaChip Icon={TriggerIcon} label={trig.label} accent={accent} />
-          {details && <MetaDetail>{details}</MetaDetail>}
-        </div>
-
-        {/* Действие */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 4, flexWrap: 'wrap' }}>
-          <MetaChip Icon={ActionIcon} label={act.label} />
-          {rule.action.instruction && (
-            <MetaDetail>{truncate(rule.action.instruction, 80)}</MetaDetail>
-          )}
-        </div>
-
-        {/* Нижняя строка действий: «Проверить» вынесена отдельно (частое действие) */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 9 }}>
-          <button onClick={onTest} disabled={busy} style={testBtn(busy)}>
-            <FlaskConical size={13} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            {busy ? 'Запускаю…' : 'Проверить'}
-          </button>
-        </div>
-      </div>
-
-      {/* Правая колонка: тумблер + ⋯-меню */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
-        <Toggle checked={rule.enabled} onChange={onToggle} />
-        <div style={{ position: 'relative' }}>
-          <button
-            onClick={onToggleMenu}
-            aria-label="Действия"
-            disabled={busy}
-            style={iconMenuBtn(isMobile)}
-          >
-            <MoreHorizontal size={16} strokeWidth={ICON_STROKE} />
-          </button>
-          {menuOpen && (
-            <Menu onClose={onCloseMenu} align="right" top={32} minWidth={180}>
-              <MenuItem
-                icon={<Pencil size={15} strokeWidth={ICON_STROKE} />}
-                label="Изменить"
-                onClick={onEdit}
-              />
-              <MenuItem
-                danger
-                icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
-                label="Удалить"
-                onClick={onAskDelete}
-              />
-            </Menu>
-          )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <RuleStatusBadge enabled={rule.enabled} />
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={onToggleMenu}
+              aria-label="Действия"
+              disabled={busy}
+              style={{
+                width: isMobile ? 36 : 28, height: isMobile ? 36 : 28, border: 'none',
+                background: 'transparent', borderRadius: R.md, cursor: 'pointer',
+                color: C.textMuted, fontSize: 16, lineHeight: 1,
+                visibility: isMobile || hovered || menuOpen ? 'visible' : 'hidden',
+              }}
+            >⋯</button>
+            {menuOpen && (
+              <Menu onClose={onCloseMenu} align="right" top={30} minWidth={180}>
+                <MenuItem
+                  icon={<Pencil size={15} strokeWidth={ICON_STROKE} />}
+                  label="Изменить"
+                  onClick={onEdit}
+                />
+                <MenuItem
+                  icon={<FlaskConical size={15} strokeWidth={ICON_STROKE} />}
+                  label={busy ? 'Запускаю…' : 'Проверить'}
+                  disabled={busy}
+                  onClick={onTest}
+                />
+                <MenuItem
+                  icon={rule.enabled
+                    ? <Power size={15} strokeWidth={ICON_STROKE} />
+                    : <CheckCircle2 size={15} strokeWidth={ICON_STROKE} />}
+                  label={rule.enabled ? 'Выключить' : 'Включить'}
+                  onClick={() => onToggle(!rule.enabled)}
+                />
+                <div style={{ height: 1, background: C.borderLight, margin: '4px 6px' }} />
+                <MenuItem
+                  danger
+                  icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
+                  label="Удалить"
+                  onClick={onAskDelete}
+                />
+              </Menu>
+            )}
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-// ─── Empty-state ───────────────────────────────────────────────────────────────
+// ─── Круглая иконка типа триггера (как BindingTypeIcon — без залитой плитки) ───
+
+function TriggerTypeIcon({ type, size = 32, dim }: { type: AutomationTriggerType; size?: number; dim?: boolean }) {
+  const meta = TRIGGER_META[type] ?? TRIGGER_META.timer;
+  return (
+    <span style={{
+      width: size, height: size, borderRadius: R.full, flexShrink: 0,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: dim ? C.bgSelected : meta.bg, color: dim ? C.textMuted : meta.fg,
+    }}>
+      <meta.Icon size={size >= 32 ? 16 : 13} strokeWidth={ICON_STROKE} />
+    </span>
+  );
+}
+
+// ─── Бейдж статуса правила (как BindingModeBadge: активно/выкл) ────────────────
+
+function RuleStatusBadge({ enabled }: { enabled: boolean }) {
+  const bg = enabled ? C.accentLight : C.bgSelected;
+  const fg = enabled ? C.accent : C.textMuted;
+  return (
+    <span style={{
+      borderRadius: R.pill, padding: '2px 8px', fontSize: 10.5, fontWeight: 600,
+      letterSpacing: '0.02em', background: bg, color: fg, flexShrink: 0, whiteSpace: 'nowrap',
+    }}>
+      {enabled ? 'активно' : 'выкл'}
+    </span>
+  );
+}
+
+// ─── Empty-state (внутри 680-контейнера, в духе привязок) ──────────────────────
 
 function EmptyState({ onCreate }: { onCreate: () => void }) {
   return (
     <div style={{
-      marginTop: 10, border: `1.5px dashed ${C.dashed}`, borderRadius: R.xl,
-      padding: '30px 22px', textAlign: 'center',
+      marginTop: 14, border: `1.5px dashed ${C.dashed}`, borderRadius: R.xl,
+      padding: '24px 22px', textAlign: 'center',
       display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12,
     }}>
-      <div style={{ color: C.dashed }}>
-        <Zap size={40} strokeWidth={1.5} />
+      <div style={{ color: C.textMuted }}>
+        <Zap size={26} strokeWidth={1.5} />
       </div>
-      <div style={{ maxWidth: 340, fontFamily: FONT.sans, fontSize: 13.5, color: C.textSecondary, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>
+        Подключи первое правило
+      </div>
+      <div style={{ maxWidth: 360, fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
         Персона будет сама реагировать на события: таймер, изменения файлов и заметок,
         новые коммиты, смену статуса задач и @упоминания. По умолчанию она сначала решает,
-        стоит ли вмешиваться, и пишет в отдельный чат правила.
+        стоит ли вмешиваться.
       </div>
       <button onClick={onCreate} style={emptyAddBtn}>
         <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-        Создать первое правило
+        Создать правило
       </button>
     </div>
   );
 }
 
-// ─── Чип и детальная подпись в карточке ────────────────────────────────────────
-
-function MetaChip({ Icon, label, accent }: { Icon: React.ComponentType<{ size?: number; strokeWidth?: number; style?: React.CSSProperties }>; label: string; accent?: string }) {
+// Пунктирная кнопка «+ Добавить правило» (как AddBindingButton)
+function AddRuleButton({ onClick, accent }: { onClick: () => void; accent: string }) {
   return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      fontSize: 11, fontWeight: 600, letterSpacing: '0.01em',
-      padding: '2px 8px', borderRadius: R.pill, whiteSpace: 'nowrap',
-      background: accent ? `${accent}1F` : C.bgSelected,
-      color: accent ?? C.textSecondary,
-    }}>
-      <Icon size={11} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-      {label}
-    </span>
+    <button
+      onClick={onClick}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = accent; e.currentTarget.style.color = accent; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = C.dashed; e.currentTarget.style.color = C.textSecondary; }}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        border: `1.5px dashed ${C.dashed}`, background: 'transparent', color: C.textSecondary,
+        borderRadius: R.lg, padding: '7px 14px', fontSize: 12.5, fontWeight: 600,
+        cursor: 'pointer', fontFamily: FONT.sans, transition: 'border-color 0.15s, color 0.15s',
+      }}
+    >
+      <Plus size={14} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+      Добавить правило
+    </button>
   );
 }
 
-function MetaDetail({ children }: { children: React.ReactNode }) {
-  return (
-    <span style={{
-      fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, lineHeight: 1.4,
-      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-    }}>
-      {children}
-    </span>
-  );
-}
+// ─── Метаданные триггеров и действий (тона — как BINDING_TYPE_META) ────────────
 
-// ─── Метаданные триггеров и действий ───────────────────────────────────────────
-
-const TRIGGER_META: Record<AutomationTriggerType, { label: string; Icon: React.ComponentType<{ size?: number; strokeWidth?: number; style?: React.CSSProperties }> }> = {
-  timer:      { label: 'Таймер',       Icon: Clock },
-  file:       { label: 'Файлы',        Icon: FileText },
-  note:       { label: 'Заметки',      Icon: StickyNote },
-  gitCommit:  { label: 'Коммиты',      Icon: GitBranch },
-  taskStatus: { label: 'Статус задачи', Icon: ListChecks },
-  mention:    { label: 'Упоминание',   Icon: AtSign },
+const TRIGGER_META: Record<AutomationTriggerType, { label: string; Icon: LucideIcon; bg: string; fg: string }> = {
+  timer:      { label: 'Таймер',         Icon: Clock,      bg: C.accentLight, fg: C.accent },
+  file:       { label: 'Файлы',          Icon: FileText,   bg: C.bgSelected,  fg: C.textSecondary },
+  note:       { label: 'Заметки',        Icon: StickyNote, bg: C.successBg,   fg: C.successText },
+  gitCommit:  { label: 'Коммиты',        Icon: GitBranch,  bg: C.infoBg,      fg: C.info },
+  taskStatus: { label: 'Статус задачи',   Icon: ListChecks, bg: C.planLight,   fg: C.plan },
+  mention:    { label: 'Упоминание',     Icon: AtSign,     bg: C.warningBg,   fg: C.warning },
 };
 
-const ACTION_META: Record<AutomationActionWeight, { label: string; Icon: React.ComponentType<{ size?: number; strokeWidth?: number; style?: React.CSSProperties }> }> = {
-  gate: { label: 'Сообщить', Icon: MessageSquare },
-  work: { label: 'Полный ход', Icon: Wrench },
+const ACTION_META: Record<AutomationActionWeight, { label: string }> = {
+  gate: { label: 'Сообщить' },
+  work: { label: 'Полный ход' },
 };
 
 // Короткие подписи статусов задач для детали триггера taskStatus
@@ -299,7 +335,7 @@ const TASK_STATUS_SHORT: Record<string, string> = {
   Done: 'Готово',
 };
 
-// Человекопонятная подпись параметров триггера (деталь под чипом типа)
+// Человекопонятная подпись параметров триггера (становится частью сводки-подзаголовка)
 function triggerDetails(rule: PersonaAutomationRule, projects: Project[]): string {
   const a = ((rule.trigger.args?.schedule as Record<string, any>) ?? rule.trigger.args ?? {}) as Record<string, any>;
   switch (rule.trigger.type) {
@@ -345,42 +381,24 @@ function triggerDetails(rule: PersonaAutomationRule, projects: Project[]): strin
   }
 }
 
-function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n).trimEnd() + '…' : s;
+// Счётчик «N правил · M активно» для заголовка секции (как bindingsCounter)
+function rulesPlural(n: number): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return 'правило';
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'правила';
+  return 'правил';
+}
+function rulesCounter(rules: PersonaAutomationRule[]): string {
+  if (rules.length === 0) return 'нет правил';
+  const enabled = rules.filter(r => r.enabled).length;
+  return `${rules.length} ${rulesPlural(rules.length)}${enabled ? ` · ${enabled} активно` : ''}`;
 }
 
 // ─── Стили ──────────────────────────────────────────────────────────────────────
 
-function addBtn(accent: string): React.CSSProperties {
-  return {
-    display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
-    border: `1px solid ${accent}`, background: C.accentLight, color: accent,
-    borderRadius: R.lg, padding: '8px 14px', cursor: 'pointer',
-    fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
-  };
-}
-
-const emptyAddBtn: React.CSSProperties = {
+const emptyAddBtn: CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 7,
   border: `1px solid ${C.accent}`, background: C.accent, color: C.onAccent,
   borderRadius: R.lg, padding: '8px 14px', cursor: 'pointer',
   fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
 };
-
-function testBtn(busy: boolean): React.CSSProperties {
-  return {
-    display: 'inline-flex', alignItems: 'center', gap: 5,
-    border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textSecondary,
-    borderRadius: R.md, padding: '5px 10px', cursor: busy ? 'default' : 'pointer',
-    fontFamily: FONT.sans, fontSize: 12, fontWeight: 500,
-    opacity: busy ? 0.6 : 1,
-  };
-}
-
-function iconMenuBtn(isMobile?: boolean): React.CSSProperties {
-  return {
-    width: isMobile ? 36 : 28, height: isMobile ? 36 : 28, border: 'none',
-    background: 'transparent', borderRadius: R.md, cursor: 'pointer',
-    color: C.textMuted, display: 'flex', alignItems: 'center', justifyContent: 'center',
-  };
-}

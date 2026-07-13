@@ -47,25 +47,25 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
 
   // Ресайз панели просмотра: панель справа, тянем влево (clientX падает) → ширина растёт.
   // Тот же паттерн, что у handleArtifactsSplitterMouseDown в WorkspacePage.
-  const handleDocSplitterMouseDown = (e: React.MouseEvent) => {
+  const handleDocSplitterMouseDown = (e: React.PointerEvent) => {
     e.preventDefault();
     setDraggingSplitter(true);
     const startX = e.clientX;
     const startW = docPanelWidth;
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       setDocPanelWidth(Math.max(DOC_PANEL_MIN, Math.min(DOC_PANEL_MAX, startW - (ev.clientX - startX))));
     };
     const onUp = () => {
       setDraggingSplitter(false);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
   };
 
   // Поиск: semantic (по смыслу) | fulltext (точный). Дебаунс.

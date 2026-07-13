@@ -276,6 +276,7 @@ public sealed class PersonaAutomationService : IDisposable
         sb.AppendLine("## ПРАВИЛА");
         sb.AppendLine("- Не выдумывай работу сверх события и инструкции.");
         sb.AppendLine("- Соблюдай свой характер и зону контекста.");
+        sb.AppendLine("- Если нужно уточнить что-то у пользователя — используй инструмент AskUserQuestion с вариантами ответов (не пиши вопросы текстом). Он покажет ему кнопки для выбора.");
         return sb.ToString();
     }
 

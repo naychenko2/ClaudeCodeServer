@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Bell, CheckCheck, Search } from 'lucide-react';
+import { Bell, CheckCheck, Search, Trash2 } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { HubHeader } from '../../components/HubHeader';
 import type { HubTab } from '../../components/HubTabs';
@@ -14,6 +14,7 @@ import {
   markRead,
   markAllRead,
   deleteNotification,
+  deleteReadAll,
 } from '../../lib/notifications';
 
 const KIND_META: Record<NotificationKind, { icon: string; color: string; bg: string }> = {
@@ -359,6 +360,26 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
                   onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textSecondary; }}
                 >
                   <CheckCheck size={14} /> Прочитать всё
+                </button>
+              )}
+              {notifs.some(n => n.isRead) && (
+                <button
+                  style={{
+                    padding: '7px 16px', borderRadius: R.md,
+                    border: `1px solid ${C.border}`,
+                    background: C.bgCard, color: C.textMuted,
+                    fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 500,
+                    cursor: 'pointer', whiteSpace: 'nowrap',
+                    display: 'flex', alignItems: 'center', gap: 6,
+                  }}
+                  onClick={() => {
+                    if (window.confirm('Удалить все прочитанные уведомления?'))
+                      deleteReadAll().then(rerender);
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = C.danger; e.currentTarget.style.color = C.danger; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textMuted; }}
+                >
+                  <Trash2 size={14} /> Очистить прочитанные
                 </button>
               )}
             </div>

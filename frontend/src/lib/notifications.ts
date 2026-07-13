@@ -101,6 +101,15 @@ export async function deleteBatch(ids: string[]) {
   return result.deleted;
 }
 
+export async function deleteReadAll() {
+  const result = await api<{ deleted: number }>(`${BASE}/read-all`, {
+    method: 'DELETE',
+  });
+  items = items.filter(i => !i.isRead);
+  notify();
+  return result.deleted;
+}
+
 // ====== State queries ======
 
 export function getNotifications() { return items; }

@@ -197,6 +197,18 @@ public class NotificationStore
         }
     }
 
+    // Удалить все прочитанные уведомления
+    public async Task<int> DeleteReadAsync(string userId)
+    {
+        var all = await GetAllAsync(userId);
+        lock (_lock)
+        {
+            var count = all.RemoveAll(n => n.IsRead);
+            if (count > 0) Save(userId, all);
+            return count;
+        }
+    }
+
     // Получение непрочитанных (для бейджа)
     public async Task<int> GetUnreadCountAsync(string userId)
     {

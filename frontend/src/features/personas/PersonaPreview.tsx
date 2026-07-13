@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, Clock, FileText, StickyNote, GitBranch, ListChecks, AtSign } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import type { AutomationTriggerType, Persona, PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Session, Task } from '../../types';
+import type { AutomationTriggerType, Persona, PersonaAutomationRule, PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Session, Task } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
@@ -23,14 +23,20 @@ const TOOL_TITLES: Record<string, string> = {
   web: 'Веб',
 };
 
-// Подписи типов триггеров автоматизации (краткая сводка в обзоре «Активность»)
-const TRIGGER_LABELS: Record<AutomationTriggerType, string> = {
-  timer: 'Таймер',
-  file: 'Файлы',
-  note: 'Заметки',
-  gitCommit: 'Коммиты',
-  taskStatus: 'Статус задачи',
-  mention: 'Упоминание',
+// Метаданные триггеров для карточек проактивности
+const TRIGGER_META: Record<AutomationTriggerType, { label: string; Icon: React.ComponentType<{ size?: number; strokeWidth?: number }>; bg: string; fg: string }> = {
+  timer:      { label: 'Таймер',         Icon: Clock,      bg: C.accentLight, fg: C.accent },
+  file:       { label: 'Файлы',          Icon: FileText,   bg: C.bgSelected,  fg: C.textSecondary },
+  note:       { label: 'Заметки',        Icon: StickyNote, bg: C.successBg,   fg: C.successText },
+  gitCommit:  { label: 'Коммиты',        Icon: GitBranch,  bg: C.infoBg,      fg: C.info },
+  taskStatus: { label: 'Статус задачи',   Icon: ListChecks, bg: C.planLight,   fg: C.plan },
+  mention:    { label: 'Упоминание',     Icon: AtSign,     bg: C.warningBg,   fg: C.warning },
+};
+
+// Подписи действий в подзаголовке карточки
+const ACTION_LABEL: Record<string, string> = {
+  gate: 'Сообщить',
+  work: 'Полный ход',
 };
 
 // Подписи типов памяти для мини-бейджа у записи
@@ -419,10 +425,36 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     </div>
   );
 
-  // === Проактивность (правила автоматизации): сводка триггеров ===
+  // === Проактивность (правила автоматизации): карточки в стиле вкладки ===
   const automationRules = persona.automationRules ?? [];
   const enabledRulesCount = automationRules.filter(r => r.enabled).length;
-  const triggerTypes = Array.from(new Set(automationRules.map(r => r.trigger.type)));
+
+  // Короткая подпись параметров триггера для подзаголовка карточки
+  function triggerBrief(rule: PersonaAutomationRule): string {
+    const args = (rule.trigger.args ?? {}) as Record<string, any>;
+    const schedule = args.schedule as Record<string, any> | undefined;
+    switch (rule.trigger.type) {
+      case 'timer': {
+        if (args.intervalMinutes) return `каждые ${args.intervalMinutes} мин`;
+        const type = schedule?.type ?? args.type;
+        const kind = type === 'weekdays' ? 'по будням'
+          : type === 'weekly' ? 'по дням'
+          : 'ежедневно';
+        const time = schedule?.time ?? args.time;
+        return time ? `${kind} в ${time}` : kind;
+      }
+      case 'file': return String(args.glob ?? 'любые файлы');
+      case 'note': return 'заметки';
+      case 'gitCommit': return 'репозиторий';
+      case 'taskStatus': {
+        const from = args.from, to = args.to;
+        return from && to ? `${from} → ${to}` : 'любая смена';
+      }
+      case 'mention': return 'когда упоминают';
+      default: return '';
+    }
+  }
+
   const automationSection = (
     <div style={section}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
@@ -449,15 +481,62 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
         </div>
       ) : (
         <>
-          <div style={{
-            background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
-            padding: '12px 14px', display: 'flex', flexWrap: 'wrap', gap: 8,
-          }}>
-            {triggerTypes.map(t => (
-              <span key={t} style={triggerChip}>
-                {TRIGGER_LABELS[t] ?? t}
-              </span>
-            ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {automationRules.map(rule => {
+              const meta = TRIGGER_META[rule.trigger.type] ?? TRIGGER_META.timer;
+              const act = ACTION_LABEL[rule.action.weight] ?? 'Сообщить';
+              const dim = !rule.enabled;
+              const brief = triggerBrief(rule);
+              return (
+                <div
+                  key={rule.id}
+                  onClick={onOpenAutomation}
+                  title="Открыть проактивность"
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; }}
+                  style={{
+                    background: C.bgWhite,
+                    border: `1px solid ${C.border}`,
+                    borderRadius: R.xl, padding: '10px 14px',
+                    cursor: onOpenAutomation ? 'pointer' : 'default',
+                    transition: 'border-color 0.15s',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span style={{
+                      width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      background: dim ? C.bgSelected : meta.bg,
+                      color: dim ? C.textMuted : meta.fg,
+                    }}>
+                      <meta.Icon size={16} strokeWidth={1.5} />
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0, opacity: dim ? 0.55 : 1 }}>
+                      <div style={{
+                        fontSize: 13.5, fontWeight: 600, color: C.textHeading,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
+                        {rule.name || 'Без названия'}
+                      </div>
+                      <div style={{
+                        fontSize: 12, color: C.textSecondary, marginTop: 1,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
+                        {meta.label}{brief ? ` · ${brief}` : ''} · {act}
+                      </div>
+                    </div>
+                    <span style={{
+                      borderRadius: 999, padding: '2px 8px', fontSize: 10.5, fontWeight: 600,
+                      letterSpacing: '0.02em', flexShrink: 0, whiteSpace: 'nowrap',
+                      background: rule.enabled ? C.accentLight : C.bgSelected,
+                      color: rule.enabled ? C.accent : C.textMuted,
+                    }}>
+                      {rule.enabled ? 'активно' : 'выкл'}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
           {onOpenAutomation && (
             <button type="button" onClick={onOpenAutomation} style={linkBtn}>
@@ -759,12 +838,6 @@ const miniEmpty: React.CSSProperties = {
 };
 const miniEmptyText: React.CSSProperties = {
   fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5,
-};
-
-// Чип типа триггера в сводке «Активность»
-const triggerChip: React.CSSProperties = {
-  fontSize: 12.5, fontWeight: 600, color: C.textSecondary, fontFamily: FONT.sans,
-  background: C.bgSelected, borderRadius: R.md, padding: '4px 10px',
 };
 
 // Бейдж типа записи памяти (факт/эпизод/приём)

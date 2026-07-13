@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Controllers;
 public class NotificationsController(
     NotificationStore store,
     IHubContext<SessionHub> hub,
+    PushService push,
     ILogger<NotificationsController> log) : ControllerBase
 {
     // Текущий пользователь из JWT (задаётся JwtAuthFilter / middleware)
@@ -67,8 +68,9 @@ public class NotificationsController(
             Tag: item.Tag);
 
         await hub.Clients.Group("user_" + UserId).SendAsync("message", msg);
-        // Push — опционально, только для важных
-        // await _push.SendToUserAsync(UserId, msg);
+        // Push — для важных (напоминания, ответы персон, завершение задач)
+        if (req.Kind is "reminder" or "claude" or "success")
+            await push.SendToUserAsync(UserId, msg);
 
         log.LogInformation("Уведомление создано: {Id} «{Title}» ({Kind})", item.Id, item.Title, item.Kind);
         return CreatedAtAction(nameof(GetById), new { id = item.Id }, item);
@@ -113,6 +115,14 @@ public class NotificationsController(
     public async Task<ActionResult<object>> DeleteBatch([FromBody] NotificationBatchRequest req)
     {
         var count = await store.DeleteBatchAsync(UserId, req.Ids);
+        return Ok(new { deleted = count });
+    }
+
+    /// <summary>DELETE /api/notifications/read-all — удалить все прочитанные</summary>
+    [HttpDelete("read-all")]
+    public async Task<ActionResult<object>> DeleteReadAll()
+    {
+        var count = await store.DeleteReadAsync(UserId);
         return Ok(new { deleted = count });
     }
 }

@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useContext } from 'react';
 import { Check, SquarePen, MessageCircle } from 'lucide-react';
 import type { ChatItem } from '../../types';
 import { C, FONT } from '../../lib/design';
-import { useAssistantName } from './contexts';
+import { useAssistantName, PersonaContext } from './contexts';
+import { personaLabel } from '../../lib/personas';
 
 // Уточняющий вопрос Claude (AskUserQuestion) — интерактивная карточка выбора
 interface QuestionDef { question: string; header?: string; multiSelect?: boolean; options: Array<{ label: string; description?: string }> }
@@ -30,6 +31,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
   onInterrupt?: () => void;
 }) {
   const asstName = useAssistantName();
+  const persona = useContext(PersonaContext);
   const questions = (() => {
     const q = (item.input as { questions?: unknown } | null)?.questions;
     return Array.isArray(q) ? (q as QuestionDef[]) : [];
@@ -49,7 +51,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
       <div style={{ border: `1px solid ${C.success}`, borderLeft: `3px solid ${C.success}`, borderRadius: 12, padding: '13px 14px', background: C.successBg }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10, fontSize: 13, fontWeight: 600, color: C.successText }}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill={C.success} /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
-          Ответ передан {asstName}
+          Ответ передан {persona ? personaLabel(persona) : asstName}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {questions.map((q, qi) => {
@@ -192,7 +194,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 11 }}>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 600, color: C.textHeading }}>
           <MessageCircle size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />
-          {asstName} уточняет
+          {persona ? personaLabel(persona) : asstName} уточняет
         </div>
         {multiQ && <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, fontFamily: FONT.mono }}>{activeTab + 1} / {questions.length}</span>}
       </div>

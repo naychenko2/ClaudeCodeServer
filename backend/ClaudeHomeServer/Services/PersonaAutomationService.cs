@@ -49,12 +49,14 @@ public sealed class PersonaAutomationService : IDisposable
         _sources = sources.ToDictionary(s => s.Type);
         _sessions.OnUserMessage += OnUserMessageAsync;
         _sessions.OnSessionMessage += OnSessionMessageAsync;
+        _sessions.OnSessionDeleted += OnSessionDeleted;
     }
 
     public void Dispose()
     {
         _sessions.OnUserMessage -= OnUserMessageAsync;
         _sessions.OnSessionMessage -= OnSessionMessageAsync;
+        _sessions.OnSessionDeleted -= OnSessionDeleted;
     }
 
     // ─── Тик (collaborator из TaskSchedulerService) ─────────────────────────────
@@ -162,6 +164,8 @@ public sealed class PersonaAutomationService : IDisposable
         {
             _log.LogWarning(ex, "send правило {Rule}", rule.Id);
             _inflight.TryRemove(targetSessionId, out _);
+            // Чат мог быть удалён/сломан — сбросим ссылку, чтобы следующий ход создал свежий
+            if (state.SessionId == targetSessionId) { state.SessionId = null; _state.Save(); }
             MarkResult(state, "error");
             return;
         }
@@ -215,6 +219,22 @@ public sealed class PersonaAutomationService : IDisposable
             await _push.SendToUserAsync(ownerId, n);
         }
         catch { /* уведомление — best-effort */ }
+    }
+
+    // Чат правила удалили (вручную или авто-удалением временного) — сбросим ссылку state.SessionId,
+    // чтобы следующий ход создал свежий чат, а не пытался переиспользовать удалённый.
+    private void OnSessionDeleted(Session session)
+    {
+        if (session.AutomationRuleId is string ruleId && session.PersonaId is string personaId)
+        {
+            var st = _state.GetRule(personaId, ruleId);
+            if (st.SessionId == session.Id)
+            {
+                st.SessionId = null;
+                _state.Save();
+            }
+        }
+        _inflight.TryRemove(session.Id, out _);
     }
 
     // ─── Постановка-промпт (по образцу TaskExecutionService.BuildPrompt) ────────

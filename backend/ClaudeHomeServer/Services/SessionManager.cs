@@ -68,6 +68,9 @@ public class SessionManager
     // fire-and-forget, ошибки наблюдателя не роняют ход. (session, text, senderPersonaId)
     public event Func<Session, string, string?, Task>? OnUserMessage;
 
+    // Удаление сессии (чат/проектная сессия) — для авто-движков: сбросить ссылки на чат правила.
+    public event Action<Session>? OnSessionDeleted;
+
     // Auto-recall заметок (фича notes-auto-recall): семантический индекс + гейт по флагу
     private readonly NotesKnowledgeService _notesKb;
     private readonly FeatureFlagService _flags;
@@ -1299,6 +1302,7 @@ public class SessionManager
         if (entry.Info.ClaudeSessionId is string csid)
             _history.Delete(csid);
         SaveSessions();
+        try { OnSessionDeleted?.Invoke(entry.Info); } catch { /* наблюдатель не должен ронять удаление */ }
         await BroadcastChatDeletedAsync(sessionId, entry.Info);
     }
 

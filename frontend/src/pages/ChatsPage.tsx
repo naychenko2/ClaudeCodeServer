@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ChevronLeft, Menu as MenuIcon, MessageCircle, Pin, Plus } from 'lucide-react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
 import { joinUser, onMessage } from '../lib/signalr';
@@ -74,21 +73,21 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   const toggleArtifacts = useCallback(() => setArtifactsOpen(v => !v), []);
   const [draggingArtifacts, setDraggingArtifacts] = useState(false);
 
-  const handleArtifactsSplitterMouseDown = (e: ReactMouseEvent) => {
+  const handleArtifactsSplitterMouseDown = (e: React.PointerEvent) => {
     e.preventDefault();
     setDraggingArtifacts(true);
     const startX = e.clientX;
     const startW = artifactsWidth;
     // Панель справа: тянем влево (clientX уменьшается) → ширина растёт
-    const onMove = (ev: globalThis.MouseEvent) =>
+    const onMove = (ev: PointerEvent) =>
       setArtifactsWidth(Math.max(240, Math.min(480, startW - (ev.clientX - startX))));
     const onUp = () => {
       setDraggingArtifacts(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
   };
 
   const refresh = () => api.chats.list().then(setChats).catch(() => {});

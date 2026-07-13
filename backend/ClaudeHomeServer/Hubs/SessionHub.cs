@@ -58,6 +58,7 @@ public class SessionHub : Hub
     public async Task JoinSession(string sessionId)
     {
         if (!OwnsSession(sessionId)) throw Denied();
+        _sessions.AddViewer(sessionId);
         await Groups.AddToGroupAsync(Context.ConnectionId, sessionId);
 
         // Новый клиент сразу получает текущий статус (чтобы не пропустить working при workflow)
@@ -76,6 +77,7 @@ public class SessionHub : Hub
 
     public async Task LeaveSession(string sessionId)
     {
+        _sessions.RemoveViewer(sessionId);
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, sessionId);
     }
 

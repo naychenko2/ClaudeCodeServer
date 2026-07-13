@@ -96,7 +96,7 @@ public class TaskExecutionServiceTests
         n.Title.Should().Be("Claude ждёт ответа по задаче");
         n.Body.Should().Be("Задача");
         n.Kind.Should().Be("claude");
-        n.Url.Should().Be($"/#/project/p1/task/{task.Id}");
+        n.Url.Should().Be($"/project/p1/task/{task.Id}");
     }
 
     // ─── Промпт постановки ───────────────────────────────────────────────────

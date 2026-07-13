@@ -59,6 +59,28 @@ public class SessionManager
     // Аналогично для MCP notes-server (тот же сервисный токен владельца по смыслу, свой кэш)
     private readonly ConcurrentDictionary<string, (string Token, DateTime IssuedAt)> _notesTokens = new();
 
+    // Счётчик активных зрителей сессии (SignalR-подключений в группе сессии).
+    // Инкремент в SessionHub.JoinSession, декремент в LeaveSession.
+    // Нужен PersonaAutomationService чтобы не слать уведомления, когда пользователь и так смотрит чат.
+    private readonly ConcurrentDictionary<string, int> _sessionViewers = new();
+
+    // Добавить зрителя сессии (вызывается из JoinSession)
+    public void AddViewer(string sessionId) =>
+        _sessionViewers.AddOrUpdate(sessionId, 1, (_, c) => c + 1);
+
+    // Убрать зрителя сессии (вызывается из LeaveSession)
+    public void RemoveViewer(string sessionId)
+    {
+        if (_sessionViewers.TryGetValue(sessionId, out var c) && c > 1)
+            _sessionViewers[sessionId] = c - 1;
+        else
+            _sessionViewers.TryRemove(sessionId, out _);
+    }
+
+    // Есть ли хотя бы один зритель у сессии?
+    public bool HasViewers(string sessionId) =>
+        _sessionViewers.TryGetValue(sessionId, out var c) && c > 0;
+
     // Наблюдатель сообщений сессий (Claude-исполнитель задач слушает result/permission).
     // Вызывается после обновления статуса и broadcast; его ошибки не роняют пайплайн
     public event Func<Session, ServerMessage, Task>? OnSessionMessage;

@@ -123,6 +123,6 @@ public class TaskSchedulerService(
     // Hash-диплинк на задачу: проектная → детали в проекте, личная → модалка в календаре
     internal static string TaskUrl(TaskItem task) =>
         task.ProjectId is null
-            ? $"/#/calendar/task/{task.Id}"
-            : $"/#/project/{task.ProjectId}/task/{task.Id}";
+            ? $"/calendar/task/{task.Id}"
+            : $"/project/{task.ProjectId}/task/{task.Id}";
 }

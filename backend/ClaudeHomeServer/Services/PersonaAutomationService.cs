@@ -206,11 +206,15 @@ public sealed class PersonaAutomationService : IDisposable
         await FireAsync(persona, rule, ResolveTz(ownerId), synthetic, CancellationToken.None, bypassThrottle: true);
     }
 
-    // ─── Уведомление по завершении хода ─────────────────────────────────────────
+    // ─── Уведомления по событиям хода ────────────────────────────────────────────
 
+    // Все типы сообщений, требующие внимания пользователя: ход завершён, задан вопрос,
+    // запрошено разрешение на инструмент, представлен план. Уведомление шлём ТОЛЬКО если
+    // пользователь не смотрит этот чат (нет активных SignalR-подписок в группе сессии).
+    // Снимаем _inflight только на ResultMessage — остальные паузы не отменяют бег.
     private async Task OnSessionMessageAsync(Session session, ServerMessage msg)
     {
-        if (msg is not (ResultMessage or AskQuestionMessage)) return;
+        if (msg is not (ResultMessage or AskQuestionMessage or PermissionRequestMessage or PlanReviewMessage)) return;
         if (!_inflight.TryGetValue(session.Id, out var ruleId)) return;
         var ownerId = ResolveOwner(session);
         if (ownerId is null) return;
@@ -219,27 +223,38 @@ public sealed class PersonaAutomationService : IDisposable
             ? "Персона"
             : (string.IsNullOrWhiteSpace(persona.Role) ? persona.Name : $"{persona.Role} ({persona.Name})");
 
+        // Если пользователь смотрит этот чат — не шлём уведомление (он видит в реальном времени)
+        if (_sessions.HasViewers(session.Id)) return;
+
         try
         {
+            string title, body;
             if (msg is ResultMessage)
             {
                 _inflight.TryRemove(session.Id, out _);
-                await _notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
-                    Title: $"{label} написала вам",
-                    Body: "Новое сообщение по правилу автоматизации — откройте чат",
-                    Url: $"/#/chats/{session.Id}",
-                    Kind: "claude",
-                    Tag: "Автоматизация"), sendPush: true);
+                title = $"{label} написала вам";
+                body = "Новое сообщение по правилу автоматизации";
             }
             else if (msg is AskQuestionMessage)
             {
-                await _notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
-                    Title: $"{label} ждёт ответа на вопрос",
-                    Body: "Персона спрашивает — ответьте, чтобы продолжить",
-                    Url: $"/#/chats/{session.Id}",
-                    Kind: "claude",
-                    Tag: "Автоматизация"), sendPush: true);
+                title = $"{label} ждёт ответа на вопрос";
+                body = "Персона спрашивает — ответьте, чтобы продолжить";
             }
+            else if (msg is PermissionRequestMessage)
+            {
+                title = $"{label} запрашивает разрешение";
+                body = "Персона хочет выполнить действие — разрешите или отклоните";
+            }
+            else // PlanReviewMessage
+            {
+                title = $"{label} представила план";
+                body = "Персона предлагает план — согласуйте его";
+            }
+
+            await _notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
+                Title: title, Body: body,
+                Url: $"/chats/{session.Id}",
+                Kind: "claude", Tag: "Автоматизация"), sendPush: true);
         }
         catch { /* уведомление — best-effort */ }
     }

@@ -234,7 +234,7 @@ public sealed class DailyBriefingService
         var msg = new NotificationMessage(
             Title: "Утренний бриф готов",
             Body: "План на день собран в дневнике",
-            Url: $"/#/notes/{dailyNoteId}",
+            Url: $"/notes/{dailyNoteId}",
             Kind: "info",
             Tag: "Дайджест");
         await _notif.SendNotificationMessageAsync(userId, msg);

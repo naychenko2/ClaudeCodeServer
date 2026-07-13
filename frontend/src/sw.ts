@@ -54,13 +54,16 @@ self.addEventListener('push', e => {
 // или открываем новое
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  const url: string = e.notification.data?.url ?? '/';
+  // URL приходит в формате /chats/{id} или /notes/{id} — без #/
+  // Для hash-маршрутизации SPA добавляем # спереди
+  const raw = e.notification.data?.url ?? '/';
+  const url = raw.startsWith('/') ? '#' + raw : raw;
   e.waitUntil((async () => {
     const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const client of clientList) {
       if ('focus' in client) {
         await client.focus();
-        // Диплинк обрабатывается при загрузке страницы — навигируем окно целиком
+        // navigate с #/chats/id корректно меняет хеш на той же странице
         if ('navigate' in client) await (client as WindowClient).navigate(url);
         return;
       }

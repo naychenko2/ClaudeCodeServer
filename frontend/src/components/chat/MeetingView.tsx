@@ -37,7 +37,7 @@ function EntryRow({ entry, defaultOpen }: { entry: MeetingEntryItem; defaultOpen
           ? <PersonaAvatar persona={persona as Persona} size={22} />
           : <span style={{ width: 22, height: 22, borderRadius: '50%', background: C.bgSelected, flexShrink: 0 }} />}
         <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: entry.isError ? C.dangerText : C.textHeading, fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {label}{entry.isError ? ' — не ответил(а)' : ''}
+          {label}{entry.isError ? ' — не ответил' : ''}
         </span>
         <ChevronDown size={11} color={C.textMuted} strokeWidth={2}
           style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />

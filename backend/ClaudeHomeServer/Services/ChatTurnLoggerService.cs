@@ -51,7 +51,7 @@ public sealed class ChatTurnLoggerService : IHostedService
 
         _events.Append(session.ProjectId, owner!, ProjectEventTypes.ChatTurn,
             session.PersonaId ?? "user",
-            label is not null ? $"{label} ответил(а)" : "Ход чата завершён",
+            label is not null ? $"{label} ответил" : "Ход чата завершён",
             session.Id);
         return Task.CompletedTask;
     }

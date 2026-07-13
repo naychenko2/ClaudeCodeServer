@@ -74,7 +74,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
     void load();
   }, [load]);
 
-  // Realtime: память текущей персоны изменилась (персона запомнила/забыла) — перечитать.
+  // Realtime: память текущей персоны изменилась (персона запомнил/забыл) — перечитать.
   // joinUser уже сделан стором personas; здесь только слушаем сообщения.
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -186,7 +186,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
             <div style={{ fontSize: 30, opacity: 0.5 }}>🧠</div>
             <div style={{ fontFamily: FONT.serif, fontSize: 17, color: C.textHeading }}>Память пуста</div>
             <div style={{ fontSize: 13, color: C.textSecondary, maxWidth: 320, lineHeight: 1.5 }}>
-              Персона пока ничего не запомнила. Память пополняется во время разговоров.
+              Персона пока ничего не запомнил. Память пополняется во время разговоров.
             </div>
           </div>
         )}

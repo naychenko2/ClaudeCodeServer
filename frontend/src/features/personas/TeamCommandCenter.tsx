@@ -111,7 +111,7 @@ export function TeamCommandCenter({
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
             <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
-              {team.length} участниц
+              {team.length} участников
             </span>
             <span style={{ display: 'inline-block', fontSize: 10.5, fontWeight: 600, padding: '1px 7px', borderRadius: R.pill, background: `${stripe}1F`, color: stripe, whiteSpace: 'nowrap', flexShrink: 0 }}>
               Проект
@@ -438,7 +438,7 @@ function EventCard({ e, personaById, onOpen, compact }: {
   return (
     <div style={{ position: 'relative' }}>
       {/* точка-маркер цветом категории */}
-      <span style={{ position: 'absolute', left: -22, top: 14, width: 10, height: 10, borderRadius: '50%', background: meta.color, border: `2px solid ${C.bgMain}`, boxSizing: 'border-box', boxShadow: `0 0 0 1px ${meta.color}` }} />
+      <span style={{ position: 'absolute', left: -26, top: 14, width: 10, height: 10, borderRadius: '50%', background: meta.color, border: `2px solid ${C.bgMain}`, boxSizing: 'border-box', boxShadow: `0 0 0 1px ${meta.color}` }} />
       <div style={{ ...eventCardStyle, cursor: clickable || !compact ? 'pointer' : 'default' }} onClick={onCardClick}>
         {/* цветная полоса категории */}
         <div style={{ width: 3, borderRadius: 2, background: meta.color, flexShrink: 0, alignSelf: 'stretch' }} />
@@ -490,7 +490,7 @@ function GroupChatPicker({ team, onClose, onCreated }: { team: Persona[]; onClos
     try { const s = await api.chats.createGroup(sel); sessionStorage.setItem('cc_auto_discuss', s.id); onCreated(s); } finally { setBusy(false); }
   };
   return (
-    <Modal width={420} title="Созвать команду" subtitle="Выберите 2–4 участниц. Первый — ведущий." onClose={onClose}
+    <Modal width={420} title="Созвать команду" subtitle="Выберите 2–4 участников. Первый — ведущий." onClose={onClose}
       footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button onClick={onClose} style={ghostBtn}>Отмена</button>
         <button onClick={() => void create()} disabled={sel.length < 2 || busy} style={primaryBtn}>Создать чат</button>
@@ -642,7 +642,7 @@ const EVENT_META: Record<string, { Icon: ComponentType<{ size?: number; color?: 
   task_completed: { Icon: CheckCircle2, color: C.success, bg: C.successBg, label: 'Задача завершена' },
   task_spawned: { Icon: Repeat, color: C.accent, bg: C.accentLight, label: 'Следующий экземпляр' },
   task_deleted: { Icon: Trash2, color: C.danger, bg: C.dangerBg, label: 'Задача удалена' },
-  memory_learned: { Icon: Brain, color: C.info, bg: C.infoBg, label: 'Запомнил(а) факт' },
+  memory_learned: { Icon: Brain, color: C.info, bg: C.infoBg, label: 'Запомнил факт' },
   knowledge_changed: { Icon: BookOpen, color: C.info, bg: C.infoBg, label: 'База знаний' },
   note_changed: { Icon: FileText, color: C.info, bg: C.infoBg, label: 'Заметка' },
   team_joined: { Icon: UserPlus, color: C.success, bg: C.successBg, label: 'В команде' },

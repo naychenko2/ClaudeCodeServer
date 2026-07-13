@@ -220,12 +220,12 @@ public class TaskManager
         _tasks[task.Id] = task;
         Save();
         LogTask(task, ProjectEventTypes.TaskSpawned, $"Создан следующий экземпляр: «{task.Title}»");
-        // proactive-уведомление (②-2.1): персона-исполнитель подготовила следующий экземпляр
+        // proactive-уведомление (②-2.1): персона-исполнитель подготовил следующий экземпляр
         if (!string.IsNullOrEmpty(task.PersonaId) && !string.IsNullOrEmpty(task.OwnerId))
         {
             var label = _notify?.LabelOf(task.PersonaId);
             _ = _notify?.SendAsync(task.OwnerId,
-                label is not null ? $"{label} подготовила следующую задачу" : "Создан следующий экземпляр задачи",
+                label is not null ? $"{label} подготовил следующую задачу" : "Создан следующий экземпляр задачи",
                 task.Title, TaskSchedulerService.TaskUrl(task), "info");
         }
         return task;

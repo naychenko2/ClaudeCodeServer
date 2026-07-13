@@ -30,7 +30,7 @@ public static class ProjectEventTypes
     public const string TaskCompleted = "task_completed";    // задача завершена (done)
     public const string TaskSpawned = "task_spawned";        // спавнен следующий экземпляр регулярной
     public const string TaskDeleted = "task_deleted";        // задача удалена
-    public const string MemoryLearned = "memory_learned";    // персона запомнила факт (autolearn)
+    public const string MemoryLearned = "memory_learned";    // персона запомнил факт (autolearn)
     public const string KnowledgeChanged = "knowledge_changed"; // изменение в базе знаний проекта
     public const string NoteChanged = "note_changed";        // заметка проекта создана/изменена
     public const string TeamJoined = "team_joined";          // член команды добавлен (проектная персона)

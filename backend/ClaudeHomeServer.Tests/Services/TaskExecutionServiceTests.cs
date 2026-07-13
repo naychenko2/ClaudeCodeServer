@@ -175,7 +175,7 @@ public class TaskExecutionServiceTests
 
         var n = TaskExecutionService.BuildResultNotification(task, ok: true, persona);
 
-        n.Title.Should().Be("Планировщик (Вера) завершила работу над задачей");
+        n.Title.Should().Be("Планировщик (Вера) завершил работу над задачей");
     }
 
     [Fact]

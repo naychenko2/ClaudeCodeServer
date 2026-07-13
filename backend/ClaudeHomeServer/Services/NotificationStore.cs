@@ -25,7 +25,9 @@ public class NotificationStore
 
     public NotificationStore(IConfiguration config, ILogger<NotificationStore> log)
     {
-        _baseDir = Path.Combine(config.GetValue<string>("DataPath") ?? "data", "notifications");
+        var dataDir = Path.GetDirectoryName(
+            config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
+        _baseDir = Path.Combine(dataDir, "notifications");
         _log = log;
         Directory.CreateDirectory(_baseDir);
     }

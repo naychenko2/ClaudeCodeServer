@@ -8,10 +8,11 @@ import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
 import { groupChats } from '../lib/chatGroups';
-import { getPersonaById, usePersonasVersion, personaLabel } from '../lib/personas';
+import { getPersonaById, usePersonas, usePersonasVersion, personaLabel } from '../lib/personas';
 import { ExpiryBadge } from './ExpiryBadge';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { agentDotColor } from './AgentSelector';
+import { FilterBar } from './FilterBar';
 
 // Время создания чата: сегодня — часы:минуты, иначе — дата (группы и так разбиты по дням)
 function chatTime(iso: string): string {
@@ -42,6 +43,25 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const [editTarget, setEditTarget] = useState<Session | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
 
+  // === Фильтры списка чатов ===
+  const [hideTaskChats, setHideTaskChats] = useState(true);
+  const [activeOnly, setActiveOnly] = useState(false);
+  const [filterPersonaId, setFilterPersonaId] = useState<string | null>(null);
+
+  const personas = usePersonas();
+
+  // Персоны в списке (для селектора фильтра)
+  const personaIdsInList = [...new Set(chats.filter(c => c.personaId).map(c => c.personaId!))];
+
+  // Применение фильтров
+  const filteredChats = chats.filter(c => {
+    if (hideTaskChats && c.taskExecution) return false;
+    if (activeOnly && Date.now() - new Date(c.updatedAt).getTime() > 5 * 60 * 1000) return false;
+    if (filterPersonaId && c.personaId !== filterPersonaId) return false;
+    return true;
+  });
+  const hiddenCount = chats.length - filteredChats.length;
+
   const togglePin = async (chat: Session) => {
     try {
       const updated = await api.chats.update(chat.id, { pinned: !chat.isPinned });
@@ -61,14 +81,14 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     setDeleteTarget(null);
   };
 
-  const groups = groupChats(chats);
+  const groups = groupChats(filteredChats);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       {/* Новый чат — пунктирная «создать в сайдбаре» (единый стиль с SessionList/FileExplorer) */}
       <Button
         variant="dashed" size="md" fullWidth loading={creating}
-        onClick={onNew} style={{ marginBottom: 12 }}
+        onClick={onNew} style={{ marginBottom: 8 }}
         leftIcon={
           <Plus size={15} strokeWidth={2.2} />
         }
@@ -76,10 +96,29 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
         Новый чат
       </Button>
 
+      {/* Строка фильтров */}
+      <FilterBar
+        hideTaskChats={hideTaskChats}
+        onChangeHideTaskChats={setHideTaskChats}
+        activeOnly={activeOnly}
+        onChangeActiveOnly={setActiveOnly}
+        filterPersonaId={filterPersonaId}
+        onChangeFilterPersona={setFilterPersonaId}
+        personaIdsInList={personaIdsInList}
+        allPersonas={personas}
+        hiddenCount={hiddenCount}
+        isMobile={isMobile}
+      />
+
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', margin: '0 -4px', padding: '0 4px' }}>
-        {groups.length === 0 && (
+        {groups.length === 0 && chats.length === 0 && (
           <div style={{ padding: '24px 8px', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>
             Пока нет чатов. Начните новый.
+          </div>
+        )}
+        {groups.length === 0 && chats.length > 0 && (
+          <div style={{ padding: '24px 8px', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>
+            Все чаты скрыты фильтрами
           </div>
         )}
         {groups.map(g => (

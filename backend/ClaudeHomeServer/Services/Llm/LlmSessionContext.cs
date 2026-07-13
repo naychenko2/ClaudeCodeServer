@@ -44,6 +44,11 @@ public sealed record RecallItem(string Kind, string? Ref, string Title, string? 
 // Результат recall-провайдера: текст для системного промпта + айтемы манифеста (F3).
 public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items);
 
+// Контекст MCP-сервера уведомлений: адрес API и сервисный токен владельца.
+// Всегда подключается, когда есть владелец сессии — Claude и агенты могут
+// создавать уведомления через инструмент notifications_create.
+public record NotificationsMcpContext(string ApiUrl, string Token);
+
 // Per-session контекст, общий для всех адаптеров — то, что SessionManager передаёт
 // при создании сессии независимо от провайдера. Claude-специфичные зависимости
 // (MCP-конфиг, скиллы, disallowed tools) живут в фабрике адаптеров.
@@ -73,6 +78,9 @@ public sealed record LlmSessionContext(
     // MCP-сервер персон: CRUD из любого чата + @упоминания/persona_ask
     // (null — фича выключена или нет владельца).
     PersonasMcpContext? PersonasMcp = null,
+    // MCP-сервер уведомлений: создание уведомлений из Claude/агентов
+    // (null — владелец не определён, сессия без MCP).
+    NotificationsMcpContext? NotificationsMcp = null,
     // MCP-сервер рабочего пространства: проекты/файлы/знания/поиск владельца
     // (null — флаг workspace-tools выключен или нет владельца).
     WorkspaceMcpContext? WorkspaceMcp = null,

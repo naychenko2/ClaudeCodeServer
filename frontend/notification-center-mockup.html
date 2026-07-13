@@ -1,0 +1,1159 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Центр уведомлений · v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=PT+Serif:wght@400;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* ====== Токены ====== */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bgMain: #F4F0E8;
+    --bgPanel: #EDE7DA;
+    --bgCard: #FFFFFF;
+    --bgCardHover: #FAF7F2;
+    --border: #E0D7C8;
+    --borderLight: #EDE7DA;
+    --accent: #D97757;
+    --accentHover: #C96A4B;
+    --accentLight: #FDF0EA;
+    --textHeading: #1A1A1A;
+    --textPrimary: #2B2B2B;
+    --textSecondary: #6B6560;
+    --textMuted: #9C9690;
+    --success: #5B8C5A;
+    --successLight: #EEF6EE;
+    --warning: #C8953B;
+    --warningLight: #FEF6ED;
+    --danger: #C1534A;
+    --dangerLight: #FDF0EE;
+    --info: #5A8FBD;
+    --infoLight: #EEF4FA;
+    --purple: #8B6FAF;
+    --purpleLight: #F3EEF9;
+    --Rsm: 6px;
+    --Rmd: 8px;
+    --Rlg: 12px;
+    --Rxl: 16px;
+    --R2xl: 20px;
+    --SP2xs: 2px;
+    --SPxs: 4px;
+    --SPsm: 6px;
+    --SPmd: 8px;
+    --SPlg: 12px;
+    --SPxl: 16px;
+    --SP2xl: 24px;
+    --SP3xl: 32px;
+    --SP4xl: 48px;
+    --SP5xl: 64px;
+    --FSxs: 11px;
+    --FSsm: 12px;
+    --FSbase: 13.5px;
+    --FSlg: 16px;
+    --FSxl: 20px;
+    --FSh2: 22px;
+    --FSh1: 28px;
+    --fontSans: 'Hanken Grotesk', system-ui, sans-serif;
+    --fontSerif: 'PT Serif', Georgia, serif;
+    --fontMono: 'JetBrains Mono', monospace;
+    --headerH: 52px;
+    --maxW: 680px;
+    --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  body {
+    font-family: var(--fontSans);
+    background: var(--bgMain);
+    color: var(--textPrimary);
+    font-size: var(--FSbase);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* ====== App Frame ====== */
+  .app { max-width: 100vw; min-height: 100vh; display: flex; flex-direction: column; }
+
+  /* ====== Header ====== */
+  .header {
+    height: var(--headerH);
+    background: var(--bgPanel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center;
+    padding: 0 20px;
+    gap: var(--SPxl);
+    flex-shrink: 0;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .header-logo {
+    font-family: var(--fontSerif);
+    font-size: var(--FSlg);
+    font-weight: 700;
+    color: var(--textHeading);
+    letter-spacing: -0.3px;
+    white-space: nowrap;
+  }
+  .header-logo em { font-style: normal; color: var(--accent); }
+  .hub-tabs {
+    display: flex; gap: 4px;
+    flex: 1; justify-content: center;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .hub-tab {
+    padding: 6px 14px;
+    border-radius: var(--Rmd);
+    font-size: var(--FSsm);
+    font-weight: 500;
+    color: var(--textSecondary);
+    cursor: pointer;
+    transition: var(--transition);
+    white-space: nowrap;
+    border: none; background: transparent;
+    font-family: inherit;
+    position: relative;
+  }
+  .hub-tab:hover { color: var(--textPrimary); background: rgba(0,0,0,0.04); }
+  .hub-tab.active { color: var(--textHeading); background: rgba(0,0,0,0.07); font-weight: 600; }
+  .hub-tab .badge {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+    margin-left: 6px;
+    vertical-align: middle;
+    line-height: 1.4;
+    min-width: 18px;
+    text-align: center;
+  }
+  .header-right {
+    display: flex; align-items: center; gap: var(--SPmd);
+    flex-shrink: 0;
+  }
+  .bell-btn {
+    position: relative;
+    width: 34px; height: 34px;
+    border-radius: var(--Rmd);
+    border: none; background: transparent;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: var(--transition);
+    color: var(--textSecondary);
+  }
+  .bell-btn:hover { background: rgba(0,0,0,0.05); color: var(--textPrimary); }
+  .bell-btn .bell-count {
+    position: absolute;
+    top: 1px; right: 0;
+    min-width: 18px; height: 18px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    border-radius: 999px;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0 4px;
+    line-height: 1;
+    box-shadow: 0 0 0 2px var(--bgPanel);
+  }
+  .bell-btn svg { width: 20px; height: 20px; }
+  .avatar {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+
+  /* ====== Page Layout ====== */
+  .page {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    padding: var(--SP3xl) var(--SPxl);
+  }
+  .page-inner {
+    width: 100%;
+    max-width: var(--maxW);
+  }
+
+  /* ====== Page Header ====== */
+  .page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--SP2xl);
+  }
+  .page-header-left {}
+  .page-title {
+    font-family: var(--fontSerif);
+    font-size: var(--FSh2);
+    font-weight: 700;
+    color: var(--textHeading);
+    letter-spacing: -0.3px;
+  }
+  .page-title-count {
+    font-family: var(--fontSans);
+    font-size: var(--FSsm);
+    font-weight: 400;
+    color: var(--textMuted);
+    margin-left: var(--SPmd);
+  }
+  .page-subtitle {
+    font-size: var(--FSsm);
+    color: var(--textMuted);
+    margin-top: 2px;
+  }
+  .page-header-right {
+    display: flex;
+    align-items: center;
+    gap: var(--SPmd);
+  }
+
+  /* ====== Search ====== */
+  .search-box {
+    position: relative;
+    width: 240px;
+  }
+  .search-box svg {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 14px;
+    height: 14px;
+    color: var(--textMuted);
+    pointer-events: none;
+  }
+  .search-box input {
+    width: 100%;
+    height: 34px;
+    padding: 0 12px 0 32px;
+    border: 1px solid var(--border);
+    border-radius: var(--Rmd);
+    background: var(--bgCard);
+    font-family: var(--fontSans);
+    font-size: var(--FSsm);
+    color: var(--textPrimary);
+    outline: none;
+    transition: var(--transition);
+  }
+  .search-box input::placeholder { color: var(--textMuted); }
+  .search-box input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(217,119,87,0.12);
+  }
+
+  .btn-mark-all {
+    padding: 7px 16px;
+    border-radius: var(--Rmd);
+    border: 1px solid var(--border);
+    background: var(--bgCard);
+    color: var(--textSecondary);
+    font-family: inherit;
+    font-size: var(--FSsm);
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+    white-space: nowrap;
+  }
+  .btn-mark-all:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accentLight);
+  }
+
+  /* ====== Filter Bar ====== */
+  .filter-bar {
+    display: flex;
+    gap: var(--SPsm);
+    margin-bottom: var(--SPxl);
+    flex-wrap: wrap;
+  }
+  .filter-chip {
+    padding: 5px 14px;
+    border-radius: 999px;
+    font-size: var(--FSsm);
+    font-weight: 500;
+    color: var(--textSecondary);
+    background: transparent;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: var(--transition);
+    font-family: inherit;
+    white-space: nowrap;
+  }
+  .filter-chip:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accentLight);
+  }
+  .filter-chip.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .filter-chip.active:hover {
+    background: var(--accentHover);
+    border-color: var(--accentHover);
+    color: #fff;
+  }
+  .filter-chip .chip-count {
+    display: inline-block;
+    margin-left: 4px;
+    font-size: 10px;
+    opacity: 0.65;
+  }
+
+  /* ====== Date Group ====== */
+  .date-group { margin-bottom: var(--SPxl); }
+  .date-header {
+    display: flex;
+    align-items: center;
+    gap: var(--SPlg);
+    margin-bottom: var(--SPlg);
+    font-size: var(--FSsm);
+    font-weight: 600;
+    color: var(--textMuted);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+  .date-header::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--borderLight);
+  }
+
+  /* ====== Notification Card ====== */
+  .notif-card {
+    display: flex;
+    gap: var(--SPxl);
+    padding: var(--SPxl) var(--SPxl) var(--SPxl) var(--SPxl);
+    position: relative;
+    margin-bottom: var(--SPlg);
+    transition: var(--transition);
+    background: var(--bgCard);
+    border-radius: var(--Rlg);
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03);
+  }
+  .notif-card::before {
+    content: '';
+    position: absolute;
+    left: -1px; top: -1px; bottom: -1px; width: 4px;
+    border-radius: var(--Rlg) 0 0 var(--Rlg);
+    transition: var(--transition);
+  }
+  .notif-card:hover {
+    border-color: #d0c8b8;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04);
+    transform: translateY(-1px);
+  }
+
+  /* Type accent borders */
+  .notif-card.type-reminder::before { background: var(--warning); }
+  .notif-card.type-claude::before { background: var(--accent); }
+  .notif-card.type-info::before { background: var(--info); }
+  .notif-card.type-success::before { background: var(--success); }
+  .notif-card.type-meeting::before { background: var(--purple); }
+
+  .notif-card.unread {
+    border-color: transparent;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06), inset 0 0 0 1px var(--accent);
+  }
+  .notif-card.unread:hover {
+    border-color: transparent;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.08), inset 0 0 0 1px var(--accent);
+  }
+
+  .notif-icon {
+    width: 40px; height: 40px;
+    min-width: 40px;
+    border-radius: var(--Rlg);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    transition: var(--transition);
+  }
+  .notif-card:hover .notif-icon { transform: scale(1.05); }
+  .notif-icon.type-reminder { background: var(--warningLight); color: var(--warning); }
+  .notif-icon.type-claude { background: var(--accentLight); color: var(--accent); }
+  .notif-icon.type-info { background: var(--infoLight); color: var(--info); }
+  .notif-icon.type-success { background: var(--successLight); color: var(--success); }
+  .notif-icon.type-meeting { background: var(--purpleLight); color: var(--purple); }
+
+  .notif-body { flex: 1; min-width: 0; }
+
+  .notif-row1 {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--SPmd);
+  }
+  .notif-title {
+    font-weight: 600;
+    font-size: var(--FSbase);
+    color: var(--textHeading);
+    display: flex;
+    align-items: center;
+    gap: var(--SPmd);
+    flex: 1;
+  }
+  .notif-card.unread .notif-title::after {
+    content: '';
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+  .notif-time {
+    font-size: var(--FSxs);
+    color: var(--textMuted);
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .notif-text {
+    font-size: var(--FSsm);
+    color: var(--textSecondary);
+    margin-top: 3px;
+    line-height: 1.55;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    max-width: 520px;
+  }
+
+  /* ====== Tags + Meta Row ====== */
+  .notif-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--SPmd);
+    margin-top: var(--SPmd);
+    flex-wrap: wrap;
+  }
+  .notif-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    line-height: 1.5;
+  }
+  .notif-tag.reminder { background: var(--warningLight); color: var(--warning); }
+  .notif-tag.claude { background: var(--accentLight); color: var(--accent); }
+  .notif-tag.info { background: var(--infoLight); color: var(--info); }
+  .notif-tag.success { background: var(--successLight); color: var(--success); }
+  .notif-tag.meeting { background: var(--purpleLight); color: var(--purple); }
+  .notif-source {
+    font-size: var(--FSxs);
+    color: var(--textMuted);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .notif-source::before {
+    content: '·';
+    margin-right: 2px;
+  }
+
+  /* ====== Card Actions ====== */
+  .notif-card-actions {
+    display: flex;
+    gap: var(--SPsm);
+    margin-top: var(--SPlg);
+    opacity: 0;
+    transition: opacity 0.18s ease;
+  }
+  .notif-card:hover .notif-card-actions { opacity: 1; }
+  .notif-card.unread .notif-card-actions { opacity: 1; }
+
+  .notif-action-btn {
+    padding: 6px 12px;
+    border-radius: var(--Rsm);
+    border: none;
+    font-family: inherit;
+    font-size: var(--FSxs);
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: transparent;
+    color: var(--textSecondary);
+  }
+  .notif-action-btn:hover { background: rgba(0,0,0,0.05); color: var(--textPrimary); }
+  .notif-action-btn.primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  .notif-action-btn.primary:hover { background: var(--accentHover); }
+  .notif-action-btn.danger:hover { color: var(--danger); background: var(--dangerLight); }
+
+  /* ====== Empty State ====== */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--SP5xl) var(--SPxl);
+    text-align: center;
+    animation: fadeIn 0.4s ease-out;
+  }
+  .empty-state-visual {
+    width: 96px; height: 96px;
+    border-radius: 50%;
+    background: var(--bgPanel);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 40px;
+    color: var(--textMuted);
+    margin-bottom: var(--SP2xl);
+    transition: var(--transition);
+  }
+  .empty-state:hover .empty-state-visual {
+    transform: scale(1.04);
+    background: var(--border);
+  }
+  .empty-state-title {
+    font-size: var(--FSlg);
+    font-weight: 600;
+    color: var(--textHeading);
+    margin-bottom: var(--SPsm);
+  }
+  .empty-state-text {
+    font-size: var(--FSsm);
+    color: var(--textMuted);
+    max-width: 320px;
+    line-height: 1.6;
+  }
+
+  /* ====== Toast Notifications (live demo) ====== */
+  .toast-container {
+    position: fixed;
+    top: 64px;
+    right: 20px;
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 360px;
+    pointer-events: none;
+  }
+  .toast {
+    background: var(--bgCard);
+    border: 1px solid var(--border);
+    border-radius: var(--Rlg);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.10);
+    padding: var(--SPlg) var(--SPxl);
+    display: flex;
+    gap: var(--SPlg);
+    align-items: flex-start;
+    pointer-events: all;
+    animation: toastIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    max-width: 360px;
+    position: relative;
+    overflow: hidden;
+  }
+  .toast.out { animation: toastOut 0.25s ease-in both; }
+  .toast-icon { font-size: 17px; flex-shrink: 0; margin-top: 1px; }
+  .toast-body { flex: 1; min-width: 0; }
+  .toast-title { font-weight: 600; font-size: var(--FSbase); color: var(--textHeading); }
+  .toast-text { font-size: var(--FSsm); color: var(--textSecondary); margin-top: 1px; }
+  .toast-close {
+    width: 24px; height: 24px;
+    border-radius: var(--Rsm);
+    border: none; background: transparent;
+    cursor: pointer; color: var(--textMuted);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    font-size: 14px;
+    transition: var(--transition);
+  }
+  .toast-close:hover { background: rgba(0,0,0,0.05); color: var(--textPrimary); }
+  .toast-progress {
+    position: absolute;
+    bottom: 0; left: 0;
+    height: 2px;
+    background: var(--accent);
+    animation: toastProgress 5s linear forwards;
+  }
+
+  @keyframes toastIn {
+    0% { opacity: 0; transform: translateX(20px) scale(0.95); }
+    100% { opacity: 1; transform: translateX(0) scale(1); }
+  }
+  @keyframes toastOut {
+    0% { opacity: 1; transform: translateX(0); }
+    100% { opacity: 0; transform: translateX(20px); }
+  }
+  @keyframes toastProgress {
+    0% { width: 100%; }
+    100% { width: 0%; }
+  }
+
+  /* ====== Animations ====== */
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+  .notif-card { animation: slideUp 0.3s ease-out both; }
+  .notif-card:nth-child(1) { animation-delay: 0.02s; }
+  .notif-card:nth-child(2) { animation-delay: 0.04s; }
+  .notif-card:nth-child(3) { animation-delay: 0.06s; }
+  .notif-card:nth-child(4) { animation-delay: 0.08s; }
+  .notif-card:nth-child(5) { animation-delay: 0.10s; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .notif-card, .toast, .empty-state { animation: none; }
+  }
+
+  /* ====== Scrollbar ====== */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--textMuted); }
+
+  /* ====== Responsive ====== */
+  @media (max-width: 720px) {
+    .page { padding: var(--SPxl) var(--SPmd); }
+    .page-header { flex-direction: column; align-items: flex-start; gap: var(--SPlg); }
+    .page-header-right { width: 100%; }
+    .search-box { flex: 1; }
+    .search-box input { width: 100%; }
+    .notif-card { padding: var(--SPlg); }
+    .notif-card-actions { opacity: 1; }
+    .hub-tab { padding: 6px 10px; font-size: 11px; }
+    .header { padding: 0 var(--SPlg); gap: var(--SPmd); }
+    .header-logo { font-size: var(--FSbase); }
+    .toast-container { right: 10px; left: 10px; max-width: none; }
+    .toast { max-width: none; }
+  }
+
+  /* ====== Tooltip ====== */
+  [data-tip] {
+    position: relative;
+  }
+  [data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--textHeading);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ====== Header ====== -->
+  <header class="header">
+    <div class="header-logo">Claude<em>Code</em></div>
+    <nav class="hub-tabs">
+      <button class="hub-tab">Чаты</button>
+      <button class="hub-tab">Проекты</button>
+      <button class="hub-tab">Календарь</button>
+      <button class="hub-tab">Заметки</button>
+      <button class="hub-tab">Персоны</button>
+      <button class="hub-tab">Знания</button>
+      <button class="hub-tab active">
+        Уведомления
+        <span class="badge" id="headerBadge">5</span>
+      </button>
+    </nav>
+    <div class="header-right">
+      <button class="bell-btn" onclick="showDemoToast()" data-tip="Показать демо-тост">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+        <span class="bell-count" id="bellCount">5</span>
+      </button>
+      <div class="avatar">A</div>
+    </div>
+  </header>
+
+  <!-- ====== Page ====== -->
+  <div class="page">
+    <div class="page-inner">
+
+      <!-- Page Header -->
+      <div class="page-header">
+        <div class="page-header-left">
+          <div class="page-title">
+            Уведомления
+            <span class="page-title-count" id="pageCount">12 всего · 5 непрочитанных</span>
+          </div>
+          <div class="page-subtitle">Напоминания, ответы агентов, системные события</div>
+        </div>
+        <div class="page-header-right">
+          <div class="search-box">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input type="text" placeholder="Поиск уведомлений..." id="searchInput" oninput="filterNotifications()">
+          </div>
+          <button class="btn-mark-all" onclick="markAllRead()">✓ Прочитать всё</button>
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div class="filter-bar" id="filterBar">
+        <button class="filter-chip active" data-filter="all" onclick="setFilter(this)">Все <span class="chip-count" id="countAll">12</span></button>
+        <button class="filter-chip" data-filter="unread" onclick="setFilter(this)">Непрочитанные <span class="chip-count" id="countUnread">5</span></button>
+        <button class="filter-chip" data-filter="reminder" onclick="setFilter(this)">⏰ Напоминания</button>
+        <button class="filter-chip" data-filter="claude" onclick="setFilter(this)">● Claude</button>
+        <button class="filter-chip" data-filter="info" onclick="setFilter(this)">ℹ Системные</button>
+        <button class="filter-chip" data-filter="success" onclick="setFilter(this)">✓ Выполнено</button>
+        <button class="filter-chip" data-filter="meeting" onclick="setFilter(this)">🏁 Совещания</button>
+      </div>
+
+      <!-- Notification List -->
+      <div id="notifContainer">
+
+        <!-- ====== Сегодня ====== -->
+        <div class="date-group" data-date="today">
+          <div class="date-header">Сегодня</div>
+
+          <div class="notif-card unread type-reminder" data-id="n1">
+            <div class="notif-icon type-reminder">⏰</div>
+            <div class="notif-body">
+              <div class="notif-row1">
+                <div class="notif-title">Напоминание: подписать документы</div>
+                <span class="notif-time">14:28</span>
+              </div>
+              <div class="notif-text">Срок задачи «Подготовить договор с поставщиком» истекает через 2 часа</div>
+              <div class="notif-meta">
+                <span class="notif-tag reminder">⏰ Напоминание</span>
+                <span class="notif-source">Проект «Сайт»</span>
+              </div>
+              <div class="notif-card-actions">
+                <button class="notif-action-btn primary" onclick="handleAction(event, this, 'open_task')">📋 Открыть задачу</button>
+                <button class="notif-action-btn" onclick="handleAction(event, this, 'mark_read')">✓ Прочитано</button>
+                <button class="notif-action-btn danger" onclick="handleAction(event, this, 'delete')">✕ Удалить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="notif-card unread type-claude" data-id="n2">
+            <div class="notif-icon type-claude">●</div>
+            <div class="notif-body">
+              <div class="notif-row1">
+                <div class="notif-title">Ревьюер: проверка кода завершена</div>
+                <span class="notif-time">12:05</span>
+              </div>
+              <div class="notif-text">Персона «Ревьюер (Мом)» проверила пул-реквест. Обнаружено 2 потенциальные проблемы.</div>
+              <div class="notif-meta">
+                <span class="notif-tag claude">● Персона</span>
+                <span class="notif-source">Чат: Ревьюер</span>
+              </div>
+              <div class="notif-card-actions">
+                <button class="notif-action-btn primary" onclick="handleAction(event, this, 'open_chat')">💬 Открыть чат</button>
+                <button class="notif-action-btn" onclick="handleAction(event, this, 'mark_read')">✓ Прочитано</button>
+                <button class="notif-action-btn danger" onclick="handleAction(event, this, 'delete')">✕ Удалить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="notif-card unread type-info" data-id="n3">
+            <div class="notif-icon type-info">ℹ</div>
+            <div class="notif-body">
+              <div class="notif-row1">
+                <div class="notif-title">Утренний дайджест готов</div>
+                <span class="notif-time">09:00</span>
+              </div>
+              <div class="notif-text">Сводка по проектам за вчера: 5 коммитов, 2 задачи выполнены, 1 PR открыт</div>
+              <div class="notif-meta">
+                <span class="notif-tag info">ℹ Дайджест</span>
+              </div>
+              <div class="notif-card-actions">
+                <button class="notif-action-btn primary" onclick="handleAction(event, this, 'open_note')">📝 Открыть дайджест</button>
+                <button class="notif-action-btn" onclick="handleAction(event, this, 'mark_read')">✓ Прочитано</button>
+                <button class="notif-action-btn danger" onclick="handleAction(event, this, 'delete')">✕ Удалить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="notif-card unread type-meeting" data-id="n4">
+            <div class="notif-icon type-meeting">🏁</div>
+            <div class="notif-body">
+              <div class="notif-row1">
+                <div class="notif-title">Совещание «Дизайн-ревью» завершено</div>
+                <span class="notif-time">08:32</span>
+              </div>
+              <div class="notif-text">4 участника, 3 раунда обсуждения. Достигнуты договорённости по сетке дашборда и цветовой палитре.</div>
+              <div class="notif-meta">
+                <span class="notif-tag meeting">🏁 Совещание</span>
+              </div>
+              <div class="notif-card-actions">
+                <button class="notif-action-btn primary" onclick="handleAction(event, this, 'read_summary')">📄 Читать итоги</button>
+                <button class="notif-action-btn" onclick="handleAction(event, this, 'mark_read')">✓ Прочитано</button>
+                <button class="notif-action-btn danger" onclick="handleAction(event, this, 'delete')">✕ Удалить</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ====== Вчера ====== -->
+        <div class="date-group" data-date="yesterday">
+          <div class="date-header">Вчера</div>
+
+          <div class="notif-card type-success" data-id="n5">
+            <div class="notif-icon type-success">✓</div>
+            <div class="notif-body">
+              <div class="notif-row1">
+                <div class="notif-title">Задача выполнена: настроить CI</div>
+                <span class="notif-time">18:45</span>
+              </div>
+              <div class="notif-text">Claude завершил выполнение задачи «Настроить GitHub Actions для сборки проекта»</div>
+              <div class="notif-meta">
+                <span class="notif-tag success">✓ Исполнитель</span>
+                <span class="notif-source">Проект «Сайт»</span>
+              </div>
+              <div class="notif-card-actions">
+                <button class="notif-action-btn primary" onclick="handleAction(event, this, 'open_chat')">💬 Открыть чат</button>
+                <button class="notif-action-btn danger" onclick="handleAction(event, this, 'delete')">✕ Удалить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="notif-card type-reminder" data-id="n6">
+            <div class="notif-icon type-reminder">⏰</div>
+            <div class="notif-body">
+              <div class="notif-row1">
+                <div class="notif-title">Напоминание: созвон в 15:00</div>
+                <span class="notif-time">14:30</span>
+              </div>
+              <div class="notif-text">Еженедельная синхронизация с командой по проекту «Рефакторинг»</div>
+              <div class="notif-meta">
+                <span class="notif-tag reminder">⏰ Напоминание</span>
+              </div>
+              <div class="notif-card-actions">
+                <button class="notif-action-btn danger" onclick="handleAction(event, this, 'delete')">✕ Удалить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="notif-card type-claude" data-id="n7">
+            <div class="notif-icon type-claude">●</div>
+            <div class="notif-body">
+              <div class="notif-row1">
+                <div class="notif-title">Новое сообщение от Аналитика</div>
+                <span class="notif-time">11:20</span>
+              </div>
+              <div class="notif-text">Персона «Аналитик (Метида)» проанализировала требования и предложила архитектурное решение</div>
+              <div class="notif-meta">
+                <span class="notif-tag claude">● Персона</span>
+                <span class="notif-source">Чат: Аналитик</span>
+              </div>
+              <div class="notif-card-actions">
+                <button class="notif-action-btn primary" onclick="handleAction(event, this, 'open_chat')">💬 Открыть чат</button>
+                <button class="notif-action-btn danger" onclick="handleAction(event, this, 'delete')">✕ Удалить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="notif-card type-info" data-id="n8">
+            <div class="notif-icon type-info">📝</div>
+            <div class="notif-body">
+              <div class="notif-row1">
+                <div class="notif-title">Саммари сессии сохранено</div>
+                <span class="notif-time">10:15</span>
+              </div>
+              <div class="notif-text">Создана заметка-саммари по чату «Рефакторинг модуля авторизации» — 3 ключевых решения</div>
+              <div class="notif-meta">
+                <span class="notif-tag info">ℹ Саммари</span>
+              </div>
+              <div class="notif-card-actions">
+                <button class="notif-action-btn primary" onclick="handleAction(event, this, 'open_note')">📝 Открыть заметку</button>
+                <button class="notif-action-btn danger" onclick="handleAction(event, this, 'delete')">✕ Удалить</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ====== На этой неделе ====== -->
+        <div class="date-group" data-date="week">
+          <div class="date-header">На этой неделе</div>
+
+          <div class="notif-card type-claude" data-id="n9">
+            <div class="notif-icon type-claude">●</div>
+            <div class="notif-body">
+              <div class="notif-row1">
+                <div class="notif-title">Задача ожидает ответа</div>
+                <span class="notif-time">10 июл</span>
+              </div>
+              <div class="notif-text">Claude спрашивает уточнение по задаче «Обновить зависимости npm» — требуется указать версии</div>
+              <div class="notif-meta">
+                <span class="notif-tag claude">● Исполнитель</span>
+              </div>
+              <div class="notif-card-actions">
+                <button class="notif-action-btn primary" onclick="handleAction(event, this, 'open_chat')">💬 Ответить</button>
+                <button class="notif-action-btn danger" onclick="handleAction(event, this, 'delete')">✕ Удалить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="notif-card type-success" data-id="n10">
+            <div class="notif-icon type-success">✓</div>
+            <div class="notif-body">
+              <div class="notif-row1">
+                <div class="notif-title">Задача выполнена: экспорт в CSV</div>
+                <span class="notif-time">9 июл</span>
+              </div>
+              <div class="notif-text">Конвейер завершил реализацию задачи «Добавить экспорт в CSV». Исполнитель: Гефест</div>
+              <div class="notif-meta">
+                <span class="notif-tag success">✓ Конвейер</span>
+              </div>
+              <div class="notif-card-actions">
+                <button class="notif-action-btn primary" onclick="handleAction(event, this, 'open_chat')">💬 Открыть чат</button>
+                <button class="notif-action-btn danger" onclick="handleAction(event, this, 'delete')">✕ Удалить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="notif-card type-info" data-id="n11">
+            <div class="notif-icon type-info">🏁</div>
+            <div class="notif-body">
+              <div class="notif-row1">
+                <div class="notif-title">Конвейер: задача передана в работу</div>
+                <span class="notif-time">9 июл</span>
+              </div>
+              <div class="notif-text">Конвейер завершил планирование (Метида) и ревью (Мом). Исполнитель Гефест приступил к реализации.</div>
+              <div class="notif-meta">
+                <span class="notif-tag info">ℹ Конвейер</span>
+              </div>
+              <div class="notif-card-actions">
+                <button class="notif-action-btn primary" onclick="handleAction(event, this, 'open_chat')">💬 Смотреть ход</button>
+                <button class="notif-action-btn danger" onclick="handleAction(event, this, 'delete')">✕ Удалить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="notif-card type-claude" data-id="n12">
+            <div class="notif-icon type-claude">●</div>
+            <div class="notif-body">
+              <div class="notif-row1">
+                <div class="notif-title">Планировщик: бриф на неделю</div>
+                <span class="notif-time">8 июл</span>
+              </div>
+              <div class="notif-text">Прометей подготовил план работ на неделю: 5 задач, приоритет — рефакторинг бэкенда</div>
+              <div class="notif-meta">
+                <span class="notif-tag claude">● Планировщик</span>
+              </div>
+              <div class="notif-card-actions">
+                <button class="notif-action-btn primary" onclick="handleAction(event, this, 'open_chat')">💬 Открыть чат</button>
+                <button class="notif-action-btn danger" onclick="handleAction(event, this, 'delete')">✕ Удалить</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ====== Empty State (hidden by default) ====== -->
+      <div class="empty-state" id="emptyState" style="display:none">
+        <div class="empty-state-visal" style="width:96px;height:96px;border-radius:50%;background:var(--bgPanel);display:flex;align-items:center;justify-content:center;font-size:40px;color:var(--textMuted);margin-bottom:var(--SP2xl)">🔔</div>
+        <div class="empty-state-title">Всё чисто</div>
+        <div class="empty-state-text">Нет уведомлений по выбранному фильтру. Попробуйте изменить фильтр или зайдите позже.</div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ====== Toast Container ====== -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+  // ====== Counts State ======
+  let state = {
+    total: 12,
+    unread: 5
+  };
+
+  function updateCounts() {
+    const allCards = document.querySelectorAll('.notif-card:not([style*="display: none"])');
+    const unreadCards = document.querySelectorAll('.notif-card.unread:not([style*="display: none"])');
+    state.total = allCards.length;
+    state.unread = unreadCards.length;
+
+    document.getElementById('headerBadge').textContent = state.unread;
+    document.getElementById('bellCount').textContent = state.unread;
+    document.getElementById('pageCount').textContent = `${state.total} всего · ${state.unread} непрочитанных`;
+    document.getElementById('countAll').textContent = state.total;
+    document.getElementById('countUnread').textContent = state.unread;
+
+    // badge visibility
+    document.getElementById('headerBadge').style.display = state.unread > 0 ? '' : 'none';
+    document.getElementById('bellCount').style.display = state.unread > 0 ? '' : 'none';
+
+    // empty state
+    document.getElementById('emptyState').style.display = state.total === 0 ? '' : 'none';
+  }
+
+  // ====== Filter ======
+  function setFilter(el) {
+    document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+    el.classList.add('active');
+    filterNotifications();
+  }
+
+  function filterNotifications() {
+    const activeFilter = document.querySelector('.filter-chip.active')?.dataset?.filter || 'all';
+    const searchText = document.getElementById('searchInput')?.value?.toLowerCase() || '';
+    const cards = document.querySelectorAll('.notif-card');
+    const groups = document.querySelectorAll('.date-group');
+
+    cards.forEach(card => {
+      let show = true;
+
+      // Filter
+      if (activeFilter === 'unread') {
+        show = card.classList.contains('unread');
+      } else if (activeFilter !== 'all') {
+        show = card.classList.contains('type-' + activeFilter);
+      }
+
+      // Search
+      if (show && searchText) {
+        const text = (card.querySelector('.notif-title')?.textContent + ' ' +
+                     card.querySelector('.notif-text')?.textContent).toLowerCase();
+        show = text.includes(searchText);
+      }
+
+      card.style.display = show ? '' : 'none';
+    });
+
+    // hide empty groups
+    groups.forEach(g => {
+      const visible = [...g.querySelectorAll('.notif-card')].some(c => c.style.display !== 'none');
+      g.style.display = visible ? '' : 'none';
+    });
+
+    updateCounts();
+  }
+
+  // ====== Search ======
+  document.getElementById('searchInput').addEventListener('input', filterNotifications);
+
+  // ====== Actions ======
+  function handleAction(e, btn, action) {
+    e.stopPropagation();
+    const card = btn.closest('.notif-card');
+
+    switch (action) {
+      case 'mark_read': {
+        card.classList.remove('unread');
+        showToast('✓ Прочитано', 'Уведомление помечено как прочитанное', 'info');
+        updateCounts();
+        break;
+      }
+      case 'delete': {
+        card.style.transition = 'all 0.25s ease';
+        card.style.opacity = '0';
+        card.style.transform = 'translateX(30px) scale(0.97)';
+        setTimeout(() => {
+          card.remove();
+          // clean empty groups
+          document.querySelectorAll('.date-group').forEach(g => {
+            if (g.querySelectorAll('.notif-card').length === 0) g.remove();
+          });
+          updateCounts();
+        }, 250);
+        showToast('✕ Удалено', 'Уведомление удалено', 'info');
+        break;
+      }
+      case 'open_task': {
+        showToast('📋 Переход', 'Открываю задачу в проекте…', 'claude');
+        break;
+      }
+      case 'open_chat': {
+        showToast('💬 Переход', 'Открываю чат с агентом…', 'claude');
+        card.classList.remove('unread');
+        updateCounts();
+        break;
+      }
+      case 'open_note': {
+        showToast('📝 Переход', 'Открываю заметку…', 'info');
+        card.classList.remove('unread');
+        updateCounts();
+        break;
+      }
+      case 'read_summary': {
+        showToast('📄 Открываю', 'Итоги совещания…', 'info');
+        card.classList.remove('unread');
+        updateCounts();
+        break;
+      }
+    }
+  }
+
+  function markAllRead() {
+    document.querySelectorAll('.notif-card.unread').forEach(c => c.classList.remove('unread'));
+    updateCounts();
+    showToast('✓ Всё прочитано', 'Все уведомления помечены как прочитанные', 'success');
+  }
+
+  // ====== Click on card ======
+  document.querySelectorAll('.notif-card').forEach(card => {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.notif-action-btn')) return;
+      this.classList.remove('unread');
+      updateCounts();
+      const title = this.querySelector('.notif-title')?.textContent || 'Уведомление';
+      showToast('🔔 ' + title, 'Открываю…', 'info');
+    });
+  });
+
+  // ====== Toast System ======
+  function showToast(title, text, kind) {
+    const container = document.getElementById('toastContainer');
+    const icons = { reminder: '⏰', claude: '●', info: 'ℹ', success: '✓', warning: '⚠' };
+    const icon = icons[kind] || '●';
+
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.innerHTML = `
+      <span class="toast-icon" style="color:var(--${kind === 'claude' ? 'accent' : kind})">${icon}</span>
+      <div class="toast-body">
+        <div class="toast-title">${title}</div>
+        <div class="toast-text">${text}</div>
+      </div>
+      <button class="toast-close" onclick="this.closest('.toast').classList.add('out');setTimeout(()=>this.remove(),250)">✕</button>
+      <div class="toast-progress" style="background:var(--${kind === 'claude' ? 'accent' : kind})"></div>
+    `;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.classList.add('out');
+        setTimeout(() => toast.remove(), 250);
+      }
+    }, 5000);
+  }
+
+  // ====== Demo Toast (bell click) ======
+  function showDemoToast() {
+    showToast('Ревьюер: проверка кода', 'Обнаружено 2 потенциальные проблемы', 'claude');
+  }
+
+  // Update counts on load
+  setTimeout(updateCounts, 100);
+</script>
+
+</body>
+</html>

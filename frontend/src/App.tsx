@@ -28,7 +28,9 @@ import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
 import { NotesPage } from './features/notes/NotesPage'
 import { PersonasPage } from './features/personas/PersonasPage'
+import { ensureNotificationsSubscribed } from './lib/notifications'
 import { KnowledgePage } from './features/knowledge/KnowledgePage'
+import { NotificationsPage } from './features/notifications/NotificationsPage'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 const HUB_TAB_KEY = 'cc_hub_tab'
@@ -336,6 +338,9 @@ export default function App() {
   // Watcher: сервер уведомил об изменении файлов проекта → инкрементальный ре-синк офлайн-кэша
   useEffect(() => onFilesChanged(({ projectId }) => { syncProjectFiles(projectId) }), [])
 
+  // Подписка на уведомления через SignalR (даже если раздел ещё не открыт)
+  useEffect(() => { ensureNotificationsSubscribed(); }, []);
+
   const openProject = (p: Project) => {
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
     navPush({ screen: 'project', project: p, view: 'sidebar', file: null })
@@ -474,6 +479,8 @@ export default function App() {
               ? <PersonasPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'knowledge'
               ? <KnowledgePage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+              : effectiveHubTab === 'notifications'
+                ? <NotificationsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : project
                 ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
                 : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />

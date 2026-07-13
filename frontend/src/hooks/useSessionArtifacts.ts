@@ -87,6 +87,8 @@ export interface SessionArtifacts {
   links: ArtifactLink[];
   agents: AgentArtifact[];      // одиночные субагенты (workflow-агенты — в workflows)
   workflows: WorkflowGroup[];
+  notes: string[];              // заголовки заметок, созданных через mcp__notes__*
+  executingTask: string | null; // заголовок задачи, если чат запущен для её выполнения
 }
 
 // Инструменты, которые меняют файл — путь берём из их аргументов как запасной источник
@@ -95,6 +97,8 @@ export interface SessionArtifacts {
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'write_file', 'edit_file']);
 // Инструменты загрузки веба — источник ссылок (web_fetch — legacy старого DeepSeek-адаптера).
 const WEBFETCH_TOOLS = new Set(['WebFetch', 'web_fetch']);
+// MCP-инструменты управления заметками приложения.
+const MCP_NOTES_NAMES = new Set(['mcp__notes__notes_create']);
 
 const URL_RE = /https?:\/\/[^\s<>()[\]"'`]+/g;
 // Хвостовая пунктуация, прилипающая к URL в тексте (точка в конце предложения, запятая, скобка)
@@ -194,6 +198,30 @@ export function computeTodos(items: ChatItem[]): TodoItem[] {
         } else {
           if (typeof o?.subject === 'string' && o.subject) ex.content = o.subject;
           if (typeof o?.status === 'string' && o.status) ex.status = o.status;
+        }
+      }
+    } else if (it.name === 'mcp__tasks__tasks_create') {
+      // Создание задачи в прикладном трекере через MCP
+      const o = it.input as { title?: unknown; name?: unknown } | null;
+      const title = typeof o?.title === 'string' && o.title
+        ? o.title : typeof o?.name === 'string' && o.name ? o.name : '';
+      if (title) {
+        taskAutoId += 1;
+        tasks.set(`mcp-${taskAutoId}`, { content: title, status: 'pending' });
+      }
+    } else if (it.name === 'mcp__tasks__tasks_update') {
+      // Обновление статуса задачи: ищем по совпадению заголовка в созданных MCP-задачах
+      // (полный taskId из прикладного трекера нам неизвестен — матчим по title)
+      const o = it.input as { title?: unknown; status?: unknown } | null;
+      const status = typeof o?.status === 'string' ? o.status : null;
+      const title = typeof o?.title === 'string' && o.title ? o.title : null;
+      if (status && title) {
+        for (const [, t] of tasks) {
+          if (t.content === title) {
+            if (status === 'done' || status === 'completed') t.status = 'completed';
+            else if (status === 'in_progress') t.status = 'in_progress';
+            break;
+          }
         }
       }
     }
@@ -311,11 +339,12 @@ export function computeAgents(items: ChatItem[]): { agents: AgentArtifact[]; wor
   return { agents, workflows };
 }
 
-export function computeArtifacts(items: ChatItem[], rootPath: string): SessionArtifacts {
+export function computeArtifacts(items: ChatItem[], rootPath: string, executingTask: string | null = null): SessionArtifacts {
   // path → агрегированные дельты, порядок последнего касания сохраняем через Map
   const files = new Map<string, ArtifactFile>();
   const plans: PlanArtifact[] = [];
   const links = new Map<string, ArtifactLink>();
+  const notes: string[] = [];
 
   // Изменённый файл (file_changed/Write): дельты + флаг changed
   const touchChanged = (path: string, added: number, removed: number, hasDelta: boolean) => {
@@ -365,6 +394,10 @@ export function computeArtifacts(items: ChatItem[], rootPath: string): SessionAr
           const o = it.input as Record<string, unknown> | null;
           const u = o?.url;
           if (typeof u === 'string') addLink(u);
+        } else if (MCP_NOTES_NAMES.has(it.name)) {
+          const o = it.input as Record<string, unknown> | null;
+          const title = typeof o?.title === 'string' && o.title.trim() ? o.title.trim() : null;
+          if (title && !notes.includes(title)) notes.push(title);
         }
         break;
       }
@@ -398,6 +431,8 @@ export function computeArtifacts(items: ChatItem[], rootPath: string): SessionAr
     todos: computeTodos(items),
     links: [...links.values()],
     ...computeAgents(items),
+    notes,
+    executingTask,
   };
 }
 
@@ -427,7 +462,8 @@ export function countFiles(items: ChatItem[], rootPath: string): number {
 // projectId/rootPath опциональны: в чат-режиме проекта нет, лента едет через
 // api.chats.getHistory, а с пустым rootPath файлы из абсолютных путей отсекаются
 // сами (toRelative → null) — план/задачи/агенты/ссылки собираются без проекта.
-export function useSessionArtifacts(sessionId: string | null, projectId?: string, rootPath = ''): SessionArtifacts {
+// executingTaskTitle — если сессия запущена для выполнения задачи (заголовок для артефактов).
+export function useSessionArtifacts(sessionId: string | null, projectId?: string, rootPath = '', executingTaskTitle: string | null = null): SessionArtifacts {
   const { items } = useSession(sessionId, projectId);
-  return useMemo(() => computeArtifacts(items, rootPath), [items, rootPath]);
+  return useMemo(() => computeArtifacts(items, rootPath, executingTaskTitle), [items, rootPath, executingTaskTitle]);
 }

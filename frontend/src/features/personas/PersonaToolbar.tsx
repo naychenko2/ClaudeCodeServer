@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Book, CheckSquare, ChevronLeft, EllipsisVertical, Layers, MessageSquare, Pencil, Trash2, User } from 'lucide-react';
+import { Book, CheckSquare, ChevronLeft, EllipsisVertical, Layers, Pencil, Trash2, User, Zap } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona } from '../../types';
 import { C, FONT, R } from '../../lib/design';
@@ -17,7 +17,7 @@ import type { PersonaFormStatus } from './PersonaForm';
 // скрыты, справа — [Отмена] и Сохранить (+точка dirty).
 // В режиме создания: «Новая персона» + [Отмена] [Создать].
 
-export type PersonaView = 'preview' | 'knowledge' | 'memory' | 'tasks';
+export type PersonaView = 'preview' | 'knowledge' | 'memory' | 'tasks' | 'automation';
 
 // Иконки видов — на мобиле пилюли компактные (подпись только у активного)
 const VIEW_OPTIONS: { value: PersonaView; label: string; icon: React.ReactNode }[] = [
@@ -29,6 +29,8 @@ const VIEW_OPTIONS: { value: PersonaView; label: string; icon: React.ReactNode }
   { value: 'memory', label: 'Память', icon: <Layers size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
   // Задачи — чек-лист (поручения персоне-исполнителю)
   { value: 'tasks', label: 'Задачи', icon: <CheckSquare size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
+  // Проактивность — молния (правила «событие → действие»)
+  { value: 'automation', label: 'Проактивность', icon: <Zap size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> },
 ];
 
 interface CommonProps {
@@ -112,7 +114,7 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
     );
   }
 
-  const { persona, zoneLabel, view, onView, editing, onEdit, onCancelEdit, talking, onTalk, onDelete } = props;
+  const { persona, zoneLabel, view, onView, editing, onEdit, onCancelEdit, onDelete } = props;
   const lines = personaTitleLines(persona);
 
   return (
@@ -144,6 +146,28 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
         </>
       ) : (
         <>
+          {/* Редактировать + ⋯-меню — всегда видно до вкладок, чтобы не прыгало при переключении */}
+          <button onClick={onEdit} title="Редактировать"
+            style={{ ...tbBtnGhost, display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            {!isMobile && 'Редактировать'}
+          </button>
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <IconButton onClick={() => setMenuOpen(o => !o)} title="Ещё" size={isMobile ? 'lg' : 'md'}>
+              <EllipsisVertical size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            </IconButton>
+            {menuOpen && (
+              <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={180}>
+                <MenuItem
+                  danger
+                  icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
+                  label="Удалить персону"
+                  onClick={() => { setMenuOpen(false); onDelete(); }}
+                />
+              </Menu>
+            )}
+          </div>
+
           {/* Сегмент Профиль | [Умения] | Память | Задачи (на мобиле — компактный, иконки) */}
           <PillSwitch<PersonaView>
             value={view}
@@ -152,42 +176,6 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
             compact={isMobile}
             isMobile={isMobile}
           />
-
-          {/* Поговорить — на десктопе во всех видах; на мобиле убрано из тулбара
-              (тесно) и живёт в теле «Профиля» */}
-          {!isMobile && (
-            <button onClick={onTalk} disabled={talking} title="Поговорить"
-              style={{ ...talkBtn(accent), opacity: talking ? 0.6 : 1, cursor: talking ? 'default' : 'pointer' }}>
-              <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-              {talking ? 'Создаём…' : 'Поговорить'}
-            </button>
-          )}
-
-          {/* Редактировать + ⋯-меню — только в виде «Профиль» (визитка) */}
-          {view === 'preview' && (
-            <>
-              <button onClick={onEdit} title="Редактировать"
-                style={{ ...tbBtnGhost, display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-                {!isMobile && 'Редактировать'}
-              </button>
-              <div style={{ position: 'relative', flexShrink: 0 }}>
-                <IconButton onClick={() => setMenuOpen(o => !o)} title="Ещё" size={isMobile ? 'lg' : 'md'}>
-                  <EllipsisVertical size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-                </IconButton>
-                {menuOpen && (
-                  <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={180}>
-                    <MenuItem
-                      danger
-                      icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
-                      label="Удалить персону"
-                      onClick={() => { setMenuOpen(false); onDelete(); }}
-                    />
-                  </Menu>
-                )}
-              </div>
-            </>
-          )}
         </>
       )}
     </Toolbar>
@@ -203,11 +191,4 @@ function zoneBadge(accent: string): React.CSSProperties {
   };
 }
 
-// Кнопка «Поговорить» — как tbBtnPrimary, но залита акцентом персоны
-function talkBtn(accent: string): React.CSSProperties {
-  return {
-    ...tbBtnPrimary,
-    display: 'inline-flex', gap: 7,
-    background: accent, color: C.onAccent,
-  };
-}
+

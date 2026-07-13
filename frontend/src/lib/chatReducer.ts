@@ -124,6 +124,17 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return withItems([...prev.items, { kind: 'text', text: msg.text }]);
     }
 
+    case 'user_message':
+      // Сервер-инициированная отправка (автоматизация/задача) — клиент не добавлял её
+      // оптимистично, поэтому сообщение приходит живьём. Дублей нет: ввод пользователя
+      // (auto=false) этим событием не рассылается.
+      return withItems([...prev.items, {
+        kind: 'user_message', text: msg.text,
+        ...(msg.attachedPaths ? { attachedPaths: msg.attachedPaths } : {}),
+        ...(msg.senderPersonaId ? { senderPersonaId: msg.senderPersonaId } : {}),
+        ...(msg.auto ? { auto: true } : {}),
+      }]);
+
     case 'thinking_delta': {
       const last = prev.items[prev.items.length - 1];
       if (last?.kind === 'thinking') return withItems([...prev.items.slice(0, -1), { ...last, text: last.text + msg.text }]);

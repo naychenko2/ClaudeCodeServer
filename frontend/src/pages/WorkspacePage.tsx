@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { Project, Session, AgentInfo, SkillsData, AuthState, Task } from '../types';
+import type { Project, Session, SkillsData, AuthState, Task } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
@@ -189,18 +189,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const handleAttachToChat = useCallback((path: string) => {
     setAttachedFiles(prev => prev.includes(path) ? prev : [...prev, path]);
   }, []);
-  const [selectedAgent, setSelectedAgent] = useState<AgentInfo | null>(() => {
-    try {
-      const raw = localStorage.getItem(`cc_agent_${project.id}`);
-      return raw ? JSON.parse(raw) : null;
-    } catch { return null; }
-  });
-
-  const handleAgentChange = (agent: AgentInfo | null) => {
-    setSelectedAgent(agent);
-    if (agent) localStorage.setItem(`cc_agent_${project.id}`, JSON.stringify(agent));
-    else localStorage.removeItem(`cc_agent_${project.id}`);
-  };
 
   useEffect(() => {
     api.knowledge.getStatus(project.id).then(s => {
@@ -434,47 +422,47 @@ const windowWidth = useWindowWidth();
   useEffect(() => {
     if (!draggingSplitter) return;
     const up = () => setDraggingSplitter(null);
-    window.addEventListener('mouseup', up);
-    return () => window.removeEventListener('mouseup', up);
+    window.addEventListener('pointerup', up);
+    return () => window.removeEventListener('pointerup', up);
   }, [draggingSplitter]);
 
-  const handleSidebarSplitterMouseDown = (e: React.MouseEvent) => {
+  const handleSidebarSplitterMouseDown = (e: React.PointerEvent) => {
     e.preventDefault();
     const startX = e.clientX;
     const startW = sidebarWidth;
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       setSidebarWidth(Math.max(220, Math.min(520, startW + (ev.clientX - startX))));
     };
     const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
   };
 
-  const handleArtifactsSplitterMouseDown = (e: React.MouseEvent) => {
+  const handleArtifactsSplitterMouseDown = (e: React.PointerEvent) => {
     e.preventDefault();
     const startX = e.clientX;
     const startW = artifactsWidth;
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       // Панель справа: тянем влево (clientX уменьшается) → ширина растёт
       setArtifactsWidth(Math.max(240, Math.min(480, startW - (ev.clientX - startX))));
     };
     const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
   };
 
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
@@ -592,29 +580,29 @@ const windowWidth = useWindowWidth();
 
   const handleEnterFullscreen = () => setFileFullscreen(true);
 
-  const handleSplitterMouseDown = (e: React.MouseEvent) => {
+  const handleSplitterMouseDown = (e: React.PointerEvent) => {
     e.preventDefault();
     const container = splitContainerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
     const SPLITTER = 5;
 
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       const available = rect.width - SPLITTER;
       const chatW = Math.max(200, Math.min(available - 200, ev.clientX - rect.left));
       const fileW = available - chatW;
       if (fileW > 0) setChatFlex(chatW / fileW);
     };
     const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
   };
 
   const handleTabSwitch = (tab: LeftTab) => {
@@ -752,7 +740,7 @@ const windowWidth = useWindowWidth();
       )}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {leftTab === 'sessions' ? (
-          <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
+          <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
         ) : leftTab === 'tasks' ? (
           <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
         ) : leftTab === 'personas' ? (
@@ -801,7 +789,7 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
-              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} agents={skillsData?.agents} selectedAgent={selectedAgent} onAgentChange={handleAgentChange} />
+              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
               : leftTab === 'personas'

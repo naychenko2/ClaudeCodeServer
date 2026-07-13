@@ -21,6 +21,7 @@ import { PersonaPreview } from './PersonaPreview';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaTasksPanel } from './PersonaTasksPanel';
+import { PersonaAutomationPanel } from './PersonaAutomationPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
 import type { PersonaTemplate } from './personaTemplates';
 
@@ -384,6 +385,11 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSes
     // Знания — привязки источников и правил (фича persona-bindings)
     ? <div style={{ flex: 1, minHeight: 0 }}>
         <PersonaBindingsPanel persona={persona} accent={accent} isMobile={isMobile} />
+      </div>
+    : view === 'automation'
+    // Проактивность — правила «событие → действие» (событийно-управляемая автоматизация)
+    ? <div style={{ flex: 1, minHeight: 0 }}>
+        <PersonaAutomationPanel persona={persona} projects={projects} accent={accent} isMobile={isMobile} />
       </div>
     : editing
     // Профиль в режиме правки — инлайн-форма (действия — в тулбаре); успешное

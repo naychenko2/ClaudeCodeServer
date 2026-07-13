@@ -63,6 +63,14 @@ public class SessionManager
     // Вызывается после обновления статуса и broadcast; его ошибки не роняют пайплайн
     public event Func<Session, ServerMessage, Task>? OnSessionMessage;
 
+    // Текст пользовательского сообщения (ввод в чат) — для push-источников автоматизаций
+    // (детекция @упоминаний персон). Вызывается из SendMessageAsync после записи в Accumulator;
+    // fire-and-forget, ошибки наблюдателя не роняют ход. (session, text, senderPersonaId)
+    public event Func<Session, string, string?, Task>? OnUserMessage;
+
+    // Удаление сессии (чат/проектная сессия) — для авто-движков: сбросить ссылки на чат правила.
+    public event Action<Session>? OnSessionDeleted;
+
     // Auto-recall заметок (фича notes-auto-recall): семантический индекс + гейт по флагу
     private readonly NotesKnowledgeService _notesKb;
     private readonly FeatureFlagService _flags;
@@ -422,7 +430,7 @@ public class SessionManager
     // чат создаётся в нём, а не вне проекта (как давно позволяет смена собеседника SetPersona).
     public async Task<Session> CreatePersonaChatAsync(string ownerId, string personaId,
         ClaudeMode mode, string? resumeSessionId = null, string? name = null,
-        string? contextProjectId = null)
+        string? contextProjectId = null, string? automationRuleId = null)
     {
         var persona = _personas.Get(personaId, ownerId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {personaId}");
@@ -445,6 +453,7 @@ public class SessionManager
                 Name = name,
                 Model = persona.Model,
                 Effort = persona.Effort,
+                AutomationRuleId = automationRuleId,
             };
             await StartNewSessionAsync(projectSession, project.RootPath, project.SystemPrompt,
                 () => _projects.GetById(project.Id)?.PermissionRules
@@ -463,6 +472,7 @@ public class SessionManager
             Name = name,
             Model = persona.Model,
             Effort = persona.Effort,
+            AutomationRuleId = automationRuleId,
         };
         await StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);
         return session;
@@ -735,6 +745,19 @@ public class SessionManager
             sections, allowedIds, selfSessionId);
     }
 
+    // Контекст MCP-сервера уведомлений: всегда подключается, когда есть владелец.
+    // Тот же сервисный токен, что у tasks/notes/workspace.
+    private NotificationsMcpContext? BuildNotificationsContext(string? ownerId)
+    {
+        if (ownerId is null) return null;
+        var entry = _notesTokens.AddOrUpdate(ownerId,
+            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
+            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
+                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
+                : old);
+        return new NotificationsMcpContext(ResolveTasksApiUrl(), entry.Token);
+    }
+
     // Дополнительные запреты сессии персоны: профиль доступа (PersonaAccessPolicy — «пол»
     // запретов: ReadOnly/Custom) + capability-решение «web» через привязки
     // (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools). Web-решение передаём
@@ -871,6 +894,7 @@ public class SessionManager
             PersonaRecallProvider: persona.Recall,
             ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona),
             PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session),
+            NotificationsMcp: BuildNotificationsContext(ownerId),
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections)));
         entry.Process = adapter;
@@ -900,6 +924,13 @@ public class SessionManager
         // ДО пересоздания процесса — новый персона-слой применяется уже к этому ходу
         await RouteGroupSpeakerAsync(sessionId, entry, text);
 
+        // Сервер-инициированная отправка (автоматизация/задача): клиент не добавлял сообщение
+        // оптимистично — покажем его сразу, до тяжёлого старта CLI-процесса, чтобы было видно,
+        // что именно обрабатывается. Ввод пользователя и внутренние директивы цикла не рассылаем.
+        if (auto && !systemDirective)
+            await BroadcastSessionMessageAsync(sessionId,
+                new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null, senderPersonaId, auto));
+
         await EnsureProcessAsync(sessionId, entry);
 
         // Авторство реплик хода: text-сообщения истории получают персону на момент хода
@@ -922,6 +953,20 @@ public class SessionManager
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
         entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId);
+
+        // Push-источники автоматизаций: @упоминание персоны в тексте пользователя.
+        // Fire-and-forget — обработчик не должен тормозить ход (он лишь детектит и ставит в очередь).
+        if (OnUserMessage is { } userMsgObservers)
+        {
+            _ = Task.Run(async () =>
+            {
+                try { await userMsgObservers(entry.Info, text, senderPersonaId); }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[SessionManager] Ошибка OnUserMessage ({sessionId}): {ex.Message}");
+                }
+            });
+        }
         // Обвязки хода (OmO) дописываются только к тексту для CLI —
         // история и UI хранят исходное сообщение пользователя
         await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths);
@@ -1066,6 +1111,7 @@ public class SessionManager
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona),
                 PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info),
+                NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections));
         }
@@ -1087,6 +1133,7 @@ public class SessionManager
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona),
                 PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info),
+                NotificationsMcp: BuildNotificationsContext(project.OwnerId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections));
         }
@@ -1283,6 +1330,7 @@ public class SessionManager
         if (entry.Info.ClaudeSessionId is string csid)
             _history.Delete(csid);
         SaveSessions();
+        try { OnSessionDeleted?.Invoke(entry.Info); } catch { /* наблюдатель не должен ронять удаление */ }
         await BroadcastChatDeletedAsync(sessionId, entry.Info);
     }
 

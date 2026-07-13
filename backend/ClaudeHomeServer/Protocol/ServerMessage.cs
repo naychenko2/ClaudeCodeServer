@@ -22,6 +22,13 @@ public record SessionStartedMessage(string ClaudeSessionId, bool IsResume, strin
 public record TextDeltaMessage(string Text)
     : ServerMessage("text_delta");
 
+// Текст пользовательского сообщения для сервер-инициированных отправок (автоматизация/задача):
+// клиент не добавлял его оптимистично — бродкастим, чтобы промпт появился в чате сразу,
+// а не по перезагрузке истории. Только для auto && !systemDirective (ввод пользователя уже
+// виден на клиенте, внутренние директивы цикла «до готово» показывать не нужно).
+public record UserMessageMessage(string Text, IReadOnlyList<string>? AttachedPaths, string? SenderPersonaId, bool Auto)
+    : ServerMessage("user_message");
+
 public record ThinkingDeltaMessage(string Text)
     : ServerMessage("thinking_delta");
 
@@ -164,9 +171,14 @@ public record PipelinePhaseMessage(string PipelineId, string Phase, string Task,
     : ServerMessage("pipeline_phase");
 
 // Пользовательское уведомление (напоминание о задаче, событие Claude-исполнителя и т.п.) —
-// в группу user_{userId}: открытое приложение показывает тост, клик ведёт по Url (hash-диплинк).
-// Kind — семантика для иконки/цвета: reminder | claude | info
-public record NotificationMessage(string Title, string Body, string? Url = null, string Kind = "info")
+// в группу user_{userId}: открытое приложение показывает тост + сохраняет в центр уведомлений.
+// Kind — семантика для иконки/цвета: reminder | claude | info | success | meeting
+// NotificationId — id в NotificationStore (для mark-read/delete через тост).
+// Type — подтип: task_reminder | execution_started | execution_completed | briefing | summary | ...
+public record NotificationMessage(string Title, string Body, string? Url = null,
+    string Kind = "info", string? NotificationId = null, string? Type = null,
+    string? ProjectId = null, string? SessionId = null, string? TaskId = null,
+    string? Source = null, string? Tag = null)
     : ServerMessage("notification");
 
 // Манифест recall (F3): что персона подтянула в ход из памяти/заметок/базы — для атрибуции

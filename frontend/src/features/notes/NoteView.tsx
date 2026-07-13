@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { MessageCircle, X } from 'lucide-react';
 import type { NoteDetail } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNotesVersion } from '../../lib/notes';
@@ -69,6 +69,16 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   }, [noteId, version]);
 
   const startEdit = () => { if (note) { setDraftTitle(note.title); setDraftBody(note.content); setEditing(true); } };
+
+  // Открыть чат, из которого создана заметка
+  const openSession = async (sessionId: string) => {
+    try {
+      const chat = await api.chats.get(sessionId);
+      if (chat) {
+        window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
+      }
+    } catch { /* чат не найден — возможно удалён */ }
+  };
 
   // Резолв вики-имени для hover-preview и embed ![[…]] (фрагмент по якорю приоритетен)
   const resolveNote = async (name: string, anchor?: string) => {
@@ -274,6 +284,20 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             </h1>}
         {!isMobile && <SourceBadge source={note.source} label={note.sourceLabel} />}
         {!editing && !isMobile && <span style={{ fontSize: 11, color: C.textMuted, flex: 'none' }}>изменено {relTime(note.updatedAt)}</span>}
+        {!editing && note.sourceSessionId && (
+          <button onClick={() => openSession(note.sourceSessionId!)}
+            style={{ fontSize: 11, color: C.info, flex: 'none', background: 'none', border: 'none', cursor: 'pointer', fontFamily: FONT.sans, display: 'flex', alignItems: 'center', gap: 3, padding: 0 }}>
+            <MessageCircle size={11} strokeWidth={2} /> Из чата
+          </button>
+        )}
+        {!editing && note.expiresAt && (() => {
+          const left = new Date(note.expiresAt).getTime() - Date.now();
+          if (left <= 0) return <span style={{ fontSize: 11, color: C.warning, flex: 'none', whiteSpace: 'nowrap' }}>⏳ скоро</span>;
+          const min = Math.round(left / 60_000);
+          const urgent = min < 60;
+          const label = min < 60 ? `${Math.max(min, 1)} мин` : min < 1440 ? `${Math.round(min / 60)} ч` : `${Math.round(min / 1440)} дн`;
+          return <span style={{ fontSize: 11, color: urgent ? C.warning : C.textMuted, flex: 'none', whiteSpace: 'nowrap' }}>⏳ {label}</span>;
+        })()}
         <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 'none' }}>
           {editing ? (
             /* В правке — «Отмена» + «Сохранить» в тулбаре, как у файлов */

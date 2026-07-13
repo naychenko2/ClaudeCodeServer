@@ -85,6 +85,9 @@ public class Session
     // Иначе персона с ограничением tools (без «tasks») теряет tasks-сервер и не может ни прочитать,
     // ни завершить задачу (fallback на встроенный Task-тул → «система задач недоступна»).
     public bool TaskExecution { get; set; }
+    // Origin автоматизации: null — обычный чат; иначе — id правила PersonaAutomationRule,
+    // чат которого создан движком проактивности. Для фильтрации авто-чатов и трассировки.
+    public string? AutomationRuleId { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

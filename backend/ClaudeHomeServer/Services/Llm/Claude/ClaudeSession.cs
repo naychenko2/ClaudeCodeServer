@@ -66,17 +66,6 @@ public class ClaudeSession : ILlmSessionAdapter
     private static readonly string[] BuiltInTaskTools =
         ["TaskGet", "TaskList", "TaskCreate", "TaskUpdate", "TaskComplete", "TaskDelete", "TaskSearch"];
 
-    // Префиксы встроенных MCP-серверов приложения (инструменты вида mcp__{server}__{tool}).
-    // Для сессии-исполнителя задачи разрешаем их автоматический выз — без пользователя,
-    // который ответит на карточку разрешения (см. DecidePermissionAsync).
-    private static readonly string[] AppMcpPrefixes =
-        ["mcp__tasks__", "mcp__notes__", "mcp__personas__", "mcp__memory__", "mcp__wsp__"];
-    private static bool IsAppMcpTool(string toolName)
-    {
-        foreach (var p in AppMcpPrefixes) if (toolName.StartsWith(p, StringComparison.Ordinal)) return true;
-        return false;
-    }
-
     // Отслеживание изменений файлов на время хода
     private readonly TurnFileWatcher _fileWatcher;
 
@@ -102,6 +91,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly PersonasMcpContext? _personasMcp;
     // MCP-сервер рабочего пространства: проекты/файлы/знания/поиск владельца
     private readonly WorkspaceMcpContext? _workspaceMcp;
+    // MCP-сервер уведомлений: создание уведомлений из Claude/агентов
+    private readonly NotificationsMcpContext? _notificationsMcp;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -129,6 +120,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _bindingsProvider = context.BindingsProvider;
         _personasMcp = context.PersonasMcp;
         _workspaceMcp = context.WorkspaceMcp;
+        _notificationsMcp = context.NotificationsMcp;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
             ? [.. (disallowedTools ?? []), .. extra]
@@ -158,9 +150,11 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasPersonas = personasServerPath is not null;
         var workspaceServerPath = _workspaceMcp is not null ? WorkspaceServerLocator.FindWorkspaceServerPath() : null;
         var hasWorkspace = workspaceServerPath is not null;
+        var notificationsServerPath = _notificationsMcp is not null ? NotificationsServerLocator.FindNotificationsServerPath() : null;
+        var hasNotifications = notificationsServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var userServers = LoadUserScopeMcpServers();
-        if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasDataset && userServers is null) return null;
+        if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications && !hasDataset && userServers is null) return null;
 
         try
         {
@@ -222,6 +216,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["NOTES_API_URL"] = _notesMcp!.ApiUrl,
                         ["NOTES_API_TOKEN"] = _notesMcp.Token,
                         ["NOTES_PROJECT_ID"] = _notesMcp.ProjectId ?? "",
+                        ["NOTES_SESSION_ID"] = Info.Id,
                     },
                 };
             }
@@ -298,6 +293,20 @@ public class ClaudeSession : ILlmSessionAdapter
                     // CLI в режим deferred-tools, где ленивые серверы прячут инструменты от модели.
                     // Персона-секретарь опирается на workspace-инструменты — держим их всегда видимыми.
                     ["alwaysLoad"] = true,
+                };
+            }
+
+            if (hasNotifications)
+            {
+                servers["notifications"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["command"] = "node",
+                    ["args"] = new System.Text.Json.Nodes.JsonArray { notificationsServerPath! },
+                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["NOTIFICATIONS_API_URL"] = _notificationsMcp!.ApiUrl,
+                        ["NOTIFICATIONS_API_TOKEN"] = _notificationsMcp.Token,
+                    },
                 };
             }
 
@@ -506,11 +515,11 @@ public class ClaudeSession : ILlmSessionAdapter
         var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, inputEl);
         if (ruleDecision == "deny") return "deny";
         // Сессия-исполнитель задачи работает автономно — отвечать на карточку разрешения
-        // некому, и без этого исполнитель вязнет на первом же mcp__tasks__* (status=Waiting
-        // до таймаута в 60 мин) и не может ни прочитать, ни завершить задачу. Встроенные
-        // MCP-серверы приложения (tasks/notes/personas/memory/wsp) — наши инструменты под
-        // сервисным токеном, неопасные; разрешаем их автоматически. deny-правило выше учтено.
-        if (ruleDecision == null && Info.TaskExecution && IsAppMcpTool(toolName)) return "allow";
+        // некому, и без этого исполнитель вязнет в первом же permission-запросе (status=Waiting
+        // до таймаута в 60 мин) и не может работать. Разрешаем ВСЕ инструменты автоматически:
+        // deny-правило проекта выше учтено, а права персоны уже ограничены Persona.Tools
+        // и ExtraDisallowedTools. deny-правило применено выше и имеет приоритет.
+        if (ruleDecision == null && Info.TaskExecution) return "allow";
         if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(toolName)) return "allow";
 
         var tcs = new TaskCompletionSource<string>();

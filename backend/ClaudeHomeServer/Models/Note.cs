@@ -14,7 +14,9 @@ public record NoteSummary(
     string Path,         // относительный путь внутри источника (forward slashes)
     IReadOnlyList<string> Tags,
     string CreatedAt,    // ISO 8601
-    string UpdatedAt);
+    string UpdatedAt,
+    string? ExpiresAt = null,         // ISO 8601; null — бессрочно
+    string? SourceSessionId = null);  // ID чата, из которого создана заметка
 
 // Разрешённая исходящая ссылка [[...]] из заметки.
 public record NoteLinkDto(
@@ -45,7 +47,9 @@ public record NoteDetail(
     // но без [[…]] — предложение связать (Snippet — строка-контекст).
     IReadOnlyList<NoteBacklinkDto> UnlinkedMentions,
     string CreatedAt,
-    string UpdatedAt);
+    string UpdatedAt,
+    string? ExpiresAt = null,       // ISO 8601; null — бессрочно
+    string? SourceSessionId = null);  // ID чата, из которого создана заметка
 
 // Узел графа знаний. Ghost=true — «призрачная» заметка (на неё ссылаются, но её нет).
 public record NoteGraphNode(
@@ -75,9 +79,11 @@ public record NoteTemplateDto(string Id, string Title);
 public record CreateNoteRequest(
     string Title,
     string? Content = null,
-    string? Source = null,     // "personal" (по умолчанию) | projectId
-    string? TemplateId = null, // имя шаблона из templates/ (без .md)
-    string? Folder = null);    // папка внутри источника ("Идеи/Черновики"); пусто = корень
+    string? Source = null,          // "personal" (по умолчанию) | projectId
+    string? TemplateId = null,      // имя шаблона из templates/ (без .md)
+    string? Folder = null,          // папка внутри источника ("Идеи/Черновики"); пусто = корень
+    int? ExpiresAfterMinutes = null,  // время жизни в минутах; null — без ограничения
+    string? SourceSessionId = null);  // ID чата, из которого создана заметка
 
 // Перенос заметки: в папку и/или другой источник (id меняется — источник+путь в id)
 public record MoveNoteRequest(string? Folder = null, string? TargetSource = null);
@@ -99,4 +105,5 @@ public record LinkMentionRequest(string TargetTitle);
 
 public record UpdateNoteRequest(
     string? Title = null,     // непусто и отличается от текущего → переименование файла
-    string? Content = null);
+    string? Content = null,
+    int? ExpiresAfterMinutes = -1);  // -1 = не менять, null = снять, N = установить

@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemberDraft } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo };
@@ -473,6 +473,30 @@ export const api = {
       request<{ candidates: PersonaBinding[] }>(`/personas/${encodeURIComponent(id)}/bindings/suggest`, {
         method: 'POST', timeoutMs: 150_000,
       }),
+
+    // === Проактивность/автоматизации (правила «событие → действие») ===
+    automation: (id: string) =>
+      request<PersonaAutomationRule[]>(`/personas/${encodeURIComponent(id)}/automation`),
+    addAutomation: (id: string, dto: AutomationRuleDto) =>
+      request<PersonaAutomationRule>(`/personas/${encodeURIComponent(id)}/automation`, {
+        method: 'POST', body: JSON.stringify(dto),
+      }),
+    updateAutomation: (id: string, ruleId: string, dto: AutomationRuleDto) =>
+      request<PersonaAutomationRule>(
+        `/personas/${encodeURIComponent(id)}/automation/${encodeURIComponent(ruleId)}`,
+        { method: 'PUT', body: JSON.stringify(dto) },
+      ),
+    removeAutomation: (id: string, ruleId: string) =>
+      request<void>(
+        `/personas/${encodeURIComponent(id)}/automation/${encodeURIComponent(ruleId)}`,
+        { method: 'DELETE' },
+      ),
+    // Ручной прогон: синтетическое событие, байпас троттлинга (UX «Проверить»)
+    testAutomation: (id: string, ruleId: string) =>
+      request<void>(
+        `/personas/${encodeURIComponent(id)}/automation/${encodeURIComponent(ruleId)}/test`,
+        { method: 'POST' },
+      ),
   },
 
   // Утренний бриф (флаг daily-briefing): собрать план дня в дневник
@@ -513,6 +537,7 @@ export const api = {
   // Чаты вне проекта (project-less)
   chats: {
     list: () => request<Session[]>('/chats'),
+    get: (id: string) => request<Session>(`/chats/${id}`),
     create: (mode = 'auto', resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
       request<Session>('/chats', {
         method: 'POST',

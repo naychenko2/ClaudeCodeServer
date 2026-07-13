@@ -147,6 +147,9 @@ public class Persona
     // Привязки к источникам знаний и правилам (фича persona-bindings).
     // null — привязок нет (миграция стора не нужна, поведение как раньше).
     public List<PersonaBinding>? Bindings { get; set; }
+    // Правила автоматизации (событийно-управляемая проактивность): null — правил нет.
+    // Конфигурация; runtime-состояние (LastFiredAt/счётчики/снапшоты) — в отдельном сторе.
+    public List<PersonaAutomationRule>? AutomationRules { get; set; }
     // Профиль доступа (P6): Full/ReadOnly/Custom (см. PersonaAccessPolicy)
     public PersonaAccess Access { get; set; } = PersonaAccess.Full;
     // Свой список запрещённых инструментов — только при Access == Custom

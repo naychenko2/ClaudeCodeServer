@@ -6,9 +6,10 @@ import { Modal } from '../../components/ui';
 import { C, FONT, R } from '../../lib/design';
 import { OfflineError } from '../../lib/offline';
 import { createNoteOffline } from '../../lib/notesOffline';
+import { EXPIRY_PRESETS, expiryOptionLabel } from '../../lib/expiry';
 
 // Диалог создания заметки: заголовок, источник, папка (с автодополнением по
-// существующим — включая пустые физические папки), опционально шаблон.
+// существующим — включая пустые физические папки), опционально шаблон и время жизни.
 // Вынесен из NotesPage, чтобы переиспользоваться из раздела «Файлы».
 export function NewNoteDialog({ defaults, onClose, onCreated }: {
   defaults?: { source?: string; folder?: string };
@@ -23,6 +24,8 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
   const [sources, setSources] = useState<NoteSource[]>([{ key: 'personal', label: 'Личный' }]);
   const [templates, setTemplates] = useState<NoteTemplate[]>([]);
   const [templateId, setTemplateId] = useState('');
+  const [temporary, setTemporary] = useState(false);
+  const [ttl, setTtl] = useState<number>(1440);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -52,6 +55,7 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
       const note = await api.notes.create({
         title: title.trim(), source, templateId: templateId || undefined,
         folder: folder.trim() || undefined,
+        expiresAfterMinutes: temporary ? ttl : null,
       });
       onCreated(note.id);
     } catch (e) {
@@ -104,6 +108,24 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
             </select>
           </div>
         )}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <label style={fieldLabel}>Время жизни</label>
+            <label style={{ fontSize: 11, color: C.textMuted, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <input type="checkbox" checked={temporary} onChange={e => setTemporary(e.target.checked)}
+                style={{ accentColor: C.accent }} />
+              только на время
+            </label>
+          </div>
+          {temporary && (
+            <select value={ttl} onChange={e => setTtl(Number(e.target.value))} style={{ ...fieldInput, cursor: 'pointer' }}>
+              {EXPIRY_PRESETS.map(p => <option key={p.minutes} value={p.minutes}>{p.label}</option>)}
+            </select>
+          )}
+          {!temporary && (
+            <div style={{ padding: '9px 0', fontSize: 13, color: C.textMuted }}>{expiryOptionLabel(null)}</div>
+          )}
+        </div>
       </div>
     </Modal>
   );

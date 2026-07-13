@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { Plus, SquarePen, Trash2 } from 'lucide-react';
-import type { Project, Session, AgentInfo, Persona } from '../types';
+import type { Project, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
@@ -11,9 +11,9 @@ import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
 import { Modal, ModalActions, Button, IconButton } from './ui';
 import { getPersonaById, usePersonas, usePersonasVersion, personaLabel } from '../lib/personas';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
-import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
 import { agentDotColor } from './AgentSelector';
 import { ExpiryBadge } from './ExpiryBadge';
+import { FilterBar } from './FilterBar';
 
 // Время создания сессии: сегодня — часы:минуты, иначе — дата
 function sessTime(iso: string): string {
@@ -32,31 +32,13 @@ interface Props {
   onSessionsChanged?: (count: number) => void;
   isMobile?: boolean;
   workflowRunningFor?: string;
-  // .md-агенты проекта — для единого селектора собеседника
-  agents?: AgentInfo[];
-  // Запомненный .md-агент проекта (localStorage в WorkspacePage) — начальный выбор
-  selectedAgent?: AgentInfo | null;
-  // Персист выбора .md-агента (WorkspacePage кладёт в localStorage)
-  onAgentChange?: (agent: AgentInfo | null) => void;
 }
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor, agents = [], selectedAgent, onAgentChange }: Props) {
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor }: Props) {
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий персон)
   usePersonasVersion();
   const personas = usePersonas();
-  // Доступные в контексте проекта персоны: проектные (этого проекта) + глобальные
-  const ctxPersonas = personas.filter(p => p.scope === 'global' || (p.scope === 'project' && p.projectId === project.id));
-  // Выбранный собеседник нового чата (локально): персона ИЛИ .md-агент.
-  // Агент инициализируется из запомненного выбора проекта (localStorage в WorkspacePage).
-  const [companion, setCompanion] = useState<{ persona: Persona | null; agent: AgentInfo | null }>(
-    () => ({ persona: null, agent: selectedAgent ?? null })
-  );
-  const handleCompanionSelect = (sel: CompanionSelection) => {
-    const next = { persona: sel.persona ?? null, agent: sel.agent ?? null };
-    setCompanion(next);
-    onAgentChange?.(next.agent); // персист .md-агента (персона в localStorage не запоминается)
-  };
   const [sessions, setSessions] = useState<Session[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [editTarget, setEditTarget] = useState<Session | null>(null);
@@ -70,12 +52,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { onSessionsChanged?.(sessions.length); }, [sessions.length, onSessionsChanged]);
 
   const createNew = async (): Promise<Session> => {
-    // Выбрана персона → чат от её лица в этом проекте (projectId кладёт сюда
-    // и чат глобальной персоны); выбран .md-агент → обычная сессия с агентом;
-    // никто → обычная сессия
-    const s = companion.persona
-      ? await api.personas.createChat(companion.persona.id, { mode: 'auto', projectId: project.id })
-      : await api.sessions.create(project.id, 'auto', undefined, undefined, undefined, companion.agent?.fileName);
+    const s = await api.sessions.create(project.id, 'auto');
     // Чужую (глобальную) сессию в список этого проекта не добавляем — поллинг сам синхронит
     if (s.projectId === project.id) setSessions(prev => [s, ...prev]);
     onSelect(s);
@@ -198,6 +175,23 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     }
   };
 
+  // === Фильтры списка чатов ===
+  const [hideTaskChats, setHideTaskChats] = useState(true);
+  const [activeOnly, setActiveOnly] = useState(false);
+  const [filterPersonaId, setFilterPersonaId] = useState<string | null>(null);
+
+  // Персоны в списке (для селектора фильтра)
+  const personaIdsInList = [...new Set(sessions.filter(s => s.personaId).map(s => s.personaId!))];
+
+  // Применение фильтров
+  const filteredSessions = sessions.filter(s => {
+    if (hideTaskChats && s.taskExecution) return false;
+    if (activeOnly && Date.now() - new Date(s.updatedAt).getTime() > 5 * 60 * 1000) return false;
+    if (filterPersonaId && s.personaId !== filterPersonaId) return false;
+    return true;
+  });
+  const hiddenCount = sessions.length - filteredSessions.length;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {online && (
@@ -208,28 +202,33 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                 <Plus size={15} strokeWidth={2.2} />
               }
             >
-              {companion.persona
-                ? `Чат с «${personaLabel(companion.persona)}»`
-                : companion.agent
-                ? `Чат с «${companion.agent.name}»`
-                : 'Новый чат'}
+              Новый чат
             </Button>
           </div>
-          {/* Выбор собеседника нового чата: персоны (проектные + глобальные) и .md-агенты */}
-          <CompanionSelector
-            personas={ctxPersonas}
-            agents={agents}
-            selectedPersona={companion.persona}
-            selectedAgentName={companion.agent?.fileName ?? null}
-            onSelect={handleCompanionSelect}
-            isMobile={isMobile}
-            dropUp={false}
-          />
         </div>
       )}
 
+      {/* Строка фильтров — всегда видна (для консистентности) */}
+      <FilterBar
+        hideTaskChats={hideTaskChats}
+        onChangeHideTaskChats={setHideTaskChats}
+        activeOnly={activeOnly}
+        onChangeActiveOnly={setActiveOnly}
+        filterPersonaId={filterPersonaId}
+        onChangeFilterPersona={setFilterPersonaId}
+        personaIdsInList={personaIdsInList}
+        allPersonas={personas}
+        hiddenCount={hiddenCount}
+        isMobile={isMobile}
+      />
+
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
-        {sessions.map((s, index) => {
+        {filteredSessions.length === 0 && sessions.length > 0 && (
+          <div style={{ padding: '24px 8px', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>
+            Все чаты скрыты фильтрами
+          </div>
+        )}
+        {filteredSessions.map((s, index) => {
           const isActive = activeSession?.id === s.id;
           // Сессия от лица персоны: слева мини-аватар, имя персоны и акцент её цвета
           const persona = s.personaId ? getPersonaById(s.personaId) : undefined;

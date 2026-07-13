@@ -25,7 +25,7 @@ import { TaskPersonaBadge } from './TaskPersonaBadge';
 
 interface Props {
   task: Task;
-  // null/undefined — личная задача (вне проекта): секции сессии/файлов скрыты
+  // null/undefined — личная задача (вне проекта): секция файлов скрыта
   project?: Project | null;
   isMobile?: boolean;
   // Открыть сразу в режиме редактирования (свежесозданная задача).
@@ -66,10 +66,15 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
   // AI-хаб: отложенное AI-действие, которое форма правки выполнит при монтировании
   const [pendingAi, setPendingAi] = useState<'task.description' | 'task.subtasks' | null>(null);
 
-  // Имя связанной сессии (только у проектных задач)
+  // Связанная сессия (чат Claude-исполнителя): для проектных — из списка сессий проекта,
+  // для личных задач — прямая загрузка по ID
   useEffect(() => {
-    if (!task.linkedSessionId || !project) return;
-    api.sessions.list(project.id).then(setSessions).catch(() => {});
+    if (!task.linkedSessionId) return;
+    if (project) {
+      api.sessions.list(project.id).then(setSessions).catch(() => {});
+    } else {
+      api.chats.get(task.linkedSessionId).then(s => setSessions([s])).catch(() => {});
+    }
   }, [project, task.linkedSessionId]);
 
   const linkedSession = useMemo(
@@ -415,8 +420,8 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         </div>
       )}
 
-      {/* Связанная сессия (только у проектных задач) */}
-      {project && task.linkedSessionId && (
+      {/* Связанная сессия (чат Claude-исполнителя) */}
+      {task.linkedSessionId && (
         <div style={{ marginBottom: 26 }}>
           <SectionLabel style={{ marginBottom: 10 }}>Связанная сессия</SectionLabel>
           <button

@@ -14,6 +14,7 @@ import { PersonaPreview } from './PersonaPreview';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaTasksPanel } from './PersonaTasksPanel';
+import { PersonaAutomationPanel } from './PersonaAutomationPanel';
 import { PersonaQuickCreate } from './PersonaQuickCreate';
 import type { PersonaTemplate } from './personaTemplates';
 
@@ -215,6 +216,9 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
           ) : view === 'knowledge' ? (
             // Знания — привязки источников и правил (фича persona-bindings)
             <PersonaBindingsPanel persona={persona} accent={accent} isMobile={isMobile} />
+          ) : view === 'automation' ? (
+            // Проактивность — правила «событие → действие» (событийно-управляемая автоматизация)
+            <PersonaAutomationPanel persona={persona} projects={[project]} accent={accent} isMobile={isMobile} />
           ) : editing ? (
             // Профиль в режиме правки — форма; успешное сохранение возвращает к визитке
             <PersonaForm

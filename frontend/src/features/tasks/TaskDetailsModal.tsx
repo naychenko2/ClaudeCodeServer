@@ -6,6 +6,7 @@ import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '../../types';
 import { C, R, SHADOW, Z } from '../../lib/design';
+import { api } from '../../lib/api';
 import { TaskDetailsPane } from './TaskDetailsPane';
 
 interface Props {
@@ -17,6 +18,15 @@ interface Props {
 }
 
 export function TaskDetailsModal({ task, isMobile, startInEdit, onClose }: Props) {
+  const handleOpenSession = async (sessionId: string) => {
+    try {
+      const chat = await api.chats.get(sessionId);
+      if (chat) {
+        window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
+      }
+    } catch { /* не удалось открыть чат */ }
+  };
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', handler);
@@ -53,6 +63,7 @@ export function TaskDetailsModal({ task, isMobile, startInEdit, onClose }: Props
           startInEdit={startInEdit}
           onBack={onClose}
           onClose={onClose}
+          onOpenSession={handleOpenSession}
           onDeleted={onClose}
         />
       </div>

@@ -210,6 +210,9 @@ export interface Session {
   // Привязка чата к персоне, если он ведётся от её лица.
   // В групповом чате — активный спикер (входит в participants)
   personaId?: string;
+  // Origin автоматизации: id правила PersonaAutomationRule, чат которого создан движком
+  // проактивности (отсутствие — обычный чат). Для фильтрации авто-чатов и трассировки.
+  automationRuleId?: string | null;
   // Участники группового чата (2-4 id персон; первый — ведущая). Отсутствует у обычного чата
   participants?: string[] | null;
   // Владелец чата вне проекта
@@ -231,6 +234,8 @@ export interface Session {
   expiresAfterMinutes?: number | null;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
   workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
+  // Сессия-исполнитель задачи (создана TaskExecutionService)
+  taskExecution?: boolean;
 }
 
 export interface FileEntry {
@@ -263,6 +268,7 @@ export interface WorkflowAgentInfo {
 export type ServerMessage = { sessionId: string } & (
   | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   | { type: 'text_delta'; text: string }
+  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean }
   | { type: 'thinking_delta'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown; parentToolUseId?: string }
   | { type: 'tool_input_delta'; toolUseId: string; partialJson: string }
@@ -293,7 +299,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'meeting_phase'; meetingId: string; phase: MeetingPhaseKey; question: string; entries: MeetingEntryItem[] }
   | { type: 'pipeline_progress'; pipelineId: string; phase: string; status?: string; error?: string }
   | { type: 'pipeline_phase'; pipelineId: string; phase: PipelinePhaseKey; task: string; personaId: string; text: string; round?: number }
-  | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' }
+  | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
 );
 
@@ -535,6 +541,8 @@ export interface NoteSummary {
   tags: string[];
   createdAt: string;
   updatedAt: string;
+  expiresAt?: string;
+  sourceSessionId?: string;
 }
 
 // Разрешённая исходящая ссылка [[...]]; resolved=false — «призрачная» (цели ещё нет)
@@ -566,6 +574,8 @@ export interface NoteDetail {
   unlinkedMentions: NoteBacklink[];   // упоминания заголовков без [[…]]
   createdAt: string;
   updatedAt: string;
+  expiresAt?: string;
+  sourceSessionId?: string;
 }
 
 // Узел графа; ghost=true — «призрачная» заметка (на неё ссылаются, но её нет)
@@ -623,6 +633,8 @@ export interface CreateNoteDto {
   source?: string;
   templateId?: string;
   folder?: string;   // папка внутри источника ("Идеи/Черновики"); пусто = корень
+  expiresAfterMinutes?: number | null;
+  sourceSessionId?: string;
 }
 
 export interface UpdateNoteDto {
@@ -764,6 +776,8 @@ export interface Persona {
   templateKey?: string | null;
   // Привязки к источникам знаний и правилам (фича persona-bindings); null — нет
   bindings?: PersonaBinding[] | null;
+  // Правила автоматизации (событийно-управляемая проактивность); null — нет
+  automationRules?: PersonaAutomationRule[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -791,6 +805,52 @@ export interface PantheonTemplate {
 // Тип источника: project — проект целиком; projectPath — папка/файл проекта;
 // knowledge — база знаний (Dify-датасет); notes — источник заметок; tool —
 // инструмент workspace; skill — глобальный навык.
+// ─── Проактивность/автоматизации персон: правила «событие → действие» ───
+export type AutomationTriggerType = 'timer' | 'file' | 'note' | 'gitCommit' | 'taskStatus' | 'mention';
+export type AutomationActionWeight = 'gate' | 'work';
+
+// Триггер: args — гибкий JSON-объект, ключи зависят от type
+// (см. AutomationTrigger на бэке: timer/file/note/gitCommit/taskStatus/mention).
+export interface AutomationTrigger {
+  type: AutomationTriggerType;
+  args?: Record<string, unknown> | null;
+}
+export interface AutomationCondition {
+  onlyIf?: string | null;       // текст-предикат для LLM-гейта
+  quietFrom?: string | null;    // "23:00"
+  quietTo?: string | null;      // "07:00" (переход через полночь допустим)
+  minIntervalMinutes?: number | null;
+}
+export interface AutomationAction {
+  weight: AutomationActionWeight; // gate — one-shot гейт+сообщение; work — полный агентский ход
+  instruction: string;
+  rememberInHistory: boolean;
+}
+export interface PersonaAutomationRule {
+  id: string;
+  enabled: boolean;
+  name: string;
+  trigger: AutomationTrigger;
+  condition?: AutomationCondition | null;
+  action: AutomationAction;
+  createdAt: string;
+  updatedAt: string;
+}
+// DTO для POST/PUT /api/personas/{id}/automation (partial-merge на бэке: null-поля наследуются).
+export interface AutomationRuleDto {
+  enabled?: boolean;
+  name?: string;
+  triggerType?: AutomationTriggerType;
+  triggerArgs?: Record<string, unknown> | null;
+  conditionOnlyIf?: string | null;
+  quietFrom?: string | null;
+  quietTo?: string | null;
+  minIntervalMinutes?: number | null;
+  actionWeight?: AutomationActionWeight;
+  actionInstruction?: string;
+  rememberInHistory?: boolean;
+}
+
 export type PersonaBindingType = 'project' | 'projectPath' | 'knowledge' | 'notes' | 'tool' | 'skill';
 
 // Режим привязки: auto — персона обращается по условию; always — выжимка в каждый ход; off — выключена
@@ -924,4 +984,44 @@ export interface TeamMemberDraft {
   specialty?: string;
   color?: string;
   greeting?: string;
+}
+
+// ===== Уведомления (центр уведомлений) =====
+
+export type NotificationKind = 'reminder' | 'claude' | 'info' | 'success' | 'meeting';
+
+export interface NotificationItem {
+  id: string;
+  kind: NotificationKind;
+  type: string;
+  title: string;
+  body: string;
+  url?: string;
+  projectId?: string;
+  sessionId?: string;
+  taskId?: string;
+  source?: string;
+  tag?: string;
+  isRead: boolean;
+  createdAt: string;
+  readAt?: string;
+}
+
+export interface NotificationListResponse {
+  items: NotificationItem[];
+  totalCount: number;
+  unreadCount: number;
+}
+
+export interface CreateNotificationRequest {
+  kind: NotificationKind;
+  type: string;
+  title: string;
+  body: string;
+  url?: string;
+  projectId?: string;
+  sessionId?: string;
+  taskId?: string;
+  source?: string;
+  tag?: string;
 }

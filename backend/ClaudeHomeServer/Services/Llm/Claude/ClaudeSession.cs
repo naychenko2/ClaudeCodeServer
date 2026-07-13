@@ -66,17 +66,6 @@ public class ClaudeSession : ILlmSessionAdapter
     private static readonly string[] BuiltInTaskTools =
         ["TaskGet", "TaskList", "TaskCreate", "TaskUpdate", "TaskComplete", "TaskDelete", "TaskSearch"];
 
-    // Префиксы встроенных MCP-серверов приложения (инструменты вида mcp__{server}__{tool}).
-    // Для сессии-исполнителя задачи разрешаем их автоматический выз — без пользователя,
-    // который ответит на карточку разрешения (см. DecidePermissionAsync).
-    private static readonly string[] AppMcpPrefixes =
-        ["mcp__tasks__", "mcp__notes__", "mcp__personas__", "mcp__memory__", "mcp__wsp__"];
-    private static bool IsAppMcpTool(string toolName)
-    {
-        foreach (var p in AppMcpPrefixes) if (toolName.StartsWith(p, StringComparison.Ordinal)) return true;
-        return false;
-    }
-
     // Отслеживание изменений файлов на время хода
     private readonly TurnFileWatcher _fileWatcher;
 
@@ -222,6 +211,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["NOTES_API_URL"] = _notesMcp!.ApiUrl,
                         ["NOTES_API_TOKEN"] = _notesMcp.Token,
                         ["NOTES_PROJECT_ID"] = _notesMcp.ProjectId ?? "",
+                        ["NOTES_SESSION_ID"] = Info.Id,
                     },
                 };
             }
@@ -506,11 +496,11 @@ public class ClaudeSession : ILlmSessionAdapter
         var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, inputEl);
         if (ruleDecision == "deny") return "deny";
         // Сессия-исполнитель задачи работает автономно — отвечать на карточку разрешения
-        // некому, и без этого исполнитель вязнет на первом же mcp__tasks__* (status=Waiting
-        // до таймаута в 60 мин) и не может ни прочитать, ни завершить задачу. Встроенные
-        // MCP-серверы приложения (tasks/notes/personas/memory/wsp) — наши инструменты под
-        // сервисным токеном, неопасные; разрешаем их автоматически. deny-правило выше учтено.
-        if (ruleDecision == null && Info.TaskExecution && IsAppMcpTool(toolName)) return "allow";
+        // некому, и без этого исполнитель вязнет в первом же permission-запросе (status=Waiting
+        // до таймаута в 60 мин) и не может работать. Разрешаем ВСЕ инструменты автоматически:
+        // deny-правило проекта выше учтено, а права персоны уже ограничены Persona.Tools
+        // и ExtraDisallowedTools. deny-правило применено выше и имеет приоритет.
+        if (ruleDecision == null && Info.TaskExecution) return "allow";
         if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(toolName)) return "allow";
 
         var tcs = new TaskCompletionSource<string>();

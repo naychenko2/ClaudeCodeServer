@@ -124,6 +124,7 @@ builder.Services.AddSingleton<ITriggerSource, TaskStatusTriggerSource>();
 builder.Services.AddSingleton<PersonaAutomationService>();
 builder.Services.AddHostedService<TaskSchedulerService>();
 builder.Services.AddHostedService<ChatExpiryService>();
+builder.Services.AddHostedService<NoteExpiryService>();
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");
 builder.Services.AddHttpClient("fal");

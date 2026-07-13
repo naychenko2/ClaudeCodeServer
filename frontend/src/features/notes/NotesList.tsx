@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FolderPlus } from 'lucide-react';
+import { FolderPlus, Timer } from 'lucide-react';
 import type { NoteSummary } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNoteFolders } from '../../lib/notes';
@@ -7,6 +7,17 @@ import { C, FONT, R, SHADOW } from '../../lib/design';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { ConfirmDialog, IconButton } from '../../components/ui';
 import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconTrash } from './shared';
+// Форматирует остаток времени от ISO-строки expiresAt
+const expiryTimeLeft = (expiresAt?: string): { label: string; urgent: boolean } | null => {
+  if (!expiresAt) return null;
+  const left = new Date(expiresAt).getTime() - Date.now();
+  if (left <= 0) return { label: 'скоро', urgent: true };
+  const min = Math.round(left / 60_000);
+  if (min < 60) return { label: `${Math.max(min, 1)} мин`, urgent: true };
+  const hours = Math.round(min / 60);
+  if (hours < 24) return { label: `${hours} ч`, urgent: false };
+  return { label: `${Math.round(hours / 24)} дн`, urgent: false };
+};
 
 // Иконка «Новая папка» для меню (lucide folder-plus)
 const IconFolderPlus = () => (
@@ -143,9 +154,9 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
 
   const commitCreateFolder = async (source: string, parent: string) => {
     const name = newFolderValue.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (!name) return;  // пустой ввод (blur без текста) — не закрываем инпут
     setCreatingFolder(null);
     setNewFolderValue('');
-    if (!name) return;
     const path = parent ? `${parent}/${name}` : name;
     try { await api.notes.createFolder(source, path); bumpNotes(); }
     catch { /* дубликат/конфликт — реалтайм покажет актуальное */ }
@@ -234,6 +245,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
   const renderNote = (n: NoteSummary, depth: number) => {
     const active = n.id === selectedId;
     const hovered = hoveredKey === n.id;
+    const exp = expiryTimeLeft(n.expiresAt);
     return (
       <div
         key={n.id}
@@ -262,6 +274,15 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           color: active ? C.textHeading : C.textSecondary, fontWeight: active ? 500 : 400,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{n.title}</span>
+        {exp && (
+          <span style={{
+            fontSize: 10, color: exp.urgent ? C.warning : C.textMuted, flexShrink: 0,
+            display: 'flex', alignItems: 'center', gap: 3, marginRight: 4,
+          }}>
+            <Timer size={11} strokeWidth={2} />
+            {exp.label}
+          </span>
+        )}
         {/* Действия — только при ховере на десктопе (на мобиле — long-press меню) */}
         {!isMobile && hovered && (
           <IconButton size="xs" tone="danger" title="Удалить заметку"
@@ -444,10 +465,10 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
             }
             tail={<span style={{ fontSize: 11, color: C.textMuted }}>{countNotes(g.root)}</span>}
           >
-            {creatingFolder === `${g.source}|` && renderCreateFolderInput(g.source, '', 0)}
             {g.root.children.map(c => renderFolder(g.source, c, 0))}
             {g.root.notes.map(n => renderNote(n, 0))}
           </CollapseGroup>
+          {creatingFolder === `${g.source}|` && <div style={{ padding: '4px 8px 4px 28px' }}>{renderCreateFolderInput(g.source, '', 1)}</div>}
         </div>
       ))}
 
@@ -478,7 +499,11 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           ) : ctxMenu.kind === 'source' ? (
             <>
               {onCreateInFolder && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ''))}
-              {menuItem(<IconFolderPlus />, 'Новая папка', () => { setCreatingFolder(`${ctxMenu.source}|`); setNewFolderValue(''); })}
+              {menuItem(<IconFolderPlus />, 'Новая папка', () => {
+                const k = `${ctxMenu.source}|`;
+                setCollapsed(prev => { const n = new Set(prev); n.delete(k); return n; });
+                setCreatingFolder(k); setNewFolderValue('');
+              })}
             </>
           ) : ctxMenu.kind === 'note' ? (
             <>

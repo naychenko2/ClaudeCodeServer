@@ -15,7 +15,7 @@ interface ToastItem {
   title: string;
   body: string;
   url?: string;
-  kind: 'reminder' | 'claude' | 'info';
+  kind: string;
 }
 
 const AUTO_DISMISS_MS = 8000;

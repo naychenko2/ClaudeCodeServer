@@ -20,7 +20,8 @@ public sealed class SummaryGenerationException(string message) : Exception(messa
 public class SessionSummaryService(
     SessionManager sessions, ProjectManager projects, NotesService notes,
     NotesKnowledgeService kb, Llm.OneShotClaudeRunner runner,
-    IHubContext<SessionHub> hub, PushService push, IConfiguration config,
+    IHubContext<SessionHub> hub, PushService push,
+    NotificationService notif, IConfiguration config,
     ILogger<SessionSummaryService> logger)
 {
     // Бюджет транскрипта в символах: длиннее — сокращаем (голова + хвост)
@@ -87,13 +88,12 @@ public class SessionSummaryService(
             await hub.Clients.Group("user_" + ownerId).SendAsync(
                 "message", new NotesChangedMessage(isUpdate ? "updated" : "created", note.Id), ct);
 
-            var notification = new NotificationMessage(
+            await notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
                 Title: "Итог сессии готов",
                 Body: note.Title,
                 Url: "#/notes/" + Uri.EscapeDataString(note.Id),
-                Kind: "claude");
-            await hub.Clients.Group("user_" + ownerId).SendAsync("message", notification, ct);
-            await push.SendToUserAsync(ownerId, notification);
+                Kind: "claude",
+                Tag: "Саммари"));
 
             logger.LogInformation("Итог сессии {SessionId} → заметка {NoteId} ({Action})",
                 sessionId, note.Id, isUpdate ? "обновлена" : "создана");

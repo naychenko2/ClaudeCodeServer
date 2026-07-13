@@ -17,6 +17,7 @@ public class TaskSchedulerService(
     TaskExecutionService executor,
     DailyBriefingService briefing,
     PersonaAutomationService automation,
+    NotificationService notif,
     ILogger<TaskSchedulerService> log) : BackgroundService
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
@@ -113,11 +114,10 @@ public class TaskSchedulerService(
         log.LogInformation("Напоминание отправлено: задача {TaskId} «{Title}»", updated.Id, updated.Title);
     }
 
-    // Тост в открытом приложении (SignalR) + web push на подписанные устройства
+    // Тост + сторадж + web push через единый NotificationService
     private async Task SendNotificationAsync(TaskItem task, NotificationMessage message)
     {
-        await hub.Clients.Group("user_" + task.OwnerId).SendAsync("message", message);
-        await push.SendToUserAsync(task.OwnerId!, message);
+        await notif.SendNotificationMessageAsync(task.OwnerId!, message, sendPush: true);
     }
 
     // Hash-диплинк на задачу: проектная → детали в проекте, личная → модалка в календаре

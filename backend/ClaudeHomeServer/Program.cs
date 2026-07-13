@@ -107,6 +107,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFa
     ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddSingleton<ModelCatalogService>();
+builder.Services.AddSingleton<NotificationStore>();
+builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();

@@ -737,6 +737,19 @@ public class SessionManager
             sections, allowedIds, selfSessionId);
     }
 
+    // Контекст MCP-сервера уведомлений: всегда подключается, когда есть владелец.
+    // Тот же сервисный токен, что у tasks/notes/workspace.
+    private NotificationsMcpContext? BuildNotificationsContext(string? ownerId)
+    {
+        if (ownerId is null) return null;
+        var entry = _notesTokens.AddOrUpdate(ownerId,
+            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
+            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
+                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
+                : old);
+        return new NotificationsMcpContext(ResolveTasksApiUrl(), entry.Token);
+    }
+
     // Дополнительные запреты сессии персоны: профиль доступа (PersonaAccessPolicy — «пол»
     // запретов: ReadOnly/Custom) + capability-решение «web» через привязки
     // (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools). Web-решение передаём
@@ -873,6 +886,7 @@ public class SessionManager
             PersonaRecallProvider: persona.Recall,
             ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona),
             PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session),
+            NotificationsMcp: BuildNotificationsContext(ownerId),
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections)));
         entry.Process = adapter;
@@ -1082,6 +1096,7 @@ public class SessionManager
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona),
                 PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info),
+                NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections));
         }
@@ -1103,6 +1118,7 @@ public class SessionManager
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona),
                 PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info),
+                NotificationsMcp: BuildNotificationsContext(project.OwnerId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections));
         }

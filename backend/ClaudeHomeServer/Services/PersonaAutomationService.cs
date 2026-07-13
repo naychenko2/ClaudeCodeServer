@@ -23,6 +23,7 @@ public sealed class PersonaAutomationService : IDisposable
     private readonly SessionManager _sessions;
     private readonly PushService _push;
     private readonly IHubContext<SessionHub> _hub;
+    private readonly NotificationService _notif;
     private readonly AutomationStateStore _state;
     private readonly MentionTriggerSource _mentions;
     private readonly ProjectManager _projects;
@@ -39,11 +40,12 @@ public sealed class PersonaAutomationService : IDisposable
 
     public PersonaAutomationService(PersonaManager personas, SessionManager sessions,
         PushService push, IHubContext<SessionHub> hub,
+        NotificationService notif,
         AutomationStateStore state, MentionTriggerSource mentions, ProjectManager projects,
         UserStore users, IEnumerable<ITriggerSource> sources, IConfiguration config,
         ILogger<PersonaAutomationService> log)
     {
-        _personas = personas; _sessions = sessions; _push = push; _hub = hub;
+        _personas = personas; _sessions = sessions; _push = push; _hub = hub; _notif = notif;
         _state = state; _mentions = mentions; _projects = projects; _users = users;
         _config = config; _log = log;
         _sources = sources.ToDictionary(s => s.Type);
@@ -204,15 +206,14 @@ public sealed class PersonaAutomationService : IDisposable
         var label = persona is null
             ? "Персона"
             : (string.IsNullOrWhiteSpace(persona.Role) ? persona.Name : $"{persona.Role} ({persona.Name})");
-        var n = new NotificationMessage(
-            Title: $"{label} написала вам",
-            Body: "Новое сообщение по правилу автоматизации — откройте чат",
-            Url: $"/#/chats/{session.Id}",
-            Kind: "claude");
         try
         {
-            await _hub.Clients.Group("user_" + ownerId).SendAsync("message", n);
-            await _push.SendToUserAsync(ownerId, n);
+            await _notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
+                Title: $"{label} написала вам",
+                Body: "Новое сообщение по правилу автоматизации — откройте чат",
+                Url: $"/#/chats/{session.Id}",
+                Kind: "claude",
+                Tag: "Автоматизация"), sendPush: true);
         }
         catch { /* уведомление — best-effort */ }
     }

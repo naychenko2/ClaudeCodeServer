@@ -148,6 +148,25 @@ export default function App() {
     return () => window.removeEventListener('cc-open-chat', open)
   }, [])
 
+  // Диплинк #/project/{id}/chat/{chatId} при полной загрузке страницы (клик по пушу
+  // из service worker). Если проект ещё не открыт — загружаем и открываем.
+  useEffect(() => {
+    if (!initialHash || initialHash.screen !== 'project' || !initialHash.chatId) return;
+    const pid = initialHash.projectId;
+    if (!pid) return;
+    if (project?.id === pid) {
+      // Проект уже открыт — WorkspacePage сам подхватит sessionStorage
+      window.dispatchEvent(new Event('cc-pending-project-chat'));
+      return;
+    }
+    api.projects.list()
+      .then(list => {
+        const p = list.find(x => x.id === pid);
+        if (p) openProject(p);
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Переход к чату проектной персоны из раздела «Персоны»: открываем её проект.
   // Стартовую сессию PersonasPage кладёт в sessionStorage (cc_pending_session) — её
   // подхватывает WorkspacePage при монтировании.

@@ -231,6 +231,8 @@ export interface Session {
   expiresAfterMinutes?: number | null;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
   workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
+  // Сессия-исполнитель задачи (создана TaskExecutionService)
+  taskExecution?: boolean;
 }
 
 export interface FileEntry {

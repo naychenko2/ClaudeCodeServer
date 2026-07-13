@@ -14,6 +14,7 @@ import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
 import { agentDotColor } from './AgentSelector';
 import { ExpiryBadge } from './ExpiryBadge';
+import { FilterBar } from './FilterBar';
 
 // Время создания сессии: сегодня — часы:минуты, иначе — дата
 function sessTime(iso: string): string {
@@ -198,6 +199,23 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     }
   };
 
+  // === Фильтры списка чатов ===
+  const [hideTaskChats, setHideTaskChats] = useState(true);
+  const [activeOnly, setActiveOnly] = useState(false);
+  const [filterPersonaId, setFilterPersonaId] = useState<string | null>(null);
+
+  // Персоны в списке (для селектора фильтра)
+  const personaIdsInList = [...new Set(sessions.filter(s => s.personaId).map(s => s.personaId!))];
+
+  // Применение фильтров
+  const filteredSessions = sessions.filter(s => {
+    if (hideTaskChats && s.taskExecution) return false;
+    if (activeOnly && Date.now() - new Date(s.updatedAt).getTime() > 5 * 60 * 1000) return false;
+    if (filterPersonaId && s.personaId !== filterPersonaId) return false;
+    return true;
+  });
+  const hiddenCount = sessions.length - filteredSessions.length;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {online && (
@@ -228,8 +246,27 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         </div>
       )}
 
+      {/* Строка фильтров — всегда видна (для консистентности) */}
+      <FilterBar
+        hideTaskChats={hideTaskChats}
+        onChangeHideTaskChats={setHideTaskChats}
+        activeOnly={activeOnly}
+        onChangeActiveOnly={setActiveOnly}
+        filterPersonaId={filterPersonaId}
+        onChangeFilterPersona={setFilterPersonaId}
+        personaIdsInList={personaIdsInList}
+        allPersonas={personas}
+        hiddenCount={hiddenCount}
+        isMobile={isMobile}
+      />
+
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
-        {sessions.map((s, index) => {
+        {filteredSessions.length === 0 && sessions.length > 0 && (
+          <div style={{ padding: '24px 8px', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>
+            Все чаты скрыты фильтрами
+          </div>
+        )}
+        {filteredSessions.map((s, index) => {
           const isActive = activeSession?.id === s.id;
           // Сессия от лица персоны: слева мини-аватар, имя персоны и акцент её цвета
           const persona = s.personaId ? getPersonaById(s.personaId) : undefined;

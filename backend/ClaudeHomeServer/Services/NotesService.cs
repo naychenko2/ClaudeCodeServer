@@ -15,6 +15,7 @@ public sealed class NotesService
 {
     private readonly ProjectManager _projects;
     private readonly ILogger<NotesService> _logger;
+    private readonly ProjectEventLogService? _events;
     private readonly string _dataDir;
 
     private const string PersonalKey = "personal";
@@ -31,10 +32,12 @@ public sealed class NotesService
     private readonly ConcurrentDictionary<string, (Model Model, DateTime At)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(2);
 
-    public NotesService(ProjectManager projects, IConfiguration config, ILogger<NotesService> logger)
+    public NotesService(ProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
+        ProjectEventLogService? events = null)
     {
         _projects = projects;
         _logger = logger;
+        _events = events;
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
     }
@@ -546,6 +549,10 @@ public sealed class NotesService
 
         Invalidate(userId);
         var id = EncodeId(sourceKey, NormalizeRel(relPath));
+        // P1-4: лог note_changed в проектный лог (только для заметок проекта, не личных)
+        if (sourceKey != PersonalKey)
+            _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
+                $"Создана заметка «{req.Title}»", id);
         return GetDetail(userId, id)
             ?? throw new InvalidOperationException("Заметка создана, но не читается");
     }
@@ -819,6 +826,9 @@ public sealed class NotesService
         }
 
         Invalidate(userId);
+        if (sourceKey != PersonalKey)
+            _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
+                $"Изменена заметка «{req.Title ?? oldTitle}»", effectiveId);
         return GetDetail(userId, effectiveId);
     }
 
@@ -848,6 +858,9 @@ public sealed class NotesService
         if (!File.Exists(full)) return false;
         File.Delete(full);
         Invalidate(userId);
+        if (sourceKey != PersonalKey)
+            _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
+                $"Удалена заметка «{Path.GetFileNameWithoutExtension(relPath)}»", id);
         return true;
     }
 

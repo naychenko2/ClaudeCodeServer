@@ -224,7 +224,7 @@ public class SessionManager
     // формирует markdown-блок для системного промпта. Флаги проверяются ВНУТРИ (на
     // каждый ход — переключение действует без пересоздания процесса). null — если
     // подмешивать нечего/некому. Ошибки и таймаут Dify → null (ход идёт без recall).
-    private Func<string, Task<string?>>? BuildRecallProvider(string? ownerId)
+    private Func<string, Task<RecallBlock?>>? BuildRecallProvider(string? ownerId)
     {
         if (ownerId is null) return null;
         var topK = int.TryParse(_config["Notes:AutoRecallTopK"], out var k) ? k : 4;
@@ -245,7 +245,13 @@ public class SessionManager
                 var searchTask = _notesKb.SearchAsync(ownerId, query, Math.Max(topK, 8));
                 var completed = await Task.WhenAny(searchTask, Task.Delay(timeoutMs));
                 if (completed != searchTask) return null;   // таймаут — ход без recall
-                return NotesKnowledgeService.BuildRecallBlock(await searchTask, minScore, topK);
+                var hits = (await searchTask).Where(h => h.Score >= minScore).Take(topK).ToList();
+                if (hits.Count == 0) return null;
+                var blockText = NotesKnowledgeService.BuildRecallBlock(hits, minScore, topK);
+                if (string.IsNullOrWhiteSpace(blockText)) return null;
+                // Манифест: hits заметок → айтемы (F3)
+                var items = hits.Select(h => new RecallItem("note", h.Id, h.Title, h.Snippet)).ToList();
+                return new RecallBlock(blockText, items);
             }
             catch (Exception ex)
             {

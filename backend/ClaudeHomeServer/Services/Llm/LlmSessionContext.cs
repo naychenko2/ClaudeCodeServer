@@ -59,10 +59,9 @@ public sealed record LlmSessionContext(
     Func<IReadOnlyList<PermissionRule>>? PermissionRules,
     TasksMcpContext? TasksMcp,
     NotesMcpContext? NotesMcp = null,
-    // Auto-recall заметок: по тексту хода возвращает готовый markdown-блок с
-    // релевантными заметками для системного промпта (null — не подмешивать).
-    // Провайдер-агностично; вычисляется каждый ход. Ошибки внутри — тихо в null.
-    Func<string, Task<string?>>? RecallProvider = null,
+    // Auto-recall заметок: по тексту хода возвращает блок релевантных заметок
+    // (текст для промпта + айтемы манифеста «использовано сейчас», F3). Ошибки → null.
+    Func<string, Task<RecallBlock?>>? RecallProvider = null,
     // Провайдер системного промпта персоны (имя, роль, контракт характера, дисциплина):
     // вызывается на КАЖДЫЙ ход — правки персоны и смена модели применяются без пересоздания
     // адаптера. null — обычная сессия; вызов может вернуть null (персону удалили).

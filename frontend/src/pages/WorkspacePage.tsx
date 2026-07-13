@@ -233,6 +233,15 @@ const windowWidth = useWindowWidth();
     if (t && t.screen === 'project' && t.projectId === project.id && t.board) return true;
     try { return localStorage.getItem(`cc_proj_board_${project.id}`) === '1'; } catch { return false; }
   });
+
+  // P0-2: задача, ради которой запущен текущий чат (executingTask в ArtifactsPanel)
+  const [executingTask, setExecutingTask] = useState<Task | null>(null);
+  useEffect(() => {
+    if (!activeSession) { setExecutingTask(null); return; }
+    api.tasks.listByProject(project.id).then(tasks => {
+      setExecutingTask(tasks.find(t => t.linkedSessionId === activeSession.id) ?? null);
+    }).catch(() => setExecutingTask(null));
+  }, [activeSession?.id, project.id]);
   const showProjectBoard = tasksMode && projectBoard && !selectedTask;
   const handleProjectBoard = (on: boolean) => {
     setProjectBoard(on);
@@ -834,7 +843,7 @@ const windowWidth = useWindowWidth();
             <div onClick={() => setArtifactsOpen(false)}
               style={{ position: 'absolute', inset: 0, zIndex: 900, background: C.overlay }} />
             <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 901, width: 'min(92vw, 380px)', boxShadow: '-4px 0 20px rgba(20,16,10,0.18)' }}>
-              <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} isMobile personaId={activeSession.personaId}
+              <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} isMobile personaId={activeSession.personaId} executingTask={executingTask}
                 onOpenFile={(f) => { setArtifactsOpen(false); handleOpenFileFromChat(f); }} onClose={() => setArtifactsOpen(false)} />
             </div>
           </>
@@ -999,7 +1008,7 @@ const windowWidth = useWindowWidth();
           <Splitter orientation="v" active={draggingSplitter === 'artifacts'}
             onMouseDown={e => { setDraggingSplitter('artifacts'); handleArtifactsSplitterMouseDown(e); }} />
           <div style={{ width: artifactsWidth, flexShrink: 0, height: '100%' }}>
-            <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} personaId={activeSession.personaId}
+            <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} personaId={activeSession.personaId} executingTask={executingTask}
               onOpenFile={handleOpenFileFromChat} onClose={() => setArtifactsOpen(false)} />
           </div>
         </>
@@ -1011,7 +1020,7 @@ const windowWidth = useWindowWidth();
           <div onClick={() => setArtifactsOpen(false)}
             style={{ position: 'absolute', inset: 0, zIndex: 19, background: C.overlay }} />
           <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 20, width: 'min(85vw, 360px)', boxShadow: '-4px 0 20px rgba(20,16,10,0.15)' }}>
-            <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} personaId={activeSession.personaId}
+            <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} personaId={activeSession.personaId} executingTask={executingTask}
               onOpenFile={(f) => { handleOpenFileFromChat(f); setArtifactsOpen(false); }} onClose={() => setArtifactsOpen(false)} />
           </div>
         </>

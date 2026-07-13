@@ -11,12 +11,15 @@ public class TaskManager
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
     private readonly ProjectEventLogService? _events;
-    private readonly PersonaNotifyService? _notify;
+    private readonly NotificationService? _notif;
+    private readonly PersonaManager? _personas;
 
-    public TaskManager(IConfiguration config, ProjectEventLogService? events = null, PersonaNotifyService? notify = null)
+    public TaskManager(IConfiguration config, ProjectEventLogService? events = null,
+        NotificationService? notif = null, PersonaManager? personas = null)
     {
         _events = events;
-        _notify = notify;
+        _notif = notif;
+        _personas = personas;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
         _storePath = Path.Combine(dataDir, "tasks.json");
@@ -220,13 +223,15 @@ public class TaskManager
         _tasks[task.Id] = task;
         Save();
         LogTask(task, ProjectEventTypes.TaskSpawned, $"Создан следующий экземпляр: «{task.Title}»");
-        // proactive-уведомление (②-2.1): персона-исполнитель подготовил следующий экземпляр
+        // proactive-уведомление через единый NotificationService (②-2.1) — персистится в центре уведомлений
         if (!string.IsNullOrEmpty(task.PersonaId) && !string.IsNullOrEmpty(task.OwnerId))
         {
-            var label = _notify?.LabelOf(task.PersonaId);
-            _ = _notify?.SendAsync(task.OwnerId,
+            var label = _personas?.GetByIdInternal(task.PersonaId) is { } p
+                ? PersonaManager.PersonaLabel(p) : null;
+            _ = _notif?.SendExecutionEventAsync(task.OwnerId, "",
                 label is not null ? $"{label} подготовил следующую задачу" : "Создан следующий экземпляр задачи",
-                task.Title, TaskSchedulerService.TaskUrl(task), "info");
+                task.Title, task.ProjectId, task.Id,
+                "task_spawned", "Спавн регулярной", TaskSchedulerService.TaskUrl(task));
         }
         return task;
     }

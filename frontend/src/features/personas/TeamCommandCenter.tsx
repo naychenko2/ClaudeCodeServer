@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   Users, MessageSquare, Mic, Workflow, Plus, CheckCircle2, Repeat, Trash2,
-  Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight, ChevronDown,
+  Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight,
   MoreHorizontal, Settings, Wand2, Search, EllipsisVertical,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
@@ -255,7 +255,7 @@ function OverviewPanel(props: {
         <div style={cardStyle}>
           <SectionLabel>Последняя активность</SectionLabel>
           <div style={{ display: 'flex', flexDirection: 'column', marginTop: 8 }}>
-            {recent.length === 0 ? <Muted>Пока нет событий.</Muted> : recent.map(e => <EventCard key={e.id} e={e} personaById={personaById} onOpen={onOpenEvent} compact />)}
+            {recent.length === 0 ? <Muted>Пока нет событий.</Muted> : recent.map(e => <EventCard key={e.id} e={e} personaById={personaById} onOpen={onOpenEvent} />)}
           </div>
           {events && events.length > 6 && <button onClick={() => onSwitchTab('activity')} style={{ ...linkBtn, marginTop: 8 }}>Вся активность →</button>}
         </div>
@@ -421,25 +421,20 @@ function Timeline({ events, personaById, onOpen }: {
   );
 }
 
-// ===== EventCard — нарядная карточка события (full с expand + compact для обзора) =====
-function EventCard({ e, personaById, onOpen, compact }: {
-  e: EventRow; personaById: (id: string) => Persona | undefined; onOpen: (e: EventRow) => void; compact?: boolean;
+// ===== EventCard — карточка события: клик → переход к объекту (без раскрытия) =====
+function EventCard({ e, personaById, onOpen }: {
+  e: EventRow; personaById: (id: string) => Persona | undefined; onOpen: (e: EventRow) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const target = eventTarget(e);
   const meta = EVENT_META[e.type] ?? { Icon: Settings, color: C.textMuted, bg: C.bgInset, label: e.type };
   const p = personaById(e.actor);
   const clickable = !!target;
-  const nav = navLabelFor(e.type);
-
-  const onCardClick = () => { if (compact) { if (clickable) onOpen(e); } else setExpanded(v => !v); };
-  const openObj = (ev: React.MouseEvent) => { ev.stopPropagation(); onOpen(e); };
 
   return (
     <div style={{ position: 'relative' }}>
       {/* точка-маркер цветом категории */}
       <span style={{ position: 'absolute', left: -26, top: 14, width: 10, height: 10, borderRadius: '50%', background: meta.color, border: `2px solid ${C.bgMain}`, boxSizing: 'border-box', boxShadow: `0 0 0 1px ${meta.color}` }} />
-      <div style={{ ...eventCardStyle, cursor: clickable || !compact ? 'pointer' : 'default' }} onClick={onCardClick}>
+      <div style={{ ...eventCardStyle, cursor: clickable ? 'pointer' : 'default' }} onClick={() => clickable && onOpen(e)}>
         {/* цветная полоса категории */}
         <div style={{ width: 3, borderRadius: 2, background: meta.color, flexShrink: 0, alignSelf: 'stretch' }} />
         {/* чип-иконка */}
@@ -451,33 +446,13 @@ function EventCard({ e, personaById, onOpen, compact }: {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
             {p ? <PersonaAvatar persona={p} size={20} /> : <span style={actorDot}>{e.actor === 'user' ? 'Я' : <Settings size={12} color={C.textMuted} />}</span>}
-            <span style={objTitleStyle} onClick={clickable ? openObj : undefined}>{e.summary}</span>
+            <span style={objTitleStyle}>{e.summary}</span>
           </div>
         </div>
-        {clickable ? (compact
-          ? <ChevronRight size={16} color={C.border} style={{ flexShrink: 0 }} />
-          : <ChevronDown size={16} color={C.textMuted} style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform .15s', flexShrink: 0 }} />)
-          : null}
+        {clickable && <ChevronRight size={16} color={C.border} style={{ flexShrink: 0 }} />}
       </div>
-      {/* раскрытие (full only) */}
-      {!compact && expanded && (
-        <div style={expandBodyStyle}>
-          <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>{e.summary}</div>
-          {clickable && <button onClick={openObj} style={{ ...linkBtn, marginTop: 8 }}>Открыть {nav} →</button>}
-        </div>
-      )}
     </div>
   );
-}
-
-function navLabelFor(type: string): string {
-  if (type === 'chat_turn' || type === 'meeting' || type === 'pipeline') return 'чат';
-  if (type.startsWith('task_')) return 'задачу';
-  if (type === 'memory_learned') return 'память персоны';
-  if (type === 'note_changed') return 'заметку';
-  if (type === 'knowledge_changed') return 'базу';
-  if (type === 'team_joined' || type === 'team_left') return 'персону';
-  return '';
 }
 
 // ===== Диалоги =====
@@ -703,6 +678,5 @@ const actorDot: CSSProperties = { width: 20, height: 20, borderRadius: '50%', ba
 const eventCardStyle: CSSProperties = { display: 'flex', alignItems: 'stretch', gap: 10, width: '100%', background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, boxShadow: SHADOW.card, padding: '10px 12px', transition: 'border-color .12s, box-shadow .12s' };
 const chipIconStyle: CSSProperties = { width: 28, height: 28, borderRadius: R.md, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 };
 const actionLabelStyle: CSSProperties = { fontSize: 11, fontWeight: 700, color: C.textSecondary, fontFamily: FONT.sans, textTransform: 'uppercase', letterSpacing: '0.04em' };
-const objTitleStyle: CSSProperties = { fontSize: 13.5, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' };
-const expandBodyStyle: CSSProperties = { padding: '10px 12px 12px 50px', background: C.bgInset, borderRadius: R.md, marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 };
+const objTitleStyle: CSSProperties = { fontSize: 13.5, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
 const checkDot: CSSProperties = { width: 16, height: 16, borderRadius: '50%', flexShrink: 0 };

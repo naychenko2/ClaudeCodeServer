@@ -536,6 +536,8 @@ export interface NoteSummary {
   tags: string[];
   createdAt: string;
   updatedAt: string;
+  expiresAt?: string;
+  sourceSessionId?: string;
 }
 
 // Разрешённая исходящая ссылка [[...]]; resolved=false — «призрачная» (цели ещё нет)
@@ -567,6 +569,8 @@ export interface NoteDetail {
   unlinkedMentions: NoteBacklink[];   // упоминания заголовков без [[…]]
   createdAt: string;
   updatedAt: string;
+  expiresAt?: string;
+  sourceSessionId?: string;
 }
 
 // Узел графа; ghost=true — «призрачная» заметка (на неё ссылаются, но её нет)
@@ -624,6 +628,8 @@ export interface CreateNoteDto {
   source?: string;
   templateId?: string;
   folder?: string;   // папка внутри источника ("Идеи/Черновики"); пусто = корень
+  expiresAfterMinutes?: number | null;
+  sourceSessionId?: string;
 }
 
 export interface UpdateNoteDto {

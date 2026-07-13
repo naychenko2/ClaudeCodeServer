@@ -27,6 +27,15 @@ public class ChatsController(SessionManager sessions, FileService files,
     [HttpGet]
     public IActionResult GetAll() => Ok(sessions.GetProjectlessChats(UserId));
 
+    // Получить сессию по ID независимо от типа (проектная / чат вне проекта).
+    // Используется для ссылки «Связанная сессия» в карточке задачи без проекта.
+    [HttpGet("{id}")]
+    public IActionResult Get(string id)
+    {
+        var s = sessions.GetOwned(id, UserId);
+        return s is null ? NotFound() : Ok(s);
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateChatRequest req)
     {

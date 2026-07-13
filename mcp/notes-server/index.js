@@ -89,6 +89,7 @@ const TOOLS = [
         title: { type: 'string', description: 'Заголовок (= имя файла)' },
         content: { type: 'string', description: 'Текст заметки (markdown, можно с [[wikilinks]] и frontmatter)' },
         source: { type: 'string', description: 'Куда создать: "personal" или id проекта. По умолчанию — контекст сессии' },
+        expiresAfterMinutes: { type: 'number', description: 'Время жизни в минутах. Не указывать или null — бессрочно. Пример: 1440 = сутки.' },
       },
     },
   },
@@ -169,6 +170,9 @@ async function callTool(name, args) {
       const body = { title: args.title };
       if (args.content !== undefined) body.content = args.content;
       body.source = args.source ?? DEFAULT_SOURCE;
+      if (args.expiresAfterMinutes !== undefined) body.expiresAfterMinutes = args.expiresAfterMinutes;
+      // Если заметка создаётся в рамках чата — запоминаем, откуда
+      if (process.env.NOTES_SESSION_ID) body.sourceSessionId = process.env.NOTES_SESSION_ID;
       return json(await api('/api/notes', { method: 'POST', body: JSON.stringify(body) }));
     }
 

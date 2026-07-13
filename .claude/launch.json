@@ -26,6 +26,12 @@
       "port": 5299
     },
     {
+      "name": "smoke-personas-v2",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd .claude\\worktrees\\personas-v2\\frontend && npx vite --config vite.config.smoke.ts --port 5299"],
+      "port": 5299
+    },
+    {
       "name": "smoke-kanban",
       "runtimeExecutable": "cmd",
       "runtimeArgs": ["/c", "cd .claude\\worktrees\\kanban\\frontend && npx vite --config vite.config.smoke.ts"],

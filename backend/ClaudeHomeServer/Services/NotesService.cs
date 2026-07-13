@@ -86,6 +86,8 @@ public sealed class NotesService
         public required List<(string Target, string Snippet)> RawLinks;
         public required string CreatedAt;
         public required string UpdatedAt;
+        public string? ExpiresAt;
+        public string? SourceSessionId;
     }
 
     private List<RawNote> Scan(string userId)
@@ -107,7 +109,7 @@ public sealed class NotesService
                 var rel = NormalizeRel(Path.GetRelativePath(src.RootDir, full));
                 // templates/ — шаблоны, не заметки: в список/граф не попадают
                 if (rel.StartsWith("templates/", StringComparison.OrdinalIgnoreCase)) continue;
-                var (title, tags) = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
+                var (title, tags, expires, sourceSessionId) = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
                 // Inline-теги #тег из тела + теги из frontmatter (без дублей)
                 foreach (var it in InlineTag.Matches(text).Select(m => m.Groups[1].Value))
                     if (!tags.Contains(it, StringComparer.OrdinalIgnoreCase)) tags.Add(it);
@@ -125,22 +127,26 @@ public sealed class NotesService
                     RawLinks = links,
                     CreatedAt = SafeTime(() => File.GetCreationTimeUtc(full)),
                     UpdatedAt = SafeTime(() => File.GetLastWriteTimeUtc(full)),
+                    ExpiresAt = expires,
+                    SourceSessionId = sourceSessionId,
                 });
             }
         }
         return notes;
     }
 
-    // Минимальный разбор YAML-frontmatter: только title и tags (без внешней либы).
-    private static (string Title, List<string> Tags) ParseFrontmatter(string text, string fallbackTitle)
+    // Минимальный разбор YAML-frontmatter: title, tags, expires и source_session_id (без внешней либы).
+    private static (string Title, List<string> Tags, string? ExpiresAt, string? SourceSessionId) ParseFrontmatter(string text, string fallbackTitle)
     {
         var title = fallbackTitle;
         var tags = new List<string>();
-        if (!text.StartsWith("---")) return (title, tags);
+        string? expires = null;
+        string? sourceSessionId = null;
+        if (!text.StartsWith("---")) return (title, tags, expires, sourceSessionId);
 
         using var reader = new StringReader(text);
         var first = reader.ReadLine();
-        if (first is null || first.Trim() != "---") return (title, tags);
+        if (first is null || first.Trim() != "---") return (title, tags, expires, sourceSessionId);
 
         var lines = new List<string>();
         string? line;
@@ -150,13 +156,18 @@ public sealed class NotesService
             if (line.Trim() == "---") { closed = true; break; }
             lines.Add(line);
         }
-        if (!closed) return (title, tags);
+        if (!closed) return (title, tags, expires, sourceSessionId);
 
         for (var i = 0; i < lines.Count; i++)
         {
             var l = lines[i];
             var m = Regex.Match(l, @"^title:\s*(.+)$", RegexOptions.IgnoreCase);
             if (m.Success) { title = m.Groups[1].Value.Trim().Trim('"', '\''); continue; }
+
+            var e = Regex.Match(l, @"^expires:\s*(.+)$", RegexOptions.IgnoreCase);
+            if (e.Success) { expires = e.Groups[1].Value.Trim().Trim('"', '\''); continue; }
+            var s = Regex.Match(l, @"^source_session_id:\s*(.+)$", RegexOptions.IgnoreCase);
+            if (s.Success) { sourceSessionId = s.Groups[1].Value.Trim().Trim('"', '\''); continue; }
 
             var t = Regex.Match(l, @"^tags:\s*(.*)$", RegexOptions.IgnoreCase);
             if (t.Success)
@@ -175,7 +186,7 @@ public sealed class NotesService
                     }
             }
         }
-        return (title, tags.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+        return (title, tags.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), expires, sourceSessionId);
     }
 
     private static List<(string, string)> ParseLinks(string text)
@@ -222,9 +233,19 @@ public sealed class NotesService
         public required Dictionary<string, List<RawNote>> ByName;
     }
 
+    // Проверка: срок заметки истёк (expiresAt в прошлом)
+    private static bool IsExpired(RawNote n, DateTime now) =>
+        n.ExpiresAt is not null
+        && DateTime.TryParse(n.ExpiresAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var exp)
+        && exp <= now;
+
     private Model Build(string userId)
     {
+        var now = DateTime.UtcNow;
         var notes = Scan(userId);
+        // Истёкшие заметки исключаем из модели — они не видны в списке/графе,
+        // а ссылки на них становятся «призрачными» (unresolved).
+        notes.RemoveAll(n => IsExpired(n, now));
         var byId = notes.ToDictionary(n => n.Id);
 
         // Индекс имя -> заметки (для резолва [[...]])
@@ -514,6 +535,13 @@ public sealed class NotesService
         var content = req.Content
             ?? (req.TemplateId is not null ? RenderTemplate(userId, req.TemplateId, req.Title) : null)
             ?? $"# {req.Title}\n";
+        if (req.ExpiresAfterMinutes is > 0)
+        {
+            var expiresAt = DateTime.UtcNow.AddMinutes(req.ExpiresAfterMinutes.Value).ToString("o");
+            content = InjectExpiresField(content, expiresAt);
+        }
+        if (!string.IsNullOrWhiteSpace(req.SourceSessionId))
+            content = InjectSourceSessionId(content, req.SourceSessionId);
         File.WriteAllText(full, content, new UTF8Encoding(false));
 
         Invalidate(userId);
@@ -761,6 +789,17 @@ public sealed class NotesService
         if (req.Content is not null)
             File.WriteAllText(full, req.Content, new UTF8Encoding(false));
 
+        // Время жизни: -1 (по умолчанию) — не менять; null — снять; N — установить
+        if (req.ExpiresAfterMinutes != -1)
+        {
+            var current = File.ReadAllText(full, Encoding.UTF8);
+            if (req.ExpiresAfterMinutes is null)
+                current = RemoveExpiresField(current);
+            else if (req.ExpiresAfterMinutes > 0)
+                current = InjectExpiresField(current, DateTime.UtcNow.AddMinutes(req.ExpiresAfterMinutes.Value).ToString("o"));
+            File.WriteAllText(full, current, new UTF8Encoding(false));
+        }
+
         // Авто-обновление входящих ссылок при смене заголовка: во всех заметках,
         // ссылавшихся на старый заголовок, заменяем [[Старый]] → [[Новый]] (как Obsidian).
         if (!string.IsNullOrWhiteSpace(req.Title) && Norm(req.Title!) != Norm(oldTitle)
@@ -812,17 +851,123 @@ public sealed class NotesService
         return true;
     }
 
+    // Возвращает истёкшие заметки пользователя (expiresAt в прошлом).
+    // Не инвалидирует кэш — чистая проверка на скане.
+    public IReadOnlyList<(string Id, string Title)> GetExpiredNotes(string userId, DateTime nowUtc)
+    {
+        var result = new List<(string, string)>();
+        foreach (var src in SourcesFor(userId))
+        {
+            if (!Directory.Exists(src.RootDir)) continue;
+            try
+            {
+                foreach (var full in Directory.EnumerateFiles(src.RootDir, "*.md", SearchOption.AllDirectories))
+                {
+                    string text;
+                    try { text = File.ReadAllText(full, Encoding.UTF8); }
+                    catch { continue; }
+
+                    var rel = NormalizeRel(Path.GetRelativePath(src.RootDir, full));
+                    if (rel.StartsWith("templates/", StringComparison.OrdinalIgnoreCase)) continue;
+                    var (title, _, expires, _) = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
+                    if (expires is null) continue;
+                    if (DateTime.TryParse(expires, null, System.Globalization.DateTimeStyles.RoundtripKind, out var exp)
+                        && exp <= nowUtc)
+                    {
+                        var id = EncodeId(src.Key, rel);
+                        result.Add((id, title));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Сканирование истёкших заметок в {Dir}", src.RootDir);
+            }
+        }
+        return result;
+    }
+
+    // Убирает [[wikilinks]] из всех заметок пользователя, указывающие на заданный заголовок.
+    // [[Заголовок]] → Заголовок, [[Заголовок|алиас]] → алиас
+    public void RemoveWikilinksTo(string userId, string targetTitle, string targetId)
+    {
+        // Перестраиваем модель, чтобы получить входящие ссылки на цель
+        var model = GetModel(userId);
+        if (!model.Backlinks.TryGetValue(targetId, out var backlinks)) return;
+
+        var sources = backlinks.Select(b => b.SourceId).Distinct();
+        foreach (var srcId in sources)
+        {
+            if (!model.ById.TryGetValue(srcId, out var srcNote)) continue;
+            try
+            {
+                var content = File.ReadAllText(srcNote.FullPath, Encoding.UTF8);
+                // Заменяем [[TargetTitle]] → TargetTitle, [[TargetTitle|alias]] → alias
+                var updated = Regex.Replace(content,
+                    @"\[\[" + Regex.Escape(targetTitle) + @"(\|[^\[\]]*?)?\]\]",
+                    m => m.Groups[1].Success
+                        ? m.Groups[1].Value.TrimStart('|')
+                        : targetTitle,
+                    RegexOptions.IgnoreCase);
+                File.WriteAllText(srcNote.FullPath, updated, new UTF8Encoding(false));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Удаление ссылок на {Title} в {File}", targetTitle, srcNote.FullPath);
+            }
+        }
+        Invalidate(userId);
+    }
+
+    // Вставляет поле expires в frontmatter (или создаёт новый frontmatter, если его нет).
+    internal static string InjectExpiresField(string content, string expiresAt)
+    {
+        if (content.StartsWith("---"))
+        {
+            // Ищем конец первой секции --- и вставляем после открывающих ---
+            var idx = content.IndexOf('\n', 3);
+            if (idx > 0)
+                return content[..(idx + 1)] + $"expires: {expiresAt}\n" + content[(idx + 1)..];
+        }
+        // Нет frontmatter — создаём
+        return $"---\nexpires: {expiresAt}\n---\n{content}";
+    }
+
+    // Удаляет поле expires из frontmatter (если есть).
+    internal static string RemoveExpiresField(string content)
+    {
+        if (!content.StartsWith("---")) return content;
+        var endIdx = content.IndexOf("\n---", 3, StringComparison.Ordinal);
+        if (endIdx < 0) return content;
+        var fm = content[..endIdx];
+        // Убираем строки с expires:
+        var cleaned = Regex.Replace(fm, @"\nexpires:\s*[^\n]*", "", RegexOptions.IgnoreCase);
+        return cleaned + content[endIdx..];
+    }
+
+    // Вставляет поле source_session_id в frontmatter (или создаёт новый, если его нет).
+    internal static string InjectSourceSessionId(string content, string sessionId)
+    {
+        if (content.StartsWith("---"))
+        {
+            var idx = content.IndexOf('\n', 3);
+            if (idx > 0)
+                return content[..(idx + 1)] + $"source_session_id: {sessionId}\n" + content[(idx + 1)..];
+        }
+        return $"---\nsource_session_id: {sessionId}\n---\n{content}";
+    }
+
     // --- Проекции ---
 
     private NoteSummary ToSummary(RawNote n) =>
-        new(n.Id, n.Title, n.SourceKey, n.SourceLabel, n.RelPath, n.Tags, n.CreatedAt, n.UpdatedAt);
+        new(n.Id, n.Title, n.SourceKey, n.SourceLabel, n.RelPath, n.Tags, n.CreatedAt, n.UpdatedAt, n.ExpiresAt, n.SourceSessionId);
 
     private NoteDetail ToDetail(Model model, RawNote n) =>
         new(n.Id, n.Title, n.SourceKey, n.SourceLabel, n.RelPath, n.Content, n.Tags,
             model.OutLinks.GetValueOrDefault(n.Id) ?? new(),
             model.Backlinks.GetValueOrDefault(n.Id) ?? new(),
             model.Unlinked.GetValueOrDefault(n.Id) ?? new(),
-            n.CreatedAt, n.UpdatedAt);
+            n.CreatedAt, n.UpdatedAt, n.ExpiresAt, n.SourceSessionId);
 
     // --- Разрешение источника и валидация владения ---
 

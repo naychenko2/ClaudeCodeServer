@@ -471,6 +471,7 @@ export const api = {
   // Чаты вне проекта (project-less)
   chats: {
     list: () => request<Session[]>('/chats'),
+    get: (id: string) => request<Session>(`/chats/${id}`),
     create: (mode = 'auto', resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
       request<Session>('/chats', {
         method: 'POST',

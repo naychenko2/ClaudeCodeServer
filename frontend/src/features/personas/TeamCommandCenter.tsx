@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   Users, MessageSquare, Mic, Workflow, Plus, CheckCircle2, Repeat, Trash2,
-  Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight, ChevronDown, MoreHorizontal, Settings, Wand2, Search,
+  Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight, ChevronDown,
+  MoreHorizontal, Settings, Wand2, Search, EllipsisVertical,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import type { Persona, Project, Session, Task, TeamMemoryEntry, TeamMemberDraft } from '../../types';
@@ -10,17 +11,19 @@ import { usePersonas, personaLabel } from '../../lib/personas';
 import { projectColor } from '../../lib/tasks';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { PersonaAvatar } from './PersonaAvatar';
-import { Modal, IconButton } from '../../components/ui';
+import { Modal, IconButton, Menu, MenuItem } from '../../components/ui';
+import { Toolbar, PillSwitch, tbBtnPrimary } from '../../components/Toolbar';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
 
 // Командный центр проекта (①-L1, табовый): 3 вкладки — Обзор / Память команды / Активность-таймлайн.
 type Tab = 'overview' | 'memory' | 'activity';
 type FilterKey = 'all' | 'tasks' | 'memory' | 'chats' | 'content' | 'team';
 
-const TABS: { key: Tab; label: string }[] = [
-  { key: 'overview', label: 'Обзор' },
-  { key: 'memory', label: 'Память' },
-  { key: 'activity', label: 'Активность' },
+const TAB_OPTIONS: { value: Tab; label: string }[] = [
+  { value: 'overview', label: 'Обзор' },
+  { value: 'memory', label: 'Память' },
+  { value: 'activity', label: 'Активность' },
 ];
 
 export function TeamCommandCenter({
@@ -46,7 +49,9 @@ export function TeamCommandCenter({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [formTeamOpen, setFormTeamOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const isMobile = useIsMobile();
+  const stripe = projectColor(project.id).main;
 
   useEffect(() => { sessionStorage.setItem('cc_team_tab', tab); }, [tab]);
 
@@ -93,36 +98,70 @@ export function TeamCommandCenter({
   }, [events]);
 
   return (
-    <div style={{ height: '100%', overflowY: 'auto', background: C.bgMain, padding: isMobile ? '12px 14px 24px' : '16px 24px 32px' }}>
-      <div style={{ maxWidth: 920, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {/* TabBar (sticky) */}
-        <div style={tabBarStyle}>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {TABS.map(t => (
-              <button key={t.key} onClick={() => switchTab(t.key)} style={tab === t.key ? tabActive : tabIdle}>{t.label}</button>
-            ))}
-          </div>
-          <span style={tabCountStyle}>
-            {tab === 'overview' ? `${team.length} в команде` : tab === 'memory' ? `${mem?.length ?? 0} записей` : `${events?.length ?? 0} событий`}
-          </span>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.bgMain }}>
+      {/* Единый тулбар в стиле PersonaToolbar */}
+      <Toolbar isMobile={isMobile} style={{ borderLeft: `3px solid ${stripe}`, position: 'relative' }}>
+        {/* Идентичность проекта (плитка 32 + serif + зона-бейдж) */}
+        <div style={{ width: 32, height: 32, borderRadius: R.md, background: `${stripe}22`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Users size={18} color={stripe} strokeWidth={ICON_STROKE} />
         </div>
-
-        {tab === 'overview' && (
-          <OverviewPanel project={project} team={team} events={events} mem={mem} tasks={tasks}
-            inFlight={inFlight} onlineSet={onlineSet} live={live} tasksActive={tasksActive} chatsToday={chatsToday}
-            personaById={personaById} onOpenPersona={onOpenPersona} onSwitchTab={switchTab} onOpenEvent={openEvent}
-            onPickerOpen={() => setPickerOpen(true)} onNewTaskOpen={() => setNewTaskOpen(true)} onNewPersona={onNewPersona}
-            onFormTeamOpen={() => setFormTeamOpen(true)} onOpenSessionById={onOpenSessionById} onMenuOpen={() => createTeamChat(team, onOpenSession)} />
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <div style={{ fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: stripe, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            Команда · {project.name}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+            <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
+              {team.length} участниц
+            </span>
+            <span style={{ display: 'inline-block', fontSize: 10.5, fontWeight: 600, padding: '1px 7px', borderRadius: R.pill, background: `${stripe}1F`, color: stripe, whiteSpace: 'nowrap', flexShrink: 0 }}>
+              Проект
+            </span>
+          </div>
+        </div>
+        {/* Вкладки */}
+        <PillSwitch<Tab> value={tab} onChange={t => switchTab(t)} options={TAB_OPTIONS} compact={isMobile} isMobile={isMobile} />
+        {/* Действия */}
+        {!isMobile && (
+          <button onClick={() => setPickerOpen(true)} disabled={team.length < 2}
+            style={{ ...tbBtnPrimary, background: stripe, color: C.onAccent, display: 'inline-flex', alignItems: 'center', gap: 7, opacity: team.length < 2 ? 0.5 : 1, cursor: team.length < 2 ? 'default' : 'pointer' }}>
+            <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            Созвать
+          </button>
         )}
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          <IconButton onClick={() => setMenuOpen(o => !o)} title="Ещё" size={isMobile ? 'lg' : 'md'}>
+            <EllipsisVertical size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+          </IconButton>
+          {menuOpen && (
+            <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={200}>
+              <MenuItem icon={<UserPlus size={15} strokeWidth={ICON_STROKE} />} label="Новая персона" onClick={() => { setMenuOpen(false); onNewPersona(); }} />
+              <MenuItem icon={<Wand2 size={15} strokeWidth={ICON_STROKE} />} label="Сформировать команду" onClick={() => { setMenuOpen(false); setFormTeamOpen(true); }} />
+              <MenuItem icon={<Plus size={15} strokeWidth={ICON_STROKE} />} label="Новая задача" onClick={() => { setMenuOpen(false); setNewTaskOpen(true); }} />
+            </Menu>
+          )}
+        </div>
+      </Toolbar>
+      {/* Тонкая полоса проекта */}
+      <div style={{ flex: 'none', height: 2, background: `${stripe}55` }} />
 
-        {tab === 'memory' && (
-          <MemoryPanel mem={mem} memSearch={memSearch} setMemSearch={setMemSearch} newMem={newMem} setNewMem={setNewMem} onAdd={addMem} onRemove={removeMem} />
-        )}
-
-        {tab === 'activity' && (
-          <ActivityPanel events={events} personaById={personaById} filter={filter} setFilter={setFilter}
-            actorFilter={actorFilter} setActorFilter={setActorFilter} counts={counts} limit={limit} onMore={() => setLimit(n => n + 40)} onOpenEvent={openEvent} />
-        )}
+      {/* Тело (скроллится) */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '16px 16px 32px' : '20px 24px 40px' }}>
+        <div style={{ maxWidth: 720, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {tab === 'overview' && (
+            <OverviewPanel project={project} team={team} events={events} mem={mem} tasks={tasks}
+              inFlight={inFlight} onlineSet={onlineSet} live={live} tasksActive={tasksActive} chatsToday={chatsToday}
+              personaById={personaById} onOpenPersona={onOpenPersona} onSwitchTab={switchTab} onOpenEvent={openEvent}
+              onPickerOpen={() => setPickerOpen(true)} onNewTaskOpen={() => setNewTaskOpen(true)} onNewPersona={onNewPersona}
+              onFormTeamOpen={() => setFormTeamOpen(true)} onOpenSessionById={onOpenSessionById} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe} />
+          )}
+          {tab === 'memory' && (
+            <MemoryPanel mem={mem} memSearch={memSearch} setMemSearch={setMemSearch} newMem={newMem} setNewMem={setNewMem} onAdd={addMem} onRemove={removeMem} stripe={stripe} />
+          )}
+          {tab === 'activity' && (
+            <ActivityPanel events={events} personaById={personaById} filter={filter} setFilter={setFilter}
+              actorFilter={actorFilter} setActorFilter={setActorFilter} counts={counts} limit={limit} onMore={() => setLimit(n => n + 40)} onOpenEvent={openEvent} />
+          )}
+        </div>
       </div>
 
       {pickerOpen && <GroupChatPicker team={team} onClose={() => setPickerOpen(false)} onCreated={s => { setPickerOpen(false); onOpenSession(s); }} />}
@@ -137,10 +176,9 @@ function OverviewPanel(props: {
   project: Project; team: Persona[]; events: EventRow[] | null; mem: TeamMemoryEntry[] | null; tasks: Task[] | null;
   inFlight: Map<string, string>; onlineSet: Set<string>; live: EventRow | null; tasksActive: number; chatsToday: number;
   personaById: (id: string) => Persona | undefined; onOpenPersona: (id: string) => void; onSwitchTab: (t: Tab) => void; onOpenEvent: (e: EventRow) => void;
-  onPickerOpen: () => void; onNewTaskOpen: () => void; onNewPersona: () => void; onFormTeamOpen: () => void; onOpenSessionById: (id: string) => void; onMenuOpen: () => void;
+  onPickerOpen: () => void; onNewTaskOpen: () => void; onNewPersona: () => void; onFormTeamOpen: () => void; onOpenSessionById: (id: string) => void; onMenuOpen: () => void; stripe: string;
 }) {
-  const { project, team, events, mem, inFlight, onlineSet, live, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onOpenSessionById, onMenuOpen } = props;
-  const stripe = projectColor(project.id).main;
+  const { project, team, events, mem, inFlight, onlineSet, live, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onOpenSessionById, onMenuOpen, stripe } = props;
   const recent = (events ?? []).slice(0, 6);
   const topMem = (mem ?? []).slice(0, 3);
 
@@ -241,9 +279,9 @@ function OverviewPanel(props: {
 }
 
 // ===== Вкладка 2: Память команды =====
-function MemoryPanel({ mem, memSearch, setMemSearch, newMem, setNewMem, onAdd, onRemove }: {
+function MemoryPanel({ mem, memSearch, setMemSearch, newMem, setNewMem, onAdd, onRemove, stripe }: {
   mem: TeamMemoryEntry[] | null; memSearch: string; setMemSearch: (s: string) => void;
-  newMem: string; setNewMem: (s: string) => void; onAdd: () => void; onRemove: (id: string) => void;
+  newMem: string; setNewMem: (s: string) => void; onAdd: () => void; onRemove: (id: string) => void; stripe: string;
 }) {
   const filtered = useMemo(() => {
     const q = memSearch.trim().toLowerCase();
@@ -276,7 +314,7 @@ function MemoryPanel({ mem, memSearch, setMemSearch, newMem, setNewMem, onAdd, o
               {mem.length > 0 && <button onClick={() => setMemSearch('')} style={{ ...linkBtn, display: 'inline-block', marginLeft: 6 }}>Сбросить фильтр</button>}
             </div>
           ) : filtered.map(m => (
-            <div key={m.id} style={memRowStyle}>
+            <div key={m.id} style={{ ...memRowStyle, borderLeft: `3px solid ${stripe}` }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, lineHeight: 1.45 }}>{m.text}</div>
                 <div style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, marginTop: 3 }}>{fmtDate(m.createdAt)}</div>
@@ -657,10 +695,6 @@ const specialtyBadge: CSSProperties = { display: 'inline-block', fontSize: 10.5,
 const inputStyle: CSSProperties = { flex: 1, padding: '8px 10px', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, color: C.textPrimary, fontFamily: FONT.sans, fontSize: 13, outline: 'none' };
 const memRowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderLeft: `3px solid ${C.accentMuted}`, borderRadius: R.md, padding: '10px 12px' };
 const iconBtnStyle: CSSProperties = { border: 'none', background: 'transparent', color: C.textMuted, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '2px 4px', flexShrink: 0 };
-const tabBarStyle: CSSProperties = { position: 'sticky', top: 0, zIndex: 5, background: C.bgMain, padding: '4px 0 10px', borderBottom: `1px solid ${C.borderLight}`, display: 'flex', alignItems: 'center', gap: 12 };
-const tabIdle: CSSProperties = { border: 'none', background: C.bgInset, color: C.textSecondary, borderRadius: R.lg, padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans };
-const tabActive: CSSProperties = { ...tabIdle, background: C.accentLight, color: C.accent };
-const tabCountStyle: CSSProperties = { marginLeft: 'auto', fontSize: 12, color: C.textMuted, fontFamily: FONT.sans };
 const filterBarStyle: CSSProperties = { position: 'sticky', top: 44, zIndex: 4, background: C.bgMain, padding: '8px 0 10px', borderBottom: `1px solid ${C.borderLight}` };
 const filterChip: CSSProperties = { border: 'none', background: C.bgInset, color: C.textSecondary, borderRadius: R.sm, padding: '3px 9px', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans };
 const filterChipActive: CSSProperties = { ...filterChip, background: C.accentLight, color: C.accent };

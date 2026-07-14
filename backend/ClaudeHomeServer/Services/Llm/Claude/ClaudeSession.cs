@@ -514,12 +514,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // Правила проекта: deny приоритетнее; allow — авто-разрешить; null — спросить пользователя
         var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, inputEl);
         if (ruleDecision == "deny") return "deny";
-        // Сессия-исполнитель задачи работает автономно — отвечать на карточку разрешения
-        // некому, и без этого исполнитель вязнет в первом же permission-запросе (status=Waiting
-        // до таймаута в 60 мин) и не может работать. Разрешаем ВСЕ инструменты автоматически:
-        // deny-правило проекта выше учтено, а права персоны уже ограничены Persona.Tools
-        // и ExtraDisallowedTools. deny-правило применено выше и имеет приоритет.
-        if (ruleDecision == null && Info.TaskExecution) return "allow";
+        // Сессия-исполнитель задачи или ход правила автоматизации персоны работают автономно —
+        // отвечать на карточку разрешения некому (чат никто не открывал), и без этого исполнитель
+        // вязнет в первом же permission-запросе (status=Waiting до таймаута в 60 мин) и не может
+        // работать. Разрешаем ВСЕ инструменты автоматически: deny-правило проекта выше учтено,
+        // а права персоны уже ограничены Persona.Tools и ExtraDisallowedTools.
+        if (ruleDecision == null && (Info.TaskExecution || Info.AutomationRuleId is not null)) return "allow";
         if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(toolName)) return "allow";
 
         var tcs = new TaskCompletionSource<string>();

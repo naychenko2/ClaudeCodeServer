@@ -30,6 +30,10 @@ public class TaskItem
     // Исполнение от лица персоны: сессия-исполнитель ведётся с её характером,
     // моделью и памятью (null — обычный Claude)
     public string? PersonaId { get; set; }
+    // Время жизни чата исполнения (мин от последней активности); null — бессрочно.
+    // Применяется один раз при создании сессии в TaskExecutionService.ExecuteAsync;
+    // имеет смысл только при Assignee=Claude. Дефолт 1440 (сутки) на новых задачах.
+    public int? ExecutionExpiresAfterMinutes { get; set; } = 1440;
     // Claude-исполнитель: отметка запуска (идемпотентность автозапуска, переживает рестарт)
     public DateTime? ClaudeStartedAt { get; set; }
     // Итог последнего запуска: success | error; null — ещё выполняется или не запускалась

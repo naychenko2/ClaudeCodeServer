@@ -78,6 +78,13 @@ public class TaskManager
             Assignee = req.Assignee,
             LinkedSessionId = req.LinkedSessionId,
             PersonaId = string.IsNullOrEmpty(req.PersonaId) ? null : req.PersonaId,
+            // Не передано — дефолт 1440 (сутки); отрицательное — бессрочно; N>=0 — TTL
+            ExecutionExpiresAfterMinutes = req.ExecutionExpiresAfterMinutes switch
+            {
+                null => 1440,
+                < 0 => null,
+                _ => req.ExecutionExpiresAfterMinutes,
+            },
             ResultMarkdown = req.ResultMarkdown,
             LinkedFiles = req.LinkedFiles ?? [],
             Subtasks = req.Subtasks?.Select(s => new TaskSubtask { Title = s.Title }).ToList() ?? [],
@@ -146,6 +153,9 @@ public class TaskManager
         // Персона-исполнитель: null = не менять, "" = убрать (как у строковых полей)
         if (req.PersonaId is not null)
             task.PersonaId = req.PersonaId == "" ? null : req.PersonaId;
+        // Время жизни чата исполнения: null = не менять, отрицательное = бессрочно, N>=0 = TTL
+        if (req.ExecutionExpiresAfterMinutes is not null)
+            task.ExecutionExpiresAfterMinutes = req.ExecutionExpiresAfterMinutes < 0 ? null : req.ExecutionExpiresAfterMinutes;
         if (req.ResultMarkdown is not null) task.ResultMarkdown = req.ResultMarkdown;
         if (req.LinkedFiles is not null) task.LinkedFiles = req.LinkedFiles;
         if (req.Labels is not null) task.Labels = req.Labels;
@@ -349,7 +359,10 @@ public record CreateTaskRequest(
     List<CreateSubtaskRequest>? Subtasks = null,
     List<string>? Labels = null,
     string? SourceNoteId = null,
-    int? SourceNoteLine = null);
+    int? SourceNoteLine = null,
+    // Время жизни чата исполнения (мин); не передано — дефолт 1440 (сутки),
+    // отрицательное — бессрочно, N>=0 — TTL. Имеет смысл только при исполнителе Claude.
+    int? ExecutionExpiresAfterMinutes = null);
 
 public record CreateSubtaskRequest(string Title);
 
@@ -378,6 +391,8 @@ public record UpdateTaskRequest(
     // Колонка доски проекта; null = не менять, "" = сброс на дефолт категории
     string? ColumnId = null,
     // Смена проекта: null = не менять, "" = сделать личной (ProjectId=null), guid = привязать
-    string? ProjectId = null);
+    string? ProjectId = null,
+    // Время жизни чата исполнения: null = не менять, отрицательное = бессрочно, N>=0 = TTL
+    int? ExecutionExpiresAfterMinutes = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

@@ -88,6 +88,8 @@ export interface Task {
   seriesId?: string;         // общий id серии регулярной задачи
   linkedSessionId?: string;
   personaId?: string;        // исполнение от лица персоны (assignee=claude)
+  // Время жизни чата исполнения (мин от последней активности); undefined/null — бессрочно
+  executionExpiresAfterMinutes?: number | null;
   claudeStartedAt?: string;  // отметка запуска Claude-исполнителя
   claudeResult?: 'success' | 'error';  // итог последнего запуска (null — выполняется/не запускалась)
   resultMarkdown?: string;            // Markdown-итог выполнения (прикрепляет исполнитель через MCP)
@@ -155,6 +157,9 @@ export interface CreateTaskDto {
   recurrence?: TaskRecurrence;
   linkedSessionId?: string;
   personaId?: string;        // исполнение от лица персоны
+  // Не указано — дефолт 1440 (сутки); отрицательное — бессрочно; N>=0 — TTL в минутах.
+  // Имеет смысл только при исполнителе Claude/персона.
+  executionExpiresAfterMinutes?: number;
   resultMarkdown?: string;
   linkedFiles?: string[];
   subtasks?: { title: string }[];
@@ -177,6 +182,8 @@ export interface UpdateTaskDto {
   linkedSessionId?: string;
   // Персона-исполнитель: '' = убрать, undefined = не менять
   personaId?: string;
+  // Время жизни чата исполнения: отрицательное = бессрочно, undefined = не менять, N>=0 = TTL
+  executionExpiresAfterMinutes?: number;
   resultMarkdown?: string;    // '' = очистить, undefined = не менять
   linkedFiles?: string[];
   subtasks?: TaskSubtask[];

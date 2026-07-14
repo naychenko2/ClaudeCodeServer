@@ -120,6 +120,14 @@ const PERSONA_ID_SCHEMA = {
   description: 'ID персоны-исполнителя (см. personas_list). Задачу выполнит Claude от её лица. "" — снять персону.',
 };
 
+// Время жизни чата исполнения (актуально только при исполнителе Claude/персона):
+// чат исполнения удалится сам вместе с историей, если не будет активности N минут.
+// Не указано — дефолт 1440 (сутки).
+const EXECUTION_TTL_SCHEMA = {
+  type: 'integer',
+  description: 'Время жизни чата исполнения в минутах от последней активности (по умолчанию 1440 — сутки).',
+};
+
 // Markdown-итог выполнения задачи — прикрепляет исполнитель при завершении/обновлении.
 // null/отсутствует = не менять, "" = очистить (как у description).
 const RESULT_MARKDOWN_SCHEMA = {
@@ -188,6 +196,7 @@ const TOOLS = [
         subtasks: { type: 'array', items: { type: 'string' }, description: 'Названия подзадач' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки' },
         columnId: COLUMN_ID_SCHEMA,
+        executionExpiresAfterMinutes: EXECUTION_TTL_SCHEMA,
       },
     },
   },
@@ -213,6 +222,7 @@ const TOOLS = [
         linkedFiles: LINKED_FILES_SCHEMA,
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки (заменяют список целиком)' },
         columnId: { ...COLUMN_ID_SCHEMA, description: COLUMN_ID_SCHEMA.description + ' Пустая строка — сброс на дефолтную колонку категории.' },
+        executionExpiresAfterMinutes: { ...EXECUTION_TTL_SCHEMA, description: EXECUTION_TTL_SCHEMA.description + ' Отрицательное значение — сделать бессрочным.' },
       },
     },
   },
@@ -327,7 +337,7 @@ async function callTool(name, args) {
 
     case 'tasks_create': {
       const body = { title: args.title };
-      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'labels', 'columnId'])
+      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'labels', 'columnId', 'executionExpiresAfterMinutes'])
         if (args[k] !== undefined) body[k] = args[k];
       if (Array.isArray(args.subtasks) && args.subtasks.length)
         body.subtasks = args.subtasks.map(t => ({ title: String(t) }));

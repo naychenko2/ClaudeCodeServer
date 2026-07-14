@@ -16,6 +16,8 @@ import { DueDatePicker } from './DueDatePicker';
 import { ExecutorPicker } from './ExecutorPicker';
 import { NoteEditor } from '../notes/NoteEditor';
 import { AttachPicker } from '../../components/chat/AttachPicker';
+import { Toggle, SegmentedControl } from '../../components/ui';
+import { EXPIRY_PRESETS, DEFAULT_EXPIRY } from '../../lib/expiry';
 
 interface Props {
   task: Task;
@@ -65,6 +67,9 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   const [assignee, setAssignee] = useState<TaskAssignee>(task.assignee ?? 'me');
   // Персона-исполнитель ('' — обычный Claude); выбирается единым пикером исполнителя
   const [personaId, setPersonaId] = useState(task.personaId ?? '');
+  // Время жизни чата исполнения (актуально только при исполнителе Claude/персона)
+  const [ttlEnabled, setTtlEnabled] = useState(task.executionExpiresAfterMinutes != null);
+  const [ttlMinutes, setTtlMinutes] = useState(task.executionExpiresAfterMinutes ?? DEFAULT_EXPIRY);
   const [description, setDescription] = useState(task.description);
   const [descEditing, setDescEditing] = useState(!task.description);
   // Markdown-итог выполнения (прикрепляет исполнитель; тут — ручная правка пользователем)
@@ -167,6 +172,8 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
         assignee,
         // Персона-исполнитель имеет смысл только у Claude; '' = убрать на бэке
         personaId: assignee === 'claude' && personaId ? personaId : '',
+        // Время жизни чата исполнения; отрицательное = бессрочно на бэке
+        executionExpiresAfterMinutes: ttlEnabled ? ttlMinutes : -1,
         // Смена проекта: '' = сделать личной, guid = привязать; отсутствие = не менять
         ...(projectChanged ? { projectId: projectId ?? '' } : {}),
         description,
@@ -462,6 +469,32 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
               onChange={v => { setAssignee(v.assignee); setPersonaId(v.personaId ?? ''); }}
             />
           </div>
+
+          {/* Время жизни чата исполнения — только когда исполнитель не «Я» (чат вообще
+              не создаётся для personaId=none/assignee=me) */}
+          {assignee === 'claude' && (
+            <>
+              <div style={fieldLabelStyle()}>Время жизни чата исполнения</div>
+              <div style={{ marginBottom: 22 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <Toggle checked={ttlEnabled} onChange={setTtlEnabled} />
+                  <span style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans }}>
+                    {ttlEnabled ? 'Удаляется автоматически' : 'Хранится бессрочно'}
+                  </span>
+                </div>
+                {ttlEnabled && (
+                  <div style={{ marginTop: 10 }}>
+                    <SegmentedControl
+                      value={String(ttlMinutes)}
+                      options={EXPIRY_PRESETS.map(p => ({ value: String(p.minutes), label: p.label }))}
+                      onChange={v => setTtlMinutes(Number(v))}
+                      columns={4}
+                    />
+                  </div>
+                )}
+              </div>
+            </>
+          )}
 
           {/* Проект — лента чипов (как в диалоге создания); «Личное» = вне проекта.
               Смена проекта сбрасывает колонку доски (на бэке) и может требовать смены

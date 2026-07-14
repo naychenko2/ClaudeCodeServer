@@ -212,6 +212,8 @@ public sealed class PersonaAutomationService : IDisposable
         var title = string.IsNullOrWhiteSpace(persona.Role) ? persona.Name : persona.Role;
         var chat = await _sessions.CreatePersonaChatAsync(persona.OwnerId, persona.Id, ClaudeMode.AcceptEdits,
             name: $"{title}: {rule.Name}", automationRuleId: rule.Id);
+        // TTL чата правила — только при создании; null у Action.ExpiresAfterMinutes — бессрочно
+        if (rule.Action.ExpiresAfterMinutes is { } ttl) _sessions.SetExpiry(chat.Id, ttl);
         state.SessionId = chat.Id;
         _state.Save();
         return chat.Id;

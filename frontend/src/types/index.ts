@@ -825,6 +825,8 @@ export interface AutomationAction {
   weight: AutomationActionWeight; // gate — one-shot гейт+сообщение; work — полный агентский ход
   instruction: string;
   rememberInHistory: boolean;
+  // Время жизни чата правила (мин); null — бессрочно. Применяется один раз при создании.
+  expiresAfterMinutes?: number | null;
 }
 export interface PersonaAutomationRule {
   id: string;
@@ -849,6 +851,9 @@ export interface AutomationRuleDto {
   actionWeight?: AutomationActionWeight;
   actionInstruction?: string;
   rememberInHistory?: boolean;
+  // Не указано (undefined, поле опущено в теле запроса) — сохранить текущее/дефолт 1440
+  // при создании; null — бессрочно; N>0 — TTL в минутах.
+  actionExpiresAfterMinutes?: number | null;
 }
 
 export type PersonaBindingType = 'project' | 'projectPath' | 'knowledge' | 'notes' | 'tool' | 'skill';

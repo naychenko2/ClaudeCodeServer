@@ -955,6 +955,11 @@ public class PersonasController : ControllerBase
                 Weight = req.ActionWeight ?? existing?.Action.Weight ?? AutomationActionWeight.Gate,
                 Instruction = req.ActionInstruction ?? existing?.Action.Instruction ?? "",
                 RememberInHistory = req.RememberInHistory ?? existing?.Action.RememberInHistory ?? false,
+                // -1 (не передано) — унаследовать текущее значение / дефолт 1440 при создании;
+                // null — явный выбор «бессрочно»; N>0 — TTL в минутах
+                ExpiresAfterMinutes = req.ActionExpiresAfterMinutes == -1
+                    ? existing?.Action.ExpiresAfterMinutes ?? 1440
+                    : req.ActionExpiresAfterMinutes,
             },
             UpdatedAt = DateTime.UtcNow,
         };
@@ -1591,7 +1596,10 @@ public record AutomationRuleRequest(
     int? MinIntervalMinutes,
     AutomationActionWeight? ActionWeight,
     string? ActionInstruction,
-    bool? RememberInHistory);
+    bool? RememberInHistory,
+    // Время жизни чата правила: -1 (сентинел, не передано) — сохранить текущее при
+    // обновлении / дефолт 1440 при создании; null — бессрочно; N>0 — TTL в минутах.
+    int? ActionExpiresAfterMinutes = -1);
 
 public record AutomationRulesSetRequest(List<AutomationRuleRequest>? Rules);
 

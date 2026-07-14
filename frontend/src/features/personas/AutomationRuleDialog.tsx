@@ -13,6 +13,8 @@ import { Modal, ModalActions, Field, TextField, TextArea, SegmentedControl, Togg
 import type { Persona, PersonaAutomationRule, Project, AutomationTriggerType, AutomationActionWeight, AutomationRuleDto } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
+import { bumpPersonas } from '../../lib/personas';
+import { EXPIRY_PRESETS, DEFAULT_EXPIRY } from '../../lib/expiry';
 
 type ScheduleType = 'daily' | 'weekdays' | 'weekly' | 'interval';
 
@@ -42,6 +44,8 @@ interface FormState {
   weight: AutomationActionWeight;
   instruction: string;
   remember: boolean;
+  ttlEnabled: boolean;
+  ttlMinutes: number;
 }
 
 const TRIGGER_OPTIONS: { value: AutomationTriggerType; label: string }[] = [
@@ -85,6 +89,10 @@ function initialForm(rule: PersonaAutomationRule | null, projects: Project[]): F
     weight: rule?.action.weight ?? 'gate',
     instruction: rule?.action.instruction ?? '',
     remember: rule?.action.rememberInHistory ?? false,
+    // Новое правило — бессрочность по умолчанию 24ч (①); существующее — как сохранено
+    // (null у старого правила означает «бессрочно» либо унаследованный дефолт 1440 сервера)
+    ttlEnabled: rule ? rule.action.expiresAfterMinutes != null : true,
+    ttlMinutes: rule?.action.expiresAfterMinutes ?? DEFAULT_EXPIRY,
   };
 }
 
@@ -143,10 +151,14 @@ export function AutomationRuleDialog({ persona, projects, rule, onClose }: {
       actionWeight: f.weight,
       actionInstruction: f.instruction,
       rememberInHistory: f.remember,
+      actionExpiresAfterMinutes: f.ttlEnabled ? f.ttlMinutes : null,
     };
     try {
       if (rule) await api.personas.updateAutomation(persona.id, rule.id, dto);
       else await api.personas.addAutomation(persona.id, dto);
+      // Дожидаемся обновления стора персон ДО закрытия — иначе повторное открытие
+      // «Изменить» может увидеть снимок до сохранения (гонка с realtime personas_changed)
+      await bumpPersonas();
       onClose();
     } catch (e: any) {
       window.alert(e?.message ?? 'Не удалось сохранить правило');
@@ -285,6 +297,27 @@ export function AutomationRuleDialog({ persona, projects, rule, onClose }: {
             Запоминать в истории персоны
           </span>
         </div>
+      </Field>
+
+      {/* Время жизни чата правила — общий чат, в котором персона отвечает на каждое
+          срабатывание (и Сообщить, и Полный ход пишут в него же) */}
+      <Field label="Время жизни чата" hint="Чат правила удалится сам вместе с историей, если не будет активности выбранное время.">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Toggle checked={f.ttlEnabled} onChange={v => set('ttlEnabled', v)} />
+          <span style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans }}>
+            {f.ttlEnabled ? 'Удаляется автоматически' : 'Хранится бессрочно'}
+          </span>
+        </div>
+        {f.ttlEnabled && (
+          <div style={{ marginTop: 10 }}>
+            <SegmentedControl
+              value={String(f.ttlMinutes)}
+              options={EXPIRY_PRESETS.map(p => ({ value: String(p.minutes), label: p.label }))}
+              onChange={v => set('ttlMinutes', Number(v))}
+              columns={4}
+            />
+          </div>
+        )}
       </Field>
 
       {/* Условие */}

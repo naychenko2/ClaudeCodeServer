@@ -55,6 +55,10 @@ public class AutomationAction
     public string Instruction { get; set; } = "";
     // Записать карточку-итог срабатывания в историю чата (AppendStoredAsync)
     public bool RememberInHistory { get; set; }
+    // Время жизни чата правила (мин от последней активности, как Session.ExpiresAfterMinutes);
+    // null — чат бессрочный. Применяется один раз при создании чата правила
+    // (PersonaAutomationService.EnsureRuleChatAsync), дефолт при создании правила — 1440 (сутки).
+    public int? ExpiresAfterMinutes { get; set; } = 1440;
 }
 
 // Правило автоматизации персоны. Конфигурация (не runtime-состояние): персистится в

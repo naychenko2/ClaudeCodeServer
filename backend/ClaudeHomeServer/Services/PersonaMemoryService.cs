@@ -285,7 +285,10 @@ public sealed class PersonaMemoryService
 
     // Результат recall памяти: markdown-блок для промпта + hits, реально попавшие в блок
     // (для манифеста атрибуции F3 — «персона опирается на…»). Text=null — нечего подмешивать.
-    public sealed record PersonaRecallResult(string? Text, IReadOnlyList<PersonaMemoryHit> Hits);
+    // TeamHits — записи памяти команды проекта (③-3.4), попавшие в тот же блок, отдельно от
+    // личных hits: это чужой тип данных (TeamMemoryEntry, не PersonaMemoryHit), без scoring.
+    public sealed record PersonaRecallResult(string? Text, IReadOnlyList<PersonaMemoryHit> Hits,
+        IReadOnlyList<TeamMemoryEntry> TeamHits);
 
     // Markdown-блок памяти для системного промпта хода (auto-recall персоны).
     // Рабочий фокус (если есть) — всегда первым блоком, без скоринга; при фокусе
@@ -312,14 +315,20 @@ public sealed class PersonaMemoryService
 
         // Память команды проекта (③-3.4): проектная персона recall'ит общую память команды
         string? teamBlock = null;
+        IReadOnlyList<TeamMemoryEntry> teamHits = [];
         if (_teamMemory is not null && persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
         {
-            try { teamBlock = _teamMemory.BuildRecallBlock(ownerId, persona.ProjectId!, query); }
+            try
+            {
+                var teamRecall = _teamMemory.BuildRecallBlock(ownerId, persona.ProjectId!, query);
+                teamBlock = teamRecall.Text;
+                teamHits = teamRecall.Used;
+            }
             catch (Exception ex) { _logger.LogDebug(ex, "team-memory recall {Project}", persona.ProjectId); }
         }
 
         if (top.Count == 0 && focus is null && teamBlock is null)
-            return new PersonaRecallResult(null, []);
+            return new PersonaRecallResult(null, [], []);
 
         var sb = new StringBuilder();
         if (focus is not null)
@@ -345,7 +354,7 @@ public sealed class PersonaMemoryService
             if (sb.Length > 0) sb.AppendLine();
             sb.Append(teamBlock);
         }
-        return new PersonaRecallResult(sb.Length > 0 ? sb.ToString() : null, top);
+        return new PersonaRecallResult(sb.Length > 0 ? sb.ToString() : null, top, teamHits);
     }
 
     // Reinforcement: отметить обращение к записям (LastAccessedAt = now). Dify не трогаем —

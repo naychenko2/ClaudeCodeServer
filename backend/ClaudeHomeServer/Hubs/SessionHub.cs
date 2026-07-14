@@ -73,6 +73,11 @@ public class SessionHub : Hub
         // Кэшированные workflow_progress
         foreach (var msg in _sessions.GetWorkflowProgress(sessionId))
             await Clients.Caller.SendAsync("message", msg with { SessionId = sessionId });
+
+        // Последний манифест recall (F3) — иначе «использовано сейчас» видно только тем,
+        // кто был на связи в момент самого хода (актуально для персон-автоматизаций)
+        if (_sessions.GetLastRecallManifest(sessionId) is { } recall)
+            await Clients.Caller.SendAsync("message", recall with { SessionId = sessionId });
     }
 
     public async Task LeaveSession(string sessionId)

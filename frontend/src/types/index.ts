@@ -966,7 +966,8 @@ export interface TeamMemoryEntry {
   createdAt: string;
 }
 
-// Элемент манифеста recall (F3): что персона подтянула в ход. Kind ∈ memory|note|knowledge.
+// Элемент манифеста recall (F3): что персона подтянула в ход. Kind ∈ memory|note|knowledge|team
+// (team — память команды проекта, ③-3.4).
 export interface RecallItem {
   kind: string;
   ref?: string | null;

@@ -1,11 +1,12 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { Brain, Calendar, Cog, BookOpen, FileText, Folder } from 'lucide-react';
+import { Brain, Calendar, Cog, BookOpen, FileText, Users } from 'lucide-react';
 import { api } from '../lib/api';
 import { usePersonas, personaLabel } from '../lib/personas';
 import { useRecallManifest } from '../lib/recallManifest';
-import type { PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Task } from '../types';
+import type { PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Task, TeamMemoryEntry } from '../types';
 import { C, FONT, R, SHADOW } from '../lib/design';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
+import { BINDING_ICONS, useBindingLabels } from '../features/personas/bindingMeta';
 
 // Вкладка «Контекст персоны» в ArtifactsPanel (①-L2a + ①-L2b): показывает рядом с чатом то,
 // что делает персону «не stateless» — долгую память, привязанные знания и активные задачи,
@@ -16,6 +17,8 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
   const usedNow = useRecallManifest(sessionId ?? null);
   const [mem, setMem] = useState<PersonaMemoryEntry[] | null>(null);
   const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [teamMem, setTeamMem] = useState<TeamMemoryEntry[] | null>(null);
+  const projectId = persona?.scope === 'project' ? persona.projectId : undefined;
 
   useEffect(() => {
     let alive = true;
@@ -25,14 +28,25 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
     return () => { alive = false; };
   }, [personaId]);
 
+  // Память команды проекта (③-3.4) — только у проектных персон, отдельный запрос
+  // (данные общие для всех персон проекта, не персональные)
+  useEffect(() => {
+    let alive = true;
+    setTeamMem(null);
+    if (!projectId) { setTeamMem([]); return; }
+    api.projects.teamMemory(projectId).then(t => { if (alive) setTeamMem(t); }).catch(() => { if (alive) setTeamMem([]); });
+    return () => { alive = false; };
+  }, [projectId]);
+
   if (!persona) {
     return <div style={emptyStyle}>Персона не найдена.</div>;
   }
 
-  const memory = (mem ?? []).slice(0, 6);
-  const active = (tasks ?? []).filter(t => t.status !== 'done').slice(0, 6);
-  const knowledge = (persona.bindings ?? []).filter(b =>
-    b.type === 'knowledge' || b.type === 'notes' || b.type === 'project' || b.type === 'projectPath');
+  const memoryAll = mem ?? [];
+  const activeAll = (tasks ?? []).filter(t => t.status !== 'done');
+  // Все 6 типов привязок (не только источники знаний — Tool/Skill тоже «то, что персона знает»)
+  const bindings = persona.bindings ?? [];
+  const resolveBindingLabel = useBindingLabels(bindings);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '4px 2px' }}>
@@ -50,56 +64,89 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
       {usedNow.length > 0 && (
         <Section title="Использовано сейчас">
           {usedNow.map((it, i) => (
-            <Row key={it.ref ?? i} icon={it.kind === 'memory' ? <Brain size={13} color={C.info} /> : it.kind === 'note' ? <BookOpen size={13} color={C.info} /> : <FileText size={13} color={C.info} />}>
+            <Row key={it.ref ?? i} icon={recallIcon(it.kind)}>
               {it.title}
             </Row>
           ))}
         </Section>
       )}
 
-      <Section title={`Память${mem && mem.length ? ` · ${mem.length}` : ''}`}>
-        {memory.length === 0 ? (
+      <Section title={`Память${memoryAll.length + (teamMem?.length ?? 0) ? ` · ${memoryAll.length + (teamMem?.length ?? 0)}` : ''}`}>
+        {memoryAll.length === 0 ? (
           mem === null ? <Skeleton /> : <Muted>Пока ничего не запомнено.</Muted>
         ) : (
-          memory.map(m => (
-            <Row key={m.id} icon={memoryIcon(m.type)}>{m.text}</Row>
-          ))
+          <ExpandableRows items={memoryAll} previewCount={3}
+            renderRow={m => <Row key={m.id} icon={memoryIcon(m.type)}>{m.text}</Row>} />
+        )}
+        {projectId && (teamMem === null || teamMem.length > 0) && (
+          <>
+            <div style={subsectionTitle}>Команда проекта{teamMem ? ` · ${teamMem.length}` : ''}</div>
+            {teamMem === null ? <Skeleton /> : (
+              <ExpandableRows items={teamMem} previewCount={3}
+                renderRow={e => <Row key={e.id} icon={<Users size={13} color={C.accent} />}>{e.text}</Row>} />
+            )}
+          </>
         )}
       </Section>
 
-      <Section title={`Знает${knowledge.length ? ` · ${knowledge.length}` : ''}`}>
-        {knowledge.length === 0 ? <Muted>Нет привязанных источников.</Muted> : knowledge.map(b => (
-          <Row key={b.id} icon={bindingIcon(b.type)}>{b.condition || bindingLabel(b)}</Row>
-        ))}
+      <Section title={`Знает${bindings.length ? ` · ${bindings.length}` : ''}`}>
+        {bindings.length === 0 ? <Muted>Нет привязанных источников и правил.</Muted> : (
+          <ExpandableRows items={bindings} previewCount={5}
+            renderRow={b => <Row key={b.id} icon={bindingIcon(b.type)}>{b.condition || resolveBindingLabel(b)}</Row>} />
+        )}
       </Section>
 
-      <Section title={`Задачи${active.length ? ` · ${active.length}` : ''}`}>
-        {active.length === 0 ? (
+      <Section title={`Задачи${activeAll.length ? ` · ${activeAll.length}` : ''}`}>
+        {activeAll.length === 0 ? (
           tasks === null ? <Skeleton /> : <Muted>Нет активных задач.</Muted>
         ) : (
-          active.map(t => (
+          <ExpandableRows items={activeAll} previewCount={5} renderRow={t => (
             <Row key={t.id} icon={<span style={{ width: 8, height: 8, borderRadius: '50%', background: C.accent, flexShrink: 0, marginTop: 4 }} />}>
               {t.title}{t.dueDate ? <span style={{ color: C.textMuted }}> · до {t.dueDate}</span> : null}
             </Row>
-          ))
+          )} />
         )}
       </Section>
     </div>
   );
 }
 
+function recallIcon(kind: string) {
+  // team — память команды проекта (③-3.4): выделена акцентным цветом, а не общим info,
+  // чтобы отличаться от личной памяти/заметок персоны с первого взгляда
+  if (kind === 'team') return <Users size={13} color={C.accent} />;
+  if (kind === 'memory') return <Brain size={13} color={C.info} />;
+  if (kind === 'note') return <BookOpen size={13} color={C.info} />;
+  return <FileText size={13} color={C.info} />;
+}
 function memoryIcon(t: PersonaMemoryType) {
   if (t === 'semantic') return <Brain size={13} color={C.info} />;
   if (t === 'episodic') return <Calendar size={13} color={C.info} />;
   return <Cog size={13} color={C.info} />;
 }
-function bindingIcon(type: string) {
-  if (type === 'knowledge') return <BookOpen size={13} color={C.textMuted} />;
-  if (type === 'notes') return <FileText size={13} color={C.textMuted} />;
-  return <Folder size={13} color={C.textMuted} />;
+// Те же иконки/цвета типов, что и в редакторе привязок (bindingMeta) — консистентность
+function bindingIcon(type: PersonaBinding['type']) {
+  return <span style={{ display: 'flex', color: C.textMuted }}>{BINDING_ICONS[type](13)}</span>;
 }
-function bindingLabel(b: PersonaBinding): string {
-  return b.type === 'knowledge' ? 'база' : b.type === 'notes' ? 'заметки' : b.type === 'project' ? 'проект' : 'путь';
+
+// Список с раскрытием: по умолчанию первые previewCount, остальные — по клику «ещё N».
+function ExpandableRows<T>({ items, previewCount, renderRow }: {
+  items: T[]; previewCount: number; renderRow: (item: T) => React.ReactElement;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? items : items.slice(0, previewCount);
+  const hiddenCount = items.length - shown.length;
+  return (
+    <>
+      {shown.map(renderRow)}
+      {hiddenCount > 0 && (
+        <button type="button" onClick={() => setExpanded(true)} style={showMoreStyle}>ещё {hiddenCount}</button>
+      )}
+      {expanded && items.length > previewCount && (
+        <button type="button" onClick={() => setExpanded(false)} style={showMoreStyle}>Свернуть</button>
+      )}
+    </>
+  );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -134,6 +181,14 @@ const emptyStyle: CSSProperties = { padding: 16, color: C.textMuted, fontFamily:
 const sectionCard: CSSProperties = { background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, boxShadow: SHADOW.card, padding: '12px 14px' };
 const sectionTitle: CSSProperties = { fontSize: 11, fontWeight: 700, color: C.textSecondary, fontFamily: FONT.sans, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 };
 const rowTextStyle: CSSProperties = { fontSize: 12.5, color: C.textPrimary, fontFamily: FONT.sans, lineHeight: 1.45, flex: 1, minWidth: 0 };
+const subsectionTitle: CSSProperties = {
+  fontSize: 10.5, fontWeight: 700, color: C.textMuted, fontFamily: FONT.sans,
+  textTransform: 'uppercase', letterSpacing: '0.03em', margin: '10px 0 6px',
+};
+const showMoreStyle: CSSProperties = {
+  alignSelf: 'flex-start', border: 'none', background: 'none', padding: 0, marginTop: 2,
+  fontSize: 12, fontFamily: FONT.sans, color: C.accent, cursor: 'pointer',
+};
 function skeletonBar(w: number): CSSProperties {
   return { height: 11, width: `${w}%`, background: C.bgInset, borderRadius: R.sm, opacity: 0.6 };
 }

@@ -18,6 +18,10 @@ public class SessionManager
         public TurnAccumulator? Accumulator;
         // Кэш последних workflow_progress для replay при подключении нового клиента
         public Dictionary<string, WorkflowProgressMessage> WorkflowProgress = new();
+        // Последний манифест recall (F3) — как и workflow_progress, транзитное WS-событие;
+        // без кэша клиент, открывший чат уже после хода (или переподключившийся), никогда
+        // не увидит «использовано сейчас», хотя ход реально опирался на память/команду.
+        public RecallManifestMessage? LastRecallManifest;
         // Текст ответа текущего хода — для поиска маркера завершения цикла «до готово»
         public System.Text.StringBuilder LoopTurnText = new();
         // Ход завершился ошибкой (result error / error) — цикл не продолжаем
@@ -206,15 +210,16 @@ public class SessionManager
         return new NotesMcpContext(ResolveTasksApiUrl(), entry.Token, projectId);
     }
 
-    // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes)
-    private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId)
+    // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes).
+    // projectId — только у проектных персон (③-3.4: даёт доступ к team_memory_* команды).
+    private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId, string? projectId)
     {
         var entry = _notesTokens.AddOrUpdate(ownerId,
             id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
             (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
-        return new MemoryMcpContext(ResolveTasksApiUrl(), entry.Token, personaId);
+        return new MemoryMcpContext(ResolveTasksApiUrl(), entry.Token, personaId, projectId);
     }
 
     // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок релевантных
@@ -242,8 +247,10 @@ public class SessionManager
                 if (completed != recallTask) return null;   // таймаут — ход без recall
                 var recall = await recallTask;
                 if (recall?.Text is null) return null;
-                // Манифест: hits памяти → айтемы (F3)
-                var items = recall.Hits.Select(h => new RecallItem("memory", h.Id, h.Text, null)).ToList();
+                // Манифест: hits личной памяти + команды проекта → айтемы (F3)
+                var items = recall.Hits.Select(h => new RecallItem("memory", h.Id, h.Text, null))
+                    .Concat(recall.TeamHits.Select(e => new RecallItem("team", e.Id, e.Text, null)))
+                    .ToList();
                 return new RecallBlock(recall.Text, items);
             }
             catch (Exception ex)
@@ -629,7 +636,11 @@ public class SessionManager
         };
         // Долгая память — только если включена у персоны
         if (persona.MemoryEnabled)
-            return (prompt, BuildMemoryContext(ownerId, persona.Id), BuildPersonaRecallProvider(ownerId, persona.Id), persona);
+        {
+            var teamProjectId = persona.Scope == PersonaScope.Project ? persona.ProjectId : null;
+            return (prompt, BuildMemoryContext(ownerId, persona.Id, teamProjectId),
+                BuildPersonaRecallProvider(ownerId, persona.Id), persona);
+        }
         return (prompt, null, null, persona);
     }
 
@@ -1411,6 +1422,12 @@ public class SessionManager
         return entry.WorkflowProgress.Values.ToList();
     }
 
+    // Последний манифест recall (F3) сессии — replay при подключении клиента (JoinSession),
+    // как и у workflow_progress: без этого «использовано сейчас» видно только тем, кто был
+    // на связи в момент самого хода.
+    public RecallManifestMessage? GetLastRecallManifest(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) ? entry.LastRecallManifest : null;
+
     public Session? GetSessionInfo(string sessionId)
     {
         _sessions.TryGetValue(sessionId, out var entry);
@@ -1465,6 +1482,9 @@ public class SessionManager
                 case PlanReviewMessage m:
                     acc.OnPlanReview(m.RequestId, m.Plan);
                     await acc.SaveSnapshotAsync(_history);
+                    break;
+                case RecallManifestMessage m:
+                    if (entry is not null) entry.LastRecallManifest = m;
                     break;
                 case ResultMessage m:
                     await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history);

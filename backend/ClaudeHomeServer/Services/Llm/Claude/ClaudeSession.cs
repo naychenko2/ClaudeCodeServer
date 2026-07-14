@@ -246,6 +246,8 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["MEMORY_API_URL"] = _memoryMcp!.ApiUrl,
                         ["MEMORY_API_TOKEN"] = _memoryMcp.Token,
                         ["MEMORY_PERSONA_ID"] = _memoryMcp.PersonaId,
+                        // ③-3.4: проектная персона получает team_memory_* — общая память команды
+                        ["MEMORY_PROJECT_ID"] = _memoryMcp.ProjectId ?? "",
                     },
                 };
             }
@@ -817,6 +819,13 @@ public class ClaudeSession : ILlmSessionAdapter
                     "предпочтения пользователя; episodic — что было/обсуждалось в прошлых разговорах; procedural — выученные " +
                     "приёмы и правила. Когда узнаёшь что-то важное о пользователе или договариваешься о чём-то на будущее — " +
                     "запоминай это (memory_remember). Когда нужно вспомнить контекст — ищи в памяти (memory_search).";
+                if (!string.IsNullOrEmpty(_memoryMcp.ProjectId))
+                    memoryHint +=
+                        " Кроме личной памяти у тебя есть память КОМАНДЫ проекта — общие факты и договорённости, " +
+                        "которые видят и могут править ВСЕ персоны команды (не только ты): mcp__memory__team_memory_remember " +
+                        "(добавить общий факт), team_memory_list (посмотреть, что уже знает команда), team_memory_forget " +
+                        "(удалить устаревшее). Пиши туда то, что относится к проекту в целом и полезно другим персонам " +
+                        "команды — а не то, что касается лично тебя (это остаётся в memory_remember).";
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? memoryHint
                     : basePrompt + "\n\n" + memoryHint;

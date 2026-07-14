@@ -38,15 +38,19 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
     return () => { alive = false; };
   }, [projectId]);
 
+  // Все 6 типов привязок (не только источники знаний — Tool/Skill тоже «то, что персона знает»)
+  // Хук вызываем безусловно (до раннего return) — иначе на кадре, где persona ещё не
+  // подгружена стором usePersonas(), число вызванных хуков меняется между рендерами
+  // и React падает с «Rendered more hooks than during the previous render» (#310).
+  const bindings = persona?.bindings ?? [];
+  const resolveBindingLabel = useBindingLabels(bindings);
+
   if (!persona) {
     return <div style={emptyStyle}>Персона не найдена.</div>;
   }
 
   const memoryAll = mem ?? [];
   const activeAll = (tasks ?? []).filter(t => t.status !== 'done');
-  // Все 6 типов привязок (не только источники знаний — Tool/Skill тоже «то, что персона знает»)
-  const bindings = persona.bindings ?? [];
-  const resolveBindingLabel = useBindingLabels(bindings);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '4px 2px' }}>

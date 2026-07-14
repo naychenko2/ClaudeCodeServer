@@ -77,10 +77,12 @@ export function ProjectPersonasPanel({ project, selectedId, onSelect, onNew, onS
 
 // Центральная зона проектных персон: тулбар (аватар + подпись + Удалить/Поговорить/Сохранить)
 // над широкой двухколоночной формой профиля. personaId=null — создание.
-export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, onSelectPersona, onCleared, onBack }: {
+export function ProjectPersonaPane({ project, personaId, creating, initialView, onOpenChat, onSelectPersona, onCleared, onBack }: {
   project: Project;
   personaId: string | null;
   creating: boolean;
+  // Вкладка, на которую нужно сразу открыться (бэйдж автоматизации в чате)
+  initialView?: PersonaView | null;
   // Открыть созданный «Поговорить» чат на месте (переключить на «Чаты» и выбрать сессию)
   onOpenChat: (session: Session) => void;
   // Родитель выбирает персону (после создания переключаемся с «создания» на «редактирование»)
@@ -94,11 +96,11 @@ export function ProjectPersonaPane({ project, personaId, creating, onOpenChat, o
   const isMobile = useIsMobile();
 
   // Активный вид (для существующей персоны): профиль (дефолт), умения, память, задачи.
-  // Смена персоны в списке сбрасывает вид обратно на профиль.
-  const [view, setView] = useState<PersonaView>('preview');
+  // Смена персоны в списке сбрасывает вид обратно на профиль (или на initialView, если задан).
+  const [view, setView] = useState<PersonaView>(initialView ?? 'preview');
   // Развёрнута ли форма правки профиля (внутри вида «Профиль»)
   const [editing, setEditing] = useState(false);
-  useEffect(() => { setView('preview'); setEditing(false); }, [personaId]);
+  useEffect(() => { setView(initialView ?? 'preview'); setEditing(false); }, [personaId, initialView]);
 
   // Создание: сначала экран быстрого создания по промпту, «Заполнить вручную» — пустая форма.
   // Сбрасываем на быстрый экран при каждом новом входе в режим создания.

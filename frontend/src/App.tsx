@@ -485,6 +485,42 @@ export default function App() {
       }
       return
     }
+    // Диплинк на персону внутри проекта (#/project/{id}/persona/{personaId}) — бэйдж
+    // автоматизации в чате проектной персоны. Тот же канал, что у задачи (cc_pending_task).
+    if (target?.screen === 'project' && target.projectId && target.personaId) {
+      const pid = target.projectId
+      sessionStorage.setItem('cc_pending_persona', `${pid}|${target.personaId}`)
+      if (target.personaView) sessionStorage.setItem('cc_pending_persona_view', target.personaView)
+      else sessionStorage.removeItem('cc_pending_persona_view')
+      if (effectiveHubTab === 'projects' && project?.id === pid) {
+        window.dispatchEvent(new Event('cc-pending-persona'))
+      } else if (project?.id === pid) {
+        localStorage.setItem(HUB_TAB_KEY, 'projects')
+        setHubTab('projects')
+      } else {
+        api.projects.list()
+          .then(list => {
+            const p = list.find(x => x.id === pid)
+            if (p) {
+              localStorage.setItem(HUB_TAB_KEY, 'projects')
+              setHubTab('projects')
+              openProject(p)
+            }
+          })
+          .catch(() => {})
+      }
+      return
+    }
+    // Диплинк на конкретную персону в глобальном разделе «Персоны» (#/personas/{id}) —
+    // бэйдж автоматизации в чате глобальной персоны. Тот же канал, что у заметок ниже.
+    if (target?.screen === 'personas' && target.personaId) {
+      sessionStorage.setItem('cc_pending_persona_id', target.personaId)
+      if (target.personaView) sessionStorage.setItem('cc_pending_persona_view', target.personaView)
+      else sessionStorage.removeItem('cc_pending_persona_view')
+      if (effectiveHubTab === 'personas') window.dispatchEvent(new Event('cc-open-persona'))
+      else switchHubTab('personas')
+      return
+    }
     // Диплинк на заметку (#/notes/{id}) — бриф дня, итог сессии.
     // Тот же канал, что у «открыть в заметках» из чата: cc_pending_note_id + cc-open-note.
     if (target?.screen === 'notes' && target.noteId) {

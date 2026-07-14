@@ -28,6 +28,7 @@ import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
+import type { PersonaView } from '../features/personas/PersonaToolbar';
 import { TeamCommandCenter } from '../features/personas/TeamCommandCenter';
 
 interface Props {
@@ -147,9 +148,13 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const personasMode = leftTab === 'personas';
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
   const [personaCreating, setPersonaCreating] = useState(false);
+  // Вкладка студии персоны, на которую нужно сразу открыться (бэйдж автоматизации в чате) —
+  // одноразовая, сбрасывается любым обычным выбором персоны
+  const [pendingPersonaView, setPendingPersonaView] = useState<PersonaView | null>(null);
   const handlePersonaSelect = (id: string) => {
     setSelectedPersonaId(id);
     setPersonaCreating(false);
+    setPendingPersonaView(null);
     navPush({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, persona: id });
     if (isMobile) setMobileView('chat');
   };
@@ -397,6 +402,36 @@ const windowWidth = useWindowWidth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
+  // Диплинк на персону вкладки «Команда»: App положил «projectId|personaId» в sessionStorage
+  // (бэйдж автоматизации в чате проектной персоны — см. lib/chatOrigin.ts).
+  useEffect(() => {
+    const consumePendingPersona = () => {
+      const raw = sessionStorage.getItem('cc_pending_persona');
+      if (!raw) return;
+      const sep = raw.indexOf('|');
+      const [pid, pending] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
+      if (pid !== project.id) return;
+      sessionStorage.removeItem('cc_pending_persona');
+      const view = sessionStorage.getItem('cc_pending_persona_view');
+      sessionStorage.removeItem('cc_pending_persona_view');
+      setLeftTab('personas');
+      setSelectedPersonaId(pending);
+      setPersonaCreating(false);
+      setPendingPersonaView(view === 'automation' ? 'automation' : null);
+      setOpenFile(null);
+      if (window.matchMedia(MOBILE_QUERY).matches) {
+        setMobileView('chat');
+        navPush({ screen: 'project', project, view: 'chat', file: null, task: null, persona: pending });
+      } else {
+        navPush({ screen: 'project', project, view: 'sidebar', file: null, task: null, persona: pending });
+      }
+    };
+    consumePendingPersona();
+    window.addEventListener('cc-pending-persona', consumePendingPersona);
+    return () => window.removeEventListener('cc-pending-persona', consumePendingPersona);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+
   // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
   useEffect(() => {
     const consumePendingProjectChat = async () => {
@@ -585,6 +620,7 @@ const windowWidth = useWindowWidth();
         setLeftTab('personas');
         setSelectedPersonaId(s.persona ?? null);
         setPersonaCreating(false);
+        setPendingPersonaView(null);
       }
       // Активный чат — восстанавливаем через существующий механизм pending (sessionStorage + событие)
       if (s.chatId) {
@@ -849,7 +885,7 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {personasMode
             ? ((selectedPersonaId || personaCreating)
-                ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />
+                ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} initialView={pendingPersonaView} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />
                 : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />)
             : tasksMode
             ? (selectedTask
@@ -980,7 +1016,7 @@ const windowWidth = useWindowWidth();
               {collapsedBar}
               <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                 {(selectedPersonaId || personaCreating)
-                  ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} />
+                  ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} initialView={pendingPersonaView} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} />
                   : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />}
               </div>
             </div>

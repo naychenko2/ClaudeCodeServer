@@ -49,6 +49,7 @@ export interface HashTarget {
   board?: boolean;
   noteId?: string;
   personaId?: string;
+  personaView?: 'automation'; // сразу открыть вкладку студии персоны (бэйдж автоматизации в чате)
   knowledgeId?: string;
   chatId?: string;   // диплинк на конкретный чат: #/chats/{id} — глобальный, #/project/{id}/chat/{chatId} — проектный
 }
@@ -80,6 +81,7 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
     case 'agents': {
       const target: HashTarget = { screen: 'personas' };
       if (parts[1]) target.personaId = decodeURIComponent(parts[1]);
+      if (parts[2] === 'automation') target.personaView = 'automation';
       return target;
     }
     case 'knowledge': {
@@ -97,7 +99,10 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
       if (parts[2] === 'task' && parts[3]) target.taskId = parts[3];
       else if (parts[2] === 'file' && parts[3]) target.file = decodeURIComponent(parts.slice(3).join('/'));
       else if (parts[2] === 'board') target.board = true;
-      else if (parts[2] === 'persona' && parts[3]) target.personaId = parts[3];
+      else if (parts[2] === 'persona' && parts[3]) {
+        target.personaId = parts[3];
+        if (parts[4] === 'automation') target.personaView = 'automation';
+      }
       return target;
     }
     default: return null;

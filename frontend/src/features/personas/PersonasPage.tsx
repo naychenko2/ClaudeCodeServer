@@ -46,6 +46,9 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const allPersonas = usePersonas();
   const personas = useMemo(() => allPersonas.filter(p => p.scope === 'global'), [allPersonas]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Вкладка студии, на которую нужно сразу открыться (бэйдж автоматизации в чате) —
+  // одноразовая, сбрасывается любым обычным выбором персоны из списка
+  const [pendingView, setPendingView] = useState<PersonaView | null>(null);
   const [mobileView, setMobileView] = useState<'list' | 'card'>('list');
   // Режим создания новой персоны: пустая форма прямо в контентной зоне
   const [creating, setCreating] = useState(false);
@@ -57,10 +60,31 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   useEffect(() => { api.projects.list().then(setProjects).catch(() => {}); }, []);
 
-  // Диплинк #/personas/{id} (старый #/agents/{id} парсится как алиас)
+  // Диплинк #/personas/{id} (старый #/agents/{id} парсится как алиас) — прямой заход/обновление
+  // страницы. Плюс pending-канал cc_pending_persona_id + событие cc-open-persona — навигация
+  // изнутри приложения (бэйдж автоматизации в чате глобальной персоны, см. lib/chatOrigin.ts),
+  // когда раздел «Персоны» уже смонтирован и hash просто переключился на «#/personas» без id.
   useEffect(() => {
-    const t = parseHash();
-    if (t?.screen === 'personas' && t.personaId) { setSelectedId(t.personaId); setMobileView('card'); }
+    const consume = () => {
+      const pending = sessionStorage.getItem('cc_pending_persona_id');
+      if (pending) {
+        sessionStorage.removeItem('cc_pending_persona_id');
+        const view = sessionStorage.getItem('cc_pending_persona_view');
+        sessionStorage.removeItem('cc_pending_persona_view');
+        setSelectedId(pending); setMobileView('card');
+        setPendingView(view === 'automation' ? 'automation' : null);
+        navPush({ screen: 'personas', persona: pending });
+        return;
+      }
+      const t = parseHash();
+      if (t?.screen === 'personas' && t.personaId) {
+        setSelectedId(t.personaId); setMobileView('card');
+        setPendingView(t.personaView === 'automation' ? 'automation' : null);
+      }
+    };
+    consume();
+    window.addEventListener('cc-open-persona', consume);
+    return () => window.removeEventListener('cc-open-persona', consume);
   }, []);
 
   // Back/forward браузера внутри раздела «Персоны»
@@ -88,14 +112,14 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
 
   const selectPersona = (id: string) => {
     setCreating(false);
-    setSelectedId(id); setMobileView('card');
+    setSelectedId(id); setMobileView('card'); setPendingView(null);
     navPush({ screen: 'personas', persona: id });
     // В режиме drawer после выбора — закрываем оверлей (как в «Заметках»)
     setSidebarMode(m => m === 'open' ? 'collapsed' : m);
   };
   const clearSelection = () => {
     setCreating(false);
-    setSelectedId(null); setMobileView('list');
+    setSelectedId(null); setMobileView('list'); setPendingView(null);
     if (getNav()?.persona) navReplace({ screen: 'personas' });
   };
   // Кнопка «Новая персона» — пустая форма создания в контентной зоне
@@ -193,6 +217,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         persona={selected}
         projects={projects}
         talking={talking}
+        initialView={pendingView}
         onDelete={() => onDelete(selected)}
         onTalk={() => talk(selected)}
         onOpenSession={openSession}
@@ -334,10 +359,12 @@ function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {
 // Студия персоны: центральная область = обзор-визитка (дефолт), инлайн-форма
 // профиля ИЛИ долгая память. Чата здесь нет — разговор живёт среди обычных
 // чатов (кнопка «Поговорить»).
-function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSession, onBack, isMobile }: {
+function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTalk, onOpenSession, onBack, isMobile }: {
   persona: Persona;
   projects: Project[];
   talking: boolean;
+  // Вкладка, на которую нужно сразу открыться (бэйдж автоматизации в чате) — только при монтировании
+  initialView?: PersonaView | null;
   onDelete: () => void;
   onTalk: () => void;
   onOpenSession: (s: Session) => void;
@@ -346,7 +373,7 @@ function PersonaStudio({ persona, projects, talking, onDelete, onTalk, onOpenSes
 }) {
   // Активный вид: профиль (визитка/форма), умения, память или задачи.
   // Компонент перемонтируется по key={persona.id} — смена персоны сама сбрасывает вид на профиль.
-  const [view, setView] = useState<PersonaView>('preview');
+  const [view, setView] = useState<PersonaView>(initialView ?? 'preview');
   // Развёрнута ли форма правки профиля (внутри вида «Профиль»). key={persona.id}
   // перемонтирует компонент, так что смена персоны сбрасывает editing сама.
   const [editing, setEditing] = useState(false);

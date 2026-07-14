@@ -14,7 +14,7 @@ import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { agentDotColor } from './AgentSelector';
 import { FilterBar } from './FilterBar';
 import { ChatOriginBadge } from './ChatOriginBadge';
-import { resolveChatOrigin } from '../lib/chatOrigin';
+import { resolveChatOrigin, loadVisibleOrigins, persistVisibleOrigins } from '../lib/chatOrigin';
 
 // Время создания чата: сегодня — часы:минуты, иначе — дата (группы и так разбиты по дням)
 function chatTime(iso: string): string {
@@ -46,8 +46,9 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
 
   // === Фильтры списка чатов ===
-  // Дефолт: обычные и автоматизация видны, чаты-исполнители задач скрыты (шум)
-  const [visibleOrigins, setVisibleOrigins] = useState<Set<Session['origin']>>(() => new Set(['manual', 'automation']));
+  // Тип чата — персистится в localStorage отдельно от проектных списков (scope 'global')
+  const [visibleOrigins, setVisibleOriginsState] = useState<Set<Session['origin']>>(() => loadVisibleOrigins('global'));
+  const setVisibleOrigins = (v: Set<Session['origin']>) => { setVisibleOriginsState(v); persistVisibleOrigins('global', v); };
   const [activeOnly, setActiveOnly] = useState(false);
   const [filterPersonaId, setFilterPersonaId] = useState<string | null>(null);
 

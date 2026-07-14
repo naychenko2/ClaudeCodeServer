@@ -39,16 +39,18 @@ public sealed class NoteTriggerSource(NotesService notes) : ITriggerSource
         }
         var list = filtered.ToList();
 
-        var prev = ctx.State.NoteHashes ?? new Dictionary<string, string>();
+        var prev = ctx.State.NoteHashes;
         var cur = new Dictionary<string, string>();
         var changed = new List<NoteSummary>();
         foreach (var n in list)
         {
             var hash = Hash($"{n.Title}\n{string.Join(',', n.Tags)}\n{n.UpdatedAt}");
             cur[n.Id] = hash;
-            if (!prev.TryGetValue(n.Id, out var old) || old != hash) changed.Add(n);
+            if (prev is not null && (!prev.TryGetValue(n.Id, out var old) || old != hash)) changed.Add(n);
         }
         ctx.State.NoteHashes = cur;
+        // Первое наблюдение (prev is null): базовый снапшот без эмита — иначе «изменёнными»
+        // считались бы все существующие заметки (guard как у GitCommit)
 
         if (changed.Count == 0) return Task.FromResult<IReadOnlyList<TriggerEvent>>(Array.Empty<TriggerEvent>());
 

@@ -32,16 +32,19 @@ public sealed class PersonaAutomationService : IDisposable
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaAutomationService> _log;
 
-    // sessionId → ruleId: ходы, запущенные движком. По ResultMessage шлём «персона написала вам».
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _inflight = new();
-
-    // Накопленные события файловых триггеров: ruleId → [относительные пути].
-    // Для батчинга: файлы скапливаются в течение minInterval (1 мин для файлов,
-    // 5 мин для остальных), затем отправляются одним ходом со сводкой по всем.
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, List<string>> _pendingFileEvents = new();
-
     private int DefaultMinIntervalMinutes => _config.GetValue("Persona:AutomationMinIntervalMinutes", 5);
     private int HourlyCap => _config.GetValue("Persona:AutomationHourlyCap", 8);
+
+    // Дефолтный кулдаун File-триггера короче общего: изменения файлов копятся в самом дереве
+    // проекта и один скан после кулдауна отдаёт их единым батч-событием.
+    private const int FileDefaultMinIntervalMinutes = 1;
+
+    // Единый расчёт кулдауна правила. Тик и FireAsync ОБЯЗАНЫ считать одинаково: рассинхрон
+    // дефолтов приводил к тому, что тик отдавал батч через 1 мин, а FireAsync резал его по
+    // 5 мин как throttled — накопленные события файлов терялись.
+    private int EffectiveMinIntervalMinutes(PersonaAutomationRule rule) =>
+        rule.Condition?.MinIntervalMinutes
+        ?? (rule.Trigger.Type == AutomationTriggerType.File ? FileDefaultMinIntervalMinutes : DefaultMinIntervalMinutes);
 
     public PersonaAutomationService(PersonaManager personas, SessionManager sessions,
         PushService push, IHubContext<SessionHub> hub,
@@ -83,56 +86,31 @@ public sealed class PersonaAutomationService : IDisposable
 
                 var state = _state.GetRule(persona.Id, rule.Id);
 
-                // === File-триггер: батч-режим (1 мин кд, накопление) ===
-                // Для файлов pre-throttling НЕ применяем — всегда сканируем дерево и обновляем
-                // снапшот, чтобы не потерять изменения. Если правило в кд — накапливаем пути
-                // в _pendingFileEvents. Когда кд истекает — отправляем ОДИН ход со всеми
-                // накопленными файлами за раз.
-                if (rule.Trigger.Type == AutomationTriggerType.File)
-                {
-                    var ctx = new TriggerContext(user, persona, rule, tz, nowUtc, state);
-                    IReadOnlyList<TriggerEvent> events;
-                    try { events = await source.EvaluateAsync(ctx, ct); }
-                    catch (Exception ex) { _log.LogWarning(ex, "Ошибка File-триггера {Rule}", rule.Id); continue; }
-                    if (events.Count > 0)
-                    {
-                        _state.Save();  // персистим снапшот (чтобы не переобнаруживать те же файлы)
-                        AccumulateFileEvents(rule.Id, events);
-                    }
-
-                    var fileMinInterval = rule.Condition?.MinIntervalMinutes ?? 1;
-                    bool inCooldown = state.LastFiredAt is { } last && nowUtc - last < TimeSpan.FromMinutes(fileMinInterval);
-                    var pending = _pendingFileEvents.GetOrAdd(rule.Id, _ => new List<string>());
-
-                    // Всё ещё в кд — ничего не делаем, файлы копятся в pending
-                    if (inCooldown) continue;
-
-                    // Кд истёк — есть что отправить?
-                    if (pending.Count == 0) continue;
-
-                    // Формируем сводное событие из всех накопленных путей
-                    var merged = MergeFileEvents(rule, pending);
-                    pending.Clear();
-                    _ = FireAsync(persona, rule, tz, merged, CancellationToken.None);
-                    continue;
-                }
-
-                // === Остальные триггеры: pre-throttling с дефолтным кд ===
-                var minInterval = rule.Condition?.MinIntervalMinutes ?? DefaultMinIntervalMinutes;
+                // Pre-throttle ДО опроса источника — единый для всех poll-типов. Снапшот-источники
+                // (File/Note/GitCommit/TaskStatus) продвигают снапшот внутри EvaluateAsync, поэтому
+                // отбрасывать событие ПОСЛЕ детекции нельзя — оно уничтожается безвозвратно.
+                // Кулдаун, тихие часы и потолок в час откладывают саму детекцию: снапшот не тронут,
+                // изменения обнаружатся первым разрешённым тиком. Для File это же экономит дорогой
+                // обход дерева проекта: скан идёт не чаще кулдауна, а изменения за время ожидания
+                // копятся в самом дереве и выходят одним сводным батч-событием.
+                if (InQuietWindow(rule, TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz))) continue;
+                var minInterval = EffectiveMinIntervalMinutes(rule);
                 if (state.LastFiredAt is { } lastFired && nowUtc - lastFired < TimeSpan.FromMinutes(minInterval))
                     continue;
+                if (!_state.HasHourlyBudget(persona.Id, HourlyCap, nowUtc)) continue;
 
-                var ctx2 = new TriggerContext(user, persona, rule, tz, nowUtc, state);
-                IReadOnlyList<TriggerEvent> events2;
-                try { events2 = await source.EvaluateAsync(ctx2, ct); }
+                var ctx = new TriggerContext(user, persona, rule, tz, nowUtc, state);
+                IReadOnlyList<TriggerEvent> events;
+                try { events = await source.EvaluateAsync(ctx, ct); }
                 catch (Exception ex)
                 {
                     _log.LogWarning(ex, "Ошибка источника {Type} правила {Rule}", rule.Trigger.Type, rule.Id);
                     continue;
                 }
-                if (events2.Count > 0) _state.Save();
+                if (events.Count == 0) continue;
+                _state.Save();  // персистим продвинутый снапшот (чтобы не переобнаруживать то же)
 
-                foreach (var ev in events2)
+                foreach (var ev in events)
                     _ = FireAsync(persona, rule, tz, ev, CancellationToken.None);
             }
         }
@@ -171,21 +149,29 @@ public sealed class PersonaAutomationService : IDisposable
         var state = _state.GetRule(persona.Id, rule.Id);
         var now = DateTime.UtcNow;
 
-        // 0. Троттлинг (fail-fast до LLM)
+        // 0-1. Троттлинг (fail-fast до LLM) + mark-fired ДО запуска. Проверка и установка
+        // LastFiredAt — атомарно под локом state: Mention (push) и тик конкурируют за одно
+        // правило, без лока два потока проходили throttle-проверку и дублировали реакцию.
         if (!bypassThrottle)
         {
             var localNow = TimeZoneInfo.ConvertTimeFromUtc(now, tz);
             if (InQuietWindow(rule, localNow)) { MarkResult(state, "quiet"); return; }
-            var minInterval = rule.Condition?.MinIntervalMinutes ?? DefaultMinIntervalMinutes;
-            if (state.LastFiredAt is { } last && now - last < TimeSpan.FromMinutes(minInterval))
-            { MarkResult(state, "throttled"); return; }
-            if (!_state.TryConsumeHourly(persona.Id, HourlyCap, now))
-            { MarkResult(state, "throttled"); return; }
+            var minInterval = EffectiveMinIntervalMinutes(rule);
+            lock (state)
+            {
+                if (state.LastFiredAt is { } last && now - last < TimeSpan.FromMinutes(minInterval))
+                { MarkResult(state, "throttled"); return; }
+                if (!_state.TryConsumeHourly(persona.Id, HourlyCap, now))
+                { MarkResult(state, "throttled"); return; }
+                state.LastFiredAt = now;
+                state.RunCount++;
+            }
         }
-
-        // 1. Mark-fired ДО запуска (идемпотентность, как у удалённой PersonaProactiveService)
-        state.LastFiredAt = now;
-        state.RunCount++;
+        else
+        {
+            state.LastFiredAt = now;
+            state.RunCount++;
+        }
         _state.Save();
 
         // Перечитать персону/правило — могли удалить/выключить между тиком и запуском
@@ -205,12 +191,10 @@ public sealed class PersonaAutomationService : IDisposable
         catch (Exception ex) { _log.LogWarning(ex, "создание чата правила {Rule}", rule.Id); MarkResult(state, "error"); return; }
 
         // 4. Промпт → ход от лица персоны (контекст срабатывания — внутри сообщения чата)
-        _inflight[targetSessionId] = freshRule.Id;
         try { await _sessions.SendMessageAsync(targetSessionId, prompt, [], auto: true, senderPersonaId: freshPersona.Id); }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "send правило {Rule}", rule.Id);
-            _inflight.TryRemove(targetSessionId, out _);
             // Чат мог быть удалён/сломан — сбросим ссылку, чтобы следующий ход создал свежий
             if (state.SessionId == targetSessionId) { state.SessionId = null; _state.Save(); }
             MarkResult(state, "error");
@@ -248,7 +232,6 @@ public sealed class PersonaAutomationService : IDisposable
     // Все типы сообщений, требующие внимания пользователя: ход завершён, задан вопрос,
     // запрошено разрешение на инструмент, представлен план. Уведомление шлём ТОЛЬКО если
     // пользователь не смотрит этот чат (нет активных SignalR-подписок в группе сессии).
-    // Снимаем _inflight только на ResultMessage — остальные паузы не отменяют бег.
     private async Task OnSessionMessageAsync(Session session, ServerMessage msg)
     {
         if (msg is not (ResultMessage or AskQuestionMessage or PermissionRequestMessage or PlanReviewMessage)) return;
@@ -268,7 +251,6 @@ public sealed class PersonaAutomationService : IDisposable
             string title, body;
             if (msg is ResultMessage)
             {
-                _inflight.TryRemove(session.Id, out _);
                 title = $"{label} написала вам";
                 body = "Новое сообщение по правилу автоматизации";
             }
@@ -313,7 +295,6 @@ public sealed class PersonaAutomationService : IDisposable
                 _state.Save();
             }
         }
-        _inflight.TryRemove(session.Id, out _);
     }
 
     // ─── Постановка-промпт (по образцу TaskExecutionService.BuildPrompt) ────────
@@ -356,36 +337,6 @@ public sealed class PersonaAutomationService : IDisposable
         sb.AppendLine("- Соблюдай свой характер и зону контекста.");
         sb.AppendLine("- Если нужно уточнить что-то у пользователя — используй инструмент AskUserQuestion с вариантами ответов (не пиши вопросы текстом). Он покажет ему кнопки для выбора.");
         return sb.ToString();
-    }
-
-    // ─── Хелперы батчинга файловых событий ───────────────────────────────────────
-
-    // Накопить пути из событий файлового триггера
-    private void AccumulateFileEvents(string ruleId, IReadOnlyList<TriggerEvent> events)
-    {
-        var list = _pendingFileEvents.GetOrAdd(ruleId, _ => new List<string>());
-        foreach (var ev in events)
-        {
-            if (ev.Details is null) continue;
-            if (ev.Details.TryGetValue("created", out var created))
-                foreach (var p in created.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                    if (!list.Contains(p)) list.Add(p);
-            if (ev.Details.TryGetValue("changed", out var changed))
-                foreach (var p in changed.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                    if (!list.Contains(p)) list.Add(p);
-        }
-    }
-
-    // Сформировать сводное TriggerEvent из накопленных путей
-    private static TriggerEvent MergeFileEvents(PersonaAutomationRule rule, List<string> paths)
-    {
-        var created = paths.Count;
-        var summary = $"Файлы в проекте изменились: {created} изменений";
-        var details = new Dictionary<string, string>
-        {
-            ["created"] = string.Join("\n", paths.Take(15)) + (paths.Count > 15 ? $"\n…и ещё {paths.Count - 15}" : ""),
-        };
-        return new TriggerEvent(rule.Id, AutomationTriggerType.File, summary, details);
     }
 
     private static string TriggerLabel(PersonaAutomationRule rule) => rule.Trigger.Type switch
@@ -432,6 +383,8 @@ public sealed class PersonaAutomationService : IDisposable
             paths.AddRange(created.Split('\n', StringSplitOptions.RemoveEmptyEntries));
         if (ev.Details?.TryGetValue("changed", out var changed) == true)
             paths.AddRange(changed.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        // Сентинел усечения из источника («…и ещё N») — не путь, в список файлов не берём
+        paths.RemoveAll(p => p.StartsWith("…и ещё", StringComparison.Ordinal));
         if (paths.Count == 0) { sb.AppendLine("Файлы не переданы."); return sb.ToString(); }
 
         sb.AppendLine(paths.Count == 1 ? "Файл:" : $"Файлы ({paths.Count}):");

@@ -34,7 +34,14 @@ public sealed class FileTriggerSource(ProjectManager projects, ILogger<FileTrigg
             return Task.FromResult<IReadOnlyList<TriggerEvent>>(Array.Empty<TriggerEvent>());
 
         var cur = BuildSnapshot(project.RootPath, glob);
-        var prev = ctx.State.FileSnapshot ?? new Dictionary<string, long>();
+        var prev = ctx.State.FileSnapshot;
+        // Первое наблюдение: только базовый снапшот, без эмита — иначе «созданным» считался бы
+        // весь проект и новое правило сразу запускало бы дорогой ход (guard как у GitCommit)
+        if (prev is null)
+        {
+            ctx.State.FileSnapshot = cur;
+            return Task.FromResult<IReadOnlyList<TriggerEvent>>(Array.Empty<TriggerEvent>());
+        }
 
         var created = new List<string>();
         var changed = new List<string>();

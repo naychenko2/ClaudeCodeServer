@@ -60,6 +60,19 @@ public sealed class AutomationStateStore
         }
     }
 
+    // Проверка квоты БЕЗ потребления — pre-check тика до опроса снапшот-источников:
+    // при исчерпанном потолке детекцию откладываем (снапшот не продвигаем), а не сжигаем события.
+    public bool HasHourlyBudget(string personaId, int cap, DateTime nowUtc)
+    {
+        lock (_stateLock)
+        {
+            var p = GetOrCreate(personaId);
+            if (p.HourBucketStart is null || nowUtc - p.HourBucketStart >= TimeSpan.FromHours(1))
+                return true;   // окно истекло — квота обнулится при первом Consume
+            return p.HourBucketCount < cap;
+        }
+    }
+
     // Потолок реакций в час per-persona: true — квота есть (и уже consumed), false — превышен.
     // Вызывается executor'ом перед запуском LLM — fail-fast до дорогого вызова.
     public bool TryConsumeHourly(string personaId, int cap, DateTime nowUtc)

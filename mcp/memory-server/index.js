@@ -5,16 +5,24 @@
 //   MEMORY_API_URL     — базовый URL бэкенда (http://127.0.0.1:5000)
 //   MEMORY_API_TOKEN   — сервисный JWT владельца сессии
 //   MEMORY_PERSONA_ID  — id персоны, чья память доступна в этой сессии
+//   MEMORY_PROJECT_ID  — id проекта персоны (③-3.4); пусто — персона глобальная,
+//                        инструменты team_memory_* не регистрируются
 //
 // Память типизирована: semantic (устойчивые факты/предпочтения), episodic (что произошло
 // в прошлых разговорах), procedural (выученные приёмы/правила поведения). Изоляция —
 // на стороне backend: токен определяет владельца, persona_id — конкретную память.
+//
+// Память КОМАНДЫ проекта (③-3.4) — отдельное хранилище (TeamMemoryService), общее для
+// ВСЕХ персон проекта: плоский список фактов без типов, recall'ится наравне с личной
+// памятью в системный промпт каждого хода. team_memory_* — то же CRUD, что и у ручного
+// ввода через UI «Командный центр», но доступное персоне прямо из разговора.
 
 import { createInterface } from 'node:readline';
 
 const API_URL = (process.env.MEMORY_API_URL ?? 'http://localhost:5000').replace(/\/$/, '');
 const API_TOKEN = process.env.MEMORY_API_TOKEN ?? '';
 const PERSONA_ID = process.env.MEMORY_PERSONA_ID ?? '';
+const PROJECT_ID = process.env.MEMORY_PROJECT_ID ?? '';
 
 async function api(path, options = {}) {
   const res = await fetch(`${API_URL}${path}`, {
@@ -34,6 +42,7 @@ async function api(path, options = {}) {
 }
 
 const base = `/api/personas/${encodeURIComponent(PERSONA_ID)}/memory`;
+const teamBase = `/api/projects/${encodeURIComponent(PROJECT_ID)}/team-memory`;
 
 const TOOLS = [
   {
@@ -89,6 +98,36 @@ const TOOLS = [
   },
 ];
 
+// team_memory_* — только у проектных персон (PROJECT_ID задан). Память команды не типизирована
+// (в отличие от personal semantic/episodic/procedural) — плоский список общих фактов проекта.
+const TEAM_TOOLS = [
+  {
+    name: 'team_memory_remember',
+    description: 'Запомнить факт в общую память КОМАНДЫ проекта — увидят и смогут использовать ' +
+      'ВСЕ персоны проекта, не только ты. Пиши сюда то, что относится к проекту в целом (общие ' +
+      'договорённости, структура данных, ограничения), а не личные заметки о себе.',
+    inputSchema: {
+      type: 'object',
+      required: ['text'],
+      properties: { text: { type: 'string', description: 'Общий факт/договорённость проекта (кратко)' } },
+    },
+  },
+  {
+    name: 'team_memory_list',
+    description: 'Перечислить всё, что команда проекта уже знает (общая память, не личная).',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'team_memory_forget',
+    description: 'Удалить запись из общей памяти команды проекта по id (устарела/оказалась неверной).',
+    inputSchema: {
+      type: 'object',
+      required: ['id'],
+      properties: { id: { type: 'string', description: 'ID записи командной памяти' } },
+    },
+  },
+];
+
 function json(data) {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
 }
@@ -118,6 +157,16 @@ async function callTool(name, args) {
     case 'memory_forget':
       await api(`${base}/${encodeURIComponent(args.id)}`, { method: 'DELETE' });
       return { content: [{ type: 'text', text: `Запись ${args.id} удалена из памяти.` }] };
+
+    case 'team_memory_remember':
+      return json(await api(teamBase, { method: 'POST', body: JSON.stringify({ text: args.text }) }));
+
+    case 'team_memory_list':
+      return json(await api(teamBase));
+
+    case 'team_memory_forget':
+      await api(`${teamBase}/${encodeURIComponent(args.id)}`, { method: 'DELETE' });
+      return { content: [{ type: 'text', text: `Запись ${args.id} удалена из памяти команды.` }] };
 
     default:
       throw new Error(`Неизвестный инструмент: ${name}`);
@@ -157,7 +206,7 @@ rl.on('line', async line => {
         });
         break;
       case 'tools/list':
-        reply(id, { tools: TOOLS });
+        reply(id, { tools: PROJECT_ID ? [...TOOLS, ...TEAM_TOOLS] : TOOLS });
         break;
       case 'tools/call': {
         try {

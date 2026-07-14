@@ -194,15 +194,16 @@ public class SessionManager
         return new NotesMcpContext(ResolveTasksApiUrl(), entry.Token, projectId);
     }
 
-    // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes)
-    private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId)
+    // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes).
+    // projectId — только у проектных персон (③-3.4: даёт доступ к team_memory_* команды).
+    private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId, string? projectId)
     {
         var entry = _notesTokens.AddOrUpdate(ownerId,
             id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
             (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
-        return new MemoryMcpContext(ResolveTasksApiUrl(), entry.Token, personaId);
+        return new MemoryMcpContext(ResolveTasksApiUrl(), entry.Token, personaId, projectId);
     }
 
     // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок релевантных
@@ -617,7 +618,11 @@ public class SessionManager
         };
         // Долгая память — только если включена у персоны
         if (persona.MemoryEnabled)
-            return (prompt, BuildMemoryContext(ownerId, persona.Id), BuildPersonaRecallProvider(ownerId, persona.Id), persona);
+        {
+            var teamProjectId = persona.Scope == PersonaScope.Project ? persona.ProjectId : null;
+            return (prompt, BuildMemoryContext(ownerId, persona.Id, teamProjectId),
+                BuildPersonaRecallProvider(ownerId, persona.Id), persona);
+        }
         return (prompt, null, null, persona);
     }
 

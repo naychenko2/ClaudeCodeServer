@@ -12,9 +12,11 @@ public record TasksMcpContext(string ApiUrl, string Token, string? ProjectId);
 // (задаёт источник по умолчанию для создания заметок; null — личный vault).
 public record NotesMcpContext(string ApiUrl, string Token, string? ProjectId);
 
-// Контекст MCP-сервера памяти персоны: адрес API, сервисный токен владельца и id персоны,
-// чья долгая память доступна инструментами mcp__memory__* в этой сессии.
-public record MemoryMcpContext(string ApiUrl, string Token, string PersonaId);
+// Контекст MCP-сервера памяти персоны: адрес API, сервисный токен владельца, id персоны,
+// чья долгая память доступна инструментами mcp__memory__* в этой сессии, и проект персоны
+// (③-3.4: проектная персона дополнительно получает team_memory_* — общую память команды
+// проекта; null — глобальная персона, командной памяти нет).
+public record MemoryMcpContext(string ApiUrl, string Token, string PersonaId, string? ProjectId = null);
 
 // Контекст MCP-сервера рабочего пространства: доступ сессии ко всем проектам владельца
 // (список, файлы, базы знаний, единый поиск). Sections — включённые секции инструментов
@@ -37,8 +39,9 @@ public record WorkspaceMcpContext(string ApiUrl, string Token, string? ProjectId
 public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId,
     string? SelfPersonaId = null, string? MentionsHint = null, bool BindingsEnabled = false);
 
-// Элемент манифеста recall — что персона подтянула в ход (память/заметка/база) для атрибуции
-// «опирается на…» / «использовано сейчас» (F3). Kind ∈ memory|note|knowledge; Ref — id/ссылка.
+// Элемент манифеста recall — что персона подтянула в ход (память/заметка/база/команда) для
+// атрибуции «опирается на…» / «использовано сейчас» (F3). Kind ∈ memory|note|knowledge|team
+// (team — память команды проекта, ③-3.4); Ref — id/ссылка.
 public sealed record RecallItem(string Kind, string? Ref, string Title, string? Snippet);
 
 // Результат recall-провайдера: текст для системного промпта + айтемы манифеста (F3).

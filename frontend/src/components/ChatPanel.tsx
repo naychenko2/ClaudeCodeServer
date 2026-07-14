@@ -190,7 +190,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     [handleCompanionChange]
   );
 
-  // Групповой чат: создаём НОВЫЙ чат с 2-4 участниками
+  // Групповой чат: создаём НОВЫЙ чат с 2-8 участниками
   // и уводим пользователя в него. Ведущая проектная → сессия текущего проекта,
   // глобальная → чат вне проекта (переход в раздел «Чаты»).
   const handleCreateGroup = useCallback(async (personaIds: string[]) => {

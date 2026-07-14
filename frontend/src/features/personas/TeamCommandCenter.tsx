@@ -447,7 +447,7 @@ function EventCard({ e, personaById, onOpen }: {
 function GroupChatPicker({ team, onClose, onCreated }: { team: Persona[]; onClose: () => void; onCreated: (s: Session) => void; }) {
   const [sel, setSel] = useState<string[]>(team.length >= 2 ? [team[0].id, team[1].id] : team.map(p => p.id));
   const [busy, setBusy] = useState(false);
-  const toggle = (id: string) => setSel(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 4 ? [...prev, id] : prev);
+  const toggle = (id: string) => setSel(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 8 ? [...prev, id] : prev);
   const create = async () => {
     setBusy(true);
     try { const s = await api.chats.createGroup(sel); sessionStorage.setItem('cc_auto_discuss', s.id); onCreated(s); }
@@ -459,7 +459,7 @@ function GroupChatPicker({ team, onClose, onCreated }: { team: Persona[]; onClos
     finally { setBusy(false); }
   };
   return (
-    <Modal width={420} title="Созвать команду" subtitle="Выберите 2–4 участников. Первый — ведущий." onClose={onClose}
+    <Modal width={420} title="Созвать команду" subtitle="Выберите 2–8 участников. Первый — ведущий." onClose={onClose}
       footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button onClick={onClose} style={ghostBtn}>Отмена</button>
         <button onClick={() => void create()} disabled={sel.length < 2 || busy} style={primaryBtn}>Создать чат</button>
@@ -586,7 +586,7 @@ function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onC
 }
 
 async function createTeamChat(team: Persona[], onOpenSession: (s: Session) => void) {
-  try { const s = await api.chats.createGroup(team.slice(0, 4).map(p => p.id)); onOpenSession(s); } catch { /* тишина */ }
+  try { const s = await api.chats.createGroup(team.slice(0, 8).map(p => p.id)); onOpenSession(s); } catch { /* тишина */ }
 }
 
 // ===== Shared: мета событий, навигация, хелперы, стили =====

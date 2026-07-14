@@ -9,7 +9,7 @@ import { showToast } from '../../lib/toast';
 import { PersonaAvatar } from './PersonaAvatar';
 
 // Управление участниками группового чата: поповер под стеком аватаров в шапке.
-// Список текущих (ведущая/отвечает, удаление при >2) + добавление доступных персон (до 4).
+// Список текущих (ведущая/отвечает, удаление при >2) + добавление доступных персон (до 8).
 export function GroupParticipantsPopover({ session, participants, onUpdated, onClose }: {
   session: Session;
   participants: Persona[];
@@ -99,7 +99,7 @@ export function GroupParticipantsPopover({ session, participants, onUpdated, onC
           </>
         )))}
 
-        {participants.length < 4 && available !== null && available.length > 0 && (
+        {participants.length < 8 && available !== null && available.length > 0 && (
           <>
             <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '6px 0' }} />
             <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4, padding: '4px 8px 6px' }}>
@@ -125,9 +125,9 @@ export function GroupParticipantsPopover({ session, participants, onUpdated, onC
             ))}
           </>
         )}
-        {participants.length >= 4 && (
+        {participants.length >= 8 && (
           <div style={{ fontSize: 11, color: C.textMuted, padding: '4px 8px 6px' }}>
-            Максимум 4 участника.
+            Максимум 8 участников.
           </div>
         )}
       </div>

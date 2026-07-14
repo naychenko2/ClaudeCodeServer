@@ -49,7 +49,7 @@ public class ChatsController(SessionManager sessions, FileService files,
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
-    // Групповой чат (флаг persona-group-chats): 2-4 персоны, первая — ведущая.
+    // Групповой чат (флаг persona-group-chats): 2-8 персон, первая — ведущая.
     // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
     [HttpPost("group")]
     public async Task<IActionResult> CreateGroup([FromBody] CreateGroupChatRequest req)

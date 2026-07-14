@@ -27,7 +27,7 @@ interface Props {
   // Направление раскрытия: по умолчанию вверх (composer прижат к низу).
   // dropUp=false — раскрытие вниз (для триггера у верха панели, напр. список чатов).
   dropUp?: boolean;
-  // Групповой чат (флаг persona-group-chats): мультивыбор 2-4 персон,
+  // Групповой чат (флаг persona-group-chats): мультивыбор 2-8 персон,
   // первая выбранная — ведущая; подтверждение создаёт новый групповой чат.
   onCreateGroup?: (personaIds: string[]) => void;
 }
@@ -91,9 +91,9 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
 
   // Добавление виртуальной роли в групповой мультивыбор: материализуем и берём её id
   const toggleVirtualInGroup = async (key: string) => {
-    if (groupSelected.length >= 4) return;
+    if (groupSelected.length >= 8) return;
     const persona = await materialize(key);
-    if (persona) setGroupSelected(prev => prev.includes(persona.id) || prev.length >= 4 ? prev : [...prev, persona.id]);
+    if (persona) setGroupSelected(prev => prev.includes(persona.id) || prev.length >= 8 ? prev : [...prev, persona.id]);
   };
 
   // Круглый аватар виртуальной роли (инициал роли на её цвете)
@@ -134,13 +134,13 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
   const groupCheckboxItem = (p: Persona) => {
     const idx = groupSelected.indexOf(p.id);
     const checked = idx >= 0;
-    const disabled = !checked && groupSelected.length >= 4;
+    const disabled = !checked && groupSelected.length >= 8;
     return (
       <button
         key={`g-${p.id}`}
         onClick={() => setGroupSelected(prev => checked
           ? prev.filter(x => x !== p.id)
-          : prev.length >= 4 ? prev : [...prev, p.id])}
+          : prev.length >= 8 ? prev : [...prev, p.id])}
         disabled={disabled}
         style={{
           width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '7px 10px',
@@ -327,7 +327,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
             Групповой чат
           </div>
           <div style={{ padding: '0 10px 6px', fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.4 }}>
-            Выберите 2–4 участников. Первый выбранный — ведущий: его зона и модель задают чат.
+            Выберите 2–8 участников. Первый выбранный — ведущий: его зона и модель задают чат.
           </div>
           {/* Подгруппы участников: проектные → глобальные → пантеон (с разделителями) */}
           {(() => {
@@ -347,7 +347,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
           })()}
           {/* Виртуальные роли пантеона: клик материализует роль и добавляет её */}
           {virtualPantheon.map(t => {
-            const disabled = materializing !== null || groupSelected.length >= 4;
+            const disabled = materializing !== null || groupSelected.length >= 8;
             return (
               <button
                 key={`gv-${t.key}`}

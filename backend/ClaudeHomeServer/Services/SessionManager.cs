@@ -593,8 +593,8 @@ public class SessionManager
     {
         var ids = (personaIds ?? Array.Empty<string>())
             .Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
-        if (ids.Count is < 2 or > 4)
-            throw new InvalidOperationException("В групповом чате участвуют от 2 до 4 персон");
+        if (ids.Count is < 2 or > 8)
+            throw new InvalidOperationException("В групповом чате участвуют от 2 до 8 персон");
         return ids.Select(id => _personas.Get(id, ownerId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}")).ToList();
     }

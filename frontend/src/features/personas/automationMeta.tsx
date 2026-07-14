@@ -8,14 +8,17 @@ import { Clock, FileText, StickyNote, GitBranch, ListChecks, AtSign } from 'luci
 import type { AutomationActionWeight, AutomationTriggerType, PersonaAutomationRule, Project } from '../../types';
 import { C } from '../../lib/design';
 
-export const TRIGGER_META: Record<AutomationTriggerType, { label: string; Icon: LucideIcon; bg: string; fg: string }> = {
-  timer:      { label: 'Таймер',         Icon: Clock,      bg: C.accentLight, fg: C.accent },
-  file:       { label: 'Файлы',          Icon: FileText,   bg: C.bgSelected,  fg: C.textSecondary },
-  note:       { label: 'Заметки',        Icon: StickyNote, bg: C.successBg,   fg: C.successText },
-  gitCommit:  { label: 'Коммиты',        Icon: GitBranch,  bg: C.infoBg,      fg: C.info },
-  taskStatus: { label: 'Статус задачи',   Icon: ListChecks, bg: C.planLight,   fg: C.plan },
-  mention:    { label: 'Упоминание',     Icon: AtSign,     bg: C.warningBg,   fg: C.warning },
+export const TRIGGER_META: Record<AutomationTriggerType, { label: string; Icon: LucideIcon; bg: string; fg: string; hint: string }> = {
+  timer:      { label: 'Таймер',         Icon: Clock,      bg: C.accentLight, fg: C.accent,          hint: 'по расписанию — время или интервал' },
+  file:       { label: 'Файлы',          Icon: FileText,   bg: C.bgSelected,  fg: C.textSecondary,   hint: 'новые/изменённые файлы проекта' },
+  note:       { label: 'Заметки',        Icon: StickyNote, bg: C.successBg,   fg: C.successText,     hint: 'новые/изменённые заметки' },
+  gitCommit:  { label: 'Коммиты',        Icon: GitBranch,  bg: C.infoBg,      fg: C.info,             hint: 'новый коммит в репозитории' },
+  taskStatus: { label: 'Статус задачи',   Icon: ListChecks, bg: C.planLight,   fg: C.plan,             hint: 'смена статуса задачи' },
+  mention:    { label: 'Упоминание',     Icon: AtSign,     bg: C.warningBg,   fg: C.warning,          hint: '@упоминание в чате' },
 };
+
+// Порядок триггеров в сетке шага «Событие» степпера создания
+export const TRIGGER_TYPE_ORDER: AutomationTriggerType[] = ['timer', 'file', 'note', 'gitCommit', 'taskStatus', 'mention'];
 
 export const ACTION_META: Record<AutomationActionWeight, { label: string }> = {
   gate: { label: 'Сообщить' },

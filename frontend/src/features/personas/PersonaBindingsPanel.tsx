@@ -14,6 +14,7 @@ import {
   BindingModeBadge, BindingTypeIcon, bindingsCounter,
   fetchBindingTargets, useBindingLabels,
 } from './bindingMeta';
+import { Stepper, Crumb } from './stepperUi';
 
 // Вкладка «Умения» студии персоны (фича persona-bindings): карточки привязок
 // «источник + правило, когда им пользоваться». Семантика мгновенного сохранения
@@ -647,7 +648,10 @@ function AddPanel({ panel, accent, isMobile, aiBusy, onChange, onClose, onCommit
         <button onClick={onClose} aria-label="Закрыть" style={xBtn}><X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /></button>
       </div>
 
-      <Stepper step={panel.step} accent={accent}
+      <Stepper
+        step={panel.step}
+        accent={accent}
+        steps={[{ n: 1, label: 'Тип' }, { n: 2, label: 'Цель' }, { n: 3, label: 'Правило' }]}
         onStep={s => {
           if (s >= panel.step) return;
           // Возврат назад: на шаг «Тип» — сброс цели; на «Цель» — сброс правила
@@ -887,62 +891,6 @@ function PickRow({ label, hint, meta, mono, onClick }: {
       {meta && (
         <span style={{ marginLeft: 'auto', flexShrink: 0, fontFamily: FONT.mono, fontSize: 12, color: C.textMuted }}>{meta}</span>
       )}
-    </button>
-  );
-}
-
-// Степпер ① Тип → ② Цель → ③ Правило (пройденные шаги кликабельны)
-function Stepper({ step, accent, onStep }: { step: 1 | 2 | 3; accent: string; onStep: (s: 1 | 2 | 3) => void }) {
-  const items: { n: 1 | 2 | 3; label: string }[] = [
-    { n: 1, label: 'Тип' }, { n: 2, label: 'Цель' }, { n: 3, label: 'Правило' },
-  ];
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12 }}>
-      {items.map((it, i) => {
-        const state = it.n === step ? 'act' : it.n < step ? 'done' : 'todo';
-        return (
-          <span key={it.n} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button
-              onClick={() => state === 'done' && onStep(it.n)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6, border: 'none', background: 'none',
-                padding: 0, fontSize: 12, fontFamily: FONT.sans,
-                cursor: state === 'done' ? 'pointer' : 'default',
-                color: state === 'act' ? C.textHeading : state === 'done' ? C.accent : C.textMuted,
-                fontWeight: state === 'act' ? 600 : 400,
-              }}
-            >
-              <span style={{
-                width: 18, height: 18, borderRadius: R.full, display: 'flex', alignItems: 'center',
-                justifyContent: 'center', fontSize: 10.5, fontWeight: 700,
-                background: state === 'act' ? accent : state === 'done' ? C.accentLight : C.bgSelected,
-                color: state === 'act' ? '#fff' : state === 'done' ? C.accent : C.textMuted,
-              }}>{it.n}</span>
-              {it.label}
-            </button>
-            {i < items.length - 1 && <span style={{ width: 24, height: 1, background: C.borderLight }} />}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-// Хлебная крошка возврата на предыдущий шаг
-function Crumb({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      onMouseEnter={e => { e.currentTarget.style.background = C.accentLight; e.currentTarget.style.color = C.textPrimary; }}
-      onMouseLeave={e => { e.currentTarget.style.background = C.bgSelected; e.currentTarget.style.color = C.textSecondary; }}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 10, maxWidth: '100%',
-        background: C.bgSelected, border: 'none', borderRadius: R.md, padding: '4px 10px',
-        fontSize: 12, color: C.textSecondary, cursor: 'pointer', fontFamily: FONT.sans,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}
-    >
-      {children}
     </button>
   );
 }

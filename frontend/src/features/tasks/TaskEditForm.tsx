@@ -16,8 +16,9 @@ import { DueDatePicker } from './DueDatePicker';
 import { ExecutorPicker } from './ExecutorPicker';
 import { NoteEditor } from '../notes/NoteEditor';
 import { AttachPicker } from '../../components/chat/AttachPicker';
-import { Toggle, SegmentedControl } from '../../components/ui';
+import { Toggle, SegmentedControl, WaitingIndicator } from '../../components/ui';
 import { EXPIRY_PRESETS, DEFAULT_EXPIRY } from '../../lib/expiry';
+import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 
 interface Props {
   task: Task;
@@ -94,48 +95,60 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   const [labels, setLabels] = useState<string[]>(task.labels);
   const [newLabel, setNewLabel] = useState('');
   const [saving, setSaving] = useState(false);
-  const [aiDescLoading, setAiDescLoading] = useState(false);
-  const [aiSubsLoading, setAiSubsLoading] = useState(false);
+  // Статус/результат AI-генерации — в aiJobStore по ключу задачи (переживает закрытие
+  // модалки правки до ответа: вернувшись к этой же задаче, увидите прогресс/результат).
+  const descKey = `tasks:${task.id}:ai-description`;
+  const descJob = useAiJob<string>(descKey);
+  const aiDescLoading = descJob.status === 'running';
+  const subsKey = `tasks:${task.id}:ai-subtasks`;
+  const subsJob = useAiJob<string[]>(subsKey);
+  const aiSubsLoading = subsJob.status === 'running';
   const [aiError, setAiError] = useState<string | null>(null);
 
   // Описание от Claude: по названию + контекст проекта (личная — только название)
-  const generateDescription = async () => {
+  const generateDescription = () => {
     if (!title.trim() || aiDescLoading) return;
-    setAiDescLoading(true);
     setAiError(null);
-    try {
-      const r = await api.tasks.aiDescription(title.trim(), task.projectId ?? null);
-      setDescription(r.description);
-      setDescEditing(false);   // сразу показываем результат в превью
-    } catch (e) {
-      setAiError(e instanceof Error ? e.message : 'Не удалось сгенерировать описание');
-    } finally {
-      setAiDescLoading(false);
-    }
+    runAiJob(descKey, () => api.tasks.aiDescription(title.trim(), task.projectId ?? null).then(r => r.description));
   };
 
   // Подзадачи от Claude: по названию и заполненному описанию
-  const generateSubtasks = async () => {
+  const generateSubtasks = () => {
     if (!title.trim() || !description.trim() || aiSubsLoading) return;
-    setAiSubsLoading(true);
     setAiError(null);
-    try {
-      const r = await api.tasks.aiSubtasks(title.trim(), description, task.projectId ?? null);
-      const existing = new Set(subtasks.map(s => s.title.toLowerCase()));
-      const fresh = r.subtasks.filter(t => !existing.has(t.toLowerCase()));
-      setSubtasks(prev => [...prev, ...fresh.map(t => ({ id: '', title: t, isDone: false }))]);
-    } catch (e) {
-      setAiError(e instanceof Error ? e.message : 'Не удалось сгенерировать подзадачи');
-    } finally {
-      setAiSubsLoading(false);
-    }
+    runAiJob(subsKey, () => api.tasks.aiSubtasks(title.trim(), description, task.projectId ?? null).then(r => r.subtasks));
   };
+
+  useEffect(() => {
+    if (descJob.status === 'done' && descJob.result != null) {
+      setDescription(descJob.result);
+      setDescEditing(false);   // сразу показываем результат в превью
+      resetAiJob(descKey);
+    } else if (descJob.status === 'error') {
+      setAiError(descJob.error ?? 'Не удалось сгенерировать описание');
+      resetAiJob(descKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [descJob.status]);
+
+  useEffect(() => {
+    if (subsJob.status === 'done' && subsJob.result != null) {
+      const existing = new Set(subtasks.map(s => s.title.toLowerCase()));
+      const fresh = subsJob.result.filter(t => !existing.has(t.toLowerCase()));
+      setSubtasks(prev => [...prev, ...fresh.map(t => ({ id: '', title: t, isDone: false }))]);
+      resetAiJob(subsKey);
+    } else if (subsJob.status === 'error') {
+      setAiError(subsJob.error ?? 'Не удалось сгенерировать подзадачи');
+      resetAiJob(subsKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subsJob.status]);
 
   // AI-хаб: если в правку вошли по действию из палитры/подсказки — сразу запускаем генерацию
   useEffect(() => {
     if (!pendingAi) return;
-    if (pendingAi === 'task.description') void generateDescription();
-    else if (pendingAi === 'task.subtasks') void generateSubtasks();
+    if (pendingAi === 'task.description') generateDescription();
+    else if (pendingAi === 'task.subtasks') generateSubtasks();
     onPendingConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAi]);
@@ -567,7 +580,14 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
             </button>
           </div>
           <div style={{ marginBottom: 22 }}>
-            {descEditing ? (
+            {aiDescLoading ? (
+              <div style={{
+                background: C.bgWhite, border: `1px solid ${C.borderLight}`,
+                borderRadius: R.xl, padding: '14px 18px',
+              }}>
+                <WaitingIndicator hint="Генерирую описание по названию задачи" />
+              </div>
+            ) : descEditing ? (
               <NoteEditor
                 value={description}
                 onChange={setDescription}
@@ -642,6 +662,14 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
             <div style={{ ...fieldLabelStyle(), marginBottom: 0 }}>Подзадачи</div>
             {/* Генерация подзадач (AI) — через AI-палитру (⌘/Ctrl+K) */}
           </div>
+          {aiSubsLoading && (
+            <div style={{
+              background: C.bgWhite, border: `1px solid ${C.borderLight}`,
+              borderRadius: R.xl, padding: '14px 18px', marginBottom: 12,
+            }}>
+              <WaitingIndicator hint="Предлагаю подзадачи по описанию" />
+            </div>
+          )}
           <div style={{
             background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl,
             overflow: 'hidden', marginBottom: 22,

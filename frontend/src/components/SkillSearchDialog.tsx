@@ -3,8 +3,9 @@ import { Search, ExternalLink } from 'lucide-react';
 import type { RegistrySkill, SkillSuggestion } from '../types';
 import { C, R, FONT } from '../lib/design';
 import { api } from '../lib/api';
-import { Modal, Button, IconField } from './ui';
+import { Modal, Button, IconField, WaitingIndicator } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { useAiJob, runAiJob } from '../lib/aiJobStore';
 
 // Контекст установки диалога определяет доступные действия:
 //  • persona     — «Установить персоне» (глобально + привязка Skill) и «✨ Подобрать под персону»;
@@ -19,25 +20,41 @@ interface Props {
 
 type CardState = 'idle' | 'busy' | 'project-done' | 'global-done' | 'error';
 
+// Результат «✨ Подобрать» — статус и результат живут в aiJobStore по ключу контекста,
+// переживают закрытие/переоткрытие диалога (тот же персона/проект/глобально)
+interface SuggestJobResult {
+  results: RegistrySkill[];
+  reasons: Record<string, string>;
+}
+
 const keyOf = (s: RegistrySkill) => `${s.source}@${s.skill}`;
 
 export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: Props) {
+  const suggestKey = `skills-suggest:${persona ? `persona:${persona.id}` : projectId ? `project:${projectId}` : 'global'}`;
+  const suggestJob = useAiJob<SuggestJobResult>(suggestKey);
+
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<RegistrySkill[]>([]);
-  // reason по ключу навыка — заполняется при LLM-подборе (иначе карточка без обоснования)
-  const [reasons, setReasons] = useState<Record<string, string>>({});
-  const [mode, setMode] = useState<'search' | 'suggest' | null>(null);
+  // Если по этому контексту уже идёт/готов подбор (диалог переоткрыли) — сразу его и показываем
+  const [mode, setMode] = useState<'search' | 'suggest' | null>(
+    () => (suggestJob.status !== 'idle' ? 'suggest' : null),
+  );
   const [translatedQuery, setTranslatedQuery] = useState<string | null>(null);
   const [cardStates, setCardStates] = useState<Record<string, CardState>>({});
 
   const canContextSuggest = !!persona || !!projectId;
+  const suggesting = suggestJob.status === 'running';
+  const busy = mode === 'suggest' ? suggesting : mode === 'search' ? loading : false;
+  const displayResults = mode === 'suggest' ? (suggestJob.result?.results ?? []) : results;
+  const displayReasons = mode === 'suggest' ? (suggestJob.result?.reasons ?? {}) : {};
+  const suggestError = mode === 'suggest' && suggestJob.status === 'error' ? suggestJob.error : null;
 
   const runFind = async () => {
     const q = query.trim();
     if (q.length < 2) { setError('Введите минимум 2 символа'); return; }
-    setLoading(true); setError(null); setReasons({}); setMode('search'); setTranslatedQuery(null);
+    setLoading(true); setError(null); setMode('search'); setTranslatedQuery(null);
     try {
       const { results, translatedQuery } = await api.skills.find(q);
       setResults(results);
@@ -48,7 +65,7 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
     } finally { setLoading(false); }
   };
 
-  const runSuggest = async () => {
+  const runSuggest = () => {
     const q = query.trim();
     // С текстом — подбор по запросу; без текста — по контексту (персона/проект)
     const ctx = q.length >= 2
@@ -57,15 +74,14 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
       : projectId ? { projectId }
       : null;
     if (!ctx) { setError('Введите запрос для подбора'); return; }
-    setLoading(true); setError(null); setMode('suggest'); setTranslatedQuery(null);
-    try {
+    setError(null); setMode('suggest'); setTranslatedQuery(null);
+    runAiJob<SuggestJobResult>(suggestKey, async () => {
       const { candidates } = await api.skills.suggest(ctx);
-      setResults(candidates.map((c: SkillSuggestion) => c.skill));
-      setReasons(Object.fromEntries(candidates.map((c: SkillSuggestion) => [keyOf(c.skill), c.reason])));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Подбор не удался');
-      setResults([]);
-    } finally { setLoading(false); }
+      return {
+        results: candidates.map((c: SkillSuggestion) => c.skill),
+        reasons: Object.fromEntries(candidates.map((c: SkillSuggestion) => [keyOf(c.skill), c.reason])),
+      };
+    });
   };
 
   const setCard = (k: string, s: CardState) =>
@@ -130,8 +146,8 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
             icon={<Search size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
           />
         </div>
-        <Button variant="secondary" onClick={runFind} disabled={loading}>Найти</Button>
-        <Button variant="primary" onClick={runSuggest} disabled={loading}>✨ Подобрать</Button>
+        <Button variant="secondary" onClick={runFind} disabled={loading || suggesting}>Найти</Button>
+        <Button variant="primary" onClick={runSuggest} disabled={loading || suggesting}>✨ Подобрать</Button>
       </div>
 
       {canContextSuggest && (
@@ -140,11 +156,11 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
         </div>
       )}
 
-      {error && (
+      {(error || suggestError) && (
         <div style={{
           padding: '10px 12px', background: C.dangerBg, border: `1px solid ${C.dangerBorder}`,
           borderRadius: R.lg, fontSize: 12.5, color: C.dangerText,
-        }}>{error}</div>
+        }}>{error || suggestError}</div>
       )}
 
       {/* Показываем, что запрос переведён на английский для поиска по реестру */}
@@ -156,23 +172,29 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
 
       {/* Результаты */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 80 }}>
-        {loading && (
-          <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 13, color: C.textMuted }}>
-            {mode === 'suggest' ? 'ИИ подбирает навыки — до минуты…' : 'Ищем…'}
-          </div>
+        {busy && (
+          mode === 'suggest' ? (
+            <div style={{ padding: '20px 4px' }}>
+              <WaitingIndicator hint="Подбор навыков под роль/проект — до минуты" />
+            </div>
+          ) : (
+            <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 13, color: C.textMuted }}>
+              Ищем…
+            </div>
+          )
         )}
 
-        {!loading && mode && results.length === 0 && !error && (
+        {!busy && mode && !suggestError && displayResults.length === 0 && !error && (
           <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 13, color: C.textMuted }}>
             Ничего не найдено. Попробуйте другой запрос.
           </div>
         )}
 
-        {!loading && results.map(s => (
+        {!busy && displayResults.map(s => (
           <SkillResultCard
             key={keyOf(s)}
             skill={s}
-            reason={reasons[keyOf(s)]}
+            reason={displayReasons[keyOf(s)]}
             state={cardStates[keyOf(s)] ?? 'idle'}
             persona={persona}
             projectId={projectId}

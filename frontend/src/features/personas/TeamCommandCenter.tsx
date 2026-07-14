@@ -16,10 +16,11 @@ import { C, FONT, R, SHADOW } from '../../lib/design';
 import { PersonaAvatar } from './PersonaAvatar';
 import { SPECIALTY_LABEL } from './automationMeta';
 import { TeamMemoryPanel } from './TeamMemoryPanel';
-import { Modal, IconButton, Menu, MenuItem } from '../../components/ui';
+import { Modal, IconButton, Menu, MenuItem, WaitingIndicator } from '../../components/ui';
 import { Toolbar, PillSwitch, tbBtnPrimary } from '../../components/Toolbar';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
+import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
 
 // Командный центр проекта (①-L1, табовый): 3 вкладки — Обзор / Память команды / Активность-таймлайн.
 type Tab = 'overview' | 'memory' | 'activity';
@@ -482,68 +483,79 @@ function GroupChatPicker({ team, onClose, onCreated }: { team: Persona[]; onClos
   );
 }
 
+// Кандидаты AI-подбора команды с чекбоксами — статус/результат в aiJobStore
+// (переживает закрытие/переоткрытие диалога того же проекта)
+interface TeamSuggestResult {
+  members: (TeamMemberDraft & { on: boolean })[];
+}
+
 function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onClose: () => void; onCreated: () => void; }) {
+  const teamKey = `personas:team-generate:${project.id}`;
+  const teamJob = useAiJob<TeamSuggestResult>(teamKey);
   const [prompt, setPrompt] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [members, setMembers] = useState<TeamMemberDraft[] | null>(null);
-  const [sel, setSel] = useState<Set<number>>(new Set());
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const generate = async () => {
-    if (!prompt.trim() || loading) return;
-    setLoading(true); setError(null); setMembers(null);
-    try {
+  const generating = teamJob.status === 'running';
+  const members = teamJob.status === 'done' ? teamJob.result?.members ?? [] : [];
+  const generate = () => {
+    if (!prompt.trim() || generating) return;
+    setError(null);
+    runAiJob<TeamSuggestResult>(teamKey, async () => {
       const res = await api.personas.aiTeam(project.id, prompt.trim());
-      setMembers(res.members ?? []);
-      setSel(new Set((res.members ?? []).map((_, i) => i)));
-    } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось сформировать команду'); }
-    finally { setLoading(false); }
+      return { members: (res.members ?? []).map(m => ({ ...m, on: true })) };
+    });
   };
-  const toggle = (i: number) => setSel(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; });
+  const toggle = (i: number) => patchAiJobResult<TeamSuggestResult>(teamKey, prev => ({
+    members: prev.members.map((m, idx) => idx === i ? { ...m, on: !m.on } : m),
+  }));
   const create = async () => {
-    if (creating || !members) return;
+    if (creating || members.length === 0) return;
     setCreating(true); setError(null);
     try {
-      for (let i = 0; i < members.length; i++) {
-        if (!sel.has(i)) continue;
-        const m = members[i];
+      for (const m of members) {
+        if (!m.on) continue;
         await api.personas.create({
           name: m.name?.trim() || 'Персона', role: m.role, description: m.description,
           contract: { character: m.character, tone: m.tone }, specialty: m.specialty as Persona['specialty'] | undefined,
           scope: 'project', projectId: project.id, color: m.color, greeting: m.greeting, memoryEnabled: true,
         });
       }
+      resetAiJob(teamKey);
       onCreated();
     } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось создать персон'); }
     finally { setCreating(false); }
   };
+  const selCount = members.filter(m => m.on).length;
   return (
     <Modal width={480} title="Сформировать команду" onClose={onClose} subtitle="Опишите команду — LLM проанализирует проект и предложит состав."
-      footer={members && members.length > 0 ? (
+      footer={members.length > 0 ? (
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>{sel.size} из {members.length}</span>
+          <span style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>{selCount} из {members.length}</span>
           <button onClick={onClose} style={ghostBtn}>Отмена</button>
-          <button onClick={() => void create()} disabled={sel.size === 0 || creating} style={primaryBtn}>{creating ? 'Создание…' : `Создать ${sel.size || ''}`}</button>
+          <button onClick={() => void create()} disabled={selCount === 0 || creating} style={primaryBtn}>{creating ? 'Создание…' : `Создать ${selCount || ''}`}</button>
         </div>
       ) : undefined}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {!members && (
+        {teamJob.status !== 'done' && (
           <>
             <textarea value={prompt} onChange={e => setPrompt(e.target.value)} autoFocus placeholder="Напр.: команда для бэкенда на .NET — аналитик, разработчик, ревьюер и тестировщик." style={{ ...inputStyle, minHeight: 80, resize: 'vertical' }} />
-            {error && <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>}
-            <button onClick={() => void generate()} disabled={!prompt.trim() || loading} style={primaryBtn}>{loading ? 'Анализирую проект…' : 'Сформировать состав'}</button>
+            {(error || (teamJob.status === 'error' && teamJob.error)) && (
+              <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error || teamJob.error}</div>
+            )}
+            {generating && <WaitingIndicator hint="Анализирую проект и подбираю состав — обычно 10–20 секунд" />}
+            <button onClick={generate} disabled={!prompt.trim() || generating} style={primaryBtn}>{generating ? 'Анализирую проект…' : 'Сформировать состав'}</button>
           </>
         )}
-        {members && members.length === 0 && !loading && (
+        {teamJob.status === 'done' && members.length === 0 && (
           <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans }}>
             Не удалось предложить состав. Уточните промпт.
-            <button onClick={() => setMembers(null)} style={{ ...linkBtn, display: 'block', margin: '8px auto 0' }}>← назад</button>
+            <button onClick={() => resetAiJob(teamKey)} style={{ ...linkBtn, display: 'block', margin: '8px auto 0' }}>← назад</button>
           </div>
         )}
-        {members && members.length > 0 && (
+        {teamJob.status === 'done' && members.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {members.map((m, i) => {
-              const checked = sel.has(i);
+              const checked = m.on;
               return (
                 <button key={i} onClick={() => toggle(i)} style={{ ...memberCard, border: `1px solid ${checked ? C.accent : C.borderLight}` }}>
                   <div style={{ minWidth: 0, flex: 1 }}>

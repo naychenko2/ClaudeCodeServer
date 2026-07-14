@@ -4,8 +4,9 @@ import type { BindingTarget, Persona, PersonaBinding, PersonaBindingDto, Persona
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
-import { Button, IconField, Menu, MenuItem } from '../../components/ui';
+import { Button, IconField, Menu, MenuItem, WaitingIndicator } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
 import { SkillSearchDialog } from '../../components/SkillSearchDialog';
 import { PillSwitch } from '../../components/Toolbar';
 import { SectionLabel } from '../tasks/bits';
@@ -48,13 +49,11 @@ interface AddPanelState {
 }
 
 // Кандидаты AI-подбора с чекбоксами: привязки к существующим источникам +
-// навыки из реестра (их нужно установить и привязать)
-interface SuggestState {
-  loading: boolean;
-  candidates?: (PersonaBinding & { on: boolean })[];
-  skills?: (SkillSuggestion & { on: boolean })[];
-  error?: string;
-  adding?: boolean;
+// навыки из реестра (их нужно установить и привязать). Статус/результат живут
+// в aiJobStore по ключу персоны — переживают уход со страницы.
+interface SuggestResult {
+  candidates: (PersonaBinding & { on: boolean })[];
+  skills: (SkillSuggestion & { on: boolean })[];
 }
 
 export function PersonaBindingsPanel({ persona, accent, isMobile }: {
@@ -77,8 +76,9 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   const [menuId, setMenuId] = useState<string | null>(null);
 
   const [panel, setPanel] = useState<AddPanelState | null>(null);
-  const [suggest, setSuggest] = useState<SuggestState | null>(null);
-  const [aiBusy, setAiBusy] = useState(false);
+  const suggestKey = `personas:${persona.id}:bindings-suggest`;
+  const suggestJob = useAiJob<SuggestResult>(suggestKey);
+  const [adding, setAdding] = useState(false);
   const [showSkillSearch, setShowSkillSearch] = useState(false);
 
   const load = useCallback(async () => {
@@ -114,8 +114,8 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
 
   // Подписи целей — и для сохранённых привязок, и для кандидатов подбора
   const labelSource = useMemo(
-    () => [...(bindings ?? []), ...(suggest?.candidates ?? [])],
-    [bindings, suggest?.candidates],
+    () => [...(bindings ?? []), ...(suggestJob.result?.candidates ?? [])],
+    [bindings, suggestJob.result?.candidates],
   );
   const labelOf = useBindingLabels(labelSource);
 
@@ -209,47 +209,82 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
     }
   };
 
-  // AI-условие «когда пользоваться» — заполняет поле (развёрнутой карточки или панели)
-  const runAiCondition = async (type: PersonaBindingType, target: string, path: string | undefined, apply: (cond: string) => void) => {
-    if (aiBusy) return;
-    setAiBusy(true);
-    try {
-      const { condition } = await api.personas.aiBindingCondition({ type, target, path });
-      apply(condition);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : 'Не удалось сформулировать условие.');
-    } finally {
-      setAiBusy(false);
+  // AI-условие «когда пользоваться» — статус и результат живут в aiJobStore по ключу
+  // (карточка/панель), поэтому переживают уход со страницы; применяются автоматически,
+  // когда готовы, если нужная карточка/панель всё ещё открыта.
+  const condKey = `personas:${persona.id}:binding-condition:${expandedId ?? '_none'}`;
+  const condJob = useAiJob<string>(condKey);
+  const aiBusy = condJob.status === 'running';
+  const panelCondKey = `personas:${persona.id}:binding-condition:panel`;
+  const panelCondJob = useAiJob<string>(panelCondKey);
+  const panelAiBusy = panelCondJob.status === 'running';
+
+  useEffect(() => {
+    if (condJob.status === 'done' && condJob.result != null && expanded) {
+      const cond = condJob.result;
+      setCondDraft(cond);
+      void putBinding(expanded, { condition: cond });
+      resetAiJob(condKey);
+    } else if (condJob.status === 'error') {
+      alert(condJob.error ?? 'Не удалось сформулировать условие.');
+      resetAiJob(condKey);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [condJob.status]);
+
+  useEffect(() => {
+    if (panelCondJob.status === 'done' && panelCondJob.result != null && panel) {
+      setPanel({ ...panel, condition: panelCondJob.result });
+      resetAiJob(panelCondKey);
+    } else if (panelCondJob.status === 'error') {
+      alert(panelCondJob.error ?? 'Не удалось сформулировать условие.');
+      resetAiJob(panelCondKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelCondJob.status]);
+
+  const runAiCondition = () => {
+    if (!expanded) return;
+    runAiJob(condKey, () => api.personas
+      .aiBindingCondition({ type: expanded.type, target: expanded.target, path: expanded.path ?? undefined })
+      .then(r => r.condition));
+  };
+  const runPanelAiCondition = () => {
+    if (!panel?.type || !panel.targetId) return;
+    runAiJob(panelCondKey, () => api.personas
+      .aiBindingCondition({ type: panel.type!, target: panel.targetId!, path: panel.path })
+      .then(r => r.condition));
   };
 
   // «✨ Подобрать автоматически» — параллельно: привязки к существующим источникам +
-  // релевантные навыки из реестра (их предложим установить и привязать)
-  const runSuggest = async () => {
+  // релевантные навыки из реестра (их предложим установить и привязать). Статус и
+  // результат — в aiJobStore, переживают уход со страницы.
+  const runSuggest = () => {
     setPanel(null);
     setExpandedId(null);
-    setSuggest({ loading: true });
-    const [bindingsRes, skillsRes] = await Promise.allSettled([
-      api.personas.suggestBindings(persona.id),
-      api.skills.suggest({ personaId: persona.id }),
-    ]);
-    const candidates = bindingsRes.status === 'fulfilled'
-      ? bindingsRes.value.candidates.map(c => ({ ...c, on: true })) : [];
-    const skills = skillsRes.status === 'fulfilled'
-      ? skillsRes.value.candidates.map(s => ({ ...s, on: true })) : [];
-    // Оба источника упали — показываем ошибку; иначе показываем что есть
-    if (candidates.length === 0 && skills.length === 0 && bindingsRes.status === 'rejected') {
-      setSuggest({ loading: false, error: 'Не удалось подобрать. Попробуйте ещё раз.' });
-      return;
-    }
-    setSuggest({ loading: false, candidates, skills });
+    runAiJob<SuggestResult>(suggestKey, async () => {
+      const [bindingsRes, skillsRes] = await Promise.allSettled([
+        api.personas.suggestBindings(persona.id),
+        api.skills.suggest({ personaId: persona.id }),
+      ]);
+      const candidates = bindingsRes.status === 'fulfilled'
+        ? bindingsRes.value.candidates.map(c => ({ ...c, on: true })) : [];
+      const skills = skillsRes.status === 'fulfilled'
+        ? skillsRes.value.candidates.map(s => ({ ...s, on: true })) : [];
+      // Оба источника упали — показываем ошибку; иначе показываем что есть
+      if (candidates.length === 0 && skills.length === 0 && bindingsRes.status === 'rejected') {
+        throw new Error('Не удалось подобрать. Попробуйте ещё раз.');
+      }
+      return { candidates, skills };
+    });
   };
 
   const acceptSuggest = async () => {
-    const picked = (suggest?.candidates ?? []).filter(c => c.on);
-    const pickedSkills = (suggest?.skills ?? []).filter(s => s.on);
-    if (picked.length === 0 && pickedSkills.length === 0) { setSuggest(null); return; }
-    setSuggest(s => s ? { ...s, adding: true } : s);
+    const result = suggestJob.result;
+    const picked = (result?.candidates ?? []).filter(c => c.on);
+    const pickedSkills = (result?.skills ?? []).filter(s => s.on);
+    if (picked.length === 0 && pickedSkills.length === 0) { resetAiJob(suggestKey); return; }
+    setAdding(true);
     const added: string[] = [];
     try {
       for (const c of picked) {
@@ -264,23 +299,23 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       for (const s of pickedSkills)
         await api.skills.installForPersona(persona.id, s.skill.source, s.skill.skill);
       if (pickedSkills.length > 0) await load();
-      setSuggest(null);
+      resetAiJob(suggestKey);
       flash(added);
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Не удалось добавить.');
-      setSuggest(null);
+      resetAiJob(suggestKey);
       void load();
+    } finally {
+      setAdding(false);
     }
   };
 
   const openAdd = (type?: PersonaBindingType) => {
     void commitDraft(expanded);
     setExpandedId(null);
-    setSuggest(null);
+    resetAiJob(suggestKey);
     setPanel({ step: type ? 2 : 1, type, condition: '', mode: 'auto' });
   };
-
-  const busyOverlay = suggest?.loading || suggest?.adding;
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', background: C.bgMain }}>
@@ -311,7 +346,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         )}
 
         {/* Пустое состояние — приглашение с чипами-примерами */}
-        {bindings !== null && !error && list.length === 0 && !panel && !suggest && (
+        {bindings !== null && !error && list.length === 0 && !panel && suggestJob.status === 'idle' && (
           <div style={{
             marginTop: 14, border: `1.5px dashed ${C.dashed}`, borderRadius: R.xl,
             padding: '24px 22px', textAlign: 'center',
@@ -431,13 +466,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
                           onChange={setCondDraft}
                           onBlur={() => void commitDraft(b)}
                         />
-                        <AiConditionButton
-                          busy={aiBusy}
-                          onClick={() => void runAiCondition(b.type, b.target, b.path ?? undefined, cond => {
-                            setCondDraft(cond);
-                            void putBinding(b, { condition: cond });
-                          })}
-                        />
+                        <AiConditionButton busy={aiBusy} onClick={runAiCondition} />
                       </div>
                       <div style={{ ...fLabel, marginTop: 14 }}>Режим</div>
                       <PillSwitch<PersonaBindingMode>
@@ -466,10 +495,10 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         )}
 
         {/* Кнопки под списком (скрыты, пока открыта панель добавления или подбор) */}
-        {bindings !== null && !error && list.length > 0 && !panel && !suggest && (
+        {bindings !== null && !error && list.length > 0 && !panel && suggestJob.status === 'idle' && (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
             <AddBindingButton onClick={() => openAdd()} />
-            <Button variant="ghostAccent" size="sm" onClick={() => void runSuggest()}>
+            <Button variant="ghostAccent" size="sm" onClick={runSuggest}>
               ✨ Подобрать автоматически
             </Button>
             <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
@@ -477,9 +506,9 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             </Button>
           </div>
         )}
-        {bindings !== null && !error && list.length === 0 && !panel && !suggest && (
+        {bindings !== null && !error && list.length === 0 && !panel && suggestJob.status === 'idle' && (
           <div style={{ display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
-            <Button variant="ghostAccent" size="sm" onClick={() => void runSuggest()}>
+            <Button variant="ghostAccent" size="sm" onClick={runSuggest}>
               ✨ Подобрать автоматически
             </Button>
             <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
@@ -496,44 +525,40 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
           />
         )}
 
-        {/* AI-подбор: спиннер / кандидаты с чекбоксами */}
-        {suggest && (
+        {/* AI-подбор: индикатор / кандидаты с чекбоксами — статус в aiJobStore, переживает уход со страницы */}
+        {suggestJob.status !== 'idle' && (
           <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 14, paddingTop: 18 }}>
-            {suggest.loading ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: C.textMuted }}>
-                <span style={pulseDot} />
-                Подбираю источники под роль персоны — до минуты
-                <style>{'@keyframes cc-bind-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }'}</style>
-              </div>
-            ) : suggest.error ? (
+            {suggestJob.status === 'running' ? (
+              <WaitingIndicator hint="Подбираю источники и навыки под роль персоны — до минуты" />
+            ) : suggestJob.status === 'error' ? (
               <div style={{ fontSize: 12.5, color: C.dangerText }}>
-                {suggest.error}{' '}
-                <button onClick={() => void runSuggest()} style={linkBtn}>Повторить</button>{' '}
-                <button onClick={() => setSuggest(null)} style={{ ...linkBtn, color: C.textMuted }}>Закрыть</button>
+                {suggestJob.error}{' '}
+                <button onClick={runSuggest} style={linkBtn}>Повторить</button>{' '}
+                <button onClick={() => resetAiJob(suggestKey)} style={{ ...linkBtn, color: C.textMuted }}>Закрыть</button>
               </div>
-            ) : (suggest.candidates ?? []).length === 0 && (suggest.skills ?? []).length === 0 ? (
+            ) : (suggestJob.result?.candidates ?? []).length === 0 && (suggestJob.result?.skills ?? []).length === 0 ? (
               <div style={{ fontSize: 12.5, color: C.textMuted }}>
                 Ничего подходящего не нашлось — попробуйте добавить привязку вручную.{' '}
-                <button onClick={() => setSuggest(null)} style={linkBtn}>Закрыть</button>
+                <button onClick={() => resetAiJob(suggestKey)} style={linkBtn}>Закрыть</button>
               </div>
             ) : (
               <>
                 {/* Привязки к существующим источникам */}
-                {suggest.candidates!.length > 0 && (
+                {suggestJob.result!.candidates.length > 0 && (
                   <>
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
                       <SectionLabel>Умения подобраны автоматически</SectionLabel>
                       <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
-                        {suggest.candidates!.filter(c => c.on).length} из {suggest.candidates!.length}
+                        {suggestJob.result!.candidates.filter(c => c.on).length} из {suggestJob.result!.candidates.length}
                       </span>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-                      {suggest.candidates!.map(c => (
+                      {suggestJob.result!.candidates.map(c => (
                         <div
                           key={c.id}
-                          onClick={() => setSuggest(s => s?.candidates
-                            ? { ...s, candidates: s.candidates.map(x => x.id === c.id ? { ...x, on: !x.on } : x) }
-                            : s)}
+                          onClick={() => patchAiJobResult<SuggestResult>(suggestKey, prev => ({
+                            ...prev, candidates: prev.candidates.map(x => x.id === c.id ? { ...x, on: !x.on } : x),
+                          }))}
                           style={{
                             display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
                             background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
@@ -556,21 +581,21 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
                 )}
 
                 {/* Навыки из реестра — установить и привязать */}
-                {(suggest.skills ?? []).length > 0 && (
+                {suggestJob.result!.skills.length > 0 && (
                   <>
-                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginTop: suggest.candidates!.length > 0 ? 18 : 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginTop: suggestJob.result!.candidates.length > 0 ? 18 : 0 }}>
                       <SectionLabel>Навыки из реестра</SectionLabel>
                       <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
-                        {suggest.skills!.filter(s => s.on).length} из {suggest.skills!.length}
+                        {suggestJob.result!.skills.filter(s => s.on).length} из {suggestJob.result!.skills.length}
                       </span>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-                      {suggest.skills!.map(s => (
+                      {suggestJob.result!.skills.map(s => (
                         <div
                           key={`${s.skill.source}@${s.skill.skill}`}
-                          onClick={() => setSuggest(st => st?.skills
-                            ? { ...st, skills: st.skills.map(x => x.skill.skill === s.skill.skill && x.skill.source === s.skill.source ? { ...x, on: !x.on } : x) }
-                            : st)}
+                          onClick={() => patchAiJobResult<SuggestResult>(suggestKey, prev => ({
+                            ...prev, skills: prev.skills.map(x => x.skill.skill === s.skill.skill && x.skill.source === s.skill.source ? { ...x, on: !x.on } : x),
+                          }))}
                           style={{
                             display: 'flex', alignItems: 'flex-start', gap: 12, cursor: 'pointer',
                             background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
@@ -597,11 +622,11 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
                   ✨ Предложено ИИ по роли и доступным источникам. Навыки из реестра будут установлены и привязаны. Ничего не сохранено, пока вы не подтвердите.
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
-                  <Button variant="ghost" size="sm" disabled={busyOverlay} onClick={() => setSuggest(null)}>Отмена</Button>
-                  <Button variant="primary" size="sm" loading={suggest.adding}
-                    disabled={busyOverlay || ((suggest.candidates ?? []).every(c => !c.on) && (suggest.skills ?? []).every(s => !s.on))}
+                  <Button variant="ghost" size="sm" disabled={adding} onClick={() => resetAiJob(suggestKey)}>Отмена</Button>
+                  <Button variant="primary" size="sm" loading={adding}
+                    disabled={adding || (suggestJob.result!.candidates.every(c => !c.on) && suggestJob.result!.skills.every(s => !s.on))}
                     onClick={() => void acceptSuggest()}>
-                    {suggest.adding ? 'Добавляю…' : 'Добавить выбранные'}
+                    {adding ? 'Добавляю…' : 'Добавить выбранные'}
                   </Button>
                 </div>
               </>
@@ -615,14 +640,11 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             panel={panel}
             accent={accent}
             isMobile={isMobile}
-            aiBusy={aiBusy}
+            aiBusy={panelAiBusy}
             onChange={setPanel}
-            onClose={() => setPanel(null)}
+            onClose={() => { resetAiJob(panelCondKey); setPanel(null); }}
             onCommit={() => void commitPanel()}
-            onAiCondition={(apply) => {
-              if (panel.type && panel.targetId)
-                void runAiCondition(panel.type, panel.targetId, panel.path, apply);
-            }}
+            onAiCondition={runPanelAiCondition}
           />
         )}
       </div>
@@ -639,7 +661,7 @@ function AddPanel({ panel, accent, isMobile, aiBusy, onChange, onClose, onCommit
   onChange: (p: AddPanelState) => void;
   onClose: () => void;
   onCommit: () => void;
-  onAiCondition: (apply: (cond: string) => void) => void;
+  onAiCondition: () => void;
 }) {
   return (
     <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 14, paddingTop: 18 }}>
@@ -699,7 +721,7 @@ function AddPanel({ panel, accent, isMobile, aiBusy, onChange, onClose, onCommit
               value={panel.condition}
               onChange={v => onChange({ ...panel, condition: v })}
             />
-            <AiConditionButton busy={aiBusy} onClick={() => onAiCondition(cond => onChange({ ...panel, condition: cond }))} />
+            <AiConditionButton busy={aiBusy} onClick={onAiCondition} />
           </div>
           <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>Пусто — персона решит сама по ситуации</div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
@@ -1027,7 +1049,3 @@ const xBtn: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
 };
 
-const pulseDot: React.CSSProperties = {
-  width: 8, height: 8, borderRadius: R.full, background: C.accent, flexShrink: 0,
-  animation: 'cc-bind-pulse 1.2s ease-in-out infinite',
-};

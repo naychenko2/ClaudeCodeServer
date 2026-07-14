@@ -75,14 +75,14 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
         {memoryAll.length === 0 ? (
           mem === null ? <Skeleton /> : <Muted>Пока ничего не запомнено.</Muted>
         ) : (
-          <ExpandableRows items={memoryAll} previewCount={5}
+          <ExpandableRows items={memoryAll} previewCount={3}
             renderRow={m => <Row key={m.id} icon={memoryIcon(m.type)}>{m.text}</Row>} />
         )}
         {projectId && (teamMem === null || teamMem.length > 0) && (
           <>
             <div style={subsectionTitle}>Команда проекта{teamMem ? ` · ${teamMem.length}` : ''}</div>
             {teamMem === null ? <Skeleton /> : (
-              <ExpandableRows items={teamMem} previewCount={5}
+              <ExpandableRows items={teamMem} previewCount={3}
                 renderRow={e => <Row key={e.id} icon={<Users size={13} color={C.accent} />}>{e.text}</Row>} />
             )}
           </>

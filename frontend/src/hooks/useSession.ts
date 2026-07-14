@@ -174,9 +174,11 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     const notify = () => setTick(n => n + 1);
     listeners.add(notify);
 
-    // Признак группового чата — до загрузки истории (влияет на normalizeHistory)
-    if (getState(sessionId).isGroup !== !!isGroup)
-      setState(sessionId, prev => ({ ...prev, isGroup: !!isGroup }));
+    // Признак группового чата — до загрузки истории (влияет на normalizeHistory).
+    // Только от потребителя, который его знает: useSessionArtifacts зовёт хук без
+    // isGroup и не должен перетирать флаг, выставленный ChatPanel.
+    if (isGroup !== undefined && getState(sessionId).isGroup !== isGroup)
+      setState(sessionId, prev => ({ ...prev, isGroup }));
 
     ensureJoined(sessionId, projectId);
 
@@ -195,11 +197,14 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
 
     return () => {
       listeners.delete(notify);
-      // Покидаем группу SignalR — сервер снимает счётчик зрителей и может слать
-      // уведомления (push/тост), когда персона задаёт вопрос или запрашивает разрешение.
-      // Сбрасываем isJoined, чтобы при возврате в этот чат гарантированно перезайти.
-      leaveSession(sessionId);
-      setState(sessionId, prev => ({ ...prev, isJoined: false }));
+      // Покидаем группу SignalR только когда сессию не смотрит больше ни один компонент:
+      // ChatPanel и ArtifactsPanel (useSessionArtifacts) делят одну сессию, и уход одного
+      // не должен рвать realtime другого. Последний ушедший снимает счётчик зрителей
+      // (сервер сможет слать push/тост) и сбрасывает isJoined для перезахода при возврате.
+      if ((_listeners.get(sessionId)?.size ?? 0) === 0) {
+        leaveSession(sessionId);
+        setState(sessionId, prev => ({ ...prev, isJoined: false }));
+      }
     };
   }, [sessionId, projectId, isGroup]);
 

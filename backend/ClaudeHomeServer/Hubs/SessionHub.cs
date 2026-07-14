@@ -58,7 +58,7 @@ public class SessionHub : Hub
     public async Task JoinSession(string sessionId)
     {
         if (!OwnsSession(sessionId)) throw Denied();
-        _sessions.AddViewer(sessionId);
+        _sessions.AddViewer(sessionId, Context.ConnectionId);
         await Groups.AddToGroupAsync(Context.ConnectionId, sessionId);
 
         // Новый клиент сразу получает текущий статус (чтобы не пропустить working при workflow)
@@ -77,7 +77,7 @@ public class SessionHub : Hub
 
     public async Task LeaveSession(string sessionId)
     {
-        _sessions.RemoveViewer(sessionId);
+        _sessions.RemoveViewer(sessionId, Context.ConnectionId);
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, sessionId);
     }
 
@@ -107,6 +107,9 @@ public class SessionHub : Hub
     public override Task OnDisconnectedAsync(Exception? exception)
     {
         _watcher.RemoveConnection(Context.ConnectionId);
+        // Обрыв без LeaveSession (закрытая вкладка, потеря сети) — иначе зритель «застревает»
+        // и навсегда глушит проактивные уведомления сессии (HasViewers)
+        _sessions.RemoveConnectionViewers(Context.ConnectionId);
         _diag.RecordDisconnect(Context.ConnectionId, exception);
         return base.OnDisconnectedAsync(exception);
     }

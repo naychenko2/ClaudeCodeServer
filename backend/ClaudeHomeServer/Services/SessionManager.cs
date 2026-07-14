@@ -231,8 +231,10 @@ public class SessionManager
                 if (completed != recallTask) return null;   // таймаут — ход без recall
                 var recall = await recallTask;
                 if (recall?.Text is null) return null;
-                // Манифест: hits памяти → айтемы (F3)
-                var items = recall.Hits.Select(h => new RecallItem("memory", h.Id, h.Text, null)).ToList();
+                // Манифест: hits личной памяти + команды проекта → айтемы (F3)
+                var items = recall.Hits.Select(h => new RecallItem("memory", h.Id, h.Text, null))
+                    .Concat(recall.TeamHits.Select(e => new RecallItem("team", e.Id, e.Text, null)))
+                    .ToList();
                 return new RecallBlock(recall.Text, items);
             }
             catch (Exception ex)

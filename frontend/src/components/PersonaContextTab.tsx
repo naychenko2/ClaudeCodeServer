@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { Brain, Calendar, Cog, BookOpen, FileText, Folder } from 'lucide-react';
+import { Brain, Calendar, Cog, BookOpen, FileText, Folder, Users } from 'lucide-react';
 import { api } from '../lib/api';
 import { usePersonas, personaLabel } from '../lib/personas';
 import { useRecallManifest } from '../lib/recallManifest';
@@ -50,7 +50,7 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
       {usedNow.length > 0 && (
         <Section title="Использовано сейчас">
           {usedNow.map((it, i) => (
-            <Row key={it.ref ?? i} icon={it.kind === 'memory' ? <Brain size={13} color={C.info} /> : it.kind === 'note' ? <BookOpen size={13} color={C.info} /> : <FileText size={13} color={C.info} />}>
+            <Row key={it.ref ?? i} icon={recallIcon(it.kind)}>
               {it.title}
             </Row>
           ))}
@@ -88,6 +88,12 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
   );
 }
 
+function recallIcon(kind: string) {
+  if (kind === 'memory') return <Brain size={13} color={C.info} />;
+  if (kind === 'note') return <BookOpen size={13} color={C.info} />;
+  if (kind === 'team') return <Users size={13} color={C.info} />;
+  return <FileText size={13} color={C.info} />;
+}
 function memoryIcon(t: PersonaMemoryType) {
   if (t === 'semantic') return <Brain size={13} color={C.info} />;
   if (t === 'episodic') return <Calendar size={13} color={C.info} />;

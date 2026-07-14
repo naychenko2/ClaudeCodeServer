@@ -61,29 +61,33 @@ public class TeamMemoryService
         }
     }
 
-    // Полнотекстовый recall: записи, разделяющие слова запроса, топ по перекрытию. null — пусто.
+    // Результат recall'а: markdown-блок для промпта + записи, реально попавшие в блок
+    // (для манифеста атрибуции F3 — «персона опирается на…», см. SessionManager). Text=null — пусто.
+    public sealed record TeamRecallResult(string? Text, IReadOnlyList<TeamMemoryEntry> Used);
+
+    // Полнотекстовый recall: записи, разделяющие слова запроса, топ по перекрытию.
     // MVP-качество: без векторизации; для команды проектов обычно хватает (записей немного).
-    public string? BuildRecallBlock(string ownerId, string projectId, string query, int topK = 4)
+    public TeamRecallResult BuildRecallBlock(string ownerId, string projectId, string query, int topK = 4)
     {
         List<TeamMemoryEntry> snapshot;
         lock (_saveLock) snapshot = Get(ownerId, projectId).ToList();
-        if (snapshot.Count == 0) return null;
+        if (snapshot.Count == 0) return new TeamRecallResult(null, []);
 
         var q = Tokenize(query);
-        if (q.Length == 0) return null;
+        if (q.Length == 0) return new TeamRecallResult(null, []);
         var ranked = snapshot
             .Select(e => (e, score: Tokenize(e.Text).Count(t => q.Contains(t))))
             .Where(x => x.score > 0)
             .OrderByDescending(x => x.score)
             .Take(topK).ToList();
-        if (ranked.Count == 0) return null;
+        if (ranked.Count == 0) return new TeamRecallResult(null, []);
 
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("## Память команды проекта");
         sb.AppendLine("Общие факты и договорённости проекта (помнят все персоны команды):");
         foreach (var (e, _) in ranked)
             sb.AppendLine($"- {e.Text}");
-        return sb.ToString();
+        return new TeamRecallResult(sb.ToString(), ranked.Select(x => x.e).ToList());
     }
 
     private List<TeamMemoryEntry> Get(string ownerId, string projectId) =>

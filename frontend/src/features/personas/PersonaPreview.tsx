@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { MessageSquare, Clock, FileText, StickyNote, GitBranch, ListChecks, AtSign } from 'lucide-react';
+import { MessageSquare } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import type { AutomationTriggerType, Persona, PersonaAutomationRule, PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Session, Task } from '../../types';
+import type { Persona, PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Session, Task } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
@@ -11,6 +11,7 @@ import { relativeTime } from '../projects/projectUtil';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
 import { BindingModeBadge, BindingTypeIcon, bindingPlural, bindingsCounter, useBindingLabels } from './bindingMeta';
+import { TRIGGER_META, ACTION_META, triggerDetails } from './automationMeta';
 
 // Режим «Обзор» студии персоны: read-only визитка со сводкой — кто это,
 // как настроена (модель/возможности/память), её характер и недавние разговоры.
@@ -23,21 +24,7 @@ const TOOL_TITLES: Record<string, string> = {
   web: 'Веб',
 };
 
-// Метаданные триггеров для карточек проактивности
-const TRIGGER_META: Record<AutomationTriggerType, { label: string; Icon: React.ComponentType<{ size?: number; strokeWidth?: number }>; bg: string; fg: string }> = {
-  timer:      { label: 'Таймер',         Icon: Clock,      bg: C.accentLight, fg: C.accent },
-  file:       { label: 'Файлы',          Icon: FileText,   bg: C.bgSelected,  fg: C.textSecondary },
-  note:       { label: 'Заметки',        Icon: StickyNote, bg: C.successBg,   fg: C.successText },
-  gitCommit:  { label: 'Коммиты',        Icon: GitBranch,  bg: C.infoBg,      fg: C.info },
-  taskStatus: { label: 'Статус задачи',   Icon: ListChecks, bg: C.planLight,   fg: C.plan },
-  mention:    { label: 'Упоминание',     Icon: AtSign,     bg: C.warningBg,   fg: C.warning },
-};
-
-// Подписи действий в подзаголовке карточки
-const ACTION_LABEL: Record<string, string> = {
-  gate: 'Сообщить',
-  work: 'Полный ход',
-};
+// Метаданные триггеров/действий — общие с вкладкой «Проактивность» (./automationMeta)
 
 // Подписи типов памяти для мини-бейджа у записи
 const MEMORY_TYPE_LABEL: Record<PersonaMemoryType, string> = {
@@ -429,32 +416,6 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   const automationRules = persona.automationRules ?? [];
   const enabledRulesCount = automationRules.filter(r => r.enabled).length;
 
-  // Короткая подпись параметров триггера для подзаголовка карточки
-  function triggerBrief(rule: PersonaAutomationRule): string {
-    const args = (rule.trigger.args ?? {}) as Record<string, any>;
-    const schedule = args.schedule as Record<string, any> | undefined;
-    switch (rule.trigger.type) {
-      case 'timer': {
-        if (args.intervalMinutes) return `каждые ${args.intervalMinutes} мин`;
-        const type = schedule?.type ?? args.type;
-        const kind = type === 'weekdays' ? 'по будням'
-          : type === 'weekly' ? 'по дням'
-          : 'ежедневно';
-        const time = schedule?.time ?? args.time;
-        return time ? `${kind} в ${time}` : kind;
-      }
-      case 'file': return String(args.glob ?? 'любые файлы');
-      case 'note': return 'заметки';
-      case 'gitCommit': return 'репозиторий';
-      case 'taskStatus': {
-        const from = args.from, to = args.to;
-        return from && to ? `${from} → ${to}` : 'любая смена';
-      }
-      case 'mention': return 'когда упоминают';
-      default: return '';
-    }
-  }
-
   const automationSection = (
     <div style={section}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
@@ -484,9 +445,9 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {automationRules.map(rule => {
               const meta = TRIGGER_META[rule.trigger.type] ?? TRIGGER_META.timer;
-              const act = ACTION_LABEL[rule.action.weight] ?? 'Сообщить';
+              const act = ACTION_META[rule.action.weight]?.label ?? 'Сообщить';
               const dim = !rule.enabled;
-              const brief = triggerBrief(rule);
+              const brief = triggerDetails(rule);
               return (
                 <div
                   key={rule.id}

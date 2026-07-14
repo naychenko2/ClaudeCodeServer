@@ -11,7 +11,14 @@ function emit() { _listeners.forEach(fn => fn()); }
 
 // SignalR-обработчик вызывает это при приходе recall_manifest
 export function setRecallManifest(sessionId: string, items: RecallItem[]): void {
+  // Потолок LRU: манифест нужен открытым чатам — не копим на всю жизнь вкладки.
+  // Переинсерт освежает позицию (Map хранит порядок вставки), лишнее — самое старое.
+  _bySession.delete(sessionId);
   _bySession.set(sessionId, items);
+  if (_bySession.size > 50) {
+    const oldest = _bySession.keys().next().value;
+    if (oldest !== undefined) _bySession.delete(oldest);
+  }
   emit();
 }
 

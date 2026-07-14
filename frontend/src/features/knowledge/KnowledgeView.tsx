@@ -76,10 +76,14 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    // alive-флаг: при частых knowledge_changed (version бампается подряд) устаревший
+    // ответ не должен перетирать более свежий список документов
+    let alive = true;
     setDocs(null); setLoadErr(null);
     api.knowledgeBases.get(kb.id)
-      .then(d => setDocs(d.documents))
-      .catch(e => setLoadErr(e instanceof Error ? e.message : 'Не удалось загрузить'));
+      .then(d => { if (alive) setDocs(d.documents); })
+      .catch(e => { if (alive) setLoadErr(e instanceof Error ? e.message : 'Не удалось загрузить'); });
+    return () => { alive = false; };
   }, [kb.id, version]);
 
   useEffect(() => {

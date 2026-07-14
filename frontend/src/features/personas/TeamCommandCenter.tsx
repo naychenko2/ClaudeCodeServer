@@ -7,10 +7,13 @@ import {
 import type { ComponentType } from 'react';
 import type { Persona, Project, Session, Task, TeamMemoryEntry, TeamMemberDraft } from '../../types';
 import { api } from '../../lib/api';
+import { onMessage } from '../../lib/signalr';
+import { useIsMobile } from '../../lib/breakpoints';
 import { usePersonas, personaLabel } from '../../lib/personas';
 import { projectColor } from '../../lib/tasks';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { PersonaAvatar } from './PersonaAvatar';
+import { SPECIALTY_LABEL } from './automationMeta';
 import { Modal, IconButton, Menu, MenuItem } from '../../components/ui';
 import { Toolbar, PillSwitch, tbBtnPrimary } from '../../components/Toolbar';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -62,6 +65,20 @@ export function TeamCommandCenter({
     try { setTasks(await api.tasks.listByProject(project.id)); } catch { setTasks([]); }
   };
   useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, [project.id, limit]);
+
+  // Realtime: перечитываем ленту/память/задачи по событиям изменений (с дебаунсом) —
+  // иначе «Активность» и индикаторы «в работе»/«на связи» заморожены до перемонтирования.
+  // Ходы чатов (chat_turn) отдельного realtime-события не имеют — их закрывает мягкий поллинг.
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const debounced = () => { if (t) clearTimeout(t); t = setTimeout(() => { void refresh(); }, 1500); };
+    const off = onMessage(msg => {
+      if (msg.type === 'task_changed' || msg.type === 'notes_changed' || msg.type === 'personas_changed') debounced();
+    });
+    const poll = setInterval(() => { void refresh(); }, 60_000);
+    return () => { off(); if (t) clearTimeout(t); clearInterval(poll); };
+    // eslint-disable-next-line
+  }, [project.id, limit]);
 
   const inFlight = useMemo(() => {
     const m = new Map<string, string>();
@@ -463,7 +480,13 @@ function GroupChatPicker({ team, onClose, onCreated }: { team: Persona[]; onClos
   const toggle = (id: string) => setSel(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 4 ? [...prev, id] : prev);
   const create = async () => {
     setBusy(true);
-    try { const s = await api.chats.createGroup(sel); sessionStorage.setItem('cc_auto_discuss', s.id); onCreated(s); } finally { setBusy(false); }
+    try { const s = await api.chats.createGroup(sel); sessionStorage.setItem('cc_auto_discuss', s.id); onCreated(s); }
+    catch (e) {
+      window.dispatchEvent(new CustomEvent('cc-local-toast', {
+        detail: { title: 'Не удалось создать групповой чат', body: e instanceof Error ? e.message : '', kind: 'info' },
+      }));
+    }
+    finally { setBusy(false); }
   };
   return (
     <Modal width={420} title="Созвать команду" subtitle="Выберите 2–4 участников. Первый — ведущий." onClose={onClose}
@@ -624,11 +647,6 @@ const EVENT_META: Record<string, { Icon: ComponentType<{ size?: number; color?: 
   team_joined: { Icon: UserPlus, color: C.success, bg: C.successBg, label: 'В команде' },
   team_left: { Icon: UserMinus, color: C.textSecondary, bg: C.bgInset, label: 'Покинул(а) команду' },
 };
-const SPECIALTY_LABEL: Record<string, string> = {
-  analyst: 'Аналитик', planner: 'Планировщик', reviewer: 'Ревьюер', executor: 'Исполнитель',
-  secretary: 'Секретарь', coordinator: 'Координатор', mentor: 'Ментор', designer: 'Дизайнер', consultant: 'Консультант', librarian: 'Библиотекарь',
-};
-
 function StatusChip({ children, color, dot }: { children: React.ReactNode; color: string; dot?: boolean }) {
   return <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, fontFamily: FONT.sans, color }}>{dot && <span style={{ width: 7, height: 7, borderRadius: '50%', background: color }} />}{children}</span>;
 }
@@ -641,11 +659,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 function Muted({ children }: { children: React.ReactNode }) {
   return <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans }}>{children}</div>;
-}
-function useIsMobile(): boolean {
-  const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
-  useEffect(() => { const mq = window.matchMedia('(max-width: 767px)'); const h = (e: MediaQueryListEvent) => setM(e.matches); mq.addEventListener('change', h); return () => mq.removeEventListener('change', h); }, []);
-  return m;
 }
 function shortAgo(iso: string): string {
   const t = new Date(iso).getTime(); if (!Number.isFinite(t)) return '';

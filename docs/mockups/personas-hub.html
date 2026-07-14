@@ -381,6 +381,42 @@
     display:flex;align-items:center;justify-content:center;flex:none;
   }
 
+  /* модалка «вся активность» */
+  .modal-overlay{
+    position:fixed;inset:0;background:rgba(20,16,10,0.45);display:flex;align-items:center;justify-content:center;
+    z-index:100;opacity:0;pointer-events:none;transition:opacity .18s ease;padding:24px;
+  }
+  .modal-overlay.show{opacity:1;pointer-events:auto;}
+  .activity-modal{
+    width:640px;max-width:100%;max-height:84vh;background:var(--bg-main);border-radius:20px;
+    box-shadow:0 24px 70px rgba(20,16,10,0.35);display:flex;flex-direction:column;overflow:hidden;
+    transform:translateY(10px);transition:transform .18s ease;
+  }
+  .modal-overlay.show .activity-modal{transform:translateY(0);}
+  .modal-head{
+    flex:none;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;
+    padding:22px 24px 16px;border-bottom:1px solid var(--border-light-alt);
+  }
+  .modal-head h2{font-family:'PT Serif',serif;font-size:20px;font-weight:700;margin:0 0 4px;}
+  .modal-close{
+    flex:none;width:30px;height:30px;border-radius:9px;border:1px solid var(--border-light-alt);
+    background:var(--bg-white);color:var(--text-muted);display:flex;align-items:center;justify-content:center;
+    cursor:pointer;transition:background .12s,color .12s;
+  }
+  .modal-close:hover{background:var(--bg-hover);color:var(--text-primary);}
+  .modal-filters{flex:none;display:flex;gap:7px;flex-wrap:wrap;padding:14px 24px;border-bottom:1px solid var(--border-light-alt);}
+  .filter-chip{
+    font-size:12px;font-weight:600;padding:6px 12px;border-radius:999px;border:1px solid var(--border-light-alt);
+    background:var(--bg-white);color:var(--text-muted);cursor:pointer;transition:all .12s;white-space:nowrap;
+  }
+  .filter-chip:hover{border-color:#E9C8B4;}
+  .filter-chip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+  .modal-body{flex:1;min-height:0;overflow-y:auto;padding:20px 24px 26px;}
+  .modal-body::-webkit-scrollbar{width:9px;}
+  .modal-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:6px;}
+  .modal-body::-webkit-scrollbar-track{background:transparent;}
+  .timeline-item.filtered-out{display:none;}
+
   /* toast */
   .toast{
     position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(16px);
@@ -417,6 +453,7 @@
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
   <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-4 7.5"/></symbol>
   <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
 </svg>
 
 <div class="window">
@@ -718,6 +755,7 @@
                 <h2>Активность</h2>
                 <div class="section-sub">Что происходило недавно</div>
               </div>
+              <div class="section-link" id="openActivityModal">Смотреть всё <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
             </div>
 
             <div class="timeline-day">
@@ -785,11 +823,168 @@
                 </div>
               </div>
             </div>
+
           </div>
         </aside>
       </div>
 
     </main>
+
+    <!-- МОДАЛКА: вся активность подробно -->
+    <div class="modal-overlay" id="activityModalOverlay">
+      <div class="activity-modal">
+        <div class="modal-head">
+          <div>
+            <h2>Вся активность</h2>
+            <div class="section-sub">Полная лента событий — по всем помощникам</div>
+          </div>
+          <button class="modal-close" id="closeActivityModal" aria-label="Закрыть"><svg class="icon" width="16" height="16"><use href="#i-close"/></svg></button>
+        </div>
+
+        <div class="modal-filters" id="modalFilters">
+          <div class="filter-chip active" data-person="all">Все</div>
+          <div class="filter-chip" data-person="mark">Ревьюер (Марк)</div>
+          <div class="filter-chip" data-person="polina">Секретарь (Полина)</div>
+          <div class="filter-chip" data-person="sizif">Оркестратор (Сизиф)</div>
+          <div class="filter-chip" data-person="gefest">Мастер (Гефест)</div>
+          <div class="filter-chip" data-person="prometey">Планировщик (Прометей)</div>
+        </div>
+
+        <div class="modal-body">
+          <div class="timeline-day">
+            <div class="timeline-day-label">Сегодня</div>
+            <div class="timeline-track">
+              <div class="timeline-item" data-kind="chat" data-title="Ревьюер (Марк)" data-person="mark">
+                <div class="timeline-marker"><svg class="icon"><use href="#i-chat"/></svg></div>
+                <div class="timeline-top-row">
+                  <div class="timeline-who">Ревьюер (Марк) <span class="timeline-action">проверил PR #482</span></div>
+                  <div class="timeline-time">2 часа назад</div>
+                </div>
+                <div class="timeline-desc">Два места без обработки ошибок, один лишний console.log.</div>
+              </div>
+              <div class="timeline-item" data-kind="task" data-title="Оркестратор (Сизиф)" data-person="sizif">
+                <div class="timeline-marker"><svg class="icon"><use href="#i-check"/></svg></div>
+                <div class="timeline-top-row">
+                  <div class="timeline-who">Оркестратор (Сизиф) <span class="timeline-action">выполнил задачу</span></div>
+                  <div class="timeline-time">4 часа назад</div>
+                </div>
+                <div class="timeline-desc">«Миграция на v2»: разбил на 4 подзадачи и назначил исполнителей.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-day">
+            <div class="timeline-day-label">Вчера</div>
+            <div class="timeline-track">
+              <div class="timeline-item" data-kind="memory" data-title="Секретарь (Полина)" data-person="polina">
+                <div class="timeline-marker"><svg class="icon"><use href="#i-brain"/></svg></div>
+                <div class="timeline-top-row">
+                  <div class="timeline-who">Секретарь (Полина) <span class="timeline-action">запомнила факт</span></div>
+                  <div class="timeline-time">18:40</div>
+                </div>
+                <div class="timeline-desc">Совещание по бюджету — каждый вторник в 15:00.</div>
+              </div>
+              <div class="timeline-item" data-kind="mention" data-title="Оркестратор (Сизиф)" data-person="sizif">
+                <div class="timeline-marker"><svg class="icon"><use href="#i-at"/></svg></div>
+                <div class="timeline-top-row">
+                  <div class="timeline-who">Оркестратор (Сизиф) <span class="timeline-action">спросил «Гефеста»</span></div>
+                  <div class="timeline-time">11:05</div>
+                </div>
+                <div class="timeline-desc">Уточнил готовность API перед релизом — прямо в переписке с вами.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-day">
+            <div class="timeline-day-label">Позавчера</div>
+            <div class="timeline-track">
+              <div class="timeline-item" data-kind="chat" data-title="Мастер (Гефест)" data-person="gefest">
+                <div class="timeline-marker"><svg class="icon"><use href="#i-chat"/></svg></div>
+                <div class="timeline-top-row">
+                  <div class="timeline-who">Мастер (Гефест) <span class="timeline-action">обсудил рефакторинг</span></div>
+                  <div class="timeline-time">16:12</div>
+                </div>
+                <div class="timeline-desc">Модуль авторизации — вынес план из 3 шагов.</div>
+              </div>
+              <div class="timeline-item" data-kind="task" data-title="Планировщик (Прометей)" data-person="prometey">
+                <div class="timeline-marker"><svg class="icon"><use href="#i-check"/></svg></div>
+                <div class="timeline-top-row">
+                  <div class="timeline-who">Планировщик (Прометей) <span class="timeline-action">составил план</span></div>
+                  <div class="timeline-time">10:30</div>
+                </div>
+                <div class="timeline-desc">Расписал миграцию на v2 по неделям.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-day">
+            <div class="timeline-day-label">На этой неделе</div>
+            <div class="timeline-track">
+              <div class="timeline-item" data-kind="created" data-title="Секретарь (Полина)" data-person="polina">
+                <div class="timeline-marker"><svg class="icon"><use href="#i-plus"/></svg></div>
+                <div class="timeline-top-row">
+                  <div class="timeline-who">Вы <span class="timeline-action">создали «Секретарь (Полина)»</span></div>
+                  <div class="timeline-time">2 дня назад</div>
+                </div>
+                <div class="timeline-desc">Шаблон «Секретарь» — приветствие и характер настроены автоматически.</div>
+              </div>
+              <div class="timeline-item" data-kind="task" data-title="Ревьюер (Марк)" data-person="mark">
+                <div class="timeline-marker"><svg class="icon"><use href="#i-check"/></svg></div>
+                <div class="timeline-top-row">
+                  <div class="timeline-who">Ревьюер (Марк) <span class="timeline-action">отклонил PR #479</span></div>
+                  <div class="timeline-time">3 дня назад</div>
+                </div>
+                <div class="timeline-desc">Не хватало тестов на граничный случай — вернул с комментариями.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-day">
+            <div class="timeline-day-label">На прошлой неделе</div>
+            <div class="timeline-track">
+              <div class="timeline-item" data-kind="mention" data-title="Планировщик (Прометей)" data-person="prometey">
+                <div class="timeline-marker"><svg class="icon"><use href="#i-at"/></svg></div>
+                <div class="timeline-top-row">
+                  <div class="timeline-who">Планировщик (Прометей) <span class="timeline-action">спросил «Сизифа»</span></div>
+                  <div class="timeline-time">9 дней назад</div>
+                </div>
+                <div class="timeline-desc">Уточнил приоритеты спринта перед разбивкой плана.</div>
+              </div>
+              <div class="timeline-item" data-kind="memory" data-title="Мастер (Гефест)" data-person="gefest">
+                <div class="timeline-marker"><svg class="icon"><use href="#i-brain"/></svg></div>
+                <div class="timeline-top-row">
+                  <div class="timeline-who">Мастер (Гефест) <span class="timeline-action">запомнил факт</span></div>
+                  <div class="timeline-time">11 дней назад</div>
+                </div>
+                <div class="timeline-desc">Деплой — только по средам после 14:00.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-day">
+            <div class="timeline-day-label">В этом месяце</div>
+            <div class="timeline-track">
+              <div class="timeline-item" data-kind="created" data-title="Ревьюер (Марк)" data-person="mark">
+                <div class="timeline-marker"><svg class="icon"><use href="#i-plus"/></svg></div>
+                <div class="timeline-top-row">
+                  <div class="timeline-who">Вы <span class="timeline-action">создали «Ревьюер (Марк)»</span></div>
+                  <div class="timeline-time">18 дней назад</div>
+                </div>
+                <div class="timeline-desc">Шаблон «Ревьюер» — доступ настроен на чтение кода без правок.</div>
+              </div>
+              <div class="timeline-item" data-kind="chat" data-title="Секретарь (Полина)" data-person="polina">
+                <div class="timeline-marker"><svg class="icon"><use href="#i-chat"/></svg></div>
+                <div class="timeline-top-row">
+                  <div class="timeline-who">Секретарь (Полина) <span class="timeline-action">подготовила повестку</span></div>
+                  <div class="timeline-time">21 день назад</div>
+                </div>
+                <div class="timeline-desc">Ретро по спринту — разослала участникам заранее.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -895,6 +1090,38 @@
       var kind = item.dataset.kind;
       var fn = timelineToast[kind] || timelineToast.chat;
       showToast(fn(item.dataset.title));
+    });
+  });
+
+  /* ---------- активность: модалка «вся активность» ---------- */
+  var activityOverlay = document.getElementById('activityModalOverlay');
+  function openActivityModal(){ activityOverlay.classList.add('show'); }
+  function closeActivityModal(){ activityOverlay.classList.remove('show'); }
+  document.getElementById('openActivityModal').addEventListener('click', openActivityModal);
+  document.getElementById('closeActivityModal').addEventListener('click', closeActivityModal);
+  activityOverlay.addEventListener('click', function(e){
+    if(e.target === activityOverlay) closeActivityModal();
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape' && activityOverlay.classList.contains('show')) closeActivityModal();
+  });
+
+  /* ---------- активность: фильтр по персоне внутри модалки ---------- */
+  var modalDays = activityOverlay.querySelectorAll('.modal-body .timeline-day');
+  document.querySelectorAll('#modalFilters .filter-chip').forEach(function(chip){
+    chip.addEventListener('click', function(){
+      document.querySelectorAll('#modalFilters .filter-chip').forEach(function(c){ c.classList.remove('active'); });
+      chip.classList.add('active');
+      var person = chip.dataset.person;
+      modalDays.forEach(function(day){
+        var visible = 0;
+        day.querySelectorAll('.timeline-item').forEach(function(item){
+          var match = person === 'all' || item.dataset.person === person;
+          item.classList.toggle('filtered-out', !match);
+          if(match) visible++;
+        });
+        day.style.display = visible ? '' : 'none';
+      });
     });
   });
 

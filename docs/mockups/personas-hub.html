@@ -381,7 +381,7 @@
     display:flex;align-items:center;justify-content:center;flex:none;
   }
 
-  /* активность: фильтр по помощнику + разворачивание на месте (без попапов) */
+  /* активность: фильтр по помощнику + разворот во всю ширину контентной зоны (без попапов) */
   .timeline-filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;}
   .filter-chip{
     font-size:11.5px;font-weight:600;padding:5px 11px;border-radius:999px;border:1px solid var(--border-light-alt);
@@ -390,17 +390,29 @@
   .filter-chip:hover{border-color:#E9C8B4;}
   .filter-chip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
   .timeline-item.filtered-out{display:none;}
-  .timeline-extra{max-height:0;overflow:hidden;opacity:0;transition:max-height .4s ease,opacity .3s ease;}
-  .timeline-extra.open{max-height:2000px;opacity:1;}
-  .timeline-toggle{
-    width:100%;display:flex;align-items:center;justify-content:center;gap:7px;margin-top:2px;
-    padding:9px;border-radius:10px;border:1px dashed #D8CBB8;background:transparent;
-    color:var(--text-secondary);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;
-    transition:border-color .12s,color .12s,background .12s;
+
+  .section-icon-btn{
+    flex:none;width:29px;height:29px;border-radius:9px;border:1px solid var(--border-light-alt);
+    background:var(--bg-white);color:var(--text-muted);display:flex;align-items:center;justify-content:center;
+    cursor:pointer;transition:background .12s,color .12s;
   }
-  .timeline-toggle:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-tint);}
-  .timeline-toggle .chevron{transition:transform .2s ease;}
-  .timeline-toggle.open .chevron{transform:rotate(180deg);}
+  .section-icon-btn:hover{background:var(--bg-hover);color:var(--text-primary);}
+
+  /* развёрнутый режим: помощники/новая персона прячутся, активность — на всю ширину */
+  .hub-grid.activity-expanded{display:block;}
+  .hub-grid.activity-expanded .hub-main{display:none;}
+  .hub-grid.activity-expanded .hub-side{position:static;width:100%;max-width:760px;margin:0 auto;}
+  .hub-grid:not(.activity-expanded) .overflow-day{display:none;}
+
+  .timeline-loader-zone{padding-top:2px;}
+  .timeline-loading{
+    display:none;align-items:center;justify-content:center;gap:9px;padding:16px 0;
+    font-size:12.5px;color:var(--text-secondary);
+  }
+  .timeline-loading.show{display:flex;}
+  .timeline-end{display:none;text-align:center;padding:14px 0 2px;font-size:12px;color:var(--text-secondary-alt);}
+  .timeline-end.show{display:block;}
+  .spinner-dark{border-color:rgba(42,37,31,.14);border-top-color:var(--accent);}
 
   /* toast */
   .toast{
@@ -438,7 +450,8 @@
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
   <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-4 7.5"/></symbol>
   <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
-  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></symbol>
+  <symbol id="i-collapse" viewBox="0 0 24 24"><path d="M3 8V3h5M21 8V3h-5M3 16v5h5M21 16v5h-5"/></symbol>
 </svg>
 
 <div class="window">
@@ -740,6 +753,9 @@
                 <h2>Активность</h2>
                 <div class="section-sub">Что происходило недавно</div>
               </div>
+              <button class="section-icon-btn" id="activityExpandBtn" type="button" title="Развернуть на всю ширину" aria-label="Развернуть активность" aria-expanded="false">
+                <svg class="icon" width="15" height="15"><use href="#i-expand"/></svg>
+              </button>
             </div>
 
             <div class="timeline-filters">
@@ -817,78 +833,77 @@
               </div>
             </div>
 
-            <div class="timeline-extra" id="timelineExtra">
-              <div class="timeline-day">
-                <div class="timeline-day-label">Позавчера</div>
-                <div class="timeline-track">
-                  <div class="timeline-item" data-kind="chat" data-title="Мастер (Гефест)" data-person="gefest">
-                    <div class="timeline-marker"><svg class="icon"><use href="#i-chat"/></svg></div>
-                    <div class="timeline-top-row">
-                      <div class="timeline-who">Мастер (Гефест) <span class="timeline-action">обсудил рефакторинг</span></div>
-                      <div class="timeline-time">16:12</div>
-                    </div>
-                    <div class="timeline-desc">Модуль авторизации — вынес план из 3 шагов.</div>
+            <div class="timeline-day overflow-day">
+              <div class="timeline-day-label">Позавчера</div>
+              <div class="timeline-track">
+                <div class="timeline-item" data-kind="chat" data-title="Мастер (Гефест)" data-person="gefest">
+                  <div class="timeline-marker"><svg class="icon"><use href="#i-chat"/></svg></div>
+                  <div class="timeline-top-row">
+                    <div class="timeline-who">Мастер (Гефест) <span class="timeline-action">обсудил рефакторинг</span></div>
+                    <div class="timeline-time">16:12</div>
                   </div>
-                  <div class="timeline-item" data-kind="task" data-title="Планировщик (Прометей)" data-person="prometey">
-                    <div class="timeline-marker"><svg class="icon"><use href="#i-check"/></svg></div>
-                    <div class="timeline-top-row">
-                      <div class="timeline-who">Планировщик (Прометей) <span class="timeline-action">составил план</span></div>
-                      <div class="timeline-time">10:30</div>
-                    </div>
-                    <div class="timeline-desc">Расписал миграцию на v2 по неделям.</div>
-                  </div>
+                  <div class="timeline-desc">Модуль авторизации — вынес план из 3 шагов.</div>
                 </div>
-              </div>
-
-              <div class="timeline-day">
-                <div class="timeline-day-label">На прошлой неделе</div>
-                <div class="timeline-track">
-                  <div class="timeline-item" data-kind="mention" data-title="Планировщик (Прометей)" data-person="prometey">
-                    <div class="timeline-marker"><svg class="icon"><use href="#i-at"/></svg></div>
-                    <div class="timeline-top-row">
-                      <div class="timeline-who">Планировщик (Прометей) <span class="timeline-action">спросил «Сизифа»</span></div>
-                      <div class="timeline-time">9 дней назад</div>
-                    </div>
-                    <div class="timeline-desc">Уточнил приоритеты спринта перед разбивкой плана.</div>
+                <div class="timeline-item" data-kind="task" data-title="Планировщик (Прометей)" data-person="prometey">
+                  <div class="timeline-marker"><svg class="icon"><use href="#i-check"/></svg></div>
+                  <div class="timeline-top-row">
+                    <div class="timeline-who">Планировщик (Прометей) <span class="timeline-action">составил план</span></div>
+                    <div class="timeline-time">10:30</div>
                   </div>
-                  <div class="timeline-item" data-kind="memory" data-title="Мастер (Гефест)" data-person="gefest">
-                    <div class="timeline-marker"><svg class="icon"><use href="#i-brain"/></svg></div>
-                    <div class="timeline-top-row">
-                      <div class="timeline-who">Мастер (Гефест) <span class="timeline-action">запомнил факт</span></div>
-                      <div class="timeline-time">11 дней назад</div>
-                    </div>
-                    <div class="timeline-desc">Деплой — только по средам после 14:00.</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="timeline-day">
-                <div class="timeline-day-label">В этом месяце</div>
-                <div class="timeline-track">
-                  <div class="timeline-item" data-kind="created" data-title="Ревьюер (Марк)" data-person="mark">
-                    <div class="timeline-marker"><svg class="icon"><use href="#i-plus"/></svg></div>
-                    <div class="timeline-top-row">
-                      <div class="timeline-who">Вы <span class="timeline-action">создали «Ревьюер (Марк)»</span></div>
-                      <div class="timeline-time">18 дней назад</div>
-                    </div>
-                    <div class="timeline-desc">Шаблон «Ревьюер» — доступ настроен на чтение кода без правок.</div>
-                  </div>
-                  <div class="timeline-item" data-kind="chat" data-title="Секретарь (Полина)" data-person="polina">
-                    <div class="timeline-marker"><svg class="icon"><use href="#i-chat"/></svg></div>
-                    <div class="timeline-top-row">
-                      <div class="timeline-who">Секретарь (Полина) <span class="timeline-action">подготовила повестку</span></div>
-                      <div class="timeline-time">21 день назад</div>
-                    </div>
-                    <div class="timeline-desc">Ретро по спринту — разослала участникам заранее.</div>
-                  </div>
+                  <div class="timeline-desc">Расписал миграцию на v2 по неделям.</div>
                 </div>
               </div>
             </div>
 
-            <button class="timeline-toggle" id="timelineToggle">
-              <span id="timelineToggleLabel">Показать ещё 6 событий</span>
-              <svg class="icon chevron" width="13" height="13"><use href="#i-chevron"/></svg>
-            </button>
+            <div class="timeline-day overflow-day">
+              <div class="timeline-day-label">На прошлой неделе</div>
+              <div class="timeline-track">
+                <div class="timeline-item" data-kind="mention" data-title="Планировщик (Прометей)" data-person="prometey">
+                  <div class="timeline-marker"><svg class="icon"><use href="#i-at"/></svg></div>
+                  <div class="timeline-top-row">
+                    <div class="timeline-who">Планировщик (Прометей) <span class="timeline-action">спросил «Сизифа»</span></div>
+                    <div class="timeline-time">9 дней назад</div>
+                  </div>
+                  <div class="timeline-desc">Уточнил приоритеты спринта перед разбивкой плана.</div>
+                </div>
+                <div class="timeline-item" data-kind="memory" data-title="Мастер (Гефест)" data-person="gefest">
+                  <div class="timeline-marker"><svg class="icon"><use href="#i-brain"/></svg></div>
+                  <div class="timeline-top-row">
+                    <div class="timeline-who">Мастер (Гефест) <span class="timeline-action">запомнил факт</span></div>
+                    <div class="timeline-time">11 дней назад</div>
+                  </div>
+                  <div class="timeline-desc">Деплой — только по средам после 14:00.</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="timeline-day overflow-day">
+              <div class="timeline-day-label">В этом месяце</div>
+              <div class="timeline-track">
+                <div class="timeline-item" data-kind="created" data-title="Ревьюер (Марк)" data-person="mark">
+                  <div class="timeline-marker"><svg class="icon"><use href="#i-plus"/></svg></div>
+                  <div class="timeline-top-row">
+                    <div class="timeline-who">Вы <span class="timeline-action">создали «Ревьюер (Марк)»</span></div>
+                    <div class="timeline-time">18 дней назад</div>
+                  </div>
+                  <div class="timeline-desc">Шаблон «Ревьюер» — доступ настроен на чтение кода без правок.</div>
+                </div>
+                <div class="timeline-item" data-kind="chat" data-title="Секретарь (Полина)" data-person="polina">
+                  <div class="timeline-marker"><svg class="icon"><use href="#i-chat"/></svg></div>
+                  <div class="timeline-top-row">
+                    <div class="timeline-who">Секретарь (Полина) <span class="timeline-action">подготовила повестку</span></div>
+                    <div class="timeline-time">21 день назад</div>
+                  </div>
+                  <div class="timeline-desc">Ретро по спринту — разослала участникам заранее.</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="timeline-loader-zone overflow-day" id="timelineLoaderZone">
+              <div class="timeline-loading" id="timelineLoading"><span class="spinner spinner-dark"></span>Загружаем ещё…</div>
+              <div class="timeline-end" id="timelineEnd">Это все события за последние два месяца</div>
+              <div id="timelineSentinel"></div>
+            </div>
 
           </div>
         </aside>
@@ -987,48 +1002,132 @@
     showToast('Открылась бы форма редактирования сгенерированной персоны');
   });
 
-  /* ---------- активность: таймлайн ---------- */
+  /* ---------- активность: таймлайн (клик по событию) ---------- */
   var timelineToast = {
     chat: function(t){ return 'Открылся бы чат «' + t + '»'; },
     task: function(t){ return 'Открылась бы карточка задачи, которую ведёт «' + t + '»'; },
     memory: function(t){ return 'Открылась бы память персоны «' + t + '»'; },
-    mention: function(t){ return 'Открылся бы разговор, где «' + t + '» упомянула другую персону'; },
+    mention: function(t){ return 'Открылся бы разговор, где «' + t + '» упомянул другую персону'; },
     created: function(t){ return 'Открылась бы карточка «' + t + '»'; }
   };
-  document.querySelectorAll('.timeline-item').forEach(function(item){
+  function bindTimelineItemClick(item){
     item.addEventListener('click', function(){
       var kind = item.dataset.kind;
       var fn = timelineToast[kind] || timelineToast.chat;
       showToast(fn(item.dataset.title));
     });
-  });
+  }
+  document.querySelectorAll('.timeline-item').forEach(bindTimelineItemClick);
 
-  /* ---------- активность: показать ещё (разворот на месте, без попапов) ---------- */
-  var timelineExtra = document.getElementById('timelineExtra');
-  var timelineToggle = document.getElementById('timelineToggle');
-  var timelineToggleLabel = document.getElementById('timelineToggleLabel');
-  timelineToggle.addEventListener('click', function(){
-    var open = timelineExtra.classList.toggle('open');
-    timelineToggle.classList.toggle('open', open);
-    timelineToggleLabel.textContent = open ? 'Свернуть' : 'Показать ещё 6 событий';
-  });
+  /* ---------- активность: развернуть на всю ширину (вытесняет левые блоки) ---------- */
+  var hubGrid = document.querySelector('.hub-grid');
+  var contentEl = document.querySelector('.content');
+  var expandBtn = document.getElementById('activityExpandBtn');
+  var loaderZone = document.getElementById('timelineLoaderZone');
+  var loadingEl = document.getElementById('timelineLoading');
+  var endEl = document.getElementById('timelineEnd');
+  var sentinel = document.getElementById('timelineSentinel');
+  var expanded = false;
 
-  /* ---------- активность: фильтр по помощнику (действует на всю ленту сразу) ---------- */
-  var timelineDays = document.querySelectorAll('.hub-side .timeline-day');
+  function setExpanded(next){
+    expanded = next;
+    hubGrid.classList.toggle('activity-expanded', expanded);
+    expandBtn.setAttribute('aria-expanded', String(expanded));
+    expandBtn.title = expanded ? 'Свернуть обратно' : 'Развернуть на всю ширину';
+    expandBtn.querySelector('use').setAttribute('href', expanded ? '#i-collapse' : '#i-expand');
+    contentEl.scrollTo({top:0, behavior:'auto'});
+    if(expanded){
+      observer.observe(sentinel);
+    } else {
+      observer.unobserve(sentinel);
+    }
+  }
+  expandBtn.addEventListener('click', function(){ setExpanded(!expanded); });
+
+  /* ---------- активность: подгрузка событий скроллом (пока развёрнуто) ---------- */
+  var dayPool = [
+    {kind:'chat', person:'gefest', title:'Мастер (Гефест)', action:'обсудил деплой', desc:'Синхронизировался по релизному окну на следующей неделе.'},
+    {kind:'task', person:'sizif', title:'Оркестратор (Сизиф)', action:'закрыл задачу', desc:'«Обновление зависимостей» — проверено и выкачено.'},
+    {kind:'memory', person:'prometey', title:'Планировщик (Прометей)', action:'запомнил факт', desc:'Спринт стартует по понедельникам, ретро — по пятницам.'},
+    {kind:'mention', person:'mark', title:'Ревьюер (Марк)', action:'спросил «Полину»', desc:'Уточнил, кто отвечает за релиз-ноуты в этот раз.'},
+    {kind:'chat', person:'polina', title:'Секретарь (Полина)', action:'напомнила о встрече', desc:'Синк по продукту в 11:00 — разослала календарь.'},
+    {kind:'task', person:'gefest', title:'Мастер (Гефест)', action:'исправил баг', desc:'Утечка памяти в фоновом воркере — пофиксил и задеплоил.'}
+  ];
+  var loadCount = 0;
+  var MAX_LOADS = 4;
+  var dayCounter = 22;
+
+  function buildTimelineItem(entry){
+    var el = document.createElement('div');
+    el.className = 'timeline-item';
+    el.dataset.kind = entry.kind;
+    el.dataset.title = entry.title;
+    el.dataset.person = entry.person;
+    var iconId = entry.kind === 'chat' ? 'i-chat' : entry.kind === 'task' ? 'i-check' : entry.kind === 'memory' ? 'i-brain' : entry.kind === 'mention' ? 'i-at' : 'i-plus';
+    el.innerHTML =
+      '<div class="timeline-marker"><svg class="icon"><use href="#' + iconId + '"></use></svg></div>' +
+      '<div class="timeline-top-row">' +
+        '<div class="timeline-who">' + entry.title + ' <span class="timeline-action">' + entry.action + '</span></div>' +
+        '<div class="timeline-time">' + entry.timeLabel + '</div>' +
+      '</div>' +
+      '<div class="timeline-desc">' + entry.desc + '</div>';
+    bindTimelineItemClick(el);
+    return el;
+  }
+
+  function loadMore(){
+    if(loadCount >= MAX_LOADS){ return; }
+    loadingEl.classList.add('show');
+    setTimeout(function(){
+      var day = document.createElement('div');
+      day.className = 'timeline-day overflow-day dynamic-day';
+      var label = document.createElement('div');
+      label.className = 'timeline-day-label';
+      dayCounter += Math.floor(Math.random()*3) + 2;
+      label.textContent = dayCounter + ' дней назад';
+      var track = document.createElement('div');
+      track.className = 'timeline-track';
+      var picks = dayPool.slice().sort(function(){ return Math.random() - 0.5; }).slice(0, 2);
+      picks.forEach(function(p){
+        track.appendChild(buildTimelineItem({
+          kind:p.kind, person:p.person, title:p.title, action:p.action, desc:p.desc,
+          timeLabel: dayCounter + ' дней назад'
+        }));
+      });
+      day.appendChild(label);
+      day.appendChild(track);
+      loaderZone.parentNode.insertBefore(day, loaderZone);
+      applyActiveFilterTo(day);
+      loadingEl.classList.remove('show');
+      loadCount++;
+      if(loadCount >= MAX_LOADS){
+        observer.unobserve(sentinel);
+        endEl.classList.add('show');
+      }
+    }, 550);
+  }
+
+  var observer = new IntersectionObserver(function(entries){
+    if(entries[0].isIntersecting && expanded) loadMore();
+  }, { root: contentEl, rootMargin: '160px' });
+
+  /* ---------- активность: фильтр по помощнику (действует на всю ленту, включая подгруженное) ---------- */
+  function applyActiveFilterTo(day){
+    var active = document.querySelector('.timeline-filters .filter-chip.active');
+    var person = active ? active.dataset.person : 'all';
+    var visible = 0;
+    day.querySelectorAll('.timeline-item').forEach(function(item){
+      var match = person === 'all' || item.dataset.person === person;
+      item.classList.toggle('filtered-out', !match);
+      if(match) visible++;
+    });
+    day.style.display = visible ? '' : 'none';
+  }
   document.querySelectorAll('.timeline-filters .filter-chip').forEach(function(chip){
     chip.addEventListener('click', function(){
       document.querySelectorAll('.timeline-filters .filter-chip').forEach(function(c){ c.classList.remove('active'); });
       chip.classList.add('active');
-      var person = chip.dataset.person;
-      timelineDays.forEach(function(day){
-        var visible = 0;
-        day.querySelectorAll('.timeline-item').forEach(function(item){
-          var match = person === 'all' || item.dataset.person === person;
-          item.classList.toggle('filtered-out', !match);
-          if(match) visible++;
-        });
-        day.style.display = visible ? '' : 'none';
-      });
+      document.querySelectorAll('.hub-side .timeline-day').forEach(applyActiveFilterTo);
     });
   });
 

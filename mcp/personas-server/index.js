@@ -13,6 +13,11 @@
 //                         инструменты personas_bindings_list/suggest/set и параметры
 //                         bindings/autoBindings в personas_create/personas_update
 //
+//   Правила проактивности (personas_automation_*) доступны ВСЕГДА, без флага (как
+//   personas_create/update) — automation-эндпоинты бэкенда ничем не гейтятся. Персона может
+//   настраивать проактивность ЛЮБОЙ персоне, включая саму себя, без обязательного участия
+//   пользователя — осознанное решение (в отличие от bindings, самоограничения тут нет).
+//
 // Персона — AI-собеседник с именем, ролью, характером и аватаром; бывает глобальной
 // или привязанной к проекту. Изоляция per-owner — на стороне backend (токен определяет
 // владельца, чужие персоны и проекты недоступны).
@@ -96,6 +101,55 @@ const BINDING_CREATE_FIELDS = BINDINGS ? {
   bindings: { type: 'array', items: BINDING_ITEM_SCHEMA, description: 'Явные привязки источников знаний и правил' },
   autoBindings: { type: 'boolean', description: 'true — после создания AI сам подберёт привязки под роль персоны' },
 } : {};
+
+// Правило проактивности (событие-триггер → персона сама пишет в закреплённый чат правила,
+// без запроса пользователя). Args триггера — гибкий объект, форма зависит от triggerType
+// (см. комментарий к AutomationTrigger в PersonaAutomation.cs).
+// Значения enum — camelCase (глобальная JsonStringEnumConverter(CamelCase) на бэкенде,
+// см. Program.cs): "gitCommit"/"taskStatus"/"gate"/"work", НЕ PascalCase.
+const TRIGGER_TYPES = ['timer', 'file', 'note', 'gitCommit', 'taskStatus', 'mention'];
+const ACTION_WEIGHTS = ['gate', 'work'];
+const PROJECT_HINT = PROJECT_ID ? ` Текущий проект этого чата: projectId="${PROJECT_ID}".` : '';
+
+const AUTOMATION_FIELDS = {
+  name: { type: 'string', description: 'Человекочитаемое имя правила («Следить за релизами») — видно в списке и в заголовке чата правила' },
+  enabled: { type: 'boolean', description: 'Включено ли правило (по умолчанию true)' },
+  triggerType: {
+    type: 'string', enum: TRIGGER_TYPES,
+    description: 'Тип триггера: timer — по расписанию; file/note/gitCommit/taskStatus — опрос ' +
+      'изменений на тике; mention — по @упоминанию handle этой персоны (детектится сам, без опроса).',
+  },
+  triggerArgs: {
+    type: 'object',
+    description: 'Параметры триггера — форма зависит от triggerType:\n' +
+      '  timer: { schedule: { type: "daily"|"weekdays"|"weekly"|"interval", time: "HH:mm", weekdays?: [1..7] (1=пн), intervalMinutes?: number }, tz?: string }\n' +
+      '  file: { projectId, glob: "src/**/*.ts", kinds: ["created","changed"] }\n' +
+      '  note: { source: "personal"|projectId, tags?: ["#тег"], section?: "папка" }\n' +
+      '  gitCommit: { projectId, paths?: ["src/**"] }\n' +
+      '  taskStatus: { projectId?, from?: статус, to?: статус, assignee?: "me"|"claude" }\n' +
+      '  mention: {} — не заполняй, срабатывает автоматически.' + PROJECT_HINT,
+  },
+  conditionOnlyIf: { type: 'string', description: 'Доп. условие-предикат для LLM-гейта («реагируй, только если касается деплоя»); пусто — без доп. условия (гейт всё равно спрашивает «стоит ли реагировать»)' },
+  quietFrom: { type: 'string', description: 'Начало тихих часов "HH:mm" (местное время владельца) — правило не срабатывает в этом окне' },
+  quietTo: { type: 'string', description: 'Конец тихих часов "HH:mm" (поддерживается переход через полночь, напр. 23:00→07:00)' },
+  minIntervalMinutes: { type: 'integer', minimum: 1, description: 'Минимальный интервал между срабатываниями (троттлинг); по умолчанию 5 мин (для file — 1 мин)' },
+  actionWeight: {
+    type: 'string', enum: ACTION_WEIGHTS,
+    description: 'gate — оценить событие и коротко ответить текстом, без тяжёлых действий; ' +
+      'work — полноценный агентский ход (может править файлы, заводить задачи/заметки через инструменты)',
+  },
+  actionInstruction: { type: 'string', description: 'Инструкция себе на реакцию при срабатывании (что делать/о чём написать)' },
+  rememberInHistory: { type: 'boolean', description: 'Записывать карточку-итог срабатывания в историю чата правила' },
+  actionExpiresAfterMinutes: {
+    type: ['integer', 'null'],
+    description: 'TTL чата правила в минутах от последней активности (как у временных чатов); ' +
+      'null — бессрочно; не указывай, чтобы оставить дефолт (1440 при создании / текущее значение при обновлении)',
+  },
+};
+
+const AUTOMATION_KEYS = ['name', 'enabled', 'triggerType', 'triggerArgs', 'conditionOnlyIf',
+  'quietFrom', 'quietTo', 'minIntervalMinutes', 'actionWeight', 'actionInstruction',
+  'rememberInHistory', 'actionExpiresAfterMinutes'];
 
 const TOOLS = [
   {
@@ -233,6 +287,71 @@ const TOOLS = [
       },
     },
   ] : []),
+  // Правила проактивности: событие-триггер → персона сама пишет в закреплённый чат правила,
+  // без запроса пользователя. Доступно всегда (без флага), для любой персоны, включая себя.
+  {
+    name: 'personas_automation_list',
+    description: 'Список правил проактивности персоны — триггеры и условия, при которых она ' +
+      'сама пишет в закреплённый чат правила без запроса пользователя.',
+    inputSchema: {
+      type: 'object',
+      required: ['id'],
+      properties: { id: { type: 'string', description: 'ID персоны' } },
+    },
+  },
+  {
+    name: 'personas_automation_create',
+    description: 'Создать правило проактивности персоны. Можно для ЛЮБОЙ персоны, включая ' +
+      'саму себя — самоограничений нет. Троттлинг (тихие часы, минимальный интервал, потолок ' +
+      'срабатываний в час) применяется сервером автоматически поверх твоих настроек.',
+    inputSchema: {
+      type: 'object',
+      required: ['id', 'name', 'triggerType'],
+      properties: {
+        id: { type: 'string', description: 'ID персоны, для которой создаётся правило' },
+        ...AUTOMATION_FIELDS,
+      },
+    },
+  },
+  {
+    name: 'personas_automation_update',
+    description: 'Изменить правило проактивности: передавай только изменяемые поля — ' +
+      'остальные (включая triggerArgs целиком) сохранятся как есть.',
+    inputSchema: {
+      type: 'object',
+      required: ['id', 'ruleId'],
+      properties: {
+        id: { type: 'string', description: 'ID персоны' },
+        ruleId: { type: 'string', description: 'ID правила' },
+        ...AUTOMATION_FIELDS,
+      },
+    },
+  },
+  {
+    name: 'personas_automation_delete',
+    description: 'Удалить правило проактивности персоны по id.',
+    inputSchema: {
+      type: 'object',
+      required: ['id', 'ruleId'],
+      properties: {
+        id: { type: 'string', description: 'ID персоны' },
+        ruleId: { type: 'string', description: 'ID правила' },
+      },
+    },
+  },
+  {
+    name: 'personas_automation_test',
+    description: 'Ручной прогон правила проактивности: синтетическое событие, троттлинг ' +
+      'игнорируется. Запускает реакцию в фоне, результата не ждёт.',
+    inputSchema: {
+      type: 'object',
+      required: ['id', 'ruleId'],
+      properties: {
+        id: { type: 'string', description: 'ID персоны' },
+        ruleId: { type: 'string', description: 'ID правила' },
+      },
+    },
+  },
   {
     name: 'personas_delete',
     description: 'Удалить персону по id. Действие необратимо: долгая память персоны тоже удаляется.',
@@ -405,6 +524,33 @@ async function callTool(name, args) {
           logic: args.logic ?? null,
         }),
       }));
+
+    case 'personas_automation_list':
+      return json(await api(`/api/personas/${encodeURIComponent(args.id)}/automation`));
+
+    case 'personas_automation_create': {
+      const body = personaBody(args, AUTOMATION_KEYS);
+      return json(await api(`/api/personas/${encodeURIComponent(args.id)}/automation`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }));
+    }
+
+    case 'personas_automation_update': {
+      const body = personaBody(args, AUTOMATION_KEYS);
+      return json(await api(`/api/personas/${encodeURIComponent(args.id)}/automation/${encodeURIComponent(args.ruleId)}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }));
+    }
+
+    case 'personas_automation_delete':
+      await api(`/api/personas/${encodeURIComponent(args.id)}/automation/${encodeURIComponent(args.ruleId)}`, { method: 'DELETE' });
+      return { content: [{ type: 'text', text: `Правило ${args.ruleId} удалено.` }] };
+
+    case 'personas_automation_test':
+      await api(`/api/personas/${encodeURIComponent(args.id)}/automation/${encodeURIComponent(args.ruleId)}/test`, { method: 'POST' });
+      return { content: [{ type: 'text', text: 'Правило запущено вручную (в фоне).' }] };
 
     case 'personas_delete':
       await api(`/api/personas/${encodeURIComponent(args.id)}`, { method: 'DELETE' });

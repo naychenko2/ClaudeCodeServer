@@ -367,6 +367,10 @@ WorkingDirectory = `project.RootPath`
   (env `PERSONAS_API_URL/TOKEN/PROJECT_ID` в `BuildTurnMcpConfig` + подсказка в промпт), но только
   при включённом у владельца флаге `personas` (`SessionManager.BuildPersonasContext`).
   generate_avatar = avatar/generate `{count:1}` + select первого кандидата.
+  personas_automation_list/create/update/delete/test — CRUD правил проактивности (тонкая
+  обёртка над `/api/personas/{id}/automation*`, без доп. флага и без самоограничений: персона
+  может настраивать проактивность любой персоне, включая себя); значения enum триггера/веса
+  действия — camelCase (`gitCommit`/`taskStatus`/`gate`/`work`, см. `JsonStringEnumConverter` в Program.cs).
 - **Аватар**: инициалы+цвет (палитра `AGENT_COLORS`) базой; фото-генерация через fal.ai —
   [FalImageService.cs](backend/ClaudeHomeServer/Services/FalImageService.cs) (`Fal:ApiKey`, модель
   `Fal:ImageModel`, дефолт `fal-ai/flux/schnell`; для фото-аватаров задают `flux/dev`). Генерация

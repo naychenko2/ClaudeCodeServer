@@ -419,7 +419,7 @@ public class SessionManager
 
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
-        string? effort = null, string? personaId = null, bool taskExecution = false)
+        string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -437,6 +437,7 @@ public class SessionManager
             // Маршрутизация остаётся по вызывающему коду (задача), не по зоне персоны.
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
             TaskExecution = taskExecution,
+            TaskId = taskId,
         };
 
         await StartNewSessionAsync(session, project.RootPath, project.SystemPrompt,
@@ -448,7 +449,7 @@ public class SessionManager
     // системный промпт — только встроенная часть (rawSystemPrompt=null), без проектных правил.
     public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,
-        string? personaId = null, bool taskExecution = false)
+        string? personaId = null, bool taskExecution = false, string? taskId = null)
     {
         var rootPath = ResolveChatRoot(ownerId);
 
@@ -464,6 +465,7 @@ public class SessionManager
             // Персона-слой подхватится общим механизмом (BuildPersonaLayer)
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
             TaskExecution = taskExecution,
+            TaskId = taskId,
         };
 
         await StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);

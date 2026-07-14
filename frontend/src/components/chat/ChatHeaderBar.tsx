@@ -21,6 +21,8 @@ import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { openNoteById } from '../../features/notes/saveToNote';
 import type { ExtractedTaskCandidate } from '../../types';
+import { ChatOriginBadge } from '../ChatOriginBadge';
+import { resolveChatOrigin } from '../../lib/chatOrigin';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -932,6 +934,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const titleEl = isMobile && onBack
     ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
     : titleBlock;
+  // Контекст происхождения чата (задача/автоматизация) — виден независимо от того,
+  // ведётся ли чат от лица персоны (titleBlock рендерит персону не во всех случаях).
+  const origin = resolveChatOrigin(session);
+  const originBadge = origin ? <ChatOriginBadge origin={origin} /> : null;
+
   // Пилюля временного чата: остаток до авто-удаления; клик — быстрый путь к настройке.
   // На мобиле не показываем — шапка и так плотная, метка есть в списке чатов
   const expiryLeft = formatTimeLeft(session);
@@ -1020,7 +1027,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
 
   return (
     <Toolbar isMobile={isMobile} style={personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : undefined}>
-      {openBtn}{titleEl}{expiryBadge}{workflowBadge}{costBadges}{actionBtns}
+      {openBtn}{titleEl}{originBadge}{expiryBadge}{workflowBadge}{costBadges}{actionBtns}
     </Toolbar>
   );
 }

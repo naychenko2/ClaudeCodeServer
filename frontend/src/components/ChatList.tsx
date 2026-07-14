@@ -13,6 +13,8 @@ import { ExpiryBadge } from './ExpiryBadge';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { agentDotColor } from './AgentSelector';
 import { FilterBar } from './FilterBar';
+import { ChatOriginBadge } from './ChatOriginBadge';
+import { resolveChatOrigin } from '../lib/chatOrigin';
 
 // Время создания чата: сегодня — часы:минуты, иначе — дата (группы и так разбиты по дням)
 function chatTime(iso: string): string {
@@ -44,7 +46,8 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
 
   // === Фильтры списка чатов ===
-  const [hideTaskChats, setHideTaskChats] = useState(true);
+  // Дефолт: обычные и автоматизация видны, чаты-исполнители задач скрыты (шум)
+  const [visibleOrigins, setVisibleOrigins] = useState<Set<Session['origin']>>(() => new Set(['manual', 'automation']));
   const [activeOnly, setActiveOnly] = useState(false);
   const [filterPersonaId, setFilterPersonaId] = useState<string | null>(null);
 
@@ -55,7 +58,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
 
   // Применение фильтров
   const filteredChats = chats.filter(c => {
-    if (hideTaskChats && c.taskExecution) return false;
+    if (!visibleOrigins.has(c.origin)) return false;
     if (activeOnly && Date.now() - new Date(c.updatedAt).getTime() > 5 * 60 * 1000) return false;
     if (filterPersonaId && c.personaId !== filterPersonaId) return false;
     return true;
@@ -98,8 +101,8 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
 
       {/* Строка фильтров */}
       <FilterBar
-        hideTaskChats={hideTaskChats}
-        onChangeHideTaskChats={setHideTaskChats}
+        visibleOrigins={visibleOrigins}
+        onChangeVisibleOrigins={setVisibleOrigins}
         activeOnly={activeOnly}
         onChangeActiveOnly={setActiveOnly}
         filterPersonaId={filterPersonaId}
@@ -135,6 +138,8 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                 ? chat.participants!.map(id => getPersonaById(id)).filter(p => p !== undefined)
                 : [];
               const accent = persona ? agentDotColor(persona.avatar?.color) : C.accent;
+              // Происхождение чата (задача/автоматизация) — контекст на плашке
+              const origin = resolveChatOrigin(chat);
               return (
                 <div
                   key={chat.id}
@@ -193,13 +198,18 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                         <StatusBadge status={chat.status} />
                       )}
                     </div>
-                    {group.length > 1 ? (
-                      <div style={{ fontSize: 11.5, fontWeight: 600, color: accent, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        Групповой · {group.length} участника
-                      </div>
-                    ) : persona && (
-                      <div style={{ fontSize: 11.5, fontWeight: 600, color: accent, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {personaLabel(persona)}
+                    {(group.length > 1 || persona || origin) && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3, minWidth: 0 }}>
+                        {origin && <ChatOriginBadge origin={origin} style={{ flexShrink: 0 }} />}
+                        {group.length > 1 ? (
+                          <span style={{ fontSize: 11.5, fontWeight: 600, color: accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            Групповой · {group.length} участника
+                          </span>
+                        ) : persona && (
+                          <span style={{ fontSize: 11.5, fontWeight: 600, color: accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {personaLabel(persona)}
+                          </span>
+                        )}
                       </div>
                     )}
                     {chat.lastMessage && (

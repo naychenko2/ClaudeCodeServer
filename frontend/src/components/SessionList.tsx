@@ -14,6 +14,8 @@ import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { agentDotColor } from './AgentSelector';
 import { ExpiryBadge } from './ExpiryBadge';
 import { FilterBar } from './FilterBar';
+import { ChatOriginBadge } from './ChatOriginBadge';
+import { resolveChatOrigin } from '../lib/chatOrigin';
 
 // Время создания сессии: сегодня — часы:минуты, иначе — дата
 function sessTime(iso: string): string {
@@ -176,7 +178,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   };
 
   // === Фильтры списка чатов ===
-  const [hideTaskChats, setHideTaskChats] = useState(true);
+  // Дефолт: обычные и автоматизация видны, чаты-исполнители задач скрыты (шум)
+  const [visibleOrigins, setVisibleOrigins] = useState<Set<Session['origin']>>(() => new Set(['manual', 'automation']));
   const [activeOnly, setActiveOnly] = useState(false);
   const [filterPersonaId, setFilterPersonaId] = useState<string | null>(null);
 
@@ -185,7 +188,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
   // Применение фильтров
   const filteredSessions = sessions.filter(s => {
-    if (hideTaskChats && s.taskExecution) return false;
+    if (!visibleOrigins.has(s.origin)) return false;
     if (activeOnly && Date.now() - new Date(s.updatedAt).getTime() > 5 * 60 * 1000) return false;
     if (filterPersonaId && s.personaId !== filterPersonaId) return false;
     return true;
@@ -210,8 +213,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
       {/* Строка фильтров — всегда видна (для консистентности) */}
       <FilterBar
-        hideTaskChats={hideTaskChats}
-        onChangeHideTaskChats={setHideTaskChats}
+        visibleOrigins={visibleOrigins}
+        onChangeVisibleOrigins={setVisibleOrigins}
         activeOnly={activeOnly}
         onChangeActiveOnly={setActiveOnly}
         filterPersonaId={filterPersonaId}
@@ -237,6 +240,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             ? s.participants!.map(id => getPersonaById(id)).filter(p => p !== undefined)
             : [];
           const accent = persona ? agentDotColor(persona.avatar?.color) : C.accent;
+          // Происхождение чата (задача/автоматизация) — контекст на плашке
+          const origin = resolveChatOrigin(s);
           return (
           <div
             key={s.id}
@@ -310,13 +315,18 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                   </div>
                 )}
               </div>
-              {group.length > 1 ? (
-                <div style={{ fontSize: 11.5, fontWeight: 600, color: accent, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  Групповой · {group.length} участника
-                </div>
-              ) : persona && (
-                <div style={{ fontSize: 11.5, fontWeight: 600, color: accent, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {personaLabel(persona)}
+              {(group.length > 1 || persona || origin) && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3, minWidth: 0 }}>
+                  {origin && <ChatOriginBadge origin={origin} style={{ flexShrink: 0 }} />}
+                  {group.length > 1 ? (
+                    <span style={{ fontSize: 11.5, fontWeight: 600, color: accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      Групповой · {group.length} участника
+                    </span>
+                  ) : persona && (
+                    <span style={{ fontSize: 11.5, fontWeight: 600, color: accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {personaLabel(persona)}
+                    </span>
+                  )}
                 </div>
               )}
               {s.lastMessage && (

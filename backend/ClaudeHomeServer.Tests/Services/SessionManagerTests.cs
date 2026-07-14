@@ -190,6 +190,18 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateAsync_WithTaskId_SessionHasTaskIdAndTaskOrigin()
+    {
+        var dir = MkProjectDir("tid");
+        var project = _projectManager.Create("TID", dir, TestUserId, TestUsername);
+
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits, taskExecution: true, taskId: "task-1");
+
+        session.TaskId.Should().Be("task-1");
+        session.Origin.Should().Be(ChatOrigin.Task);
+    }
+
+    [Fact]
     public async Task CreateAsync_NonExistentProject_ThrowsKeyNotFound()
     {
         var act = () => _sut.CreateAsync("nonexistent-project", ClaudeMode.Auto);

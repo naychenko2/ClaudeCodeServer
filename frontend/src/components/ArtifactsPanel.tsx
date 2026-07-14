@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
 import { Copy, File, FileText, StickyNote, ChevronRight, ChevronLeft, ChevronDown, ChevronsRight, List, ArrowUpRight } from 'lucide-react';
-import type { Task } from '../types';
+import type { Session } from '../types';
 import { C, FONT, R, SHADOW } from '../lib/design';
 import { PillSwitch } from './Toolbar';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -9,7 +9,9 @@ import { useSessionArtifacts, type AgentArtifact, type AgentToolCall, type Artif
 import { IconNotes } from '../features/notes/shared';
 import { saveChatNote, openNoteById } from '../features/notes/saveToNote';
 import { PersonaContextTab } from './PersonaContextTab';
-import { openTaskInSection } from '../lib/tasks';
+import { getTaskById } from '../lib/tasks';
+import { resolveChatOrigin } from '../lib/chatOrigin';
+import { ChatOriginBadge } from './ChatOriginBadge';
 import { api } from '../lib/api';
 
 interface Props {
@@ -22,8 +24,9 @@ interface Props {
   isMobile?: boolean;
   // Собеседник-персона текущего чата — показывает вкладку «Контекст персоны» (①-L2a)
   personaId?: string | null;
-  // Задача, для выполнения которой запущен чат (если есть) — клик открывает её карточку
-  executingTask?: Task | null;
+  // Текущий чат — для резолва контекста происхождения (задача/автоматизация) в шапке
+  // панели и заголовка выполняемой задачи во вкладке «Задачи»
+  session?: Session | null;
 }
 
 type TabKey = 'plan' | 'todos' | 'notes' | 'agents' | 'files' | 'links' | 'context';
@@ -578,8 +581,13 @@ function NoteRow({ title }: { title: string }) {
   );
 }
 
-export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onClose, isMobile, personaId, executingTask }: Props) {
+export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onClose, isMobile, personaId, session }: Props) {
+  // Задача, ради которой запущен чат (для заголовка/счётчика вкладки «Задачи») —
+  // резолвится напрямую из стора задач по Session.taskId, без сетевого запроса
+  const executingTask = session?.taskId ? getTaskById(session.taskId) : null;
   const executingTaskTitle = executingTask?.title ?? null;
+  // Контекст происхождения (задача/автоматизация) — единый баннер в шапке панели
+  const origin = session ? resolveChatOrigin(session) : null;
   const { files, plans, todos, links, agents, workflows, notes } = useSessionArtifacts(sessionId, projectId, rootPath, executingTaskTitle);
   // Чат-режим (без проекта): файлы открывать некуда — вкладку «Файлы» не показываем.
   const isChat = !projectId;
@@ -661,6 +669,16 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
             : <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
         </button>
       </div>
+
+      {/* Баннер происхождения (задача/автоматизация) — виден независимо от активной вкладки */}
+      {origin && (
+        <div style={{
+          flexShrink: 0, padding: '8px 14px', borderBottom: `1px solid ${C.border}`,
+          background: origin.tone === 'info' ? C.infoBg : C.warningBg,
+        }}>
+          <ChatOriginBadge origin={origin} style={{ background: 'transparent', padding: 0, fontSize: 12 }} />
+        </div>
+      )}
 
       {isEmpty ? (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 32, textAlign: 'center' }}>
@@ -768,21 +786,6 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
 
             {activeKey === 'todos' && (
               <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 5 }}>
-                {executingTask && (
-                  <button onClick={() => openTaskInSection(executingTask)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 9,
-                      width: 'calc(100% - 16px)', boxSizing: 'border-box', textAlign: 'left', cursor: 'pointer',
-                      padding: '7px 14px', margin: '0 8px 6px', border: 'none',
-                      background: C.infoBg, borderRadius: R.md,
-                    }}>
-                    <ArrowUpRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.info} style={{ flexShrink: 0 }} />
-                    <span style={{ fontFamily: FONT.sans, fontSize: 12.5, color: C.textHeading, fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as CSSProperties}>
-                      {executingTask.title}
-                    </span>
-                    <span style={{ fontSize: 10, color: C.textMuted, whiteSpace: 'nowrap', fontFamily: FONT.sans }}>выполняется</span>
-                  </button>
-                )}
                 {todos.map((t, i) => <TodoRow key={i} todo={t} />)}
               </div>
             )}

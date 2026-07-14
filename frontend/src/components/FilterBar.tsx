@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Filter } from 'lucide-react';
-import type { Persona } from '../types';
+import type { Persona, Session } from '../types';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { personaLabel } from '../lib/personas';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
@@ -9,9 +9,21 @@ import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 // Одна едва заметная ссылка/иконка — при нажатии открывается поповер с настройками.
 // Когда фильтры активны — рядом показывается краткая сводка.
 
+type ChatOriginFilter = Session['origin'];
+
+const ORIGIN_OPTIONS: { value: ChatOriginFilter; label: string }[] = [
+  { value: 'manual', label: 'Обычные' },
+  { value: 'task', label: 'Задачи' },
+  { value: 'automation', label: 'Автоматизация' },
+];
+const ORIGIN_HIDDEN_LABEL: Record<ChatOriginFilter, string> = {
+  manual: 'обычных', task: 'задач', automation: 'автоматизации',
+};
+const ALL_ORIGINS = new Set<ChatOriginFilter>(['manual', 'task', 'automation']);
+
 interface FilterBarProps {
-  hideTaskChats: boolean;
-  onChangeHideTaskChats: (v: boolean) => void;
+  visibleOrigins: Set<ChatOriginFilter>;
+  onChangeVisibleOrigins: (v: Set<ChatOriginFilter>) => void;
   activeOnly: boolean;
   onChangeActiveOnly: (v: boolean) => void;
   filterPersonaId: string | null;
@@ -94,7 +106,7 @@ function PillGroup<T extends string>({ options, value, onChange, label }: {
 }
 
 export function FilterBar({
-  hideTaskChats, onChangeHideTaskChats,
+  visibleOrigins, onChangeVisibleOrigins,
   activeOnly, onChangeActiveOnly,
   filterPersonaId, onChangeFilterPersona,
   personaIdsInList, allPersonas,
@@ -114,11 +126,19 @@ export function FilterBar({
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
 
-  const hasFilters = hideTaskChats || activeOnly || filterPersonaId !== null;
+  const toggleOrigin = (o: ChatOriginFilter) => {
+    const next = new Set(visibleOrigins);
+    if (next.has(o)) next.delete(o); else next.add(o);
+    onChangeVisibleOrigins(next);
+  };
+
+  // Скрытые типы — та часть, что реально отфильтровывает список
+  const hiddenOrigins = ORIGIN_OPTIONS.filter(o => !visibleOrigins.has(o.value));
+  const hasFilters = hiddenOrigins.length > 0 || activeOnly || filterPersonaId !== null;
 
   // Сводка активных фильтров
   const summaryParts: string[] = [];
-  if (hideTaskChats) summaryParts.push('без задач');
+  if (hiddenOrigins.length) summaryParts.push('без ' + hiddenOrigins.map(o => ORIGIN_HIDDEN_LABEL[o.value]).join(', '));
   if (activeOnly) summaryParts.push('активные');
   const selectedPersona = filterPersonaId
     ? allPersonas.find(p => p.id === filterPersonaId) ?? null
@@ -197,15 +217,52 @@ export function FilterBar({
       {/* Поповер */}
       {open && (
         <div style={popoverStyle}>
-          <PillGroup
-            label="Показывать"
-            options={[
-              { value: 'all' as const, label: 'Все чаты' },
-              { value: 'hide' as const, label: 'Без задач' },
-            ]}
-            value={hideTaskChats ? 'hide' : 'all'}
-            onChange={v => onChangeHideTaskChats(v === 'hide')}
-          />
+          <div style={{ marginBottom: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <div style={{
+                fontSize: 10.5, fontWeight: 700, color: C.textMuted,
+                textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
+              }}>
+                Тип
+              </div>
+              {hiddenOrigins.length > 0 && (
+                <button
+                  onClick={() => onChangeVisibleOrigins(new Set(ALL_ORIGINS))}
+                  style={{
+                    border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+                    fontFamily: FONT.sans, fontSize: 11, color: C.accent, fontWeight: 600,
+                  }}
+                >
+                  Показать все
+                </button>
+              )}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {ORIGIN_OPTIONS.map(o => {
+                const active = visibleOrigins.has(o.value);
+                return (
+                  <button
+                    key={o.value}
+                    onClick={() => toggleOrigin(o.value)}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: R.pill,
+                      border: `1px solid ${C.borderLight}`,
+                      background: active ? C.accent : 'transparent',
+                      color: active ? C.onAccent : C.textSecondary,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      fontFamily: FONT.sans,
+                      cursor: 'pointer',
+                      transition: 'background 0.12s',
+                    }}
+                  >
+                    {o.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           <div style={{ height: 1, background: C.divider, margin: '10px 0' }} />
 

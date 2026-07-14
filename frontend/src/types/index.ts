@@ -243,6 +243,10 @@ export interface Session {
   workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
   // Сессия-исполнитель задачи (создана TaskExecutionService)
   taskExecution?: boolean;
+  // Задача-владелец чата-исполнителя (для отображения контекста «в рамках какой задачи»)
+  taskId?: string | null;
+  // Тип происхождения чата — производный от taskId/automationRuleId на бэке
+  origin: 'manual' | 'task' | 'automation';
 }
 
 export interface FileEntry {

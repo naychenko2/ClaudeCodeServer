@@ -2,6 +2,10 @@
 
 public enum SessionStatus { Starting, Working, Active, Waiting, Finished, Error, Orphaned }
 
+// Происхождение чата — вычисляется из TaskId/AutomationRuleId (см. Session.Origin),
+// отдельно не хранится, чтобы не было второго источника истины.
+public enum ChatOrigin { Manual, Task, Automation }
+
 // Режимы прав — соответствуют значениям флага --permission-mode у claude CLI
 public enum ClaudeMode { Default, AcceptEdits, Plan, Auto, DontAsk, Bypass }
 
@@ -85,9 +89,17 @@ public class Session
     // Иначе персона с ограничением tools (без «tasks») теряет tasks-сервер и не может ни прочитать,
     // ни завершить задачу (fallback на встроенный Task-тул → «система задач недоступна»).
     public bool TaskExecution { get; set; }
+    // Задача-владелец чата-исполнителя (TaskExecutionService): для отображения контекста
+    // («в рамках какой задачи») на плашке чата, в шапке и в артефактах сессии.
+    public string? TaskId { get; set; }
     // Origin автоматизации: null — обычный чат; иначе — id правила PersonaAutomationRule,
     // чат которого создан движком проактивности. Для фильтрации авто-чатов и трассировки.
     public string? AutomationRuleId { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    // Тип происхождения чата — производный от TaskId/AutomationRuleId, единая точка истины.
+    public ChatOrigin Origin => TaskId != null ? ChatOrigin.Task
+        : AutomationRuleId != null ? ChatOrigin.Automation
+        : ChatOrigin.Manual;
 }

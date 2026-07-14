@@ -12,6 +12,8 @@ import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
 import { BindingModeBadge, BindingTypeIcon, bindingPlural, bindingsCounter, useBindingLabels } from './bindingMeta';
 import { TRIGGER_META, ACTION_META, triggerDetails } from './automationMeta';
+import { PersonaActivityFeed } from './PersonaActivityFeed';
+import { usePersonasActivity } from './personasActivity';
 
 // Режим «Обзор» студии персоны: read-only визитка со сводкой — кто это,
 // как настроена (модель/возможности/память), её характер и недавние разговоры.
@@ -67,6 +69,12 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   isMobile?: boolean;
 }) {
   const modelName = useModelLabel(persona.model);
+
+  // Лента «Активность» — та же, что в хабе персон, но для одной этой персоны;
+  // справа на десктопе (см. PersonasHub). На мобиле не грузим (пустой массив —
+  // usePersonasActivity короткое замыкание без сети), там остаётся «Недавние разговоры» ниже.
+  const [activityExpanded, setActivityExpanded] = useState(false);
+  const { items: activityItems, loading: activityLoading } = usePersonasActivity(isMobile ? [] : [persona]);
 
   // Сводка задач персоны-исполнителя (реальные задачи из общего стора)
   const allTasks = useTasks();
@@ -741,40 +749,66 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
     </div>
   );
 
+  // Колонка-визитка — тот же контент, что раньше; «Недавние разговоры» остаются
+  // только на мобиле (на десктопе их накрывает лента активности справа)
+  const mainColumn = (
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <div>
+        {hero}
+        {/* Поговорить — после описания, до фактов и настроек */}
+        <button type="button" onClick={onTalk} disabled={talking} style={{
+          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          background: accent, color: C.onAccent, border: 'none', borderRadius: R.xl,
+          padding: '11px 16px', fontSize: 14, fontWeight: 600, fontFamily: FONT.sans,
+          cursor: talking ? 'default' : 'pointer', opacity: talking ? 0.6 : 1,
+          marginTop: 18,
+        }}>
+          <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+          {talking ? 'Создаём…' : 'Поговорить'}
+        </button>
+        {greeting}
+      </div>
+      {factsRow}
+      {characterSection}
+      {rulesSection}
+      {knowledgeSection}
+      {automationSection}
+      {memorySection}
+      {tasksSection}
+      {isMobile && chatsSection}
+    </div>
+  );
+
   return (
     <div style={{ height: '100%', overflowY: 'auto', background: C.bgMain }}>
       <div style={{
-        maxWidth: 680, margin: '0 auto', boxSizing: 'border-box',
+        maxWidth: isMobile ? 680 : 1020, margin: '0 auto', boxSizing: 'border-box',
         padding: isMobile ? '20px 16px 32px' : '26px 32px 40px',
-        display: 'flex', flexDirection: 'column', gap: 24,
       }}>
-        <div>
-          {hero}
-          {/* Поговорить — после описания, до фактов и настроек */}
-          <button type="button" onClick={onTalk} disabled={talking} style={{
-            width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-            background: accent, color: C.onAccent, border: 'none', borderRadius: R.xl,
-            padding: '11px 16px', fontSize: 14, fontWeight: 600, fontFamily: FONT.sans,
-            cursor: talking ? 'default' : 'pointer', opacity: talking ? 0.6 : 1,
-            marginTop: 18,
-          }}>
-            <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            {talking ? 'Создаём…' : 'Поговорить'}
-          </button>
-          {greeting}
+        <div style={isMobile || activityExpanded ? undefined : previewGrid}>
+          {(isMobile || !activityExpanded) && mainColumn}
+          {!isMobile && (
+            <aside style={activityExpanded ? { maxWidth: 760, margin: '0 auto', width: '100%' } : { width: 300, flexShrink: 0 }}>
+              <PersonaActivityFeed
+                personas={[persona]}
+                items={activityItems}
+                loading={activityLoading}
+                expanded={activityExpanded}
+                onToggleExpanded={() => setActivityExpanded(v => !v)}
+                onOpenSession={onOpenSession}
+                onOpenPersonaView={(_id, view) => { if (view === 'memory') onOpenMemory?.(); }}
+              />
+            </aside>
+          )}
         </div>
-        {factsRow}
-        {characterSection}
-        {rulesSection}
-        {knowledgeSection}
-        {automationSection}
-        {memorySection}
-        {tasksSection}
-        {chatsSection}
       </div>
     </div>
   );
 }
+
+// Строка-раскладка визитки на десктопе: колонка контента + лента активности 300px
+// (тот же приём, что hubGrid в PersonasHub)
+const previewGrid: React.CSSProperties = { display: 'flex', gap: 28, alignItems: 'flex-start' };
 
 // Плоская секция с разделителем сверху — тот же паттерн, что в PersonaForm
 const section: React.CSSProperties = {

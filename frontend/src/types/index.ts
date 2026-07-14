@@ -934,6 +934,11 @@ export interface CreatePersonaDto {
   specialty?: PersonaSpecialty;
   // Доступ ко всем проектам владельца (текущим и будущим); только для scope === 'global'
   allProjectsAccess?: boolean;
+  // true — сгенерировать фото-аватар сразу после создания (опт-ин для авто/LLM-путей,
+  // где человек не выбирает аватар сам — напр. пакетное создание команды)
+  autoAvatar?: boolean;
+  // Описание внешности для фотопортрета (англ.); пусто — берётся из роли/описания персоны
+  avatarPrompt?: string;
 }
 
 // Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны
@@ -1008,6 +1013,8 @@ export interface TeamMemberDraft {
   specialty?: string;
   color?: string;
   greeting?: string;
+  // Описание внешности для фото-аватара (англ.) — используется при автогенерации после создания
+  avatarPrompt?: string;
 }
 
 // ===== Уведомления (центр уведомлений) =====

@@ -494,6 +494,9 @@ function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onC
   const teamJob = useAiJob<TeamSuggestResult>(teamKey);
   const [prompt, setPrompt] = useState('');
   const [creating, setCreating] = useState(false);
+  // Сколько персон уже создано в текущем прогоне (для «N из M» — фото генерируются
+  // последовательно и создание может занять заметное время)
+  const [createdCount, setCreatedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const generating = teamJob.status === 'running';
   const members = teamJob.status === 'done' ? teamJob.result?.members ?? [] : [];
@@ -510,7 +513,7 @@ function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onC
   }));
   const create = async () => {
     if (creating || members.length === 0) return;
-    setCreating(true); setError(null);
+    setCreating(true); setCreatedCount(0); setError(null);
     try {
       for (const m of members) {
         if (!m.on) continue;
@@ -518,7 +521,9 @@ function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onC
           name: m.name?.trim() || 'Персона', role: m.role, description: m.description,
           contract: { character: m.character, tone: m.tone }, specialty: m.specialty as Persona['specialty'] | undefined,
           scope: 'project', projectId: project.id, color: m.color, greeting: m.greeting, memoryEnabled: true,
+          autoAvatar: true, avatarPrompt: m.avatarPrompt,
         });
+        setCreatedCount(c => c + 1);
       }
       resetAiJob(teamKey);
       onCreated();
@@ -532,7 +537,9 @@ function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onC
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
           <span style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>{selCount} из {members.length}</span>
           <button onClick={onClose} style={ghostBtn}>Отмена</button>
-          <button onClick={() => void create()} disabled={selCount === 0 || creating} style={primaryBtn}>{creating ? 'Создание…' : `Создать ${selCount || ''}`}</button>
+          <button onClick={() => void create()} disabled={selCount === 0 || creating} style={primaryBtn}>
+            {creating ? `Создаю… ${createdCount}/${selCount}` : `Создать ${selCount || ''}`}
+          </button>
         </div>
       ) : undefined}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -569,6 +576,7 @@ function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onC
                 </button>
               );
             })}
+            {creating && <WaitingIndicator hint="Создаю персон и подбираю им фото — до минуты на каждую" />}
             {error && <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>}
           </div>
         )}

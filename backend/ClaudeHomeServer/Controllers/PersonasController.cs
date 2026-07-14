@@ -167,6 +167,11 @@ public class PersonasController : ControllerBase
         // сбой подбора не роняет создание, персона остаётся без привязок
         if (req.AutoBindings == true)
             persona = await TryAutoBindAsync(persona);
+        // Фото-аватар (autoAvatar) — явный опт-ин для путей, где человек не выбирает
+        // аватар сам (напр. пакетное создание команды из ai/team); ручное создание
+        // через форму/мастер этот параметр не шлёт — там инициалы или явный выбор
+        if (req.AutoAvatar == true)
+            persona = await TryAutoGenerateAvatarAsync(persona, req.AvatarPrompt);
         await Broadcast("created", persona.Id);
         return Ok(persona);
     }
@@ -460,6 +465,32 @@ public class PersonasController : ControllerBase
                "high detail, sharp focus, square crop.";
     }
 
+    // Фото-аватар автоматически, best-effort (не критично: при сбое или невключённом
+    // fal персона остаётся с инициалами). Общий путь для всех авто/LLM-сценариев
+    // создания, где человек не выбирает аватар сам — quick-create одной персоны,
+    // пакетная команда из ai/team.
+    private async Task<Persona> TryAutoGenerateAvatarAsync(Persona persona, string? avatarPrompt)
+    {
+        if (!_falImage.Enabled) return persona;
+        try
+        {
+            var prompt = string.IsNullOrWhiteSpace(avatarPrompt)
+                ? BuildAvatarPrompt(persona)
+                : $"Photorealistic portrait photo. {avatarPrompt.Trim()}";
+            var images = await _falImage.GenerateManyAsync(prompt, 1);
+            if (images.Count == 0) return persona;
+            var dir = Path.Combine(_personas.AssetsDir, persona.Id);
+            Directory.CreateDirectory(dir);
+            var fileName = $"avatar-{Guid.NewGuid():N}{ExtFor(images[0].ContentType)}";
+            await System.IO.File.WriteAllBytesAsync(Path.Combine(dir, fileName), images[0].Bytes);
+            return _personas.SetAvatarImage(persona.Id, persona.OwnerId, fileName);
+        }
+        catch
+        {
+            return persona;
+        }
+    }
+
     // AI-помощь с характером персоны: сгенерировать с нуля или улучшить/дополнить существующий
     // (one-shot LLM). Возвращает структурированный контракт (P1) для подстановки в форму.
     [HttpPost("ai/character")]
@@ -570,25 +601,7 @@ public class PersonasController : ControllerBase
             color, draft.Greeting, memoryEnabled: true, tools: null, contract: contract);
 
         // 3. Фото-аватар — автоматически (не критично: при сбое остаются инициалы)
-        if (_falImage.Enabled)
-        {
-            try
-            {
-                var avatarPrompt = string.IsNullOrWhiteSpace(draft.AvatarPrompt)
-                    ? BuildAvatarPrompt(persona)
-                    : $"Photorealistic portrait photo. {draft.AvatarPrompt!.Trim()}";
-                var images = await _falImage.GenerateManyAsync(avatarPrompt, 1);
-                if (images.Count > 0)
-                {
-                    var dir = Path.Combine(_personas.AssetsDir, persona.Id);
-                    Directory.CreateDirectory(dir);
-                    var fileName = $"avatar-{Guid.NewGuid():N}{ExtFor(images[0].ContentType)}";
-                    await System.IO.File.WriteAllBytesAsync(Path.Combine(dir, fileName), images[0].Bytes);
-                    persona = _personas.SetAvatarImage(persona.Id, UserId, fileName);
-                }
-            }
-            catch { /* аватар не критичен для быстрого создания */ }
-        }
+        persona = await TryAutoGenerateAvatarAsync(persona, draft.AvatarPrompt);
 
         // 4. Авто-подбор привязок (по умолчанию включён) —
         // best-effort: сбой не роняет создание, персона остаётся без привязок
@@ -649,7 +662,8 @@ public class PersonasController : ControllerBase
         sb.AppendLine("  tone — тон одной короткой фразой;");
         sb.AppendLine("  specialty — одна из: analyst, planner, reviewer, executor, secretary, coordinator, mentor, designer, consultant, librarian;");
         sb.AppendLine("  color — один из: yellow, orange, blue, green, purple, red, brown, cyan, pink;");
-        sb.AppendLine("  greeting — первое приветствие персоны, 1-2 предложения.");
+        sb.AppendLine("  greeting — первое приветствие персоны, 1-2 предложения;");
+        sb.AppendLine("  avatarPrompt — описание внешности для фотопортрета, по-английски, 5-15 слов (пол, возраст, стиль, настроение, фон).");
         sb.AppendLine("По возможности включи роли для конвейера (аналитик/планировщик/ревьюер/исполнитель), если уместно проекту. Всё по-русски. НЕ упоминай имя модели.");
         return sb.ToString();
     }
@@ -1777,7 +1791,13 @@ public record CreatePersonaRequest(
     // true — после создания подобрать привязки AI (за флагом persona-bindings, best-effort)
     bool? AutoBindings = null,
     // Доступ ко всем проектам владельца (текущим и будущим) — только для Scope.Global
-    bool? AllProjectsAccess = null);
+    bool? AllProjectsAccess = null,
+    // true — после создания сгенерировать фото-аватар (best-effort, требует Fal:ApiKey).
+    // Опт-ин для авто/LLM-путей создания (напр. пакетная команда из ai/team) — обычное
+    // создание через форму/мастер не шлёт этот параметр, там инициалы или явный выбор
+    bool? AutoAvatar = null,
+    // Описание внешности для фотопортрета (англ.); пусто — берём из роли/описания персоны
+    string? AvatarPrompt = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -1849,7 +1869,7 @@ public record AiQuickCreateRequest(string Prompt, PersonaScope? Scope = null, st
 // AI-формирование команды: промпт + проект → LLM предлагает состав (черновики, без создания)
 public record AiTeamRequest(string ProjectId, string Prompt);
 public record TeamMemberDraft(string? Name, string? Role, string? Description, string? Character,
-    string? Tone, string? Specialty, string? Color, string? Greeting);
+    string? Tone, string? Specialty, string? Color, string? Greeting, string? AvatarPrompt);
 
 // DTO привязки персоны: type/mode — строками (project|projectPath|knowledge|notes|tool|skill;
 // auto|always|off), парсятся без учёта регистра.

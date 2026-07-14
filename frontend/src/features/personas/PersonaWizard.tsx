@@ -23,8 +23,8 @@ import type {
 import { api } from '../../lib/api';
 import { bumpPersonas, usePersonas } from '../../lib/personas';
 import { C, FONT, R } from '../../lib/design';
-import { Toolbar, PillSwitch, tbBtnGhost } from '../../components/Toolbar';
-import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, IconButton } from '../../components/ui';
+import { Toolbar, PillSwitch } from '../../components/Toolbar';
+import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, IconButton, ConfirmDialog } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { ModelPicker } from '../../components/ModelPicker';
 import { useModels, useModelCaps, modelProvider } from '../../lib/models';
@@ -147,7 +147,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [cancelling, setCancelling] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const caps = useModelCaps(model);
   const accentColor = AGENT_COLORS[color] ?? C.accent;
@@ -349,17 +349,19 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
     if (step > 1) setStep(step - 1);
   }
 
-  async function handleCancel() {
+  function handleCancel() {
     if (!persona) { onCancel(); return; }
-    if (!window.confirm('Отменить создание персоны? Черновик будет удалён без возможности восстановления.')) return;
-    setCancelling(true);
+    setShowCancelConfirm(true);
+  }
+
+  async function confirmCancelDraft() {
     try {
-      await api.personas.remove(persona.id);
+      await api.personas.remove(persona!.id);
       bumpPersonas();
     } catch {
       // даже если удаление черновика не удалось — выходим из мастера
     } finally {
-      setCancelling(false);
+      setShowCancelConfirm(false);
       onCancel();
     }
   }
@@ -436,9 +438,6 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
         <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
           Новая персона
         </div>
-        <button onClick={() => void handleCancel()} disabled={cancelling} style={tbBtnGhost}>
-          {cancelling ? 'Отменяю…' : 'Отмена'}
-        </button>
       </Toolbar>
       <div style={{ flex: 'none', height: 2, background: `${accentColor}55` }} />
 
@@ -802,14 +801,29 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
 
       {step !== 9 && (
         <div ref={footerRef} style={{
-          flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-          padding: isMobile ? '10px 16px' : '12px 24px', background: C.bgPanel, borderTop: `1px solid ${C.border}`,
+          flex: 'none', padding: isMobile ? '10px 16px' : '12px 24px', background: C.bgPanel, borderTop: `1px solid ${C.border}`,
         }}>
-          <div>{step > 1 && <Button variant="ghost" size="sm" onClick={goBack} disabled={busy}>Назад</Button>}</div>
-          <Button variant="primary" size="sm" loading={busy} disabled={!canProceed || busy} onClick={() => void goNext()}>
-            {step === 1 && method === 'ai' ? (busy ? 'Генерирую…' : '✨ Сгенерировать и продолжить') : (busy ? 'Сохраняю…' : 'Далее')}
-          </Button>
+          <div style={{ maxWidth: 620, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <Button variant="ghost" size="sm" onClick={handleCancel} disabled={busy}>Отмена</Button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {step > 1 && <Button variant="ghost" size="sm" onClick={goBack} disabled={busy}>Назад</Button>}
+              <Button variant="primary" size="sm" loading={busy} disabled={!canProceed || busy} onClick={() => void goNext()}>
+                {step === 1 && method === 'ai' ? (busy ? 'Генерирую…' : '✨ Сгенерировать и продолжить') : (busy ? 'Сохраняю…' : 'Далее')}
+              </Button>
+            </div>
+          </div>
         </div>
+      )}
+
+      {showCancelConfirm && (
+        <ConfirmDialog
+          title="Отменить создание персоны?"
+          subtitle="Черновик будет удалён без возможности восстановления."
+          confirmLabel="Удалить черновик"
+          confirmVariant="danger"
+          onConfirm={() => confirmCancelDraft()}
+          onCancel={() => setShowCancelConfirm(false)}
+        />
       )}
 
       {cropState && (

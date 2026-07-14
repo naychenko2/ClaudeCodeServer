@@ -135,6 +135,11 @@ public record KnowledgeChangedMessage(string Action, string? DatasetId = null)
 public record PersonasChangedMessage(string Action, string? PersonaId = null)
     : ServerMessage("personas_changed");
 
+// Изменение общей памяти команды проекта (added/updated/removed) — в группу user_{userId},
+// чтобы вкладка «Память» командного центра обновилась на всех устройствах.
+public record TeamMemoryChangedMessage(string Action, string ProjectId, string? EntryId = null)
+    : ServerMessage("team_memory_changed");
+
 // Смена активного спикера группового чата (@упоминание переключило персону-собеседника).
 // Label — готовая подпись «Роль (Имя)» для разделителя «Теперь отвечает: …».
 public record SpeakerChangedMessage(string PersonaId, string Label)

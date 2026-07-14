@@ -304,6 +304,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }
   | { type: 'knowledge_changed'; action: string; datasetId?: string }
   | { type: 'personas_changed'; action: 'created' | 'updated' | 'deleted' | 'memory'; personaId?: string }
+  | { type: 'team_memory_changed'; action: 'added' | 'updated' | 'removed'; projectId: string; entryId?: string }
   | { type: 'speaker_changed'; personaId: string; label: string }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
   | { type: 'meeting_progress'; meetingId: string; phase: string; personaId?: string; status?: string; error?: string }

@@ -2,25 +2,25 @@ import { useRef, useState } from 'react';
 import { Plus, Sparkles, MessageSquare, Brain, ListChecks, Zap, Users, AtSign } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Persona, Session } from '../../types';
-import { C, FONT, R, SP } from '../../lib/design';
-import { agentDotColor } from '../../components/AgentSelector';
+import { C, FONT, R } from '../../lib/design';
 import { personaTitleLines } from '../../lib/personas';
 import { PersonaAvatar } from './PersonaAvatar';
 import { PersonaActivityFeed } from './PersonaActivityFeed';
 import { usePersonasActivity } from './personasActivity';
-import { PERSONA_TEMPLATES, type PersonaTemplate } from './personaTemplates';
 
 // Хаб раздела «Персоны»: показывается в центральной зоне, когда персона не выбрана
 // и не идёт создание. Единая шапка (текст + компактная карточка возможностей),
-// витрина «Твои помощники» + компактный вход в создание слева, лента «Активность»
-// справа (сворачивается на всю ширину, вытесняя левую колонку — см. PersonaActivityFeed).
-export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, onNewWithTemplate, onOpenPersonaView }: {
+// витрина «Твои помощники» + компактный вход в мастер создания слева, лента
+// «Активность» справа (сворачивается на всю ширину, вытесняя левую колонку —
+// см. PersonaActivityFeed). Создание — единая точка входа PersonaWizard (9 шагов:
+// сам предлагает способ — по описанию/из шаблона/с нуля), хаб сюда ничего не
+// дублирует, только зовёт onNew().
+export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, onOpenPersonaView }: {
   personas: Persona[];
   talking?: boolean;
   onTalk: (p: Persona) => void;
   onOpenSession: (s: Session) => void;
   onNew: () => void;
-  onNewWithTemplate: (t: PersonaTemplate) => void;
   onOpenPersonaView: (id: string, view?: 'memory') => void;
 }) {
   const [activityExpanded, setActivityExpanded] = useState(false);
@@ -97,41 +97,16 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
                 )}
               </section>
 
-              {/* Новая персона */}
+              {/* Новая персона — единая точка входа: мастер сам спросит способ */}
               <section>
-                <SectionTitle title="Новая персона" sub="С нуля, по описанию или из готовой заготовки" />
+                <SectionTitle title="Новая персона" sub="Мастер сам предложит способ — по описанию, из шаблона или с нуля" />
                 <div style={createPanel}>
-                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                    <button type="button" onClick={onNew} style={createActionBtn}>
-                      <span style={createIcon}><Plus size={15} strokeWidth={2} /></span>
-                      Создать с нуля
-                    </button>
-                    <button type="button" onClick={onNew} style={createActionBtn}>
-                      <span style={createIcon}><Sparkles size={15} strokeWidth={2} /></span>
-                      Описать словами
-                    </button>
+                  <span style={createIcon}><Sparkles size={18} strokeWidth={2} /></span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={createPanelTitle}>Девять шагов, своя пара минут на каждый</div>
+                    <div style={createPanelDesc}>Роль, характер, поведение, умения и доступ — с ИИ-подбором на каждом шаге.</div>
                   </div>
-                  <div style={dividerRow}>
-                    <span style={dividerLine} /> или начните с готовой заготовки <span style={dividerLine} />
-                  </div>
-                  <div style={templateGrid}>
-                    {PERSONA_TEMPLATES.map(t => (
-                      <button
-                        key={t.key}
-                        type="button"
-                        onClick={() => onNewWithTemplate(t)}
-                        onMouseEnter={e => { e.currentTarget.style.borderColor = C.accentMuted; e.currentTarget.style.background = C.bgWhite; }}
-                        onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.bgMain; }}
-                        style={templateChip}
-                      >
-                        <span style={{ ...templateAvatar, background: agentDotColor(t.avatarColor) }}>{t.role.slice(0, 1)}</span>
-                        <span style={{ minWidth: 0 }}>
-                          <div style={templateRole}>{t.role}</div>
-                          <div style={templateName}>{t.namePlaceholder}</div>
-                        </span>
-                      </button>
-                    ))}
-                  </div>
+                  <button type="button" onClick={onNew} style={primaryBtn}>Создать</button>
                 </div>
               </section>
             </div>
@@ -265,35 +240,12 @@ const primaryBtn: React.CSSProperties = {
   padding: '9px 18px', fontSize: 13, fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer',
 };
 const createPanel: React.CSSProperties = {
-  background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xxl, padding: '18px 20px 20px',
-};
-const createActionBtn: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 9, background: C.bgMain, border: `1px solid ${C.borderLight}`,
-  borderRadius: R.lg, padding: '9px 14px 9px 9px', fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
-  color: C.textPrimary, cursor: 'pointer',
+  display: 'flex', alignItems: 'center', gap: 16,
+  background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xxl, padding: '18px 20px',
 };
 const createIcon: React.CSSProperties = {
-  width: 28, height: 28, borderRadius: R.md, background: C.accentLight, color: C.accent,
+  width: 40, height: 40, borderRadius: R.lg, background: C.accentLight, color: C.accent,
   display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
 };
-const dividerRow: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 10, margin: `${SP.lg}px 0 14px`,
-  fontFamily: FONT.mono, fontSize: 10.5, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase',
-  color: C.textSecondary,
-};
-const dividerLine: React.CSSProperties = { flex: 1, height: 1, background: C.borderLight };
-const templateGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 };
-const templateChip: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 9, background: C.bgMain, border: `1px solid ${C.border}`,
-  borderRadius: R.xl, padding: '9px 10px', cursor: 'pointer', textAlign: 'left', minWidth: 0,
-};
-const templateAvatar: React.CSSProperties = {
-  width: 30, height: 30, borderRadius: R.full, color: '#fff', flexShrink: 0,
-  display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: FONT.sans, fontSize: 13, fontWeight: 600,
-};
-const templateRole: React.CSSProperties = {
-  fontSize: 12, fontWeight: 700, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-};
-const templateName: React.CSSProperties = {
-  fontSize: 10.5, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-};
+const createPanelTitle: React.CSSProperties = { fontSize: 14, fontWeight: 700, color: C.textHeading };
+const createPanelDesc: React.CSSProperties = { fontSize: 12.5, color: C.textMuted, marginTop: 3, lineHeight: 1.5 };

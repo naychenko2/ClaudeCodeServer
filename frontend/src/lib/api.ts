@@ -114,6 +114,10 @@ export const api = {
       request<TeamMemoryEntry>(`/projects/${encodeURIComponent(id)}/team-memory`, {
         method: 'POST', body: JSON.stringify({ text }),
       }),
+    updateTeamMemory: (id: string, entryId: string, text: string) =>
+      request<TeamMemoryEntry>(`/projects/${encodeURIComponent(id)}/team-memory/${encodeURIComponent(entryId)}`, {
+        method: 'PUT', body: JSON.stringify({ text }),
+      }),
     removeTeamMemory: (id: string, entryId: string) =>
       request<void>(`/projects/${encodeURIComponent(id)}/team-memory/${encodeURIComponent(entryId)}`, { method: 'DELETE' }),
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null) =>
@@ -314,6 +318,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    updateMemory: (id: string, entryId: string, text: string) =>
+      request<PersonaMemoryEntry>(`/personas/${encodeURIComponent(id)}/memory/${encodeURIComponent(entryId)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ text }),
+      }),
     // Насосы Memory↔Notes (③-3.3)
     memoryToNote: (id: string, entryId: string) =>
       request<{ noteId: string; noteTitle: string }>(
@@ -497,6 +506,11 @@ export const api = {
         `/personas/${encodeURIComponent(id)}/automation/${encodeURIComponent(ruleId)}/test`,
         { method: 'POST' },
       ),
+    // AI-подбор правил автоматизации под роль персоны: кандидаты, ничего не сохраняется
+    suggestAutomation: (id: string) =>
+      request<{ candidates: PersonaAutomationRule[] }>(`/personas/${encodeURIComponent(id)}/automation/suggest`, {
+        method: 'POST', timeoutMs: 150_000,
+      }),
   },
 
   // Утренний бриф (флаг daily-briefing): собрать план дня в дневник

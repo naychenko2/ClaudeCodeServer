@@ -21,9 +21,8 @@ import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaAutomationPanel } from './PersonaAutomationPanel';
-import { PersonaQuickCreate } from './PersonaQuickCreate';
+import { PersonaWizard } from './PersonaWizard';
 import { PersonasHub } from './PersonasHub';
-import type { PersonaTemplate } from './personaTemplates';
 
 export function PersonasPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
@@ -45,12 +44,8 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   // одноразовая, сбрасывается любым обычным выбором персоны из списка
   const [pendingView, setPendingView] = useState<PersonaView | null>(null);
   const [mobileView, setMobileView] = useState<'list' | 'card'>('list');
-  // Режим создания новой персоны: пустая форма прямо в контентной зоне
+  // Режим создания новой персоны: мастер прямо в контентной зоне
   const [creating, setCreating] = useState(false);
-  // Шаблон роли, выбранный чипом в хабе — открывает создание сразу в ручной форме
-  // с предзаполнением, минуя экран PersonaQuickCreate. Одноразовое, сбрасывается
-  // любым другим входом в создание/выходом из него.
-  const [pendingTemplate, setPendingTemplate] = useState<PersonaTemplate | null>(null);
   // Проекты — чтобы показать имя/зону проектной персоны и открыть её проект в «Поговорить»
   const [projects, setProjects] = useState<Project[]>([]);
   // Идёт создание чата по кнопке «Поговорить»
@@ -120,17 +115,12 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   };
   const clearSelection = () => {
     setCreating(false);
-    setSelectedId(null); setMobileView('list'); setPendingView(null); setPendingTemplate(null);
+    setSelectedId(null); setMobileView('list'); setPendingView(null);
     if (getNav()?.persona) navReplace({ screen: 'personas' });
   };
-  // Кнопка «Новая персона» — пустая форма создания в контентной зоне
+  // Кнопка «Новая персона» — мастер создания в контентной зоне
   const startCreate = () => {
-    setSelectedId(null); setCreating(true); setMobileView('card'); setPendingTemplate(null);
-    if (getNav()?.persona) navReplace({ screen: 'personas' });
-  };
-  // Чип шаблона из хаба — то же самое, но сразу с предзаполнением
-  const startCreateWithTemplate = (t: PersonaTemplate) => {
-    setSelectedId(null); setCreating(true); setMobileView('card'); setPendingTemplate(t);
+    setSelectedId(null); setCreating(true); setMobileView('card');
     if (getNav()?.persona) navReplace({ screen: 'personas' });
   };
 
@@ -214,8 +204,8 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const centerPane = creating
     ? <PersonaCreatePane
         projects={projects}
-        initialTemplate={pendingTemplate}
-        onSaved={p => selectPersona(p.id)}
+        onOpenStudio={p => selectPersona(p.id)}
+        onStartChat={p => void talk(p)}
         onCancel={clearSelection}
         onBack={isMobile ? clearSelection : undefined} />
     : selected
@@ -236,7 +226,6 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         onTalk={talk}
         onOpenSession={openSession}
         onNew={startCreate}
-        onNewWithTemplate={startCreateWithTemplate}
         onOpenPersonaView={selectPersona} />;
 
   const hasContent = creating || !!selected;
@@ -307,65 +296,26 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   );
 }
 
-// Пане создания новой персоны. Первый экран — быстрое создание по промпту
-// (ИИ придумывает роль/характер/аватар); «Заполнить вручную» переключает на
-// привычную пустую PersonaForm с тулбаром (Отмена/Создать).
-function PersonaCreatePane({ projects, initialTemplate, onSaved, onCancel, onBack }: {
+// Панель создания новой персоны — пошаговый мастер (единая точка входа:
+// по описанию / из шаблона / с нуля).
+function PersonaCreatePane({ projects, onOpenStudio, onStartChat, onCancel, onBack }: {
   projects: Project[];
-  // Шаблон, выбранный чипом в хабе — сразу открывает ручную форму с предзаполнением
-  initialTemplate?: PersonaTemplate | null;
-  onSaved: (p: Persona) => void;
+  onOpenStudio: (p: Persona) => void;
+  onStartChat: (p: Persona) => void;
   onCancel: () => void;
   onBack?: () => void;
 }) {
   const isMobile = useIsMobile();
-  // Ручной путь создания (пустая форма) — по кнопке «Заполнить вручную» или сразу,
-  // если пришли с готовым шаблоном из хаба
-  const [manual, setManual] = useState(!!initialTemplate);
-  // Выбранный шаблон роли — предзаполняет ручную форму
-  const [template, setTemplate] = useState<PersonaTemplate | null>(initialTemplate ?? null);
-  const formRef = useRef<PersonaFormHandle>(null);
-  const [status, setStatus] = useState<PersonaFormStatus>({ canSave: false, saving: false, dirty: false });
-  const onStatus = useCallback((s: PersonaFormStatus) => {
-    setStatus(prev => (prev.canSave === s.canSave && prev.saving === s.saving && prev.dirty === s.dirty ? prev : s));
-  }, []);
-  // Живой цвет из формы — для перекраски акцентной полосы тулбара при создании
-  const [liveColor, setLiveColor] = useState<string>('orange');
-  const accent = AGENT_COLORS[liveColor] ?? C.accent;
-
-  // Стартовый экран — быстрое создание по промпту (глобальная зона)
-  if (!manual) {
-    return (
-      <PersonaQuickCreate
-        scope="global"
-        onCreated={onSaved}
-        onManual={() => { setTemplate(null); setManual(true); }}
-        onTemplate={t => { setTemplate(t); setManual(true); }}
-        onCancel={onCancel}
-        onBack={onBack}
-        isMobile={isMobile}
-      />
-    );
-  }
-
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <PersonaToolbar
-        mode="create"
-        accent={accent}
-        status={status}
-        onSave={() => void formRef.current?.save()}
-        onCancel={onCancel}
-        onBack={onBack}
-        isMobile={isMobile}
-      />
-      <div style={{ flex: 'none', height: 2, background: `${accent}55` }} />
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <PersonaForm ref={formRef} persona={null} projects={projects}
-          initial={template ? { name: template.namePlaceholder, role: template.role, description: template.description, contract: template.contract, greeting: template.greeting, color: template.avatarColor, tools: template.tools, access: template.access, model: template.model, effort: template.effort, specialty: template.specialty } : undefined}
-          onStatus={onStatus} onColorChange={setLiveColor} onSaved={onSaved} />
-      </div>
-    </div>
+    <PersonaWizard
+      scope="global"
+      projects={projects}
+      onOpenStudio={onOpenStudio}
+      onStartChat={onStartChat}
+      onCancel={onCancel}
+      onBack={onBack}
+      isMobile={isMobile}
+    />
   );
 }
 

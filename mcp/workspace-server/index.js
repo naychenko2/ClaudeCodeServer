@@ -34,6 +34,9 @@ const TREE_MAX_ENTRIES = 500;
 async function api(path, options = {}) {
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
+    // Таймаут: без него подвисший бэкенд вешает вызов инструмента навсегда.
+    // chats_send сюда не ходит (у него свой fetch без таймаута — сервер сам отвечает 202).
+    signal: AbortSignal.timeout(60_000),
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       Authorization: `Bearer ${API_TOKEN}`,
@@ -361,7 +364,16 @@ function json(data) {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
 }
 
+// Тул → секция (для defense-in-depth в callTool)
+const TOOL_SECTION = new Map(
+  Object.entries(SECTION_TOOLS).flatMap(([section, tools]) => tools.map(t => [t.name, section])));
+
 async function callTool(name, args) {
+  // Секция тула обязана быть включённой: список TOOLS фильтрует экспозицию, но исполнение
+  // перепроверяем отдельно — деструктив не должен выполниться даже при ошибке экспозиции
+  const section = TOOL_SECTION.get(name);
+  if (section && !SECTIONS.has(section))
+    throw new Error(`Инструмент ${name} недоступен: секция ${section} выключена для этой сессии`);
   switch (name) {
     case 'projects_list': {
       const [projects, groups] = await Promise.all([
@@ -569,7 +581,11 @@ async function callTool(name, args) {
     case 'chats_history': {
       const params = new URLSearchParams();
       if (args.limit) params.set('limit', String(args.limit));
-      return json(await api(`/api/sessions/${encodeURIComponent(String(args.sessionId ?? ''))}/history?${params}`));
+      const data = await api(`/api/sessions/${encodeURIComponent(String(args.sessionId ?? ''))}/history?${params}`);
+      // Зона сессии: маршрут адресуется по sessionId в обход projectId — проверяем по ответу
+      // (history отдаёт projectId), иначе суженная зона читала бы чаты чужих проектов владельца
+      if (data?.projectId) checkProjectAllowed(data.projectId);
+      return json(data);
     }
 
     case 'chats_create': {
@@ -640,6 +656,12 @@ async function callTool(name, args) {
         throw new Error('Нельзя писать в собственный чат — chats_send адресован ДРУГИМ сессиям');
       const text = String(args.text ?? '').trim();
       if (!text) throw new Error('Текст сообщения пуст');
+      // Зона сессии: маршрут адресуется по sessionId в обход projectId — при суженной зоне
+      // резолвим проект чата и проверяем до отправки (как chats_update/chats_delete)
+      if (ALLOWED_PROJECT_IDS.length) {
+        const targetProjectId = await resolveSessionProject(sessionId);
+        if (targetProjectId) checkProjectAllowed(targetProjectId);
+      }
 
       // fetch без своего таймаута: сервер сам вернёт 202 по истечении timeoutSec (макс 240с,
       // меньше дефолтных таймаутов undici) — обрывать запрос раньше сервера нельзя

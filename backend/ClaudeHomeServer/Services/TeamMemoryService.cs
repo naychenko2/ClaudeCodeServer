@@ -50,6 +50,19 @@ public class TeamMemoryService
         return entry;
     }
 
+    // Отредактировать текст записи вручную (UI-редактирование)
+    public TeamMemoryEntry? Update(string ownerId, string projectId, string entryId, string text)
+    {
+        lock (_saveLock)
+        {
+            var entry = Get(ownerId, projectId).FirstOrDefault(e => e.Id == entryId);
+            if (entry is null) return null;
+            entry.Text = text.Trim();
+            Save();
+            return entry;
+        }
+    }
+
     public bool Remove(string ownerId, string projectId, string entryId)
     {
         lock (_saveLock)

@@ -1,19 +1,25 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Controllers;
 
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, IHubContext<SessionHub> hub) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    private Task BroadcastTeamMemory(string action, string projectId, string? entryId = null) =>
+        hub.Clients.Group("user_" + UserId).SendAsync("message", new TeamMemoryChangedMessage(action, projectId, entryId));
 
     private object WithCount(Project p)
     {
@@ -73,21 +79,36 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 
     [HttpPost("{id}/team-memory")]
-    public IActionResult AddTeamMemory(string id, [FromBody] TeamMemoryRequest req)
+    public async Task<IActionResult> AddTeamMemory(string id, [FromBody] TeamMemoryRequest req)
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
         var entry = teamMemory.Add(UserId, id, req.Text);
+        await BroadcastTeamMemory("added", id, entry.Id);
+        return Ok(entry);
+    }
+
+    [HttpPut("{id}/team-memory/{entryId}")]
+    public async Task<IActionResult> UpdateTeamMemory(string id, string entryId, [FromBody] TeamMemoryRequest req)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
+        var entry = teamMemory.Update(UserId, id, entryId, req.Text);
+        if (entry is null) return NotFound();
+        await BroadcastTeamMemory("updated", id, entryId);
         return Ok(entry);
     }
 
     [HttpDelete("{id}/team-memory/{entryId}")]
-    public IActionResult RemoveTeamMemory(string id, string entryId)
+    public async Task<IActionResult> RemoveTeamMemory(string id, string entryId)
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
-        return teamMemory.Remove(UserId, id, entryId) ? NoContent() : NotFound();
+        if (!teamMemory.Remove(UserId, id, entryId)) return NotFound();
+        await BroadcastTeamMemory("removed", id, entryId);
+        return NoContent();
     }
 
     [HttpPost]

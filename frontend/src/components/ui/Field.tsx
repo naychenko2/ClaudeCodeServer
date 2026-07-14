@@ -86,11 +86,13 @@ interface TextAreaProps {
   // (иначе очень длинный текст разносит форму по высоте)
   maxHeight?: number;
   disabled?: boolean;
+  autoFocus?: boolean;
+  onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
   style?: CSSProperties;
 }
 
 // === Многострочное поле с авто-ростом высоты ===
-export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, style }: TextAreaProps) {
+export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, autoFocus, onKeyDown, style }: TextAreaProps) {
   const [focused, setFocused] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -110,6 +112,8 @@ export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 8
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
       disabled={disabled}
+      autoFocus={autoFocus}
+      onKeyDown={onKeyDown}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={controlStyle(focused, false, {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, X } from 'lucide-react';
+import { ChevronLeft, Pencil, X } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaMemoryEntry, PersonaMemoryType, ServerMessage } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
@@ -7,6 +7,8 @@ import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { showToast } from '../../lib/toast';
 import { personaLabel } from '../../lib/personas';
+import { useInlineEdit } from '../../lib/useInlineEdit';
+import { TextArea } from '../../components/ui';
 import { PersonaAvatar } from './PersonaAvatar';
 
 // Панель долгой памяти персоны (этап 3). Показывает записи, сгруппированные по
@@ -143,6 +145,16 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
     }
   };
 
+  // Редактирование текста записи вручную
+  const edit = useInlineEdit(async (entryId, text) => {
+    try {
+      const updated = await api.personas.updateMemory(persona.id, entryId, text);
+      setEntries(prev => prev.map(e => e.id === entryId ? updated : e));
+    } catch {
+      showToast('Память', 'Не удалось сохранить изменения.');
+    }
+  });
+
   const isEmpty = !loading && !error && entries.length === 0;
 
   return (
@@ -206,7 +218,14 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {groups[t].map(e => (
-                      <MemoryCard key={e.id} entry={e} color={meta.color} onRemove={() => remove(e.id)} removing={removingId === e.id} onToNote={() => toNote(e.id)} onConfirm={e.pending ? () => confirmEntry(e.id) : undefined} />
+                      <MemoryCard
+                        key={e.id} entry={e} color={meta.color}
+                        onRemove={() => remove(e.id)} removing={removingId === e.id}
+                        onToNote={() => toNote(e.id)} onConfirm={e.pending ? () => confirmEntry(e.id) : undefined}
+                        editing={edit.editingId === e.id} editText={edit.text} onEditTextChange={edit.setText}
+                        onStartEdit={() => edit.start(e.id, e.text)} onSaveEdit={() => void edit.save()}
+                        onCancelEdit={edit.cancel} savingEdit={edit.saving}
+                      />
                     ))}
                   </div>
                 </div>
@@ -251,13 +270,23 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
 }
 
 // Карточка одной записи памяти
-function MemoryCard({ entry, color, onRemove, removing, onToNote, onConfirm }: {
+function MemoryCard({
+  entry, color, onRemove, removing, onToNote, onConfirm,
+  editing, editText, onEditTextChange, onStartEdit, onSaveEdit, onCancelEdit, savingEdit,
+}: {
   entry: PersonaMemoryEntry;
   color: string;
   onRemove: () => void;
   removing: boolean;
   onToNote?: () => void;
   onConfirm?: () => void;   // подтвердить предложенную (pending) запись (③-3.2)
+  editing: boolean;
+  editText: string;
+  onEditTextChange: (v: string) => void;
+  onStartEdit: () => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+  savingEdit: boolean;
 }) {
   return (
     <div style={{
@@ -265,64 +294,95 @@ function MemoryCard({ entry, color, onRemove, removing, onToNote, onConfirm }: {
       borderLeft: `3px solid ${color}`, borderRadius: R.xl, padding: '10px 12px',
       opacity: removing ? 0.5 : 1,
     }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {entry.pending && (
-            <span style={{ display: 'inline-block', fontSize: 10.5, fontWeight: 600, color: C.accent, background: C.accentSoft, borderRadius: R.sm, padding: '1px 7px', marginBottom: 6 }}>предложено</span>
-          )}
-          <div style={{ fontSize: 13.5, color: C.textPrimary, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {entry.text}
-          </div>
-          {(entry.tags && entry.tags.length > 0) && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 7 }}>
-              {entry.tags.map(tag => (
-                <span key={tag} style={{
-                  fontSize: 11, color: C.textSecondary, background: C.bgInset,
-                  border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '1px 7px',
-                }}>#{tag}</span>
-              ))}
-            </div>
-          )}
-          <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>{shortAgo(entry.createdAt)}</div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
-          {onConfirm && (
-            <button
-              onClick={onConfirm}
-              aria-label="Подтвердить"
-              title="Подтвердить — запомнить"
-              style={{ ...forgetBtn, color: C.success }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
+      {editing ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <TextArea
+            value={editText}
+            onChange={onEditTextChange}
+            autoGrow
+            autoFocus
+            minHeight={44}
+            style={{ fontSize: 13.5 }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSaveEdit(); }
+              else if (e.key === 'Escape') { e.preventDefault(); onCancelEdit(); }
+            }}
+          />
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button onClick={onCancelEdit} disabled={savingEdit} style={editGhostBtn}>Отмена</button>
+            <button onClick={onSaveEdit} disabled={savingEdit || !editText.trim()} style={{ ...editSaveBtn, opacity: savingEdit || !editText.trim() ? 0.55 : 1 }}>
+              {savingEdit ? 'Сохраняю…' : 'Сохранить'}
             </button>
-          )}
-          {onToNote && (
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {entry.pending && (
+              <span style={{ display: 'inline-block', fontSize: 10.5, fontWeight: 600, color: C.accent, background: C.accentSoft, borderRadius: R.sm, padding: '1px 7px', marginBottom: 6 }}>предложено</span>
+            )}
+            <div style={{ fontSize: 13.5, color: C.textPrimary, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {entry.text}
+            </div>
+            {(entry.tags && entry.tags.length > 0) && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 7 }}>
+                {entry.tags.map(tag => (
+                  <span key={tag} style={{
+                    fontSize: 11, color: C.textSecondary, background: C.bgInset,
+                    border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '1px 7px',
+                  }}>#{tag}</span>
+                ))}
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>{shortAgo(entry.createdAt)}</div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
+            {onConfirm && (
+              <button
+                onClick={onConfirm}
+                aria-label="Подтвердить"
+                title="Подтвердить — запомнить"
+                style={{ ...forgetBtn, color: C.success }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </button>
+            )}
             <button
-              onClick={onToNote}
-              aria-label="Превратить в заметку"
-              title="Превратить в заметку"
+              onClick={onStartEdit}
+              aria-label="Редактировать"
+              title="Редактировать"
               style={forgetBtn}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-                <line x1="9" y1="13" x2="15" y2="13" />
-              </svg>
+              <Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
             </button>
-          )}
-          <button
-            onClick={onRemove}
-            disabled={removing}
-            aria-label="Забыть"
-            title="Забыть"
-            style={forgetBtn}
-          >
-            <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-          </button>
+            {onToNote && (
+              <button
+                onClick={onToNote}
+                aria-label="Превратить в заметку"
+                title="Превратить в заметку"
+                style={forgetBtn}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="9" y1="13" x2="15" y2="13" />
+                </svg>
+              </button>
+            )}
+            <button
+              onClick={onRemove}
+              disabled={removing}
+              aria-label="Забыть"
+              title="Забыть"
+              style={forgetBtn}
+            >
+              <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -358,4 +418,12 @@ const primaryBtn: React.CSSProperties = {
 const linkBtn: React.CSSProperties = {
   background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
   fontSize: 13, fontFamily: FONT.sans, textDecoration: 'underline', padding: 0,
+};
+const editGhostBtn: React.CSSProperties = {
+  background: 'transparent', border: `1px solid ${C.border}`, borderRadius: R.md,
+  padding: '5px 12px', fontSize: 12.5, fontFamily: FONT.sans, color: C.textSecondary, cursor: 'pointer',
+};
+const editSaveBtn: React.CSSProperties = {
+  background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.md,
+  padding: '5px 12px', fontSize: 12.5, fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer',
 };

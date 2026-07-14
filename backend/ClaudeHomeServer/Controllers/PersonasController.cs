@@ -1426,6 +1426,18 @@ public class PersonasController : ControllerBase
         return NoContent();
     }
 
+    // Отредактировать текст записи (UI-редактирование)
+    [HttpPut("{id}/memory/{entryId}")]
+    public async Task<ActionResult<PersonaMemoryEntry>> UpdateMemory(string id, string entryId, [FromBody] UpdateMemoryRequest req)
+    {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest("Пустой текст");
+        var entry = _memory.Update(UserId, id, entryId, req.Text);
+        if (entry is null) return NotFound();
+        await Broadcast("memory", id);
+        return Ok(entry);
+    }
+
     // Забыть запись
     [HttpDelete("{id}/memory/{entryId}")]
     public async Task<IActionResult> Forget(string id, string entryId)
@@ -1608,6 +1620,8 @@ public record RememberRequest(string Type, string Text, List<string>? Tags = nul
 
 // Закрепить заметку в памяти персоны (③-3.3)
 public record NoteToMemoryRequest(string NoteId);
+
+public record UpdateMemoryRequest(string Text);
 
 public record GenerateAvatarRequest(string? Prompt = null, int? Count = null);
 

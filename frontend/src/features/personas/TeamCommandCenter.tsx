@@ -2,18 +2,20 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   Users, MessageSquare, Mic, Workflow, Plus, CheckCircle2, Repeat, Trash2,
   Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight,
-  MoreHorizontal, Settings, Wand2, Search, EllipsisVertical,
+  MoreHorizontal, Settings, Wand2, EllipsisVertical,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import type { Persona, Project, Session, Task, TeamMemoryEntry, TeamMemberDraft } from '../../types';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
+import { showToast } from '../../lib/toast';
 import { useIsMobile } from '../../lib/breakpoints';
 import { usePersonas, personaLabel } from '../../lib/personas';
 import { projectColor } from '../../lib/tasks';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { PersonaAvatar } from './PersonaAvatar';
 import { SPECIALTY_LABEL } from './automationMeta';
+import { TeamMemoryPanel } from './TeamMemoryPanel';
 import { Modal, IconButton, Menu, MenuItem } from '../../components/ui';
 import { Toolbar, PillSwitch, tbBtnPrimary } from '../../components/Toolbar';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -47,8 +49,6 @@ export function TeamCommandCenter({
   const [filter, setFilter] = useState<FilterKey>('all');
   const [actorFilter, setActorFilter] = useState<string | null>(null);
   const [limit, setLimit] = useState(40);
-  const [memSearch, setMemSearch] = useState('');
-  const [newMem, setNewMem] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [formTeamOpen, setFormTeamOpen] = useState(false);
@@ -73,7 +73,7 @@ export function TeamCommandCenter({
     let t: ReturnType<typeof setTimeout> | null = null;
     const debounced = () => { if (t) clearTimeout(t); t = setTimeout(() => { void refresh(); }, 1500); };
     const off = onMessage(msg => {
-      if (msg.type === 'task_changed' || msg.type === 'notes_changed' || msg.type === 'personas_changed') debounced();
+      if (msg.type === 'task_changed' || msg.type === 'notes_changed' || msg.type === 'personas_changed' || msg.type === 'team_memory_changed') debounced();
     });
     const poll = setInterval(() => { void refresh(); }, 60_000);
     return () => { off(); if (t) clearTimeout(t); clearInterval(poll); };
@@ -103,8 +103,24 @@ export function TeamCommandCenter({
   }, [events]);
 
   const personaById = (id: string) => team.find(p => p.id === id);
-  const addMem = async () => { const t = newMem.trim(); if (!t) return; try { await api.projects.addTeamMemory(project.id, t); setNewMem(''); setMem(await api.projects.teamMemory(project.id)); } catch { /* тишина */ } };
-  const removeMem = async (id: string) => { try { await api.projects.removeTeamMemory(project.id, id); setMem(prev => (prev ?? []).filter(m => m.id !== id)); } catch { /* тишина */ } };
+  const addMem = async (text: string) => {
+    try {
+      const entry = await api.projects.addTeamMemory(project.id, text);
+      setMem(prev => [entry, ...(prev ?? [])]);
+    } catch { showToast('Память команды', 'Не удалось сохранить запись.'); }
+  };
+  const updateMem = async (id: string, text: string) => {
+    try {
+      const updated = await api.projects.updateTeamMemory(project.id, id, text);
+      setMem(prev => (prev ?? []).map(m => m.id === id ? updated : m));
+    } catch { showToast('Память команды', 'Не удалось сохранить изменения.'); }
+  };
+  const removeMem = async (id: string) => {
+    try {
+      await api.projects.removeTeamMemory(project.id, id);
+      setMem(prev => (prev ?? []).filter(m => m.id !== id));
+    } catch { showToast('Память команды', 'Не удалось удалить запись.'); }
+  };
   const openEvent = (e: EventRow) => onEventClick(e, project.id, onOpenSessionById, onOpenPersona);
   const switchTab = (t: Tab) => setTab(t);
 
@@ -172,7 +188,7 @@ export function TeamCommandCenter({
               onFormTeamOpen={() => setFormTeamOpen(true)} onOpenSessionById={onOpenSessionById} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe} />
           )}
           {tab === 'memory' && (
-            <MemoryPanel mem={mem} memSearch={memSearch} setMemSearch={setMemSearch} newMem={newMem} setNewMem={setNewMem} onAdd={addMem} onRemove={removeMem} stripe={stripe} />
+            <TeamMemoryPanel mem={mem} onAdd={addMem} onUpdate={updateMem} onRemove={removeMem} stripe={stripe} />
           )}
           {tab === 'activity' && (
             <ActivityPanel events={events} personaById={personaById} filter={filter} setFilter={setFilter}
@@ -296,54 +312,7 @@ function OverviewPanel(props: {
   );
 }
 
-// ===== Вкладка 2: Память команды =====
-function MemoryPanel({ mem, memSearch, setMemSearch, newMem, setNewMem, onAdd, onRemove, stripe }: {
-  mem: TeamMemoryEntry[] | null; memSearch: string; setMemSearch: (s: string) => void;
-  newMem: string; setNewMem: (s: string) => void; onAdd: () => void; onRemove: (id: string) => void; stripe: string;
-}) {
-  const filtered = useMemo(() => {
-    const q = memSearch.trim().toLowerCase();
-    const list = [...(mem ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return q ? list.filter(m => m.text.toLowerCase().includes(q)) : list;
-  }, [mem, memSearch]);
-
-  return (
-    <>
-      <div style={cardStyle}>
-        <div style={{ fontFamily: FONT.serif, fontSize: 17, color: C.textHeading }}>Память команды</div>
-        <div style={{ fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.5, margin: '6px 0 12px' }}>
-          Общие факты проекта — их remember все персоны команды. Каждый recall в чате персон этого проекта подтягивает эти факты в системный промпт.
-        </div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 10, position: 'relative' }}>
-          <Search size={15} color={C.textMuted} style={{ position: 'absolute', left: 10, top: 9, pointerEvents: 'none' }} />
-          <input value={memSearch} onChange={e => setMemSearch(e.target.value)} placeholder="Поиск по записям…" style={{ ...inputStyle, paddingLeft: 32 }} />
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input value={newMem} onChange={e => setNewMem(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') onAdd(); }} placeholder="Напр.: ревью через PR; релизы по пятницам" style={inputStyle} />
-          <button onClick={onAdd} disabled={!newMem.trim()} style={primaryBtn}>Добавить</button>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-        {mem === null ? <Muted>Загрузка…</Muted>
-          : filtered.length === 0 ? (
-            <div style={{ ...cardStyle, textAlign: 'center', color: C.textMuted, fontFamily: FONT.sans, fontSize: 13 }}>
-              {mem.length === 0 ? 'Пока пусто. Запишите общий факт выше — его запомнят все персоны команды.' : 'Ничего не найдено. '}
-              {mem.length > 0 && <button onClick={() => setMemSearch('')} style={{ ...linkBtn, display: 'inline-block', marginLeft: 6 }}>Сбросить фильтр</button>}
-            </div>
-          ) : filtered.map(m => (
-            <div key={m.id} style={{ ...memRowStyle, borderLeft: `3px solid ${stripe}` }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, lineHeight: 1.45 }}>{m.text}</div>
-                <div style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, marginTop: 3 }}>{fmtDate(m.createdAt)}</div>
-              </div>
-              <button onClick={() => onRemove(m.id)} aria-label="Удалить" title="Удалить запись" style={iconBtnStyle}>×</button>
-            </div>
-          ))}
-      </div>
-    </>
-  );
-}
+// ===== Вкладка 2: Память команды ===== — вынесена в TeamMemoryPanel.tsx (образец: PersonaMemoryPanel)
 
 // ===== Вкладка 3: Активность — таймлайн =====
 function ActivityPanel({ events, personaById, filter, setFilter, actorFilter, setActorFilter, counts, limit, onMore, onOpenEvent }: {
@@ -667,9 +636,6 @@ function shortAgo(iso: string): string {
   const hrs = Math.floor(mins / 60); if (hrs < 24) return `${hrs} ч`;
   return `${Math.floor(hrs / 24)} д`;
 }
-function fmtDate(iso: string): string {
-  try { return new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }); } catch { return ''; }
-}
 function fmtDay(d: string): string {
   try { const dt = new Date(d); return dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }); } catch { return d; }
 }
@@ -683,7 +649,6 @@ const memberCard: CSSProperties = { display: 'flex', alignItems: 'center', gap: 
 const specialtyBadge: CSSProperties = { display: 'inline-block', fontSize: 10.5, fontWeight: 600, color: C.textSecondary, background: C.bgInset, borderRadius: R.sm, padding: '1px 7px', fontFamily: FONT.sans, marginTop: 3 };
 const inputStyle: CSSProperties = { flex: 1, padding: '8px 10px', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, color: C.textPrimary, fontFamily: FONT.sans, fontSize: 13, outline: 'none' };
 const memRowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderLeft: `3px solid ${C.accentMuted}`, borderRadius: R.md, padding: '10px 12px' };
-const iconBtnStyle: CSSProperties = { border: 'none', background: 'transparent', color: C.textMuted, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '2px 4px', flexShrink: 0 };
 const filterBarStyle: CSSProperties = { position: 'sticky', top: 44, zIndex: 4, background: C.bgMain, padding: '8px 0 10px', borderBottom: `1px solid ${C.borderLight}` };
 const filterChip: CSSProperties = { border: 'none', background: C.bgInset, color: C.textSecondary, borderRadius: R.sm, padding: '3px 9px', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans };
 const filterChipActive: CSSProperties = { ...filterChip, background: C.accentLight, color: C.accent };

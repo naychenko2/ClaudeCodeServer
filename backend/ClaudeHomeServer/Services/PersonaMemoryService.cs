@@ -206,6 +206,25 @@ public sealed class PersonaMemoryService
         }
     }
 
+    // Отредактировать текст записи вручную (UI-редактирование) — Dify-документ пересинхронизируется
+    // по изменившемуся хешу через обычный QueueSync/SyncAsync.
+    public PersonaMemoryEntry? Update(string ownerId, string personaId, string entryId, string text)
+    {
+        if (_personas.Get(personaId, ownerId) is null || string.IsNullOrWhiteSpace(text)) return null;
+        var trimmed = text.Trim();
+        var state = GetState(personaId);
+        PersonaMemoryEntry? entry;
+        lock (_saveLock)
+        {
+            entry = state.Entries.FirstOrDefault(e => e.Id == entryId);
+            if (entry is null) return null;
+            entry.Text = trimmed;
+            JsonFileStore.Save(_storePath, _store, JsonOpts);
+        }
+        QueueSync(ownerId, personaId);
+        return entry;
+    }
+
     // Забыть запись
     public bool Forget(string ownerId, string personaId, string entryId)
     {

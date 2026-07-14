@@ -288,55 +288,30 @@
   .gen-actions{display:flex;flex-direction:column;gap:8px;flex:none;}
   .gen-note{font-size:11px;color:var(--text-secondary-alt);margin-top:8px;padding-left:2px;font-style:italic;}
 
-  /* недавние разговоры */
-  .recent-list{display:flex;flex-direction:column;gap:9px;}
-  .recent-item{
-    display:flex;align-items:center;gap:14px;background:var(--bg-white);border:1px solid var(--border-light-alt);
-    border-radius:14px;padding:13px 16px;box-shadow:var(--shadow-card);cursor:pointer;
-    transition:border-color .12s,box-shadow .12s;
+  /* активность — таймлайн по дням, в духе GroupTimeline из «Что нового» */
+  .timeline-day{margin-bottom:20px;}
+  .timeline-day:last-child{margin-bottom:0;}
+  .timeline-day-label{
+    font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.5px;
+    color:var(--text-secondary-alt);text-transform:uppercase;margin:0 0 10px 2px;
   }
-  .recent-item:hover{border-color:#E9C8B4;box-shadow:var(--shadow-card-hover);}
-  .recent-body{flex:1;min-width:0;}
-  .recent-top-row{display:flex;align-items:baseline;justify-content:space-between;gap:10px;}
-  .recent-title{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .recent-time{font-size:11.5px;color:var(--text-secondary);flex:none;}
-  .recent-snippet{font-size:12.5px;color:var(--text-muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .recent-cta{
-    flex:none;display:flex;align-items:center;gap:5px;font-size:12.5px;font-weight:700;color:var(--accent);
-    padding:8px 12px;border-radius:8px;transition:background .12s;
+  .timeline-track{position:relative;padding-left:34px;}
+  .timeline-track::before{
+    content:'';position:absolute;left:10px;top:2px;bottom:2px;width:2px;background:var(--border-light-alt);
   }
-  .recent-item:hover .recent-cta{background:var(--accent-tint);}
-
-  /* пантеон */
-  .pantheon-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;}
-  .pantheon-card{
-    position:relative;background:var(--bg-white);border:1px solid var(--border-light-alt);border-radius:14px;
-    padding:17px;display:flex;flex-direction:column;gap:9px;box-shadow:var(--shadow-card);
-    transition:border-color .15s,box-shadow .15s,transform .15s;
+  .timeline-item{position:relative;padding:8px 10px 8px 0;border-radius:10px;cursor:pointer;transition:background .12s;}
+  .timeline-item:hover{background:var(--bg-hover);}
+  .timeline-marker{
+    position:absolute;left:-34px;top:8px;width:22px;height:22px;border-radius:50%;
+    background:var(--bg-main);border:2px solid var(--accent);color:var(--accent);
+    display:flex;align-items:center;justify-content:center;z-index:1;
   }
-  .pantheon-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-card-hover);}
-  .pantheon-card.connected{border-color:#E9C8B4;background:#FFFBF8;}
-  .pantheon-card-top{display:flex;align-items:center;gap:10px;}
-  .pantheon-name{font-size:13.5px;font-weight:700;line-height:1.3;}
-  .pantheon-handle{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--text-secondary);margin-top:2px;}
-  .pantheon-specialty{
-    font-size:12px;color:var(--text-muted);line-height:1.5;flex:1;
-    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
-  }
-  .connect-btn{
-    width:100%;border-radius:8px;padding:8px 10px;font-family:inherit;font-size:12px;font-weight:700;
-    cursor:pointer;transition:all .12s;border:1px solid #E9C8B4;background:transparent;color:var(--accent);
-    display:flex;align-items:center;justify-content:center;gap:5px;
-  }
-  .connect-btn:hover{background:var(--accent-tint);}
-  .pantheon-card.connected .connect-btn{background:var(--accent);color:#fff;border-color:var(--accent);}
-  .pantheon-card.connected .connect-btn:hover{background:#C56745;}
-  .connected-ribbon{
-    position:absolute;top:12px;right:12px;width:20px;height:20px;border-radius:50%;
-    background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;
-    opacity:0;transform:scale(.6);transition:all .18s;
-  }
-  .pantheon-card.connected .connected-ribbon{opacity:1;transform:scale(1);}
+  .timeline-marker svg{width:11px;height:11px;}
+  .timeline-top-row{display:flex;align-items:baseline;justify-content:space-between;gap:10px;}
+  .timeline-who{font-size:13.5px;font-weight:700;}
+  .timeline-action{font-weight:400;color:var(--text-muted);}
+  .timeline-time{font-size:11.5px;color:var(--text-secondary);flex:none;white-space:nowrap;}
+  .timeline-desc{font-size:12.5px;color:var(--text-muted);margin-top:2px;line-height:1.5;}
 
   /* шаблоны */
   .template-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;}
@@ -399,6 +374,7 @@
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 13l4 4 10-10"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
   <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-4 7.5"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
 </svg>
 
 <div class="window">
@@ -533,10 +509,10 @@
           </div>
 
           <div class="qa-card">
-            <div class="qa-icon"><svg class="icon" width="19" height="19"><use href="#i-shield"/></svg></div>
-            <div class="qa-title">Подключить из Пантеона</div>
-            <div class="qa-desc">8 готовых ролей команды OmO — характер и инструкции уже написаны, подключаются в один клик.</div>
-            <div class="qa-bottom"><button class="btn-ghost" id="qaPantheonBtn">Смотреть роли <svg class="icon" width="14" height="14"><use href="#i-arrow"/></svg></button></div>
+            <div class="qa-icon"><svg class="icon" width="19" height="19"><use href="#i-copy"/></svg></div>
+            <div class="qa-title">Выбрать заготовку</div>
+            <div class="qa-desc">6 готовых сочетаний роли и характера — бери и донастраивай под себя.</div>
+            <div class="qa-bottom"><button class="btn-ghost" id="qaTemplatesBtn">Смотреть заготовки <svg class="icon" width="14" height="14"><use href="#i-arrow"/></svg></button></div>
           </div>
 
           <div class="gen-result" id="genResult">
@@ -563,174 +539,84 @@
         </div>
       </div>
 
-      <!-- НЕДАВНИЕ РАЗГОВОРЫ -->
+      <!-- АКТИВНОСТЬ -->
       <div class="section">
         <div class="section-head">
           <div>
-            <h2>Недавние разговоры</h2>
-            <div class="section-sub">Продолжи с того места, где остановился</div>
+            <h2>Активность</h2>
+            <div class="section-sub">Что происходило в команде персон в последнее время</div>
           </div>
         </div>
-        <div class="recent-list">
 
-          <div class="recent-item" data-title="Ревьюер (Марк)">
-            <div class="avatar c-orange" style="width:40px;height:40px;border-radius:12px;font-size:17px;">М</div>
-            <div class="recent-body">
-              <div class="recent-top-row">
-                <div class="recent-title">Ревьюер (Марк)</div>
-                <div class="recent-time">2 часа назад</div>
+        <div class="timeline-day">
+          <div class="timeline-day-label">Сегодня</div>
+          <div class="timeline-track">
+            <div class="timeline-item" data-kind="chat" data-title="Ревьюер (Марк)">
+              <div class="timeline-marker"><svg class="icon"><use href="#i-chat"/></svg></div>
+              <div class="timeline-top-row">
+                <div class="timeline-who">Ревьюер (Марк) <span class="timeline-action">проверил PR #482</span></div>
+                <div class="timeline-time">2 часа назад</div>
               </div>
-              <div class="recent-snippet">Проверил PR #482: два места без обработки ошибок, один лишний console.log. В целом ок.</div>
+              <div class="timeline-desc">Два места без обработки ошибок, один лишний console.log. В целом ок.</div>
             </div>
-            <div class="recent-cta">Продолжить <svg class="icon" width="14" height="14"><use href="#i-arrow"/></svg></div>
-          </div>
-
-          <div class="recent-item" data-title="Оркестратор (Сизиф)">
-            <div class="avatar c-green" style="width:40px;height:40px;border-radius:12px;font-size:17px;">С</div>
-            <div class="recent-body">
-              <div class="recent-top-row">
-                <div class="recent-title">Оркестратор (Сизиф)</div>
-                <div class="recent-time">вчера, 18:40</div>
+            <div class="timeline-item" data-kind="task" data-title="Оркестратор (Сизиф)">
+              <div class="timeline-marker"><svg class="icon"><use href="#i-check"/></svg></div>
+              <div class="timeline-top-row">
+                <div class="timeline-who">Оркестратор (Сизиф) <span class="timeline-action">выполнил задачу</span></div>
+                <div class="timeline-time">4 часа назад</div>
               </div>
-              <div class="recent-snippet">Разбил задачу «Миграция на v2» на 4 подзадачи и назначил исполнителей.</div>
+              <div class="timeline-desc">«Миграция на v2»: разбил на 4 подзадачи и назначил исполнителей.</div>
             </div>
-            <div class="recent-cta">Продолжить <svg class="icon" width="14" height="14"><use href="#i-arrow"/></svg></div>
-          </div>
-
-          <div class="recent-item" data-title="Секретарь (Полина)">
-            <div class="avatar c-teal" style="width:40px;height:40px;border-radius:12px;font-size:17px;">П</div>
-            <div class="recent-body">
-              <div class="recent-top-row">
-                <div class="recent-title">Секретарь (Полина)</div>
-                <div class="recent-time">2 дня назад</div>
-              </div>
-              <div class="recent-snippet">Напомнила о встрече с командой в 15:00 и подготовила повестку.</div>
-            </div>
-            <div class="recent-cta">Продолжить <svg class="icon" width="14" height="14"><use href="#i-arrow"/></svg></div>
-          </div>
-
-        </div>
-      </div>
-
-      <!-- ПАНТЕОН -->
-      <div class="section" id="pantheon">
-        <div class="section-head">
-          <div>
-            <h2>Пантеон OmO</h2>
-            <div class="section-sub">8 готовых ролей команды — характер и инструкции уже написаны, просто подключи</div>
           </div>
         </div>
-        <div class="pantheon-grid" id="pantheonGrid">
 
-          <div class="pantheon-card connected" data-key="sizif" data-role="Оркестратор" data-name="Сизиф" data-color="c-green">
-            <div class="connected-ribbon"><svg class="icon" width="12" height="12" style="stroke:#fff;"><use href="#i-check"/></svg></div>
-            <div class="pantheon-card-top">
-              <div class="avatar c-green" style="width:42px;height:42px;border-radius:12px;font-size:18px;">С</div>
-              <div>
-                <div class="pantheon-name">Оркестратор (Сизиф)</div>
-                <div class="pantheon-handle">@sizif</div>
+        <div class="timeline-day">
+          <div class="timeline-day-label">Вчера</div>
+          <div class="timeline-track">
+            <div class="timeline-item" data-kind="memory" data-title="Секретарь (Полина)">
+              <div class="timeline-marker"><svg class="icon"><use href="#i-brain"/></svg></div>
+              <div class="timeline-top-row">
+                <div class="timeline-who">Секретарь (Полина) <span class="timeline-action">запомнила факт</span></div>
+                <div class="timeline-time">18:40</div>
               </div>
+              <div class="timeline-desc">Совещание по бюджету — каждый вторник в 15:00.</div>
             </div>
-            <div class="pantheon-specialty">Распределяет задачи по команде и следит за прогрессом.</div>
-            <button class="connect-btn">Подключена</button>
-          </div>
-
-          <div class="pantheon-card connected" data-key="gefest" data-role="Мастер" data-name="Гефест" data-color="c-brown">
-            <div class="connected-ribbon"><svg class="icon" width="12" height="12" style="stroke:#fff;"><use href="#i-check"/></svg></div>
-            <div class="pantheon-card-top">
-              <div class="avatar c-brown" style="width:42px;height:42px;border-radius:12px;font-size:18px;">Г</div>
-              <div>
-                <div class="pantheon-name">Мастер (Гефест)</div>
-                <div class="pantheon-handle">@gefest</div>
+            <div class="timeline-item" data-kind="mention" data-title="Оркестратор (Сизиф)">
+              <div class="timeline-marker"><svg class="icon"><use href="#i-at"/></svg></div>
+              <div class="timeline-top-row">
+                <div class="timeline-who">Оркестратор (Сизиф) <span class="timeline-action">спросил «Мастера (Гефеста)»</span></div>
+                <div class="timeline-time">11:05</div>
               </div>
+              <div class="timeline-desc">Уточнил готовность API перед релизом — прямо в переписке с вами.</div>
             </div>
-            <div class="pantheon-specialty">Пишет и правит код, выполняет техническую работу руками.</div>
-            <button class="connect-btn">Подключена</button>
           </div>
+        </div>
 
-          <div class="pantheon-card connected" data-key="prometey" data-role="Планировщик" data-name="Прометей" data-color="c-blue">
-            <div class="connected-ribbon"><svg class="icon" width="12" height="12" style="stroke:#fff;"><use href="#i-check"/></svg></div>
-            <div class="pantheon-card-top">
-              <div class="avatar c-blue" style="width:42px;height:42px;border-radius:12px;font-size:18px;">П</div>
-              <div>
-                <div class="pantheon-name">Планировщик (Прометей)</div>
-                <div class="pantheon-handle">@prometey</div>
+        <div class="timeline-day">
+          <div class="timeline-day-label">На этой неделе</div>
+          <div class="timeline-track">
+            <div class="timeline-item" data-kind="created" data-title="Секретарь (Полина)">
+              <div class="timeline-marker"><svg class="icon"><use href="#i-plus"/></svg></div>
+              <div class="timeline-top-row">
+                <div class="timeline-who">Вы <span class="timeline-action">создали персону «Секретарь (Полина)»</span></div>
+                <div class="timeline-time">2 дня назад</div>
               </div>
+              <div class="timeline-desc">Шаблон «Секретарь» — приветствие и характер настроены автоматически.</div>
             </div>
-            <div class="pantheon-specialty">Раскладывает большую задачу на понятный план шагов.</div>
-            <button class="connect-btn">Подключена</button>
-          </div>
-
-          <div class="pantheon-card" data-key="atlant" data-role="Координатор" data-name="Атлант" data-color="c-purple">
-            <div class="connected-ribbon"><svg class="icon" width="12" height="12" style="stroke:#fff;"><use href="#i-check"/></svg></div>
-            <div class="pantheon-card-top">
-              <div class="avatar c-purple" style="width:42px;height:42px;border-radius:12px;font-size:18px;">А</div>
-              <div>
-                <div class="pantheon-name">Координатор (Атлант)</div>
-                <div class="pantheon-handle">@atlant</div>
+            <div class="timeline-item" data-kind="task" data-title="Ревьюер (Марк)">
+              <div class="timeline-marker"><svg class="icon"><use href="#i-check"/></svg></div>
+              <div class="timeline-top-row">
+                <div class="timeline-who">Ревьюер (Марк) <span class="timeline-action">отклонил PR #479</span></div>
+                <div class="timeline-time">3 дня назад</div>
               </div>
+              <div class="timeline-desc">Не хватало тестов на граничный случай — вернул с комментариями.</div>
             </div>
-            <div class="pantheon-specialty">Держит в голове весь проект и синхронизирует участников.</div>
-            <button class="connect-btn">Подключить</button>
           </div>
-
-          <div class="pantheon-card" data-key="metida" data-role="Аналитик" data-name="Метида" data-color="c-yellow">
-            <div class="connected-ribbon"><svg class="icon" width="12" height="12" style="stroke:#fff;"><use href="#i-check"/></svg></div>
-            <div class="pantheon-card-top">
-              <div class="avatar c-yellow" style="width:42px;height:42px;border-radius:12px;font-size:18px;">М</div>
-              <div>
-                <div class="pantheon-name">Аналитик (Метида)</div>
-                <div class="pantheon-handle">@metida</div>
-              </div>
-            </div>
-            <div class="pantheon-specialty">Исследует вопрос и собирает факты перед решением.</div>
-            <button class="connect-btn">Подключить</button>
-          </div>
-
-          <div class="pantheon-card" data-key="mom" data-role="Ревьюер" data-name="Мом" data-color="c-red">
-            <div class="connected-ribbon"><svg class="icon" width="12" height="12" style="stroke:#fff;"><use href="#i-check"/></svg></div>
-            <div class="pantheon-card-top">
-              <div class="avatar c-red" style="width:42px;height:42px;border-radius:12px;font-size:18px;">М</div>
-              <div>
-                <div class="pantheon-name">Ревьюер (Мом)</div>
-                <div class="pantheon-handle">@mom</div>
-              </div>
-            </div>
-            <div class="pantheon-specialty">Придирчиво проверяет результат и находит слабые места.</div>
-            <button class="connect-btn">Подключить</button>
-          </div>
-
-          <div class="pantheon-card" data-key="orakul" data-role="Консультант" data-name="Оракул" data-color="c-rose">
-            <div class="connected-ribbon"><svg class="icon" width="12" height="12" style="stroke:#fff;"><use href="#i-check"/></svg></div>
-            <div class="pantheon-card-top">
-              <div class="avatar c-rose" style="width:42px;height:42px;border-radius:12px;font-size:18px;">О</div>
-              <div>
-                <div class="pantheon-name">Консультант (Оракул)</div>
-                <div class="pantheon-handle">@orakul</div>
-              </div>
-            </div>
-            <div class="pantheon-specialty">Отвечает на вопросы и даёт советы, опираясь на контекст.</div>
-            <button class="connect-btn">Подключить</button>
-          </div>
-
-          <div class="pantheon-card" data-key="klio" data-role="Библиотекарь" data-name="Клио" data-color="c-slate">
-            <div class="connected-ribbon"><svg class="icon" width="12" height="12" style="stroke:#fff;"><use href="#i-check"/></svg></div>
-            <div class="pantheon-card-top">
-              <div class="avatar c-slate" style="width:42px;height:42px;border-radius:12px;font-size:18px;">К</div>
-              <div>
-                <div class="pantheon-name">Библиотекарь (Клио)</div>
-                <div class="pantheon-handle">@klio</div>
-              </div>
-            </div>
-            <div class="pantheon-specialty">Хранит и находит знания, конспектирует важное.</div>
-            <button class="connect-btn">Подключить</button>
-          </div>
-
         </div>
       </div>
 
       <!-- ШАБЛОНЫ -->
-      <div class="section">
+      <div class="section" id="templates">
         <div class="section-head">
           <div>
             <h2>Шаблоны для быстрого старта</h2>
@@ -879,9 +765,9 @@
   document.getElementById('btnNewPersonaSidebar').addEventListener('click', toastCreate);
   document.getElementById('qaCreate').addEventListener('click', toastCreate);
 
-  /* ---------- быстрое действие: прокрутка к пантеону ---------- */
-  document.getElementById('qaPantheonBtn').addEventListener('click', function(){
-    var section = document.getElementById('pantheon');
+  /* ---------- быстрое действие: прокрутка к шаблонам ---------- */
+  document.getElementById('qaTemplatesBtn').addEventListener('click', function(){
+    var section = document.getElementById('templates');
     section.scrollIntoView({behavior:'smooth', block:'start'});
     setTimeout(function(){
       section.classList.add('pulse');
@@ -916,74 +802,19 @@
     showToast('Открылась бы форма редактирования сгенерированной персоны');
   });
 
-  /* ---------- недавние разговоры ---------- */
-  document.querySelectorAll('.recent-item').forEach(function(item){
+  /* ---------- активность: таймлайн ---------- */
+  var timelineToast = {
+    chat: function(t){ return 'Открылся бы чат «' + t + '»'; },
+    task: function(t){ return 'Открылась бы карточка задачи, которую ведёт «' + t + '»'; },
+    memory: function(t){ return 'Открылась бы память персоны «' + t + '»'; },
+    mention: function(t){ return 'Открылся бы разговор, где «' + t + '» упомянула другую персону'; },
+    created: function(t){ return 'Открылась бы карточка «' + t + '»'; }
+  };
+  document.querySelectorAll('.timeline-item').forEach(function(item){
     item.addEventListener('click', function(){
-      showToast('Открылся бы чат «' + item.dataset.title + '»');
-    });
-  });
-
-  /* ---------- пантеон: подключить/отключить + синк с сайдбаром ---------- */
-  function updateCounts(){
-    var ownCount = document.querySelectorAll('#ownList .persona-item').length;
-    var pantheonCount = document.querySelectorAll('#pantheonList .persona-item').length;
-    document.getElementById('ownGroupLabel').textContent = 'Мои персоны (' + ownCount + ')';
-    document.getElementById('pantheonGroupLabel').textContent = 'Пантеон OmO (' + pantheonCount + ')';
-  }
-
-  function addSidebarPantheonItem(card){
-    var key = card.dataset.key;
-    if(document.querySelector('#pantheonList [data-key="' + key + '"]')) return;
-    var li = document.createElement('li');
-    li.className = 'persona-item sidebar-fade-in';
-    li.dataset.key = key;
-    var title = card.dataset.role + ' (' + card.dataset.name + ')';
-    li.dataset.title = title;
-    li.dataset.search = (card.dataset.role + ' ' + card.dataset.name + ' @' + key).toLowerCase();
-    li.innerHTML =
-      '<div class="avatar ' + card.dataset.color + '" style="width:36px;height:36px;border-radius:10px;font-size:15px;">' +
-        card.dataset.name.charAt(0) + '<span class="pantheon-dot"></span>' +
-      '</div>' +
-      '<div class="persona-item-text">' +
-        '<div class="persona-item-title">' + title + '</div>' +
-        '<div class="persona-item-handle">@' + key + '</div>' +
-      '</div>';
-    document.getElementById('pantheonList').appendChild(li);
-    bindPersonaItemClick(li);
-    updateCounts();
-  }
-
-  function removeSidebarPantheonItem(key){
-    var li = document.querySelector('#pantheonList [data-key="' + key + '"]');
-    if(!li) return;
-    li.classList.add('sidebar-fade-out');
-    setTimeout(function(){
-      li.remove();
-      updateCounts();
-    }, 220);
-  }
-
-  document.querySelectorAll('.pantheon-card').forEach(function(card){
-    var btn = card.querySelector('.connect-btn');
-    btn.addEventListener('click', function(e){
-      e.stopPropagation();
-      var connected = card.classList.toggle('connected');
-      var role = card.dataset.role, name = card.dataset.name;
-      if(connected){
-        btn.textContent = 'Подключена';
-        addSidebarPantheonItem(card);
-        showToast('«' + role + ' (' + name + ')» подключена — появилась в сайдбаре');
-      } else {
-        btn.textContent = 'Подключить';
-        removeSidebarPantheonItem(card.dataset.key);
-        showToast('«' + role + ' (' + name + ')» отключена');
-      }
-    });
-    btn.addEventListener('mouseenter', function(){
-      if(card.classList.contains('connected')) btn.textContent = 'Отключить';
-    });
-    btn.addEventListener('mouseleave', function(){
-      btn.textContent = card.classList.contains('connected') ? 'Подключена' : 'Подключить';
+      var kind = item.dataset.kind;
+      var fn = timelineToast[kind] || timelineToast.chat;
+      showToast(fn(item.dataset.title));
     });
   });
 
@@ -997,8 +828,6 @@
       }
     });
   });
-
-  updateCounts();
 })();
 </script>
 

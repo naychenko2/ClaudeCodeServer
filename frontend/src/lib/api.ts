@@ -506,6 +506,11 @@ export const api = {
         `/personas/${encodeURIComponent(id)}/automation/${encodeURIComponent(ruleId)}/test`,
         { method: 'POST' },
       ),
+    // AI-подбор правил автоматизации под роль персоны: кандидаты, ничего не сохраняется
+    suggestAutomation: (id: string) =>
+      request<{ candidates: PersonaAutomationRule[] }>(`/personas/${encodeURIComponent(id)}/automation/suggest`, {
+        method: 'POST', timeoutMs: 150_000,
+      }),
   },
 
   // Утренний бриф (флаг daily-briefing): собрать план дня в дневник

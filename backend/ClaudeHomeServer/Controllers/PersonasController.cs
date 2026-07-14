@@ -5,6 +5,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.TriggerSources;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -925,6 +926,212 @@ public class PersonasController : ControllerBase
         if (persona.AutomationRules?.Any(r => r.Id == ruleId) != true) return NotFound();
         _ = _automation.TestAsync(UserId, id, ruleId);   // в фон — ход может быть долгим
         return Accepted();
+    }
+
+    // AI-подбор правил автоматизации под роль персоны: возвращает кандидатов, НЕ сохраняет
+    [HttpPost("{id}/automation/suggest")]
+    public async Task<ActionResult> SuggestAutomation(string id)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+
+        try
+        {
+            var candidates = await SuggestAutomationRulesAsync(persona);
+            return Ok(new { candidates });
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "suggest automation для персоны {Persona}", id);
+            return StatusCode(502, new { error = $"Не удалось подобрать правила: {ex.Message}" });
+        }
+    }
+
+    // Подбор кандидатов-правил: каталог целей владельца + профиль персоны → one-shot LLM
+    // (строгий JSON-массив, ретрай как в suggest bindings), невалидные кандидаты отбрасываются.
+    private async Task<List<PersonaAutomationRule>> SuggestAutomationRulesAsync(Persona persona)
+    {
+        var prompt = BuildAutomationSuggestPrompt(persona);
+        var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
+
+        List<SuggestRuleRaw>? raws = null;
+        for (var attempt = 1; attempt <= 2 && raws is null; attempt++)
+        {
+            var raw = await _oneShot.RunAsync(prompt, model,
+                TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
+            raws = ParseSuggestRuleArray(raw);
+            if (raws is null)
+                _log.LogWarning("suggest automation: ответ не распознан (попытка {Attempt}); сырой ответ: {Raw}",
+                    attempt, raw.Length > 600 ? raw[..600] + "…" : raw);
+        }
+        if (raws is null) return [];
+
+        var result = new List<PersonaAutomationRule>();
+        foreach (var r in raws.Take(4))
+        {
+            if (!Enum.TryParse<AutomationTriggerType>(r.TriggerType, true, out var triggerType)) continue;
+            if (!ValidateTriggerArgs(triggerType, r.TriggerArgs, out var normalizedArgs)) continue;
+            if (!Enum.TryParse<AutomationActionWeight>(r.ActionWeight, true, out var weight))
+                weight = AutomationActionWeight.Gate;
+
+            result.Add(new PersonaAutomationRule
+            {
+                Name = string.IsNullOrWhiteSpace(r.Name) ? "Правило" : r.Name.Trim(),
+                Trigger = new AutomationTrigger { Type = triggerType, Args = normalizedArgs },
+                Condition = string.IsNullOrWhiteSpace(r.ConditionOnlyIf)
+                    ? null
+                    : new AutomationCondition { OnlyIf = r.ConditionOnlyIf.Trim() },
+                Action = new AutomationAction
+                {
+                    Weight = weight,
+                    Instruction = r.ActionInstruction?.Trim() ?? "",
+                    RememberInHistory = r.RememberInHistory ?? false,
+                    ExpiresAfterMinutes = 1440,
+                },
+            });
+        }
+        return result;
+    }
+
+    private string BuildAutomationSuggestPrompt(Persona persona)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Подбери AI-персоне правила автоматизации («когда X — делай Y») под её роль. " +
+                      "Правило — событийный триггер + действие персоны при срабатывании.");
+        sb.AppendLine($"\nПерсона: {persona.Role ?? "без роли"} ({persona.Name}).");
+        if (!string.IsNullOrWhiteSpace(persona.Description))
+            sb.AppendLine($"Кто это: {persona.Description.Trim()}");
+        // Характер: у персон с контрактом (P1) источник правды — Contract.Character,
+        // SystemPrompt — legacy-фолбэк
+        var personaCharacter = persona.Contract?.Character ?? persona.SystemPrompt;
+        if (!string.IsNullOrWhiteSpace(personaCharacter))
+        {
+            var character = personaCharacter.Trim();
+            if (character.Length > 800) character = character[..800] + "…";
+            sb.AppendLine($"Характер: {character}");
+        }
+
+        var existingRules = persona.AutomationRules ?? [];
+        if (existingRules.Count > 0)
+        {
+            sb.AppendLine("\nУже есть правила (не дублируй их по смыслу):");
+            foreach (var r in existingRules)
+                sb.AppendLine($"- «{r.Name}» — {r.Trigger.Type}{(r.Enabled ? "" : " (выкл)")}");
+        }
+        else
+        {
+            sb.AppendLine("\nПравил ещё нет.");
+        }
+
+        sb.AppendLine("\nКаталог целей:");
+        var projects = _projects.GetByOwner(UserId);
+        if (projects.Count > 0)
+        {
+            sb.AppendLine("Проекты (для триггеров file/gitCommit/taskStatus, projectId = id):");
+            foreach (var p in projects.Take(20)) sb.AppendLine($"- {p.Id} — {p.Name}");
+        }
+        var sources = _notes.GetSources(UserId);
+        if (sources.Count > 0)
+        {
+            sb.AppendLine("Источники заметок (для триггера note, source = key):");
+            foreach (var s in sources.Take(20)) sb.AppendLine($"- {s.Key} — {s.Label}");
+        }
+        sb.AppendLine($"Персона (для триггера mention — детект по @{persona.Handle}, доп. данных не нужно): handle = {persona.Handle}");
+
+        sb.AppendLine("\nСхема triggerArgs по типам триггера (строго соблюдай ключи):");
+        sb.AppendLine("- timer: {\"schedule\":{\"type\":\"daily|weekdays|weekly|interval\",\"time\":\"HH:mm\"," +
+                      "\"weekdays\":[1..7, ISO пн=1],\"intervalMinutes\":число}}");
+        sb.AppendLine("- file: {\"projectId\":\"id проекта\",\"glob\":\"**/*.ts\" (по умолчанию \"**/*\")," +
+                      "\"kinds\":[\"created\",\"changed\"]}");
+        sb.AppendLine("- note: {\"source\":\"personal|id источника\",\"tags\":[\"#тег\"] (опц.),\"section\":\"папка\" (опц.)}");
+        sb.AppendLine("- gitCommit: {\"projectId\":\"id проекта\"}");
+        sb.AppendLine("- taskStatus: {\"projectId\":\"id проекта\" (опц.),\"from\":\"Todo|InProgress|Done\" (опц.)," +
+                      "\"to\":\"Todo|InProgress|Done\" (опц.)}");
+        sb.AppendLine("- mention: {} (пусто)");
+
+        sb.AppendLine("\nВерни ТОЛЬКО JSON-массив (без пояснений и markdown) из НЕ БОЛЕЕ 4 объектов:");
+        sb.AppendLine("[{\"name\":\"короткое имя правила по-русски\",\"triggerType\":\"timer|file|note|gitCommit|taskStatus|mention\"," +
+                      "\"triggerArgs\":{...по схеме своего типа...},\"conditionOnlyIf\":\"доп. условие реакции (опционально) или null\"," +
+                      "\"actionWeight\":\"gate|work\",\"actionInstruction\":\"что делать персоне при срабатывании, 1-3 предложения по-русски\"," +
+                      "\"rememberInHistory\":false}]");
+        sb.AppendLine("Бери только правила, реально полезные роли и доступным проектам/источникам; если подходящих нет — верни [].");
+        return sb.ToString();
+    }
+
+    // Парс JSON-массива из ответа модели (устойчиво к преамбуле/markdown-fence) — та же логика,
+    // что ParseSuggestArray у bindings, но своя DTO-схема (generic-хелпер не выносим ради простоты)
+    private static List<SuggestRuleRaw>? ParseSuggestRuleArray(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var start = raw.IndexOf('[');
+        if (start < 0) return null;
+        int depth = 0; bool inStr = false, esc = false;
+        for (var i = start; i < raw.Length; i++)
+        {
+            var c = raw[i];
+            if (inStr)
+            {
+                if (esc) esc = false;
+                else if (c == '\\') esc = true;
+                else if (c == '"') inStr = false;
+                continue;
+            }
+            if (c == '"') inStr = true;
+            else if (c == '[') depth++;
+            else if (c == ']' && --depth == 0)
+            {
+                try
+                {
+                    return System.Text.Json.JsonSerializer.Deserialize<List<SuggestRuleRaw>>(raw[start..(i + 1)],
+                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                }
+                catch (System.Text.Json.JsonException) { return null; }
+            }
+        }
+        return null;
+    }
+
+    private sealed record SuggestRuleRaw(string? Name, string? TriggerType, Dictionary<string, JsonElement>? TriggerArgs,
+        string? ConditionOnlyIf, string? ActionWeight, string? ActionInstruction, bool? RememberInHistory);
+
+    // Валидация triggerArgs кандидата по типу триггера — та же логика, что должна проходить
+    // при ручном создании правила, но невалидный кандидат целиком отбрасывается (continue),
+    // а не 400: подбор best-effort, часть предложений может не подойти.
+    private bool ValidateTriggerArgs(AutomationTriggerType type, Dictionary<string, JsonElement>? args,
+        out Dictionary<string, JsonElement>? normalized)
+    {
+        normalized = args;
+        IReadOnlyDictionary<string, JsonElement> dict = args ?? new Dictionary<string, JsonElement>();
+        switch (type)
+        {
+            case AutomationTriggerType.Timer:
+            {
+                var sched = TimerTriggerSource.ParseSchedule(dict);
+                if (sched is null || sched.Type is not ("daily" or "weekdays" or "weekly" or "interval"))
+                    return false;
+                return sched.Type == "interval" ? sched.IntervalMinutes is > 0 : sched.Time is not null;
+            }
+            case AutomationTriggerType.File:
+            case AutomationTriggerType.GitCommit:
+            case AutomationTriggerType.TaskStatus:
+            {
+                var projectId = dict.GetString("projectId");
+                if (string.IsNullOrWhiteSpace(projectId)) return true;
+                var project = _projects.GetById(projectId);
+                return project is not null && project.OwnerId == UserId;
+            }
+            case AutomationTriggerType.Note:
+            {
+                var source = dict.GetString("source");
+                if (string.IsNullOrWhiteSpace(source)) return false;
+                if (source == "personal") return true;
+                return _notes.GetSources(UserId).Any(s => s.Key == source);
+            }
+            case AutomationTriggerType.Mention:
+                return true;
+            default:
+                return false;
+        }
     }
 
     // Маппинг DTO → модель правила. existing передаётся при обновлении — Id/CreatedAt и

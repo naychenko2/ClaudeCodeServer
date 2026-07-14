@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronsLeft, Menu, Pin, User } from 'lucide-react';
+import { ChevronsLeft, Menu, Pin } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { EmptyState } from '../../components/EmptyState';
-import { C, FONT, R } from '../../lib/design';
+import { C, FONT } from '../../lib/design';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
@@ -22,13 +21,8 @@ import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaAutomationPanel } from './PersonaAutomationPanel';
-import { PersonaQuickCreate } from './PersonaQuickCreate';
-import type { PersonaTemplate } from './personaTemplates';
-
-// Иконка раздела для пустого состояния (персона)
-function IconPersonas() {
-  return <User size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />;
-}
+import { PersonaWizard } from './PersonaWizard';
+import { PersonasHub } from './PersonasHub';
 
 export function PersonasPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
@@ -50,7 +44,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   // одноразовая, сбрасывается любым обычным выбором персоны из списка
   const [pendingView, setPendingView] = useState<PersonaView | null>(null);
   const [mobileView, setMobileView] = useState<'list' | 'card'>('list');
-  // Режим создания новой персоны: пустая форма прямо в контентной зоне
+  // Режим создания новой персоны: мастер прямо в контентной зоне
   const [creating, setCreating] = useState(false);
   // Проекты — чтобы показать имя/зону проектной персоны и открыть её проект в «Поговорить»
   const [projects, setProjects] = useState<Project[]>([]);
@@ -110,9 +104,11 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     }
   }, [selectedId, allPersonas, personas]);
 
-  const selectPersona = (id: string) => {
+  // view — опционально сразу открыть конкретную вкладку студии (бэйдж автоматизации
+  // в чате, клик по событию памяти в ленте активности хаба и т.п.)
+  const selectPersona = (id: string, view?: PersonaView) => {
     setCreating(false);
-    setSelectedId(id); setMobileView('card'); setPendingView(null);
+    setSelectedId(id); setMobileView('card'); setPendingView(view ?? null);
     navPush({ screen: 'personas', persona: id });
     // В режиме drawer после выбора — закрываем оверлей (как в «Заметках»)
     setSidebarMode(m => m === 'open' ? 'collapsed' : m);
@@ -122,7 +118,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     setSelectedId(null); setMobileView('list'); setPendingView(null);
     if (getNav()?.persona) navReplace({ screen: 'personas' });
   };
-  // Кнопка «Новая персона» — пустая форма создания в контентной зоне
+  // Кнопка «Новая персона» — мастер создания в контентной зоне
   const startCreate = () => {
     setSelectedId(null); setCreating(true); setMobileView('card');
     if (getNav()?.persona) navReplace({ screen: 'personas' });
@@ -208,7 +204,8 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const centerPane = creating
     ? <PersonaCreatePane
         projects={projects}
-        onSaved={p => selectPersona(p.id)}
+        onOpenStudio={p => selectPersona(p.id)}
+        onStartChat={p => void talk(p)}
         onCancel={clearSelection}
         onBack={isMobile ? clearSelection : undefined} />
     : selected
@@ -223,11 +220,13 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         onOpenSession={openSession}
         onBack={isMobile ? clearSelection : undefined}
         isMobile={isMobile} />
-    : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <EmptyState icon={<IconPersonas />} title="Персоны"
-          subtitle={personas.length ? 'Выбери персону слева, чтобы открыть её профиль и память' : 'Создай первую персону: имя, характер, аватар'}
-          action={<button onClick={startCreate} style={newBtn}>Новая персона</button>} />
-      </div>;
+    : <PersonasHub
+        personas={personas}
+        talking={talking}
+        onTalk={talk}
+        onOpenSession={openSession}
+        onNew={startCreate}
+        onOpenPersonaView={selectPersona} />;
 
   const hasContent = creating || !!selected;
 
@@ -297,62 +296,26 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   );
 }
 
-// Пане создания новой персоны. Первый экран — быстрое создание по промпту
-// (ИИ придумывает роль/характер/аватар); «Заполнить вручную» переключает на
-// привычную пустую PersonaForm с тулбаром (Отмена/Создать).
-function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {
+// Панель создания новой персоны — пошаговый мастер (единая точка входа:
+// по описанию / из шаблона / с нуля).
+function PersonaCreatePane({ projects, onOpenStudio, onStartChat, onCancel, onBack }: {
   projects: Project[];
-  onSaved: (p: Persona) => void;
+  onOpenStudio: (p: Persona) => void;
+  onStartChat: (p: Persona) => void;
   onCancel: () => void;
   onBack?: () => void;
 }) {
   const isMobile = useIsMobile();
-  // Ручной путь создания (пустая форма) — по кнопке «Заполнить вручную»
-  const [manual, setManual] = useState(false);
-  // Выбранный шаблон роли — предзаполняет ручную форму
-  const [template, setTemplate] = useState<PersonaTemplate | null>(null);
-  const formRef = useRef<PersonaFormHandle>(null);
-  const [status, setStatus] = useState<PersonaFormStatus>({ canSave: false, saving: false, dirty: false });
-  const onStatus = useCallback((s: PersonaFormStatus) => {
-    setStatus(prev => (prev.canSave === s.canSave && prev.saving === s.saving && prev.dirty === s.dirty ? prev : s));
-  }, []);
-  // Живой цвет из формы — для перекраски акцентной полосы тулбара при создании
-  const [liveColor, setLiveColor] = useState<string>('orange');
-  const accent = AGENT_COLORS[liveColor] ?? C.accent;
-
-  // Стартовый экран — быстрое создание по промпту (глобальная зона)
-  if (!manual) {
-    return (
-      <PersonaQuickCreate
-        scope="global"
-        onCreated={onSaved}
-        onManual={() => { setTemplate(null); setManual(true); }}
-        onTemplate={t => { setTemplate(t); setManual(true); }}
-        onCancel={onCancel}
-        onBack={onBack}
-        isMobile={isMobile}
-      />
-    );
-  }
-
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <PersonaToolbar
-        mode="create"
-        accent={accent}
-        status={status}
-        onSave={() => void formRef.current?.save()}
-        onCancel={onCancel}
-        onBack={onBack}
-        isMobile={isMobile}
-      />
-      <div style={{ flex: 'none', height: 2, background: `${accent}55` }} />
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <PersonaForm ref={formRef} persona={null} projects={projects}
-          initial={template ? { name: template.namePlaceholder, role: template.role, description: template.description, contract: template.contract, greeting: template.greeting, color: template.avatarColor, tools: template.tools, access: template.access, model: template.model, effort: template.effort, specialty: template.specialty } : undefined}
-          onStatus={onStatus} onColorChange={setLiveColor} onSaved={onSaved} />
-      </div>
-    </div>
+    <PersonaWizard
+      scope="global"
+      projects={projects}
+      onOpenStudio={onOpenStudio}
+      onStartChat={onStartChat}
+      onCancel={onCancel}
+      onBack={onBack}
+      isMobile={isMobile}
+    />
   );
 }
 
@@ -464,8 +427,3 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
     </div>
   );
 }
-
-const newBtn: React.CSSProperties = {
-  background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.md,
-  padding: '9px 16px', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: FONT.sans,
-};

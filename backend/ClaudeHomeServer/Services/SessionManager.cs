@@ -18,6 +18,10 @@ public class SessionManager
         public TurnAccumulator? Accumulator;
         // Кэш последних workflow_progress для replay при подключении нового клиента
         public Dictionary<string, WorkflowProgressMessage> WorkflowProgress = new();
+        // Последний манифест recall (F3) — как и workflow_progress, транзитное WS-событие;
+        // без кэша клиент, открывший чат уже после хода (или переподключившийся), никогда
+        // не увидит «использовано сейчас», хотя ход реально опирался на память/команду.
+        public RecallManifestMessage? LastRecallManifest;
         // Текст ответа текущего хода — для поиска маркера завершения цикла «до готово»
         public System.Text.StringBuilder LoopTurnText = new();
         // Ход завершился ошибкой (result error / error) — цикл не продолжаем
@@ -1406,6 +1410,12 @@ public class SessionManager
         return entry.WorkflowProgress.Values.ToList();
     }
 
+    // Последний манифест recall (F3) сессии — replay при подключении клиента (JoinSession),
+    // как и у workflow_progress: без этого «использовано сейчас» видно только тем, кто был
+    // на связи в момент самого хода.
+    public RecallManifestMessage? GetLastRecallManifest(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) ? entry.LastRecallManifest : null;
+
     public Session? GetSessionInfo(string sessionId)
     {
         _sessions.TryGetValue(sessionId, out var entry);
@@ -1460,6 +1470,9 @@ public class SessionManager
                 case PlanReviewMessage m:
                     acc.OnPlanReview(m.RequestId, m.Plan);
                     await acc.SaveSnapshotAsync(_history);
+                    break;
+                case RecallManifestMessage m:
+                    if (entry is not null) entry.LastRecallManifest = m;
                     break;
                 case ResultMessage m:
                     await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history);

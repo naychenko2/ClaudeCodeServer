@@ -22,8 +22,7 @@ import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaAutomationPanel } from './PersonaAutomationPanel';
-import { PersonaQuickCreate } from './PersonaQuickCreate';
-import type { PersonaTemplate } from './personaTemplates';
+import { PersonaWizard } from './PersonaWizard';
 
 // Иконка раздела для пустого состояния (персона)
 function IconPersonas() {
@@ -208,7 +207,8 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const centerPane = creating
     ? <PersonaCreatePane
         projects={projects}
-        onSaved={p => selectPersona(p.id)}
+        onOpenStudio={p => selectPersona(p.id)}
+        onStartChat={p => void talk(p)}
         onCancel={clearSelection}
         onBack={isMobile ? clearSelection : undefined} />
     : selected
@@ -297,62 +297,26 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   );
 }
 
-// Пане создания новой персоны. Первый экран — быстрое создание по промпту
-// (ИИ придумывает роль/характер/аватар); «Заполнить вручную» переключает на
-// привычную пустую PersonaForm с тулбаром (Отмена/Создать).
-function PersonaCreatePane({ projects, onSaved, onCancel, onBack }: {
+// Панель создания новой персоны — пошаговый мастер (единая точка входа:
+// по описанию / из шаблона / с нуля).
+function PersonaCreatePane({ projects, onOpenStudio, onStartChat, onCancel, onBack }: {
   projects: Project[];
-  onSaved: (p: Persona) => void;
+  onOpenStudio: (p: Persona) => void;
+  onStartChat: (p: Persona) => void;
   onCancel: () => void;
   onBack?: () => void;
 }) {
   const isMobile = useIsMobile();
-  // Ручной путь создания (пустая форма) — по кнопке «Заполнить вручную»
-  const [manual, setManual] = useState(false);
-  // Выбранный шаблон роли — предзаполняет ручную форму
-  const [template, setTemplate] = useState<PersonaTemplate | null>(null);
-  const formRef = useRef<PersonaFormHandle>(null);
-  const [status, setStatus] = useState<PersonaFormStatus>({ canSave: false, saving: false, dirty: false });
-  const onStatus = useCallback((s: PersonaFormStatus) => {
-    setStatus(prev => (prev.canSave === s.canSave && prev.saving === s.saving && prev.dirty === s.dirty ? prev : s));
-  }, []);
-  // Живой цвет из формы — для перекраски акцентной полосы тулбара при создании
-  const [liveColor, setLiveColor] = useState<string>('orange');
-  const accent = AGENT_COLORS[liveColor] ?? C.accent;
-
-  // Стартовый экран — быстрое создание по промпту (глобальная зона)
-  if (!manual) {
-    return (
-      <PersonaQuickCreate
-        scope="global"
-        onCreated={onSaved}
-        onManual={() => { setTemplate(null); setManual(true); }}
-        onTemplate={t => { setTemplate(t); setManual(true); }}
-        onCancel={onCancel}
-        onBack={onBack}
-        isMobile={isMobile}
-      />
-    );
-  }
-
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <PersonaToolbar
-        mode="create"
-        accent={accent}
-        status={status}
-        onSave={() => void formRef.current?.save()}
-        onCancel={onCancel}
-        onBack={onBack}
-        isMobile={isMobile}
-      />
-      <div style={{ flex: 'none', height: 2, background: `${accent}55` }} />
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <PersonaForm ref={formRef} persona={null} projects={projects}
-          initial={template ? { name: template.namePlaceholder, role: template.role, description: template.description, contract: template.contract, greeting: template.greeting, color: template.avatarColor, tools: template.tools, access: template.access, model: template.model, effort: template.effort, specialty: template.specialty } : undefined}
-          onStatus={onStatus} onColorChange={setLiveColor} onSaved={onSaved} />
-      </div>
-    </div>
+    <PersonaWizard
+      scope="global"
+      projects={projects}
+      onOpenStudio={onOpenStudio}
+      onStartChat={onStartChat}
+      onCancel={onCancel}
+      onBack={onBack}
+      isMobile={isMobile}
+    />
   );
 }
 

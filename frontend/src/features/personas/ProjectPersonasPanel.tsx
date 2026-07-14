@@ -15,8 +15,7 @@ import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaAutomationPanel } from './PersonaAutomationPanel';
-import { PersonaQuickCreate } from './PersonaQuickCreate';
-import type { PersonaTemplate } from './personaTemplates';
+import { PersonaWizard } from './PersonaWizard';
 
 function useIsMobile(): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
@@ -102,13 +101,6 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
   const [editing, setEditing] = useState(false);
   useEffect(() => { setView(initialView ?? 'preview'); setEditing(false); }, [personaId, initialView]);
 
-  // Создание: сначала экран быстрого создания по промпту, «Заполнить вручную» — пустая форма.
-  // Сбрасываем на быстрый экран при каждом новом входе в режим создания.
-  const [manualCreate, setManualCreate] = useState(false);
-  // Выбранный шаблон роли — предзаполняет ручную форму
-  const [template, setTemplate] = useState<PersonaTemplate | null>(null);
-  useEffect(() => { if (creating) { setManualCreate(false); setTemplate(null); } }, [creating]);
-
   const [talking, setTalking] = useState(false);
   const formRef = useRef<PersonaFormHandle>(null);
   const [status, setStatus] = useState<PersonaFormStatus>({ canSave: false, saving: false, dirty: false });
@@ -158,16 +150,16 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
 
   const accent = AGENT_COLORS[liveColor ?? persona?.avatar?.color ?? ''] ?? C.accent;
 
-  // Быстрое создание по промпту — свой экран целиком (тулбар внутри компонента).
+  // Создание — пошаговый мастер целиком (тулбар внутри компонента).
   // После успеха родитель выбирает созданную персону → откроется её редактор.
-  if (!persona && creating && !manualCreate) {
+  if (!persona && creating) {
     return (
-      <PersonaQuickCreate
+      <PersonaWizard
         scope="project"
         projectId={project.id}
-        onCreated={p => onSelectPersona(p.id)}
-        onManual={() => { setTemplate(null); setManualCreate(true); }}
-        onTemplate={t => { setTemplate(t); setManualCreate(true); }}
+        projects={[project]}
+        onOpenStudio={p => onSelectPersona(p.id)}
+        onStartChat={talk}
         onCancel={onCleared}
         onBack={onBack}
         isMobile={isMobile}
@@ -251,18 +243,6 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
               isMobile={isMobile}
             />
           )
-        ) : creating ? (
-          <PersonaForm
-            ref={formRef}
-            persona={null}
-            projects={[project]}
-            defaultScope="project"
-            defaultProjectId={project.id}
-            initial={template ? { name: template.namePlaceholder, role: template.role, description: template.description, contract: template.contract, greeting: template.greeting, color: template.avatarColor, tools: template.tools, access: template.access, model: template.model, effort: template.effort, specialty: template.specialty } : undefined}
-            onStatus={onStatus}
-            onColorChange={setLiveColor}
-            onSaved={p => onSelectPersona(p.id)}
-          />
         ) : null}
       </div>
       {deleteTarget && (

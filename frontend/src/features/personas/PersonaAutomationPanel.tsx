@@ -14,10 +14,10 @@
 import { useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
-  Plus, Zap, FlaskConical, Pencil, Trash2, CheckCircle2, Power, X,
+  Plus, Zap, FlaskConical, Pencil, Trash2, CheckCircle2, Power, X, Check as CheckIcon,
 } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import type { Persona, PersonaAutomationRule, Project } from '../../types';
+import type { AutomationRuleDto, Persona, PersonaAutomationRule, Project } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { bumpPersonas } from '../../lib/personas';
@@ -35,6 +35,33 @@ import {
 interface AddState {
   step: 1 | 2 | 3;
   draft: FormState;
+}
+
+// Кандидаты AI-подбора с чекбоксами (по образцу PersonaBindingsPanel.SuggestState)
+interface SuggestState {
+  loading: boolean;
+  candidates?: (PersonaAutomationRule & { on: boolean })[];
+  error?: string;
+  adding?: boolean;
+}
+
+// Кандидат → DTO создания правила (поля 1:1 с PersonaAutomationRule — сервер уже
+// возвращает валидированную модель, конвертация чисто структурная)
+function candidateToDto(c: PersonaAutomationRule): AutomationRuleDto {
+  return {
+    name: c.name,
+    enabled: c.enabled,
+    triggerType: c.trigger.type,
+    triggerArgs: c.trigger.args ?? {},
+    conditionOnlyIf: c.condition?.onlyIf ?? null,
+    quietFrom: c.condition?.quietFrom ?? null,
+    quietTo: c.condition?.quietTo ?? null,
+    minIntervalMinutes: c.condition?.minIntervalMinutes ?? null,
+    actionWeight: c.action.weight,
+    actionInstruction: c.action.instruction,
+    rememberInHistory: c.action.rememberInHistory,
+    actionExpiresAfterMinutes: c.action.expiresAfterMinutes ?? null,
+  };
 }
 
 export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: {
@@ -55,6 +82,9 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
   // Добавление — инлайн-степпер под списком
   const [adding, setAdding] = useState<AddState | null>(null);
   const [addSaving, setAddSaving] = useState(false);
+
+  // AI-подбор правил — кандидаты с чекбоксами (по образцу привязок)
+  const [suggest, setSuggest] = useState<SuggestState | null>(null);
 
   const setDraftField = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setDraft(prev => prev ? { ...prev, [key]: value } : prev);
@@ -116,6 +146,7 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
 
   function openAdd() {
     closeEdit();
+    setSuggest(null);
     setAdding({ step: 1, draft: initialForm(null, projects) });
   }
   async function commitAdd() {
@@ -128,6 +159,40 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
     } catch (e: any) {
       window.alert(e?.message ?? 'Не удалось создать правило');
     } finally { setAddSaving(false); }
+  }
+
+  // «✨ Подобрать автоматически» — правила под роль персоны, ничего не сохраняется,
+  // пока не подтверждено (по образцу PersonaBindingsPanel.runSuggest)
+  async function runSuggest() {
+    closeEdit();
+    setAdding(null);
+    setSuggest({ loading: true });
+    try {
+      const { candidates } = await api.personas.suggestAutomation(persona.id);
+      setSuggest({ loading: false, candidates: candidates.map(c => ({ ...c, on: true })) });
+    } catch (e: any) {
+      setSuggest({ loading: false, error: e?.message ?? 'Не удалось подобрать правила. Попробуйте ещё раз.' });
+    }
+  }
+
+  function toggleCandidate(id: string) {
+    setSuggest(s => s?.candidates
+      ? { ...s, candidates: s.candidates.map(c => c.id === id ? { ...c, on: !c.on } : c) }
+      : s);
+  }
+
+  async function acceptSuggest() {
+    const picked = (suggest?.candidates ?? []).filter(c => c.on);
+    if (picked.length === 0) { setSuggest(null); return; }
+    setSuggest(s => s ? { ...s, adding: true } : s);
+    try {
+      for (const c of picked) await api.personas.addAutomation(persona.id, candidateToDto(c));
+      await bumpPersonas();
+      setSuggest(null);
+    } catch (e: any) {
+      window.alert(e?.message ?? 'Не удалось добавить правила.');
+      setSuggest(null);
+    }
   }
 
   return (
@@ -182,14 +247,17 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
         )}
 
         {/* Пустое состояние — внутри 680-контейнера, в духе привязок */}
-        {rules.length === 0 && !adding && (
-          <EmptyState onCreate={openAdd} />
+        {rules.length === 0 && !adding && !suggest && (
+          <EmptyState onCreate={openAdd} onSuggest={() => void runSuggest()} />
         )}
 
-        {/* Кнопка добавления под списком (скрыта, пока открыт степпер) */}
-        {rules.length > 0 && !adding && (
+        {/* Кнопки под списком (скрыты, пока открыт степпер/подбор) */}
+        {rules.length > 0 && !adding && !suggest && (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
             <AddRuleButton onClick={openAdd} accent={accent} />
+            <Button variant="ghostAccent" size="sm" onClick={() => void runSuggest()}>
+              ✨ Подобрать автоматически
+            </Button>
           </div>
         )}
 
@@ -205,6 +273,76 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
             onClose={() => setAdding(null)}
             onCommit={() => void commitAdd()}
           />
+        )}
+
+        {/* AI-подбор: спиннер / кандидаты с чекбоксами (по образцу привязок) */}
+        {suggest && (
+          <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 14, paddingTop: 18 }}>
+            {suggest.loading ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: C.textMuted }}>
+                <span style={pulseDot} />
+                Подбираю правила под роль персоны — до минуты
+                <style>{'@keyframes cc-auto-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }'}</style>
+              </div>
+            ) : suggest.error ? (
+              <div style={{ fontSize: 12.5, color: C.dangerText }}>
+                {suggest.error}{' '}
+                <button onClick={() => void runSuggest()} style={linkBtn}>Повторить</button>{' '}
+                <button onClick={() => setSuggest(null)} style={{ ...linkBtn, color: C.textMuted }}>Закрыть</button>
+              </div>
+            ) : (suggest.candidates ?? []).length === 0 ? (
+              <div style={{ fontSize: 12.5, color: C.textMuted }}>
+                Ничего подходящего не нашлось — попробуйте создать правило вручную.{' '}
+                <button onClick={() => setSuggest(null)} style={linkBtn}>Закрыть</button>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+                  <SectionLabel>Правила подобраны автоматически</SectionLabel>
+                  <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
+                    {suggest.candidates!.filter(c => c.on).length} из {suggest.candidates!.length}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+                  {suggest.candidates!.map(c => {
+                    const trig = TRIGGER_META[c.trigger.type] ?? TRIGGER_META.timer;
+                    const details = triggerDetails(c, projects);
+                    return (
+                      <div
+                        key={c.id}
+                        onClick={() => toggleCandidate(c.id)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
+                          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+                          padding: '10px 14px', opacity: c.on ? 1 : 0.5,
+                        }}
+                      >
+                        <SuggestCheck on={c.on} />
+                        <TriggerTypeIcon type={c.trigger.type} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>{c.name}</div>
+                          <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {trig.label}{details ? ' · ' + details : ''} · {c.action.instruction}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12, color: C.textMuted }}>
+                  ✨ Предложено ИИ по роли персоны. Ничего не сохранено, пока вы не подтвердите.
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+                  <Button variant="ghost" size="sm" disabled={suggest.adding} onClick={() => setSuggest(null)}>Отмена</Button>
+                  <Button variant="primary" size="sm" loading={suggest.adding}
+                    disabled={suggest.adding || suggest.candidates!.every(c => !c.on)}
+                    onClick={() => void acceptSuggest()}>
+                    {suggest.adding ? 'Добавляю…' : 'Добавить выбранные'}
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -497,7 +635,7 @@ function ToggleLabel({ checked, onChange }: { checked: boolean; onChange: (v: bo
 
 // ─── Empty-state ────────────────────────────────────────────────────────────────
 
-function EmptyState({ onCreate }: { onCreate: () => void }) {
+function EmptyState({ onCreate, onSuggest }: { onCreate: () => void; onSuggest: () => void }) {
   return (
     <div style={{
       marginTop: 14, border: `1.5px dashed ${C.dashed}`, borderRadius: R.xl,
@@ -515,11 +653,30 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
         новые коммиты, смену статуса задач и @упоминания. По умолчанию она сначала решает,
         стоит ли вмешиваться.
       </div>
-      <button onClick={onCreate} style={emptyAddBtn}>
-        <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-        Создать правило
-      </button>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+        <button onClick={onCreate} style={emptyAddBtn}>
+          <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+          Создать правило
+        </button>
+        <Button variant="ghostAccent" size="sm" onClick={onSuggest}>
+          ✨ Подобрать автоматически
+        </Button>
+      </div>
     </div>
+  );
+}
+
+// Квадратный чекбокс кандидата подбора (копия PersonaBindingsPanel.Check)
+function SuggestCheck({ on }: { on: boolean }) {
+  return (
+    <span style={{
+      width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+      border: `1.5px solid ${on ? C.accent : C.border}`,
+      background: on ? C.accent : C.bgWhite,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
+    }}>
+      {on && <CheckIcon size={12} strokeWidth={ICON_STROKE} />}
+    </span>
   );
 }
 
@@ -561,4 +718,14 @@ const xBtn: CSSProperties = {
   width: 28, height: 28, border: 'none', background: 'transparent', borderRadius: R.md,
   color: C.textMuted, cursor: 'pointer',
   display: 'flex', alignItems: 'center', justifyContent: 'center',
+};
+
+const linkBtn: CSSProperties = {
+  background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
+  fontSize: 13, fontFamily: FONT.sans, textDecoration: 'underline', padding: 0,
+};
+
+const pulseDot: CSSProperties = {
+  width: 8, height: 8, borderRadius: R.full, background: C.accent, flexShrink: 0,
+  animation: 'cc-auto-pulse 1.2s ease-in-out infinite',
 };

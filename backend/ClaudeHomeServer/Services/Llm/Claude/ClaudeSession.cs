@@ -66,6 +66,16 @@ public class ClaudeSession : ILlmSessionAdapter
     private static readonly string[] BuiltInTaskTools =
         ["TaskGet", "TaskList", "TaskCreate", "TaskUpdate", "TaskComplete", "TaskDelete", "TaskSearch"];
 
+    // Свои MCP-серверы (mcp/*-server, mcp-dify — код этого репозитория, собираются в
+    // BuildTurnMcpConfig): работа с данными самого пользователя внутри системы, не внешнее
+    // действие с побочным эффектом наружу (в отличие от Google Drive/Gamma/Miro/figma и
+    // т.п. сторонних коннекторов). Разрешаем их автоматически, без карточки пользователю —
+    // иначе персоны и автоматизации вязнут в перманентных permission-запросах на каждый
+    // созданный чат/процесс claude, хотя доступ уже ограничен на уровне Persona.Tools/
+    // ExtraDisallowedTools и project deny-правил (проверяются раньше, см. DecidePermissionAsync).
+    private static readonly string[] BuiltInMcpServerPrefixes =
+        ["mcp__tasks__", "mcp__notes__", "mcp__memory__", "mcp__personas__", "mcp__wsp__", "mcp__notifications__", "mcp__dify__"];
+
     // Отслеживание изменений файлов на время хода
     private readonly TurnFileWatcher _fileWatcher;
 
@@ -520,6 +530,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // работать. Разрешаем ВСЕ инструменты автоматически: deny-правило проекта выше учтено,
         // а права персоны уже ограничены Persona.Tools и ExtraDisallowedTools.
         if (ruleDecision == null && (Info.TaskExecution || Info.AutomationRuleId is not null)) return "allow";
+        // Свои MCP-серверы — без карточки, см. комментарий у BuiltInMcpServerPrefixes.
+        if (ruleDecision == null && Array.Exists(BuiltInMcpServerPrefixes, p => toolName.StartsWith(p, StringComparison.Ordinal)))
+            return "allow";
         if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(toolName)) return "allow";
 
         var tcs = new TaskCompletionSource<string>();

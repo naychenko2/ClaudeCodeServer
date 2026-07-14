@@ -91,11 +91,12 @@ export default function App() {
     if (initialHash?.screen === 'notes') return 'notes'
     if (initialHash?.screen === 'personas') return 'personas'
     if (initialHash?.screen === 'knowledge') return 'knowledge'
+    if (initialHash?.screen === 'notifications') return 'notifications'
     if (initialHash?.screen === 'projects' || initialHash?.screen === 'project') return 'projects'
     const saved = localStorage.getItem(HUB_TAB_KEY)
     // Сохранённое 'agents' — ключ до переименования раздела в «Персоны»
     if (saved === 'agents') return 'personas'
-    return saved === 'projects' || saved === 'calendar' || saved === 'notes' || saved === 'personas' || saved === 'knowledge' ? saved : 'chats'
+    return saved === 'projects' || saved === 'calendar' || saved === 'notes' || saved === 'personas' || saved === 'knowledge' || saved === 'notifications' ? saved : 'chats'
   })
   const effectiveHubTab: HubTab = hubTab
 
@@ -240,7 +241,7 @@ export default function App() {
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
-    const seed: NavSnapshot = { screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : 'projects' }
+    const seed: NavSnapshot = { screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'notifications' ? 'notifications' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
     // Диплинк #/personas/{id}: сохраняем персону в снимок, иначе сид затрёт id в URL
@@ -294,6 +295,9 @@ export default function App() {
       } else if (s?.screen === 'knowledge') {
         // Раздел «Знания» — проект «спит»
         if (hubTab !== 'knowledge') { localStorage.setItem(HUB_TAB_KEY, 'knowledge'); setHubTab('knowledge') }
+      } else if (s?.screen === 'notifications') {
+        // Раздел «Уведомления» — проект «спит»
+        if (hubTab !== 'notifications') { localStorage.setItem(HUB_TAB_KEY, 'notifications'); setHubTab('notifications') }
       } else if (s?.screen === 'projects') {
         // Список проектов — явный выход из проекта
         if (project) { localStorage.removeItem(OPEN_PROJECT_KEY); setProject(null) }
@@ -390,7 +394,7 @@ export default function App() {
     }
     localStorage.setItem(HUB_TAB_KEY, t)
     setHubTab(t)
-    const dest: NavSnapshot = { screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : 'projects' }
+    const dest: NavSnapshot = { screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'notifications' ? 'notifications' : 'projects' }
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Иначе латеральное
     // переключение табов — replace (без разрастания истории).
@@ -411,8 +415,11 @@ export default function App() {
   // переключаем экран (страница заберёт pending при монтировании), либо — если целевой
   // экран уже смонтирован — будим его событием cc-pending-task.
   const openNotificationUrl = (url: string) => {
+    // Отправители шлют диплинки в двух видах: «#/notes/x» и относительный «/chats/x»
+    // (без решётки) — нормализуем к hash-виду и разбираем одним parseHash
     const hashIdx = url.indexOf('#')
-    const target = hashIdx === -1 ? null : parseHash(url.slice(hashIdx))
+    const hash = hashIdx !== -1 ? url.slice(hashIdx) : (url.startsWith('/') ? '#' + url : null)
+    const target = hash ? parseHash(hash) : null
     if (target?.screen === 'calendar' && target.taskId) {
       sessionStorage.setItem('cc_pending_calendar_task', target.taskId)
       if (effectiveHubTab === 'calendar') window.dispatchEvent(new Event('cc-pending-task'))
@@ -478,19 +485,35 @@ export default function App() {
       }
       return
     }
-    // Не задачный диплинк — фолбэк на полную загрузку, как раньше
+    // Диплинк на заметку (#/notes/{id}) — бриф дня, итог сессии.
+    // Тот же канал, что у «открыть в заметках» из чата: cc_pending_note_id + cc-open-note.
+    if (target?.screen === 'notes' && target.noteId) {
+      sessionStorage.setItem('cc_pending_note_id', target.noteId)
+      if (effectiveHubTab === 'notes') window.dispatchEvent(new Event('cc-open-note'))
+      else switchHubTab('notes')
+      return
+    }
+    // Диплинк на раздел без глубокой цели — просто переключаемся на него
+    if (target) {
+      switchHubTab(target.screen === 'project' ? 'projects' : target.screen)
+      return
+    }
+    // Не диплинк (абсолютный внешний URL) — полная загрузка, как раньше
     window.location.assign(url)
   }
   // Открытие задачи по её hash-URL из любого раздела (вкладка «Задачи» персоны и т.п.) —
   // переиспуем ту же навигацию, что у кликов по уведомлениям (календарь/проект, монтированный или нет).
+  // Listener ставится один раз; свежее замыкание openNotificationUrl — через ref.
+  const openUrlRef = useRef(openNotificationUrl)
+  openUrlRef.current = openNotificationUrl
   useEffect(() => {
     const onOpenUrl = (e: Event) => {
       const url = (e as CustomEvent<{ url: string }>).detail?.url
-      if (url) openNotificationUrl(url)
+      if (url) openUrlRef.current(url)
     }
     window.addEventListener('cc-open-url', onOpenUrl as EventListener)
     return () => window.removeEventListener('cc-open-url', onOpenUrl as EventListener)
-  })
+  }, [])
   const logout = () => {
     localStorage.removeItem('cc_token')
     localStorage.removeItem('cc_username')
@@ -528,7 +551,10 @@ export default function App() {
               : effectiveHubTab === 'notifications'
                 ? <NotificationsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : project
-                ? <WorkspacePage project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
+                // key: прямой переход проект→проект (back/forward) обязан перемонтировать
+                // WorkspacePage — иначе useState-инициализаторы не перечитают состояние
+                // нового проекта и на экране остаётся чат/файл/вкладка старого
+                ? <WorkspacePage key={project.id} project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
                 : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
       }
       {auth && historyOpen && (

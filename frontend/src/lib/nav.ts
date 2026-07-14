@@ -5,7 +5,7 @@ import type { Project } from '../types';
 // отражается в hash-части URL (#/calendar, #/project/{id}/task/{taskId}…) —
 // адрес можно копировать/обновлять, серверного роутинга под пути не нужно.
 export interface NavSnapshot {
-  screen: 'projects' | 'project' | 'chats' | 'calendar' | 'notes' | 'personas' | 'knowledge';
+  screen: 'projects' | 'project' | 'chats' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
   project?: Project;              // когда screen === 'project'
   chatId?: string;                // активный чат: screen === 'chats' — глобальный, screen === 'project' — проектный
   view?: 'sidebar' | 'chat';     // мобильный вид внутри проекта / чатов
@@ -25,6 +25,7 @@ function toHash(s: NavSnapshot): string {
     case 'notes': return s.note ? `#/notes/${encodeURIComponent(s.note)}` : '#/notes';
     case 'personas': return s.persona ? `#/personas/${encodeURIComponent(s.persona)}` : '#/personas';
     case 'knowledge': return s.knowledge ? `#/knowledge/${encodeURIComponent(s.knowledge)}` : '#/knowledge';
+    case 'notifications': return '#/notifications';
     case 'projects': return '#/projects';
     case 'project': {
       if (!s.project) return '#/projects';
@@ -41,7 +42,7 @@ function toHash(s: NavSnapshot): string {
 
 // Разбор hash при загрузке страницы (диплинк/обновление)
 export interface HashTarget {
-  screen: 'projects' | 'chats' | 'calendar' | 'project' | 'notes' | 'personas' | 'knowledge';
+  screen: 'projects' | 'chats' | 'calendar' | 'project' | 'notes' | 'personas' | 'knowledge' | 'notifications';
   projectId?: string;
   taskId?: string;
   file?: string;
@@ -86,12 +87,13 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
       if (parts[1]) target.knowledgeId = decodeURIComponent(parts[1]);
       return target;
     }
+    case 'notifications': return { screen: 'notifications' };
     case 'projects': return { screen: 'projects' };
     case 'project': {
       if (!parts[1]) return { screen: 'projects' };
       const target: HashTarget = { screen: 'project', projectId: parts[1] };
       // #/project/{id}/chat/{chatId} — диплинк на конкретный чат внутри проекта
-      if (parts[2] === 'chat' && parts[3]) { target.chatId = parts[3]; return target; }
+      if (parts[2] === 'chat' && parts[3]) { target.chatId = decodeURIComponent(parts[3]); return target; }
       if (parts[2] === 'task' && parts[3]) target.taskId = parts[3];
       else if (parts[2] === 'file' && parts[3]) target.file = decodeURIComponent(parts.slice(3).join('/'));
       else if (parts[2] === 'board') target.board = true;

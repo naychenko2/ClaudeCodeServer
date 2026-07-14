@@ -20,14 +20,16 @@ interface ToastItem {
 
 const AUTO_DISMISS_MS = 8000;
 
-const KIND_COLOR: Record<ToastItem['kind'], string> = {
+const KIND_COLOR: Record<string, string> = {
   reminder: C.warning,  // warning — колокольчик
-  claude:   C.accent,  // accent — события Claude
-  info:     C.info,  // info
+  claude:   C.accent,   // accent — события Claude
+  info:     C.info,
+  success:  C.success,
+  meeting:  C.accent,
 };
 
 function KindIcon({ kind }: { kind: ToastItem['kind'] }) {
-  const color = KIND_COLOR[kind];
+  const color = KIND_COLOR[kind] ?? C.info;   // неизвестный вид — нейтральный маркер
   if (kind === 'reminder')
     return <Bell size={15} strokeWidth={2} color={color} style={{ flexShrink: 0 }} />;
   return <span style={{ width: 9, height: 9, borderRadius: '50%', background: color, display: 'inline-block' }} />;

@@ -126,6 +126,9 @@ export function ensureNotificationsSubscribed() {
 
   onMessage((msg) => {
     if (msg.type === 'notification') {
+      // Дедуп по id: одно уведомление может прийти повторно (доставка в несколько
+      // SignalR-групп, реконнект) — не задваиваем список и счётчик непрочитанных
+      if (msg.notificationId && items.some(i => i.id === msg.notificationId)) return;
       // Новое уведомление пришло через SignalR — добавляем в начало списка
       const item: NotificationItem = {
         id: msg.notificationId ?? `_local_${Date.now()}`,

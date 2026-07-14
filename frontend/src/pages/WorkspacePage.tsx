@@ -576,6 +576,9 @@ const windowWidth = useWindowWidth();
     const onPop = (e: PopStateEvent) => {
       const s = e.state as NavSnapshot | null;
       if (s?.screen !== 'project') return; // выход из проекта — обработает App
+      // Снимок другого проекта: App сменит project и WorkspacePage перемонтируется
+      // (key={project.id}) — текущий инстанс не должен применять чужой снимок
+      if (s.project && s.project.id !== project.id) return;
       setMobileView(s.view ?? 'sidebar');
       const f = s.file ?? null;
       setOpenFile(f);

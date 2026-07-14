@@ -63,27 +63,39 @@ public class SessionManager
     // Аналогично для MCP notes-server (тот же сервисный токен владельца по смыслу, свой кэш)
     private readonly ConcurrentDictionary<string, (string Token, DateTime IssuedAt)> _notesTokens = new();
 
-    // Счётчик активных зрителей сессии (SignalR-подключений в группе сессии).
-    // Инкремент в SessionHub.JoinSession, декремент в LeaveSession.
+    // Зрители сессии: sessionId → множество SignalR-соединений в её группе.
+    // Уникальность по connectionId: повторный JoinSession того же соединения (клиент
+    // перезаходит перед каждым send и при reconnect) не раздувает счётчик, а обрыв
+    // соединения без LeaveSession вычищается RemoveConnectionViewers из OnDisconnectedAsync.
     // Нужен PersonaAutomationService чтобы не слать уведомления, когда пользователь и так смотрит чат.
-    private readonly ConcurrentDictionary<string, int> _sessionViewers = new();
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _sessionViewers = new();
 
     // Добавить зрителя сессии (вызывается из JoinSession)
-    public void AddViewer(string sessionId) =>
-        _sessionViewers.AddOrUpdate(sessionId, 1, (_, c) => c + 1);
+    public void AddViewer(string sessionId, string connectionId) =>
+        _sessionViewers.GetOrAdd(sessionId, _ => new())[connectionId] = 1;
 
     // Убрать зрителя сессии (вызывается из LeaveSession)
-    public void RemoveViewer(string sessionId)
+    public void RemoveViewer(string sessionId, string connectionId)
     {
-        if (_sessionViewers.TryGetValue(sessionId, out var c) && c > 1)
-            _sessionViewers[sessionId] = c - 1;
-        else
-            _sessionViewers.TryRemove(sessionId, out _);
+        if (!_sessionViewers.TryGetValue(sessionId, out var conns)) return;
+        conns.TryRemove(connectionId, out _);
+        if (conns.IsEmpty) _sessionViewers.TryRemove(sessionId, out _);
+    }
+
+    // Обрыв соединения (OnDisconnectedAsync): хаб не знает, в какие сессии заходило
+    // соединение, — убираем его из всех
+    public void RemoveConnectionViewers(string connectionId)
+    {
+        foreach (var (sid, conns) in _sessionViewers)
+        {
+            conns.TryRemove(connectionId, out _);
+            if (conns.IsEmpty) _sessionViewers.TryRemove(sid, out _);
+        }
     }
 
     // Есть ли хотя бы один зритель у сессии?
     public bool HasViewers(string sessionId) =>
-        _sessionViewers.TryGetValue(sessionId, out var c) && c > 0;
+        _sessionViewers.TryGetValue(sessionId, out var conns) && !conns.IsEmpty;
 
     // Наблюдатель сообщений сессий (Claude-исполнитель задач слушает result/permission).
     // Вызывается после обновления статуса и broadcast; его ошибки не роняют пайплайн
@@ -1558,10 +1570,15 @@ public class SessionManager
 
         if (entry is not null && OnSessionMessage is { } observers)
         {
-            try { await observers(entry.Info, msg); }
-            catch (Exception ex)
+            // Multicast Func<> await-ит только Task ПОСЛЕДНЕГО подписчика — ждём всех явно,
+            // иначе исключения и незавершённая работа не-последних наблюдателей теряются
+            foreach (var observer in observers.GetInvocationList().Cast<Func<Session, ServerMessage, Task>>())
             {
-                Console.Error.WriteLine($"[SessionManager] Ошибка наблюдателя сессии ({sessionId}): {ex.Message}");
+                try { await observer(entry.Info, msg); }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[SessionManager] Ошибка наблюдателя сессии ({sessionId}): {ex.Message}");
+                }
             }
         }
     }

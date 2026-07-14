@@ -129,17 +129,19 @@ public class PersonaMemoryServiceTests : IDisposable
         var recall = await _sut.BuildRecallAsync(OwnerId, _persona.Id, "совсем другой запрос", topK: 5, minScore: 0.30);
 
         recall.Should().NotBeNull();
-        recall.Should().Contain("Твоё текущее дело (рабочая память): Подготовка отчёта.");
-        recall.Should().Contain("Статус: в процессе.");
-        recall.Should().Contain("Следующий шаг: собрать цифры.");
+        recall!.Text.Should().Contain("Твоё текущее дело (рабочая память): Подготовка отчёта.");
+        recall.Text.Should().Contain("Статус: в процессе.");
+        recall.Text.Should().Contain("Следующий шаг: собрать цифры.");
     }
 
     [Fact]
-    public async Task Recall_БезФокусаИБезХитов_Null()
+    public async Task Recall_БезФокусаИБезХитов_ПустойText()
     {
         var recall = await _sut.BuildRecallAsync(OwnerId, _persona.Id, "запрос", topK: 5, minScore: 0.30);
 
-        recall.Should().BeNull();
+        recall.Should().NotBeNull();
+        recall!.Text.Should().BeNull();
+        recall.Hits.Should().BeEmpty();
     }
 
     [Fact]
@@ -151,8 +153,9 @@ public class PersonaMemoryServiceTests : IDisposable
         var recall = await _sut.BuildRecallAsync(OwnerId, _persona.Id, "пользователь ответы краткие", topK: 5, minScore: 0.1);
 
         recall.Should().NotBeNull();
-        var focusIdx = recall!.IndexOf("Твоё текущее дело", StringComparison.Ordinal);
-        var memIdx = recall.IndexOf("долгой памяти", StringComparison.Ordinal);
+        recall!.Text.Should().NotBeNull();
+        var focusIdx = recall.Text!.IndexOf("Твоё текущее дело", StringComparison.Ordinal);
+        var memIdx = recall.Text.IndexOf("долгой памяти", StringComparison.Ordinal);
         focusIdx.Should().BeGreaterThanOrEqualTo(0);
         memIdx.Should().BeGreaterThan(focusIdx);
     }
@@ -171,8 +174,9 @@ public class PersonaMemoryServiceTests : IDisposable
         await Task.Delay(30);   // чтобы Touch дал заметно более позднюю метку
 
         var recall = await _sut.BuildRecallAsync(OwnerId, _persona.Id, "кошка любит играть", topK: 5, minScore: 0.1);
-        recall.Should().Contain("Кошка");
-        recall.Should().NotContain("Собака");
+        recall!.Text.Should().Contain("Кошка");
+        recall.Text.Should().NotContain("Собака");
+        recall.Hits.Should().ContainSingle(h => h.Id == hitEntry.Id);
 
         var entries = _sut.List(OwnerId, _persona.Id, null);
         entries.Single(e => e.Id == hitEntry.Id).LastAccessedAt

@@ -113,6 +113,10 @@ public class NotificationStore
                 var toRemove = all.Where(n => n.IsRead).OrderBy(n => n.CreatedAt)
                     .Take(all.Count - MaxPerUser).ToList();
                 foreach (var r in toRemove) all.Remove(r);
+                // Жёсткий потолок: лавина непрочитанных не должна раздувать файл без предела —
+                // срезаем хвост (список новые-сверху, хвост = самые старые)
+                if (all.Count > MaxPerUser)
+                    all.RemoveRange(MaxPerUser, all.Count - MaxPerUser);
             }
 
             Save(userId, all);
@@ -246,7 +250,13 @@ public class NotificationStore
             list = [];
         }
 
-        lock (_lock) { _cache[userId] = list; }
+        lock (_lock)
+        {
+            // Double-check: параллельный первый вызов мог успеть раньше — работаем с его
+            // списком, иначе два потока мутируют разные копии и запись теряется (lost update)
+            if (_cache.TryGetValue(userId, out var winner)) return winner;
+            _cache[userId] = list;
+        }
         return list;
     }
 

@@ -49,10 +49,13 @@ public sealed class ChatTurnLoggerService : IHostedService
         var label = session.PersonaId is not null && _personas.GetByIdInternal(session.PersonaId) is { } p
             ? PersonaManager.PersonaLabel(p) : null;
 
-        _events.Append(session.ProjectId, owner!, ProjectEventTypes.ChatTurn,
-            session.PersonaId ?? "user",
-            label is not null ? $"{label} ответил" : "Ход чата завершён",
-            session.Id);
+        // Запись — вне потока диспетчеризации: синхронный SQLite-append под _writeLock
+        // задерживал бы broadcast результата хода (Append сам глотает свои ошибки)
+        var projectId = session.ProjectId;
+        var sessionId = session.Id;
+        var actor = session.PersonaId ?? "user";
+        _ = Task.Run(() => _events.Append(projectId, owner!, ProjectEventTypes.ChatTurn,
+            actor, label is not null ? $"{label} ответил" : "Ход чата завершён", sessionId));
         return Task.CompletedTask;
     }
 }

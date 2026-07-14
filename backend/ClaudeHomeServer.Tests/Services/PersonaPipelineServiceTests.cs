@@ -133,10 +133,11 @@ public class PersonaPipelineServiceTests : IDisposable
         return (user, session);
     }
 
+    // Слоты Start — ID персон (A); executorId=null → резолв по Specialty → дефолт OmO (Гефест)
     private async Task<string> StartAndWaitAsync(string ownerId, string sessionId,
-        string task = "Сделать экспорт отчётов", string? executor = "omo-hephaestus")
+        string task = "Сделать экспорт отчётов", string? executorId = null)
     {
-        var id = _sut.Start(ownerId, sessionId, task, executor);
+        var id = _sut.Start(ownerId, sessionId, task, executorId: executorId);
         await _sut.WhenDoneAsync(sessionId).WaitAsync(TimeSpan.FromSeconds(20));
         return id;
     }
@@ -174,12 +175,15 @@ public class PersonaPipelineServiceTests : IDisposable
     public async Task МатериализуетРолиПантеона()
     {
         var (user, session) = await MkFixtureAsync("mat");
+        // Явный исполнитель — материализованный Сизиф; остальные слоты дефолтятся из каталога OmO
+        var sisyphus = _personas.ConnectPantheon(user.Id, ["omo-sisyphus"])
+            .First(p => p.TemplateKey == "omo-sisyphus");
 
-        await StartAndWaitAsync(user.Id, session.Id, executor: "omo-sisyphus");
+        await StartAndWaitAsync(user.Id, session.Id, executorId: sisyphus.Id);
 
-        foreach (var key in new[] { "omo-metis", "omo-prometheus", "omo-momus", "omo-sisyphus" })
+        foreach (var key in new[] { "omo-metis", "omo-prometheus", "omo-momus" })
             _personas.GetByTemplateKey(user.Id, key).Should().NotBeNull($"роль {key} материализована");
-        _sut.ExecutorId.Should().Be(_personas.GetByTemplateKey(user.Id, "omo-sisyphus")!.Id);
+        _sut.ExecutorId.Should().Be(sisyphus.Id, "явный executorId уважается");
     }
 
     [Fact]
@@ -240,8 +244,9 @@ public class PersonaPipelineServiceTests : IDisposable
     public async Task НеверныйИсполнитель_Исключение()
     {
         var (user, session) = await MkFixtureAsync("badexec");
-        var act = () => _sut.Start(user.Id, session.Id, "задача", "omo-oracle");
-        act.Should().Throw<InvalidOperationException>().WithMessage("*omo-sisyphus*");
+        // Явно указанный, но несуществующий id слота — ошибка, а не тихая подмена роли
+        var act = () => _sut.Start(user.Id, session.Id, "задача", executorId: "no-such-persona");
+        act.Should().Throw<InvalidOperationException>().WithMessage("*no-such-persona*");
     }
 
     [Fact]
@@ -252,8 +257,8 @@ public class PersonaPipelineServiceTests : IDisposable
         var gate = new TaskCompletionSource();
         _runner.Behavior = async (_, _) => { await gate.Task; return "текст"; };
 
-        _sut.Start(user.Id, session.Id, "задача", "omo-hephaestus");
-        var act = () => _sut.Start(user.Id, session.Id, "другая", "omo-hephaestus");
+        _sut.Start(user.Id, session.Id, "задача");
+        var act = () => _sut.Start(user.Id, session.Id, "другая");
         act.Should().Throw<InvalidOperationException>().WithMessage("*уже идёт*");
 
         gate.SetResult();

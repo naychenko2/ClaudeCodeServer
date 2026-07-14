@@ -61,20 +61,29 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
             try { await Task.Delay(PendingTick, ct); }
             catch (OperationCanceledException) { break; }
 
-            // Явные заявки (переполнение после autolearn)
-            foreach (var (personaId, ownerId) in _pending.ToArray())
+            // Всё тело тика под catch: невыловленное исключение (за пределами
+            // ConsolidateSafeAsync) молча убило бы BackgroundService до рестарта сервера
+            try
             {
-                _pending.TryRemove(personaId, out _);
-                var persona = _personas.Get(personaId, ownerId);
-                if (persona is not null) await ConsolidateSafeAsync(persona, ct);
-            }
+                // Явные заявки (переполнение после autolearn)
+                foreach (var (personaId, ownerId) in _pending.ToArray())
+                {
+                    _pending.TryRemove(personaId, out _);
+                    var persona = _personas.Get(personaId, ownerId);
+                    if (persona is not null) await ConsolidateSafeAsync(persona, ct);
+                }
 
-            // Периодическая полная проходка по всем персонам
-            if (DateTime.UtcNow - lastFullPass >= Interval)
+                // Периодическая полная проходка по всем персонам
+                if (DateTime.UtcNow - lastFullPass >= Interval)
+                {
+                    lastFullPass = DateTime.UtcNow;
+                    foreach (var persona in _personas.GetAllInternal())
+                        await ConsolidateSafeAsync(persona, ct);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                lastFullPass = DateTime.UtcNow;
-                foreach (var persona in _personas.GetAllInternal())
-                    await ConsolidateSafeAsync(persona, ct);
+                _log.LogWarning(ex, "Тик консолидации памяти персон");
             }
         }
     }

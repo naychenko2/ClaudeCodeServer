@@ -34,6 +34,24 @@ public partial class SkillsCliService(IConfiguration config, ILogger<SkillsCliSe
     private TimeSpan Timeout =>
         TimeSpan.FromMilliseconds(int.TryParse(config["Skills:CliTimeoutMs"], out var ms) ? ms : 180_000);
 
+    // --- Санитизация аргументов ---
+    // На Windows CLI запускается через cmd.exe /c (npx — batch-скрипт), а cmd.exe повторно
+    // разбирает командную строку: метасимволы &|^<>%! в аргументах дают выполнение
+    // произвольной команды (класс BatBadBut). Экранирование ArgumentList рассчитано на argv
+    // и от cmd-разбора не защищает — поэтому валидируем всё пользовательское до запуска.
+
+    [GeneratedRegex(@"^[A-Za-z0-9._/@-]+$")]
+    private static partial Regex IdentifierArgRegex();
+
+    // Идентификаторы (source «owner/repo», skill, owner) — только безопасный whitelist
+    private static bool ValidIdentifier(string s) =>
+        s.Length is > 0 and <= 200 && IdentifierArgRegex().IsMatch(s);
+
+    // Поисковый запрос — свободный текст, но без метасимволов cmd.exe и управляющих символов
+    private static bool ValidQuery(string s) =>
+        s.Length is > 0 and <= 200 &&
+        !s.Any(ch => ch is '&' or '|' or '^' or '<' or '>' or '%' or '!' or '"' || char.IsControl(ch));
+
     // --- Публичные операции ---
 
     // Поиск навыков по реестру (semantic для многословных запросов, fuzzy для одного слова).
@@ -41,6 +59,11 @@ public partial class SkillsCliService(IConfiguration config, ILogger<SkillsCliSe
     public async Task<IReadOnlyList<RegistrySkill>> FindAsync(string query, string? owner = null,
         CancellationToken ct = default)
     {
+        if (!ValidQuery(query) || (!string.IsNullOrWhiteSpace(owner) && !ValidIdentifier(owner.Trim())))
+        {
+            log.LogWarning("skills find: недопустимые символы в запросе или owner");
+            return [];
+        }
         var args = new List<string> { "find", query };
         if (!string.IsNullOrWhiteSpace(owner)) { args.Add("--owner"); args.Add(owner.Trim()); }
 
@@ -57,6 +80,11 @@ public partial class SkillsCliService(IConfiguration config, ILogger<SkillsCliSe
     // для каталога и LLM-подбора. Source — «owner/repo».
     public async Task<IReadOnlyList<RegistrySkill>> ListRepoAsync(string source, CancellationToken ct = default)
     {
+        if (!ValidIdentifier(source))
+        {
+            log.LogWarning("skills add -l: недопустимый source «{Source}»", Trunc(source));
+            return [];
+        }
         var (code, stdout, stderr) = await RunAsync(["add", source, "-l"], workDir: null, ct);
         if (code != 0)
         {
@@ -73,6 +101,8 @@ public partial class SkillsCliService(IConfiguration config, ILogger<SkillsCliSe
     public async Task<(bool Ok, string Output)> InstallAsync(string source, string skill, SkillScope scope,
         string? projectRootPath, CancellationToken ct = default)
     {
+        if (!ValidIdentifier(source) || !ValidIdentifier(skill))
+            return (false, "Недопустимые символы в имени источника или навыка");
         var args = new List<string>
         {
             "add", source,
@@ -95,6 +125,11 @@ public partial class SkillsCliService(IConfiguration config, ILogger<SkillsCliSe
     public async Task<bool> RemoveAsync(string skill, SkillScope scope, string? projectRootPath,
         CancellationToken ct = default)
     {
+        if (!ValidIdentifier(skill))
+        {
+            log.LogWarning("skills remove: недопустимое имя навыка «{Skill}»", Trunc(skill));
+            return false;
+        }
         var args = new List<string> { "remove", "--skill", skill, "--agent", "claude-code", "-y" };
         if (scope == SkillScope.Global) args.Add("-g");
         var workDir = scope == SkillScope.Project ? projectRootPath : null;

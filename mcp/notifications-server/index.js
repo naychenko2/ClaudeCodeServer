@@ -21,6 +21,8 @@ const PROJECT_ID = process.env.NOTIFICATIONS_PROJECT_ID || null;
 async function api(path, options = {}) {
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
+    // Таймаут: без него подвисший бэкенд вешает вызов инструмента навсегда
+    signal: AbortSignal.timeout(30_000),
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       Authorization: `Bearer ${API_TOKEN}`,
@@ -125,16 +127,16 @@ function respondError(id, code, message) {
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }) + '\n');
 }
 
-// При первом вызове — шлём инициализацию (TODO: нормальный handshake)
-let initialized = false;
-
 rl.on('line', async (line) => {
   let msg;
   try { msg = JSON.parse(line); } catch { return; }
 
+  // Нотификации JSON-RPC (нет id, в т.ч. notifications/initialized) не требуют ответа —
+  // ответ с отсутствующим id нарушает протокол (workspace-server ведёт себя так же)
+  if (msg.id === undefined || msg.id === null) return;
+
   // JSON-RPC 2.0 initialize
   if (msg.method === 'initialize') {
-    initialized = true;
     respond(msg.id, {
       protocolVersion: '2024-11-05',
       capabilities: {
@@ -145,11 +147,6 @@ rl.on('line', async (line) => {
         version: '0.1.0',
       },
     });
-    return;
-  }
-
-  if (msg.method === 'notifications/initialized') {
-    respond(msg.id, null);
     return;
   }
 

@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -42,5 +43,49 @@ public class PersonaAutomationServiceTests
         Assert.True(PersonaAutomationService.InQuietWindow(rule, Local(23, 30))); // вечер
         Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(10, 0))); // день
         Assert.False(PersonaAutomationService.InQuietWindow(rule, Local(7, 0)));  // правая граница не входит
+    }
+
+    // --- Потолок реакций в час: HasHourlyBudget (peek) не потребляет квоту ---
+
+    private static AutomationStateStore MkStore()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "autostate_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(dir, "projects.json") })
+            .Build();
+        return new AutomationStateStore(config);
+    }
+
+    [Fact]
+    public void HasHourlyBudget_НеПотребляетКвоту()
+    {
+        var store = MkStore();
+        var now = DateTime.UtcNow;
+
+        // Peek много раз — квота не тратится
+        for (var i = 0; i < 10; i++)
+            Assert.True(store.HasHourlyBudget("p1", cap: 2, now));
+
+        // Потребляем ровно cap
+        Assert.True(store.TryConsumeHourly("p1", 2, now));
+        Assert.True(store.TryConsumeHourly("p1", 2, now));
+
+        // Квота исчерпана: peek и consume согласованы
+        Assert.False(store.HasHourlyBudget("p1", 2, now));
+        Assert.False(store.TryConsumeHourly("p1", 2, now));
+    }
+
+    [Fact]
+    public void HasHourlyBudget_НовоеОкно_КвотаВосстанавливается()
+    {
+        var store = MkStore();
+        var now = DateTime.UtcNow;
+        Assert.True(store.TryConsumeHourly("p1", 1, now));
+        Assert.False(store.HasHourlyBudget("p1", 1, now));
+
+        // Через час окно истекло — peek снова даёт бюджет
+        Assert.True(store.HasHourlyBudget("p1", 1, now.AddHours(1)));
+        Assert.True(store.TryConsumeHourly("p1", 1, now.AddHours(1)));
     }
 }

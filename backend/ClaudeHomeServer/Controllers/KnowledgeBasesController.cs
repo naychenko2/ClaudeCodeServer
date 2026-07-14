@@ -77,11 +77,21 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
         var title = (req?.Title ?? "").Trim();
         if (title.Length == 0) return BadRequest(new { error = "Не задано название" });
         var public_ = string.Equals(req?.Visibility, "public", StringComparison.OrdinalIgnoreCase);
+        // Публичная база живёт в общем неймспейсе без префикса: двоеточие в названии позволило
+        // бы замаскировать её под чужую личную ({user}:kb:…) — жертва увидела бы её как СВОЮ
+        // (запись/удаление документов в подставной базе). Запрещаем.
+        if (public_ && title.Contains(':'))
+            return BadRequest(new { error = "Двоеточие в названии публичной базы недопустимо" });
         var name = public_ ? title : $"{Username}:kb:{title}";
         var permission = public_ ? "all_team_members" : "only_me";
         var description = string.IsNullOrWhiteSpace(req?.Description) ? null : req.Description.Trim();
         try
         {
+            // Явная проверка коллизии: Dify на дубль имени отвечает невнятной ошибкой (→ 502),
+            // а совпадение с чужой личной базой вовсе нельзя доводить до создания
+            var existing = await knowledge.ListDatasetsAsync();
+            if (existing.Any(d => string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase)))
+                return BadRequest(new { error = "База с таким названием уже существует" });
             var datasetId = await knowledge.CreateDatasetAsync(name, permission, description);
             await Broadcast("created", datasetId);
             return Ok(new { id = datasetId, title, visibility = public_ ? "public" : "personal" });

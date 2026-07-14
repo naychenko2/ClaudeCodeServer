@@ -995,11 +995,13 @@ function AiConditionButton({ busy, onClick }: { busy: boolean; onClick: () => vo
         width: 38, height: 38, flexShrink: 0, borderRadius: R.lg,
         border: `1.5px solid ${C.accent}`, background: 'transparent', color: C.accent,
         fontSize: 15, cursor: busy ? 'default' : 'pointer',
-        animation: busy ? 'cc-bind-pulse 1s infinite' : undefined,
+        // Своё имя keyframe: одноимённый cc-bind-pulse спиннера подбора имеет другие фазы,
+        // при одновременной инжекции двух определений победитель недетерминирован
+        animation: busy ? 'cc-bind-btn-pulse 1s infinite' : undefined,
       }}
     >
       ✨
-      <style>{'@keyframes cc-bind-pulse { 50% { opacity: 0.4; } }'}</style>
+      <style>{'@keyframes cc-bind-btn-pulse { 50% { opacity: 0.4; } }'}</style>
     </button>
   );
 }

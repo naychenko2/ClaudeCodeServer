@@ -11,20 +11,10 @@ import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { bumpPersonas } from '../../lib/personas';
 import { C, FONT, R, SHADOW } from '../../lib/design';
+import { useIsMobile } from '../../lib/breakpoints';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
 import { AvatarCropDialog, type AvatarCropResult } from './AvatarCropDialog';
-
-function useIsMobile(): boolean {
-  const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const h = (e: MediaQueryListEvent) => setM(e.matches);
-    mq.addEventListener('change', h);
-    return () => mq.removeEventListener('change', h);
-  }, []);
-  return m;
-}
 
 // Императивный API формы для тулбара-родителя: сохранить / удалить.
 export interface PersonaFormHandle {

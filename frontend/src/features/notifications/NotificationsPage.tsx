@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Bell, CheckCheck, Search, Trash2 } from 'lucide-react';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
 import { HubHeader } from '../../components/HubHeader';
 import type { HubTab } from '../../components/HubTabs';
 import type { AuthState } from '../../types';
@@ -17,12 +17,13 @@ import {
   deleteReadAll,
 } from '../../lib/notifications';
 
+// Токены design.ts (CSS-переменные) — хардкод-hex ломал тёмную тему
 const KIND_META: Record<NotificationKind, { icon: string; color: string; bg: string }> = {
-  reminder: { icon: '⏰', color: '#C8953B', bg: '#FEF6ED' },
-  claude: { icon: '●', color: '#D97757', bg: '#FDF0EA' },
-  info: { icon: 'ℹ', color: '#5A8FBD', bg: '#EEF4FA' },
-  success: { icon: '✓', color: '#5B8C5A', bg: '#EEF6EE' },
-  meeting: { icon: '🏁', color: '#8B6FAF', bg: '#F3EEF9' },
+  reminder: { icon: '⏰', color: C.warning, bg: C.warningBg },
+  claude: { icon: '●', color: C.accent, bg: C.accentLight },
+  info: { icon: 'ℹ', color: C.info, bg: C.infoBg },
+  success: { icon: '✓', color: C.success, bg: C.successBg },
+  meeting: { icon: '🏁', color: C.plan, bg: C.planLight },
 };
 
 const KIND_LABELS: Record<string, string> = {
@@ -70,12 +71,10 @@ function NotificationCard({ item, onRead, onDelete }: {
         display: 'flex',
         gap: SP.xl,
         padding: SP.xl,
-        background: item.isRead ? C.bgCard : C.bgCard,
+        background: C.bgCard,
         borderRadius: R.lg,
         border: `1px solid ${item.isRead ? C.border : C.accent}`,
-        boxShadow: item.isRead
-          ? '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03)'
-          : '0 1px 4px rgba(0,0,0,0.06)',
+        boxShadow: SHADOW.card,
         cursor: 'default',
         position: 'relative',
         transition: 'all 0.2s ease',
@@ -83,16 +82,14 @@ function NotificationCard({ item, onRead, onDelete }: {
       }}
       onMouseEnter={e => {
         const el = e.currentTarget;
-        el.style.borderColor = '#d0c8b8';
-        el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)';
+        el.style.borderColor = C.accentMuted;
+        el.style.boxShadow = SHADOW.dropdown;
         el.style.transform = 'translateY(-1px)';
       }}
       onMouseLeave={e => {
         const el = e.currentTarget;
         el.style.borderColor = item.isRead ? C.border : C.accent;
-        el.style.boxShadow = item.isRead
-          ? '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03)'
-          : '0 1px 4px rgba(0,0,0,0.06)';
+        el.style.boxShadow = SHADOW.card;
         el.style.transform = 'none';
       }}
     >
@@ -196,11 +193,16 @@ function NotificationCard({ item, onRead, onDelete }: {
                 padding: '6px 12px', borderRadius: R.sm, border: 'none',
                 fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
                 cursor: 'pointer',
-                background: C.accent, color: '#fff',
+                background: C.accent, color: C.onAccent,
               }}
-              onClick={() => window.location.hash = item.url!}
-              onMouseEnter={e => { e.currentTarget.style.background = '#C96A4B'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = C.accent; }}
+              // SPA-переход через обработчик App (cc-open-url): смена location.hash сама по
+              // себе экран не меняет — hashchange в приложении никто не слушает
+              onClick={() => {
+                if (!item.isRead) onRead(item.id);
+                window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: item.url } }));
+              }}
+              onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}
+              onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
             >
               Открыть
             </button>
@@ -213,7 +215,7 @@ function NotificationCard({ item, onRead, onDelete }: {
                 cursor: 'pointer', background: 'transparent', color: C.textSecondary,
               }}
               onClick={() => onRead(item.id)}
-              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,0,0,0.05)'; e.currentTarget.style.color = C.textPrimary; }}
+              onMouseEnter={e => { e.currentTarget.style.background = C.bgPanel; e.currentTarget.style.color = C.textPrimary; }}
               onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.textSecondary; }}
             >
               ✓ Прочитано
@@ -226,7 +228,7 @@ function NotificationCard({ item, onRead, onDelete }: {
               cursor: 'pointer', background: 'transparent', color: C.textMuted,
             }}
             onClick={() => onDelete(item.id)}
-            onMouseEnter={e => { e.currentTarget.style.color = C.danger; e.currentTarget.style.background = '#FDF0EE'; }}
+            onMouseEnter={e => { e.currentTarget.style.color = C.danger; e.currentTarget.style.background = C.dangerBg; }}
             onMouseLeave={e => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.background = 'transparent'; }}
           >
             ✕ Удалить
@@ -393,7 +395,7 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
                 style={{
                   padding: '5px 14px', borderRadius: 999,
                   fontSize: FS.sm, fontWeight: 500,
-                  color: filter === f.key ? '#fff' : C.textSecondary,
+                  color: filter === f.key ? C.onAccent : C.textSecondary,
                   background: filter === f.key ? C.accent : 'transparent',
                   border: `1px solid ${filter === f.key ? C.accent : C.border}`,
                   cursor: 'pointer', fontFamily: FONT.sans,

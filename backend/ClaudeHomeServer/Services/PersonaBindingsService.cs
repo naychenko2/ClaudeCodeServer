@@ -85,9 +85,11 @@ public class PersonaBindingsService
     // Проекты из Project/ProjectPath-привязок (Mode != Off) — для сужения AllowedProjectIds
     // workspace-сервера. null — таких привязок нет: поведение как раньше
     // (все проекты владельца), сужаем ТОЛЬКО при наличии привязок.
+    // AllProjectsAccess — явный «пол»: разрывает сужение вовсе, даже если Project-привязки
+    // есть (они остаются подсказкой «когда каким пользоваться», зону не сужают).
     public IReadOnlyList<string>? BuildFileScopes(string ownerId, Persona? persona)
     {
-        if (persona?.Bindings is null)
+        if (persona is null || persona.AllProjectsAccess || persona.Bindings is null)
             return null;
         var ids = persona.Bindings
             .Where(b => b.Mode != PersonaBindingMode.Off

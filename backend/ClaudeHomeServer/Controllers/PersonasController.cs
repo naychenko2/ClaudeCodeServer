@@ -159,7 +159,8 @@ public class PersonasController : ControllerBase
         var persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
             req.MemoryEnabled ?? true, req.Tools, req.Contract,
-            access ?? PersonaAccess.Full, req.DisallowedTools, req.Specialty ?? PersonaSpecialty.None);
+            access ?? PersonaAccess.Full, req.DisallowedTools, req.Specialty ?? PersonaSpecialty.None,
+            req.AllProjectsAccess ?? false);
         if (bindings.Count > 0)
             persona = _personas.UpdateBindings(persona.Id, UserId, bindings);
         // Авто-подбор привязок (autoBindings) — best-effort:
@@ -184,7 +185,8 @@ public class PersonasController : ControllerBase
 
         var persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, req.Specialty);
+            req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, req.Specialty,
+            req.AllProjectsAccess);
         await Broadcast("updated", id);
         return Ok(persona);
     }
@@ -1773,7 +1775,9 @@ public record CreatePersonaRequest(
     // Явные привязки при создании (валидируются до создания персоны)
     List<PersonaBindingRequest>? Bindings = null,
     // true — после создания подобрать привязки AI (за флагом persona-bindings, best-effort)
-    bool? AutoBindings = null);
+    bool? AutoBindings = null,
+    // Доступ ко всем проектам владельца (текущим и будущим) — только для Scope.Global
+    bool? AllProjectsAccess = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -1795,7 +1799,10 @@ public record UpdatePersonaRequest(
     // Свой список запрещённых инструментов (для custom); null — не менять
     List<string>? DisallowedTools = null,
     // Специальность персоны (функциональная роль); null — не менять, None — сбросить
-    PersonaSpecialty? Specialty = null);
+    PersonaSpecialty? Specialty = null,
+    // Доступ ко всем проектам владельца (текущим и будущим); null — не менять.
+    // Игнорируется (сбрасывается в false), если персона не Scope.Global
+    bool? AllProjectsAccess = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);

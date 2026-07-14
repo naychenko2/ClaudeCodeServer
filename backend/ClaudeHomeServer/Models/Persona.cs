@@ -147,6 +147,11 @@ public class Persona
     // Привязки к источникам знаний и правилам (фича persona-bindings).
     // null — привязок нет (миграция стора не нужна, поведение как раньше).
     public List<PersonaBinding>? Bindings { get; set; }
+    // Явный доступ ко ВСЕМ проектам владельца — текущим и будущим (только Scope == Global).
+    // Разрывает связь «есть Project/ProjectPath-привязка → сужаем зону»: привязки типа
+    // Project остаются подсказкой «когда каким пользоваться», но зону не сужают.
+    // Заметки этого флага не касаются — они и так не сужаются по проекту (NotesService).
+    public bool AllProjectsAccess { get; set; }
     // Правила автоматизации (событийно-управляемая проактивность): null — правил нет.
     // Конфигурация; runtime-состояние (LastFiredAt/счётчики/снапшоты) — в отдельном сторе.
     public List<PersonaAutomationRule>? AutomationRules { get; set; }

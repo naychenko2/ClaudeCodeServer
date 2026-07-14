@@ -788,6 +788,10 @@ export interface Persona {
   templateKey?: string | null;
   // Привязки к источникам знаний и правилам (фича persona-bindings); null — нет
   bindings?: PersonaBinding[] | null;
+  // Доступ ко всем проектам владельца — текущим и будущим (только scope === 'global').
+  // Привязки типа project/projectPath остаются подсказкой «когда каким пользоваться»
+  // и зону не сужают, пока этот флаг включён.
+  allProjectsAccess?: boolean;
   // Правила автоматизации (событийно-управляемая проактивность); null — нет
   automationRules?: PersonaAutomationRule[] | null;
   createdAt: string;
@@ -928,6 +932,8 @@ export interface CreatePersonaDto {
   disallowedTools?: string[];
   // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана
   specialty?: PersonaSpecialty;
+  // Доступ ко всем проектам владельца (текущим и будущим); только для scope === 'global'
+  allProjectsAccess?: boolean;
 }
 
 // Тело обновления персоны (PUT /api/personas/{id}) — все поля опциональны

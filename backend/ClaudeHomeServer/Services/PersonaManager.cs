@@ -127,7 +127,8 @@ public class PersonaManager
         string? model, string? effort, PersonaScope scope, string? projectId,
         string? color, string? greeting, bool memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess access = PersonaAccess.Full,
-        List<string>? disallowedTools = null, PersonaSpecialty specialty = PersonaSpecialty.None)
+        List<string>? disallowedTools = null, PersonaSpecialty specialty = PersonaSpecialty.None,
+        bool allProjectsAccess = false)
     {
         var persona = new Persona
         {
@@ -148,6 +149,8 @@ public class PersonaManager
             Access = access,
             // Свой список запретов имеет смысл только при Custom-профиле
             DisallowedTools = access == PersonaAccess.Custom ? NormalizeDisallowed(disallowedTools) : null,
+            // Доступ ко всем проектам имеет смысл только у глобальных персон
+            AllProjectsAccess = scope == PersonaScope.Global && allProjectsAccess,
             Avatar = new PersonaAvatar { Kind = PersonaAvatarKind.Initials, Color = color },
         };
         // Генерация handle и вставка атомарны: без лока два одновременных Create
@@ -239,7 +242,8 @@ public class PersonaManager
         string? systemPrompt, string? model, string? effort, PersonaScope? scope, string? projectId,
         string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess? access = null,
-        List<string>? disallowedTools = null, PersonaSpecialty? specialty = null)
+        List<string>? disallowedTools = null, PersonaSpecialty? specialty = null,
+        bool? allProjectsAccess = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -262,6 +266,8 @@ public class PersonaManager
             {
                 persona.Scope = scope.Value;
                 persona.ProjectId = scope.Value == PersonaScope.Project ? projectId : null;
+                // Доступ ко всем проектам имеет смысл только у глобальных персон
+                if (scope.Value == PersonaScope.Project) persona.AllProjectsAccess = false;
             }
             else if (projectId is not null && persona.Scope == PersonaScope.Project)
             {
@@ -276,6 +282,9 @@ public class PersonaManager
             if (access is not null) persona.Access = access.Value;
             if (disallowedTools is not null) persona.DisallowedTools = NormalizeDisallowed(disallowedTools);
             if (persona.Access != PersonaAccess.Custom) persona.DisallowedTools = null;
+            // null — не менять; иначе — только для глобальной персоны (после применения scope выше)
+            if (allProjectsAccess is not null)
+                persona.AllProjectsAccess = allProjectsAccess.Value && persona.Scope == PersonaScope.Global;
             persona.UpdatedAt = DateTime.UtcNow;
         }
         Save();

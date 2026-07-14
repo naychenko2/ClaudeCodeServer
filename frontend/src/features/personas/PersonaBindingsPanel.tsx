@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, Link, Plus, Search, Check as CheckIcon, SquarePen, CheckCircle2, Power, Trash2 } from 'lucide-react';
+import { X, Link, Plus, Search, Check as CheckIcon, SquarePen, CheckCircle2, Power, Trash2, Globe } from 'lucide-react';
 import type { BindingTarget, Persona, PersonaBinding, PersonaBindingDto, PersonaBindingMode, PersonaBindingType, ServerMessage, SkillSuggestion } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
-import { Button, IconField, Menu, MenuItem, WaitingIndicator } from '../../components/ui';
+import { bumpPersonas } from '../../lib/personas';
+import { Button, IconField, Menu, MenuItem, Toggle, WaitingIndicator } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
 import { SkillSearchDialog } from '../../components/SkillSearchDialog';
@@ -64,6 +65,27 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
 }) {
   const [bindings, setBindings] = useState<PersonaBinding[] | null>(null);
   const [error, setError] = useState(false);
+
+  // «Доступ ко всем проектам» — персона-уровневый флаг (не привязка), только у глобальных
+  // персон. Локальное состояние для мгновенного отклика тумблера; источник правды — persona
+  // prop (обновляется через realtime personas_changed после сохранения).
+  const [allAccess, setAllAccess] = useState(persona.allProjectsAccess ?? false);
+  const [allAccessBusy, setAllAccessBusy] = useState(false);
+  useEffect(() => { setAllAccess(persona.allProjectsAccess ?? false); }, [persona.id, persona.allProjectsAccess]);
+
+  const toggleAllAccess = async (next: boolean) => {
+    setAllAccess(next);
+    setAllAccessBusy(true);
+    try {
+      await api.personas.update(persona.id, { allProjectsAccess: next });
+      bumpPersonas();
+    } catch (e) {
+      setAllAccess(!next);
+      alert(e instanceof Error ? e.message : 'Не удалось сохранить настройку.');
+    } finally {
+      setAllAccessBusy(false);
+    }
+  };
 
   // Развёрнутая карточка + черновик её условия (переживает realtime-перезагрузку списка)
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -334,6 +356,33 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.5, marginTop: 4 }}>
           Что персона знает и умеет — и когда этим пользоваться. Изменения сохраняются сразу.
         </div>
+
+        {/* Доступ ко всем проектам — персона-уровневый флаг, не привязка (только у глобальных) */}
+        {persona.scope === 'global' && (
+          <div style={{
+            marginTop: 14, display: 'flex', alignItems: 'center', gap: 12,
+            background: allAccess ? C.accentLight : C.bgWhite,
+            border: `1px solid ${allAccess ? accent : C.border}`,
+            borderRadius: R.xl, padding: '12px 14px', opacity: allAccessBusy ? 0.7 : 1,
+            transition: 'border-color 0.15s, background 0.15s',
+          }}>
+            <Globe size={18} strokeWidth={ICON_STROKE} style={{ color: allAccess ? accent : C.textMuted, flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>Доступ ко всем проектам</div>
+              <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 1, lineHeight: 1.45 }}>
+                {allAccess
+                  ? 'Видит файлы всех текущих и будущих проектов. Привязки «Проект» ниже не сужают доступ — работают как подсказка, когда каким пользоваться.'
+                  : 'Без привязок «Проект» ниже и так доступны все проекты — но одна такая привязка сузит доступ только до неё. Включите, чтобы зона не сужалась никогда.'}
+              </div>
+            </div>
+            <Toggle checked={allAccess} onChange={toggleAllAccess} disabled={allAccessBusy} />
+          </div>
+        )}
+        {persona.scope === 'global' && (
+          <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>
+            Заметки персона видит из всех проектов всегда, независимо от этой настройки.
+          </div>
+        )}
 
         {bindings === null && !error && (
           <div style={{ padding: 40, textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>

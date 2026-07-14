@@ -206,12 +206,6 @@
     font-family:'PT Serif',serif;font-size:31px;font-weight:700;margin:0 0 12px;line-height:1.28;max-width:600px;
   }
   .hero-text p{font-size:14px;color:var(--text-muted);line-height:1.65;margin:0;max-width:560px;}
-  .hero-avatars{display:flex;flex:none;padding-top:6px;}
-  .hero-avatars .avatar{
-    width:52px;height:52px;border-radius:16px;font-size:21px;border:3px solid var(--bg-main);
-    margin-left:-16px;box-shadow:0 2px 6px rgba(60,50,35,0.12);
-  }
-  .hero-avatars .avatar:first-child{margin-left:0;}
 
   .section{margin-bottom:34px;}
   .section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:16px;}
@@ -226,21 +220,37 @@
     100%{box-shadow:0 0 0 0 rgba(217,119,87,0);}
   }
 
-  /* быстрые действия */
-  .qa-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
-  .qa-card{
-    background:var(--bg-white);border:1px solid var(--border-light-alt);border-radius:14px;
-    padding:20px;box-shadow:var(--shadow-card);display:flex;flex-direction:column;gap:10px;
-    transition:transform .15s,box-shadow .15s,border-color .15s;
+  /* раскладка: активность вторым столбцом на десктопе */
+  .hub-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:28px;align-items:start;}
+  .hub-main{display:flex;flex-direction:column;gap:34px;min-width:0;}
+  .hub-side{position:sticky;top:0;min-width:0;}
+  @media (max-width:1160px){
+    .hub-grid{display:block;}
+    .hub-side{position:static;margin-top:34px;}
   }
-  .qa-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-card-hover);border-color:#E9C8B4;}
-  .qa-icon{
-    width:38px;height:38px;border-radius:11px;background:var(--accent-tint);color:var(--accent);
+
+  /* новая персона: быстрые действия + шаблоны в одной компактной панели */
+  .create-panel{
+    background:var(--bg-white);border:1px solid var(--border-light-alt);border-radius:14px;
+    padding:18px 20px 20px;box-shadow:var(--shadow-card);
+  }
+  .create-actions{display:flex;gap:10px;flex-wrap:wrap;}
+  .create-action-btn{
+    display:flex;align-items:center;gap:9px;background:var(--bg-main);border:1px solid var(--border-light-alt);
+    border-radius:10px;padding:9px 14px 9px 9px;font-family:inherit;font-size:13px;font-weight:600;
+    color:var(--text-primary);cursor:pointer;transition:border-color .12s,background .12s;
+  }
+  .create-action-btn:hover{border-color:#E9C8B4;background:var(--bg-hover);}
+  .qa-icon-sm{
+    width:28px;height:28px;border-radius:8px;background:var(--accent-tint);color:var(--accent);
     display:flex;align-items:center;justify-content:center;flex:none;
   }
-  .qa-title{font-size:15px;font-weight:700;}
-  .qa-desc{font-size:13px;color:var(--text-muted);line-height:1.55;flex:1;}
-  .qa-bottom{margin-top:4px;}
+  .create-divider{
+    display:flex;align-items:center;gap:10px;margin:18px 0 14px;
+    font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:600;letter-spacing:.5px;
+    color:var(--text-secondary-alt);text-transform:uppercase;
+  }
+  .create-divider::before,.create-divider::after{content:'';flex:1;height:1px;background:var(--border-light-alt);}
   .btn-primary{
     background:var(--accent);color:#fff;border:none;border-radius:8px;padding:9px 14px;
     font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;transition:filter .12s;
@@ -253,7 +263,7 @@
     display:inline-flex;align-items:center;gap:6px;
   }
   .btn-ghost:hover{background:var(--accent-tint);}
-  .qa-input-row{display:flex;gap:8px;margin-top:2px;}
+  .qa-input-row{display:flex;gap:8px;margin-top:14px;}
   .qa-input-row input{
     flex:1;min-width:0;border:1px solid var(--border-light-alt);border-radius:8px;padding:8px 10px;
     font-family:inherit;font-size:12.5px;background:var(--bg-main);outline:none;color:var(--text-primary);
@@ -268,18 +278,18 @@
   @keyframes spin{to{transform:rotate(360deg);}}
 
   .gen-result{
-    grid-column:1/-1;overflow:hidden;max-height:0;opacity:0;transform:translateY(-6px);
+    overflow:hidden;max-height:0;opacity:0;transform:translateY(-6px);
     transition:max-height .35s ease, opacity .3s ease, transform .3s ease, margin .35s ease;
   }
-  .gen-result.show{max-height:200px;opacity:1;transform:translateY(0);margin-top:2px;}
+  .gen-result.show{max-height:220px;opacity:1;transform:translateY(0);margin-top:14px;}
   .gen-result-inner{
-    display:flex;align-items:center;gap:16px;background:var(--bg-white);border:1px dashed #E9C8B4;
-    border-radius:14px;padding:18px 20px;box-shadow:var(--shadow-card);
+    display:flex;align-items:center;gap:16px;background:var(--bg-main);border:1px dashed #E9C8B4;
+    border-radius:14px;padding:16px 18px;
   }
   .gen-info{flex:1;min-width:0;}
   .gen-title{font-size:15px;font-weight:700;}
   .gen-handle{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--text-secondary);margin-top:2px;}
-  .gen-desc{font-size:12.5px;color:var(--text-muted);margin-top:7px;line-height:1.5;max-width:520px;}
+  .gen-desc{font-size:12.5px;color:var(--text-muted);margin-top:7px;line-height:1.5;max-width:420px;}
   .gen-meta{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap;}
   .badge{
     font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--text-muted);
@@ -288,6 +298,34 @@
   .gen-actions{display:flex;flex-direction:column;gap:8px;flex:none;}
   .gen-note{font-size:11px;color:var(--text-secondary-alt);margin-top:8px;padding-left:2px;font-style:italic;}
 
+  /* витрина команды */
+  .showcase-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+  .showcase-card{
+    position:relative;display:flex;flex-direction:column;gap:9px;background:var(--bg-white);
+    border:1px solid var(--border-light-alt);border-radius:14px;padding:14px;cursor:pointer;
+    box-shadow:var(--shadow-card);transition:transform .15s,box-shadow .15s,border-color .15s;
+  }
+  .showcase-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-card-hover);border-color:#E9C8B4;}
+  .showcase-top{display:flex;align-items:center;gap:10px;}
+  .showcase-name{font-size:13.5px;font-weight:700;line-height:1.3;}
+  .showcase-handle{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--text-secondary);margin-top:1px;}
+  .showcase-desc{
+    font-size:12px;color:var(--text-muted);line-height:1.5;flex:1;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  }
+  .showcase-talk{
+    display:flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;color:var(--accent);
+    opacity:0;transform:translateY(2px);transition:opacity .15s,transform .15s;
+  }
+  .showcase-card:hover .showcase-talk{opacity:1;transform:translateY(0);}
+  .showcase-add{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+    border:1.5px dashed #D8CBB8;border-radius:14px;min-height:112px;cursor:pointer;color:var(--text-secondary);
+    transition:border-color .12s,color .12s,background .12s;
+  }
+  .showcase-add:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-tint);}
+  .showcase-add span{font-size:12.5px;font-weight:600;}
+
   /* активность — таймлайн по дням, в духе GroupTimeline из «Что нового» */
   .timeline-day{margin-bottom:20px;}
   .timeline-day:last-child{margin-bottom:0;}
@@ -295,29 +333,29 @@
     font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.5px;
     color:var(--text-secondary-alt);text-transform:uppercase;margin:0 0 10px 2px;
   }
-  .timeline-track{position:relative;padding-left:34px;}
+  .timeline-track{position:relative;padding-left:30px;}
   .timeline-track::before{
     content:'';position:absolute;left:10px;top:2px;bottom:2px;width:2px;background:var(--border-light-alt);
   }
-  .timeline-item{position:relative;padding:8px 10px 8px 0;border-radius:10px;cursor:pointer;transition:background .12s;}
+  .timeline-item{position:relative;padding:8px 4px 8px 0;border-radius:10px;cursor:pointer;transition:background .12s;}
   .timeline-item:hover{background:var(--bg-hover);}
   .timeline-marker{
-    position:absolute;left:-34px;top:8px;width:22px;height:22px;border-radius:50%;
+    position:absolute;left:-30px;top:8px;width:22px;height:22px;border-radius:50%;
     background:var(--bg-main);border:2px solid var(--accent);color:var(--accent);
     display:flex;align-items:center;justify-content:center;z-index:1;
   }
   .timeline-marker svg{width:11px;height:11px;}
-  .timeline-top-row{display:flex;align-items:baseline;justify-content:space-between;gap:10px;}
-  .timeline-who{font-size:13.5px;font-weight:700;}
+  .timeline-top-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap;}
+  .timeline-who{font-size:13px;font-weight:700;}
   .timeline-action{font-weight:400;color:var(--text-muted);}
-  .timeline-time{font-size:11.5px;color:var(--text-secondary);flex:none;white-space:nowrap;}
-  .timeline-desc{font-size:12.5px;color:var(--text-muted);margin-top:2px;line-height:1.5;}
+  .timeline-time{font-size:11px;color:var(--text-secondary);flex:none;white-space:nowrap;}
+  .timeline-desc{font-size:12px;color:var(--text-muted);margin-top:2px;line-height:1.5;}
 
   /* шаблоны */
-  .template-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;}
+  .template-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
   .template-chip{
-    display:flex;align-items:center;gap:9px;background:var(--bg-white);border:1px solid var(--border-light-alt);
-    border-radius:12px;padding:10px;cursor:pointer;transition:border-color .12s,background .12s;min-width:0;
+    display:flex;align-items:center;gap:9px;background:var(--bg-main);border:1px solid var(--border-light-alt);
+    border-radius:12px;padding:9px 10px;cursor:pointer;transition:border-color .12s,background .12s;min-width:0;
   }
   .template-chip:hover{border-color:#E9C8B4;background:var(--bg-hover);}
   .template-chip.owned{background:#F7F4EC;}
@@ -472,210 +510,271 @@
           <h1>Команда ИИ-агентов со своим характером</h1>
           <p>Персона — не ещё один режим чата, а участник команды: у неё есть роль, характер, память о прошлых разговорах и свои инструменты. Разговаривай с ней как с коллегой, поручай задачи и зови на совещание вместе с другими персонами.</p>
         </div>
-        <div class="hero-avatars">
-          <div class="avatar c-green">С</div>
-          <div class="avatar c-orange">М</div>
-          <div class="avatar c-brown">Г</div>
-          <div class="avatar c-teal">П</div>
-          <div class="avatar c-blue">П</div>
-        </div>
       </div>
 
-      <!-- БЫСТРЫЕ ДЕЙСТВИЯ -->
-      <div class="section">
-        <div class="section-head">
-          <div>
-            <h2>Быстрые действия</h2>
-            <div class="section-sub">Три способа получить нового участника команды</div>
-          </div>
-        </div>
-        <div class="qa-grid">
+      <div class="hub-grid">
+        <div class="hub-main">
 
-          <div class="qa-card">
-            <div class="qa-icon"><svg class="icon" width="19" height="19"><use href="#i-plus"/></svg></div>
-            <div class="qa-title">Создать с нуля</div>
-            <div class="qa-desc">Настрой роль, характер, модель, зону ответственности и доступы сам — полный контроль над персоной.</div>
-            <div class="qa-bottom"><button class="btn-primary" id="qaCreate">Создать персону</button></div>
-          </div>
+          <!-- НОВАЯ ПЕРСОНА (быстрые действия + шаблоны) -->
+          <div class="section">
+            <div class="section-head">
+              <div>
+                <h2>Новая персона</h2>
+                <div class="section-sub">С нуля, по описанию или из готовой заготовки</div>
+              </div>
+            </div>
+            <div class="create-panel">
+              <div class="create-actions">
+                <button class="create-action-btn" id="qaCreate">
+                  <span class="qa-icon-sm"><svg class="icon" width="15" height="15"><use href="#i-plus"/></svg></span>
+                  Создать с нуля
+                </button>
+                <button class="create-action-btn" id="genToggleBtn">
+                  <span class="qa-icon-sm"><svg class="icon" width="15" height="15"><use href="#i-sparkle"/></svg></span>
+                  Описать словами
+                </button>
+              </div>
 
-          <div class="qa-card">
-            <div class="qa-icon"><svg class="icon" width="19" height="19"><use href="#i-sparkle"/></svg></div>
-            <div class="qa-title">Описать словами</div>
-            <div class="qa-desc">Опиши в двух словах, какая персона нужна — ИИ сам придумает роль, характер и аватар.</div>
-            <div class="qa-input-row">
-              <input type="text" id="genInput" placeholder="Например: дотошный тестировщик, ищет крайние случаи">
-              <button class="btn-primary" id="genBtn">Сгенерировать</button>
+              <div class="qa-input-row" id="genRow" style="display:none;">
+                <input type="text" id="genInput" placeholder="Например: дотошный тестировщик, ищет крайние случаи">
+                <button class="btn-primary" id="genBtn">Сгенерировать</button>
+              </div>
+
+              <div class="gen-result" id="genResult">
+                <div class="gen-result-inner">
+                  <div class="avatar c-slate" style="width:48px;height:48px;border-radius:14px;font-size:19px;">И</div>
+                  <div class="gen-info">
+                    <div class="gen-title">Тестировщик (Игорь)</div>
+                    <div class="gen-handle">@igor</div>
+                    <div class="gen-desc">Придирчиво ищет крайние случаи и несостыковки, перед релизом ведёт чек-лист регрессии.</div>
+                    <div class="gen-meta">
+                      <span class="badge">Sonnet</span>
+                      <span class="badge">Среднее усилие</span>
+                      <span class="badge">Память включена</span>
+                    </div>
+                  </div>
+                  <div class="gen-actions">
+                    <button class="btn-primary" id="genSave">Сохранить</button>
+                    <button class="btn-ghost" id="genEdit">Изменить</button>
+                  </div>
+                </div>
+                <div class="gen-note">Демо-превью — в реальном приложении здесь предпросмотр персоны, которую действительно сгенерировал ИИ по твоему описанию.</div>
+              </div>
+
+              <div class="create-divider">или начни с готовой заготовки</div>
+              <div class="template-grid">
+
+                <div class="template-chip owned" data-title="Ревьюер (Марк)" data-owned="true">
+                  <div class="avatar c-orange" style="width:32px;height:32px;border-radius:10px;font-size:13px;">М</div>
+                  <div class="template-chip-text">
+                    <div class="template-role">Ревьюер</div>
+                    <div class="template-name">Марк</div>
+                    <div class="template-owned-tag">✓ уже есть</div>
+                  </div>
+                </div>
+
+                <div class="template-chip" data-title="Планировщик (Вера)" data-owned="false">
+                  <div class="avatar c-blue" style="width:32px;height:32px;border-radius:10px;font-size:13px;">В</div>
+                  <div class="template-chip-text">
+                    <div class="template-role">Планировщик</div>
+                    <div class="template-name">Вера</div>
+                  </div>
+                </div>
+
+                <div class="template-chip" data-title="Аналитик (София)" data-owned="false">
+                  <div class="avatar c-yellow" style="width:32px;height:32px;border-radius:10px;font-size:13px;">С</div>
+                  <div class="template-chip-text">
+                    <div class="template-role">Аналитик</div>
+                    <div class="template-name">София</div>
+                  </div>
+                </div>
+
+                <div class="template-chip" data-title="Ментор (Григорий)" data-owned="false">
+                  <div class="avatar c-green" style="width:32px;height:32px;border-radius:10px;font-size:13px;">Г</div>
+                  <div class="template-chip-text">
+                    <div class="template-role">Ментор</div>
+                    <div class="template-name">Григорий</div>
+                  </div>
+                </div>
+
+                <div class="template-chip owned" data-title="Секретарь (Полина)" data-owned="true">
+                  <div class="avatar c-teal" style="width:32px;height:32px;border-radius:10px;font-size:13px;">П</div>
+                  <div class="template-chip-text">
+                    <div class="template-role">Секретарь</div>
+                    <div class="template-name">Полина</div>
+                    <div class="template-owned-tag">✓ уже есть</div>
+                  </div>
+                </div>
+
+                <div class="template-chip" data-title="Дизайнер (Ева)" data-owned="false">
+                  <div class="avatar c-rose" style="width:32px;height:32px;border-radius:10px;font-size:13px;">Е</div>
+                  <div class="template-chip-text">
+                    <div class="template-role">Дизайнер</div>
+                    <div class="template-name">Ева</div>
+                  </div>
+                </div>
+
+              </div>
             </div>
           </div>
 
-          <div class="qa-card">
-            <div class="qa-icon"><svg class="icon" width="19" height="19"><use href="#i-copy"/></svg></div>
-            <div class="qa-title">Выбрать заготовку</div>
-            <div class="qa-desc">6 готовых сочетаний роли и характера — бери и донастраивай под себя.</div>
-            <div class="qa-bottom"><button class="btn-ghost" id="qaTemplatesBtn">Смотреть заготовки <svg class="icon" width="14" height="14"><use href="#i-arrow"/></svg></button></div>
+          <!-- ВИТРИНА КОМАНДЫ -->
+          <div class="section" style="margin-bottom:0;">
+            <div class="section-head">
+              <div>
+                <h2>Витрина команды</h2>
+                <div class="section-sub">Все ваши персоны — кликните, чтобы поговорить</div>
+              </div>
+            </div>
+            <div class="showcase-grid">
+
+              <div class="showcase-card" data-title="Ревьюер (Марк)">
+                <div class="showcase-top">
+                  <div class="avatar c-orange" style="width:40px;height:40px;border-radius:12px;font-size:16px;">М</div>
+                  <div>
+                    <div class="showcase-name">Ревьюер (Марк)</div>
+                    <div class="showcase-handle">@mark</div>
+                  </div>
+                </div>
+                <div class="showcase-desc">Проверяет код, ищет пропущенные edge-case'ы и лишние console.log.</div>
+                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
+              </div>
+
+              <div class="showcase-card" data-title="Секретарь (Полина)">
+                <div class="showcase-top">
+                  <div class="avatar c-teal" style="width:40px;height:40px;border-radius:12px;font-size:16px;">П</div>
+                  <div>
+                    <div class="showcase-name">Секретарь (Полина)</div>
+                    <div class="showcase-handle">@polina</div>
+                  </div>
+                </div>
+                <div class="showcase-desc">Ведёт расписание, готовит повестки и напоминает о встречах.</div>
+                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
+              </div>
+
+              <div class="showcase-card" data-title="Оркестратор (Сизиф)">
+                <div class="showcase-top">
+                  <div class="avatar c-green" style="width:40px;height:40px;border-radius:12px;font-size:16px;">С</div>
+                  <div>
+                    <div class="showcase-name">Оркестратор (Сизиф)</div>
+                    <div class="showcase-handle">@sizif</div>
+                  </div>
+                </div>
+                <div class="showcase-desc">Распределяет задачи по команде и следит за прогрессом.</div>
+                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
+              </div>
+
+              <div class="showcase-card" data-title="Мастер (Гефест)">
+                <div class="showcase-top">
+                  <div class="avatar c-brown" style="width:40px;height:40px;border-radius:12px;font-size:16px;">Г</div>
+                  <div>
+                    <div class="showcase-name">Мастер (Гефест)</div>
+                    <div class="showcase-handle">@gefest</div>
+                  </div>
+                </div>
+                <div class="showcase-desc">Пишет и правит код, выполняет техническую работу руками.</div>
+                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
+              </div>
+
+              <div class="showcase-card" data-title="Планировщик (Прометей)">
+                <div class="showcase-top">
+                  <div class="avatar c-blue" style="width:40px;height:40px;border-radius:12px;font-size:16px;">П</div>
+                  <div>
+                    <div class="showcase-name">Планировщик (Прометей)</div>
+                    <div class="showcase-handle">@prometey</div>
+                  </div>
+                </div>
+                <div class="showcase-desc">Раскладывает большую задачу на понятный план шагов.</div>
+                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
+              </div>
+
+              <div class="showcase-add" id="showcaseAdd">
+                <svg class="icon" width="20" height="20"><use href="#i-plus"/></svg>
+                <span>Новая персона</span>
+              </div>
+
+            </div>
           </div>
 
-          <div class="gen-result" id="genResult">
-            <div class="gen-result-inner">
-              <div class="avatar c-slate" style="width:48px;height:48px;border-radius:14px;font-size:19px;">И</div>
-              <div class="gen-info">
-                <div class="gen-title">Тестировщик (Игорь)</div>
-                <div class="gen-handle">@igor</div>
-                <div class="gen-desc">Придирчиво ищет крайние случаи и несостыковки, перед релизом ведёт чек-лист регрессии.</div>
-                <div class="gen-meta">
-                  <span class="badge">Sonnet</span>
-                  <span class="badge">Среднее усилие</span>
-                  <span class="badge">Память включена</span>
+        </div>
+
+        <!-- АКТИВНОСТЬ (правая колонка на десктопе) -->
+        <aside class="hub-side">
+          <div class="section" style="margin-bottom:0;">
+            <div class="section-head">
+              <div>
+                <h2>Активность</h2>
+                <div class="section-sub">Что происходило недавно</div>
+              </div>
+            </div>
+
+            <div class="timeline-day">
+              <div class="timeline-day-label">Сегодня</div>
+              <div class="timeline-track">
+                <div class="timeline-item" data-kind="chat" data-title="Ревьюер (Марк)">
+                  <div class="timeline-marker"><svg class="icon"><use href="#i-chat"/></svg></div>
+                  <div class="timeline-top-row">
+                    <div class="timeline-who">Ревьюер (Марк) <span class="timeline-action">проверил PR #482</span></div>
+                    <div class="timeline-time">2 часа назад</div>
+                  </div>
+                  <div class="timeline-desc">Два места без обработки ошибок, один лишний console.log.</div>
+                </div>
+                <div class="timeline-item" data-kind="task" data-title="Оркестратор (Сизиф)">
+                  <div class="timeline-marker"><svg class="icon"><use href="#i-check"/></svg></div>
+                  <div class="timeline-top-row">
+                    <div class="timeline-who">Оркестратор (Сизиф) <span class="timeline-action">выполнил задачу</span></div>
+                    <div class="timeline-time">4 часа назад</div>
+                  </div>
+                  <div class="timeline-desc">«Миграция на v2»: разбил на 4 подзадачи и назначил исполнителей.</div>
                 </div>
               </div>
-              <div class="gen-actions">
-                <button class="btn-primary" id="genSave">Сохранить</button>
-                <button class="btn-ghost" id="genEdit">Изменить</button>
+            </div>
+
+            <div class="timeline-day">
+              <div class="timeline-day-label">Вчера</div>
+              <div class="timeline-track">
+                <div class="timeline-item" data-kind="memory" data-title="Секретарь (Полина)">
+                  <div class="timeline-marker"><svg class="icon"><use href="#i-brain"/></svg></div>
+                  <div class="timeline-top-row">
+                    <div class="timeline-who">Секретарь (Полина) <span class="timeline-action">запомнила факт</span></div>
+                    <div class="timeline-time">18:40</div>
+                  </div>
+                  <div class="timeline-desc">Совещание по бюджету — каждый вторник в 15:00.</div>
+                </div>
+                <div class="timeline-item" data-kind="mention" data-title="Оркестратор (Сизиф)">
+                  <div class="timeline-marker"><svg class="icon"><use href="#i-at"/></svg></div>
+                  <div class="timeline-top-row">
+                    <div class="timeline-who">Оркестратор (Сизиф) <span class="timeline-action">спросил «Гефеста»</span></div>
+                    <div class="timeline-time">11:05</div>
+                  </div>
+                  <div class="timeline-desc">Уточнил готовность API перед релизом — прямо в переписке с вами.</div>
+                </div>
               </div>
             </div>
-            <div class="gen-note">Демо-превью — в реальном приложении здесь предпросмотр персоны, которую действительно сгенерировал ИИ по твоему описанию.</div>
-          </div>
 
-        </div>
-      </div>
-
-      <!-- АКТИВНОСТЬ -->
-      <div class="section">
-        <div class="section-head">
-          <div>
-            <h2>Активность</h2>
-            <div class="section-sub">Что происходило в команде персон в последнее время</div>
-          </div>
-        </div>
-
-        <div class="timeline-day">
-          <div class="timeline-day-label">Сегодня</div>
-          <div class="timeline-track">
-            <div class="timeline-item" data-kind="chat" data-title="Ревьюер (Марк)">
-              <div class="timeline-marker"><svg class="icon"><use href="#i-chat"/></svg></div>
-              <div class="timeline-top-row">
-                <div class="timeline-who">Ревьюер (Марк) <span class="timeline-action">проверил PR #482</span></div>
-                <div class="timeline-time">2 часа назад</div>
+            <div class="timeline-day">
+              <div class="timeline-day-label">На этой неделе</div>
+              <div class="timeline-track">
+                <div class="timeline-item" data-kind="created" data-title="Секретарь (Полина)">
+                  <div class="timeline-marker"><svg class="icon"><use href="#i-plus"/></svg></div>
+                  <div class="timeline-top-row">
+                    <div class="timeline-who">Вы <span class="timeline-action">создали «Секретарь (Полина)»</span></div>
+                    <div class="timeline-time">2 дня назад</div>
+                  </div>
+                  <div class="timeline-desc">Шаблон «Секретарь» — приветствие и характер настроены автоматически.</div>
+                </div>
+                <div class="timeline-item" data-kind="task" data-title="Ревьюер (Марк)">
+                  <div class="timeline-marker"><svg class="icon"><use href="#i-check"/></svg></div>
+                  <div class="timeline-top-row">
+                    <div class="timeline-who">Ревьюер (Марк) <span class="timeline-action">отклонил PR #479</span></div>
+                    <div class="timeline-time">3 дня назад</div>
+                  </div>
+                  <div class="timeline-desc">Не хватало тестов на граничный случай — вернул с комментариями.</div>
+                </div>
               </div>
-              <div class="timeline-desc">Два места без обработки ошибок, один лишний console.log. В целом ок.</div>
-            </div>
-            <div class="timeline-item" data-kind="task" data-title="Оркестратор (Сизиф)">
-              <div class="timeline-marker"><svg class="icon"><use href="#i-check"/></svg></div>
-              <div class="timeline-top-row">
-                <div class="timeline-who">Оркестратор (Сизиф) <span class="timeline-action">выполнил задачу</span></div>
-                <div class="timeline-time">4 часа назад</div>
-              </div>
-              <div class="timeline-desc">«Миграция на v2»: разбил на 4 подзадачи и назначил исполнителей.</div>
             </div>
           </div>
-        </div>
-
-        <div class="timeline-day">
-          <div class="timeline-day-label">Вчера</div>
-          <div class="timeline-track">
-            <div class="timeline-item" data-kind="memory" data-title="Секретарь (Полина)">
-              <div class="timeline-marker"><svg class="icon"><use href="#i-brain"/></svg></div>
-              <div class="timeline-top-row">
-                <div class="timeline-who">Секретарь (Полина) <span class="timeline-action">запомнила факт</span></div>
-                <div class="timeline-time">18:40</div>
-              </div>
-              <div class="timeline-desc">Совещание по бюджету — каждый вторник в 15:00.</div>
-            </div>
-            <div class="timeline-item" data-kind="mention" data-title="Оркестратор (Сизиф)">
-              <div class="timeline-marker"><svg class="icon"><use href="#i-at"/></svg></div>
-              <div class="timeline-top-row">
-                <div class="timeline-who">Оркестратор (Сизиф) <span class="timeline-action">спросил «Мастера (Гефеста)»</span></div>
-                <div class="timeline-time">11:05</div>
-              </div>
-              <div class="timeline-desc">Уточнил готовность API перед релизом — прямо в переписке с вами.</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="timeline-day">
-          <div class="timeline-day-label">На этой неделе</div>
-          <div class="timeline-track">
-            <div class="timeline-item" data-kind="created" data-title="Секретарь (Полина)">
-              <div class="timeline-marker"><svg class="icon"><use href="#i-plus"/></svg></div>
-              <div class="timeline-top-row">
-                <div class="timeline-who">Вы <span class="timeline-action">создали персону «Секретарь (Полина)»</span></div>
-                <div class="timeline-time">2 дня назад</div>
-              </div>
-              <div class="timeline-desc">Шаблон «Секретарь» — приветствие и характер настроены автоматически.</div>
-            </div>
-            <div class="timeline-item" data-kind="task" data-title="Ревьюер (Марк)">
-              <div class="timeline-marker"><svg class="icon"><use href="#i-check"/></svg></div>
-              <div class="timeline-top-row">
-                <div class="timeline-who">Ревьюер (Марк) <span class="timeline-action">отклонил PR #479</span></div>
-                <div class="timeline-time">3 дня назад</div>
-              </div>
-              <div class="timeline-desc">Не хватало тестов на граничный случай — вернул с комментариями.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ШАБЛОНЫ -->
-      <div class="section" id="templates">
-        <div class="section-head">
-          <div>
-            <h2>Шаблоны для быстрого старта</h2>
-            <div class="section-sub">Своя персона с нуля, но с готовой заготовкой роли и характера</div>
-          </div>
-        </div>
-        <div class="template-grid">
-
-          <div class="template-chip owned" data-title="Ревьюер (Марк)" data-owned="true">
-            <div class="avatar c-orange" style="width:32px;height:32px;border-radius:10px;font-size:13px;">М</div>
-            <div class="template-chip-text">
-              <div class="template-role">Ревьюер</div>
-              <div class="template-name">Марк</div>
-              <div class="template-owned-tag">✓ уже есть</div>
-            </div>
-          </div>
-
-          <div class="template-chip" data-title="Планировщик (Вера)" data-owned="false">
-            <div class="avatar c-blue" style="width:32px;height:32px;border-radius:10px;font-size:13px;">В</div>
-            <div class="template-chip-text">
-              <div class="template-role">Планировщик</div>
-              <div class="template-name">Вера</div>
-            </div>
-          </div>
-
-          <div class="template-chip" data-title="Аналитик (София)" data-owned="false">
-            <div class="avatar c-yellow" style="width:32px;height:32px;border-radius:10px;font-size:13px;">С</div>
-            <div class="template-chip-text">
-              <div class="template-role">Аналитик</div>
-              <div class="template-name">София</div>
-            </div>
-          </div>
-
-          <div class="template-chip" data-title="Ментор (Григорий)" data-owned="false">
-            <div class="avatar c-green" style="width:32px;height:32px;border-radius:10px;font-size:13px;">Г</div>
-            <div class="template-chip-text">
-              <div class="template-role">Ментор</div>
-              <div class="template-name">Григорий</div>
-            </div>
-          </div>
-
-          <div class="template-chip owned" data-title="Секретарь (Полина)" data-owned="true">
-            <div class="avatar c-teal" style="width:32px;height:32px;border-radius:10px;font-size:13px;">П</div>
-            <div class="template-chip-text">
-              <div class="template-role">Секретарь</div>
-              <div class="template-name">Полина</div>
-              <div class="template-owned-tag">✓ уже есть</div>
-            </div>
-          </div>
-
-          <div class="template-chip" data-title="Дизайнер (Ева)" data-owned="false">
-            <div class="avatar c-rose" style="width:32px;height:32px;border-radius:10px;font-size:13px;">Е</div>
-            <div class="template-chip-text">
-              <div class="template-role">Дизайнер</div>
-              <div class="template-name">Ева</div>
-            </div>
-          </div>
-
-        </div>
+        </aside>
       </div>
 
       <!-- ВОЗМОЖНОСТИ -->
@@ -764,15 +863,21 @@
   function toastCreate(){ showToast('Открылась бы форма создания новой персоны'); }
   document.getElementById('btnNewPersonaSidebar').addEventListener('click', toastCreate);
   document.getElementById('qaCreate').addEventListener('click', toastCreate);
+  document.getElementById('showcaseAdd').addEventListener('click', toastCreate);
 
-  /* ---------- быстрое действие: прокрутка к шаблонам ---------- */
-  document.getElementById('qaTemplatesBtn').addEventListener('click', function(){
-    var section = document.getElementById('templates');
-    section.scrollIntoView({behavior:'smooth', block:'start'});
-    setTimeout(function(){
-      section.classList.add('pulse');
-      setTimeout(function(){ section.classList.remove('pulse'); }, 1000);
-    }, 350);
+  /* ---------- витрина команды: клик по карточке ---------- */
+  document.querySelectorAll('.showcase-card').forEach(function(card){
+    card.addEventListener('click', function(){
+      showToast('Открылся бы чат с «' + card.dataset.title + '»');
+    });
+  });
+
+  /* ---------- "описать словами": раскрыть строку генерации ---------- */
+  var genRow = document.getElementById('genRow');
+  document.getElementById('genToggleBtn').addEventListener('click', function(){
+    var open = genRow.style.display !== 'none';
+    genRow.style.display = open ? 'none' : 'flex';
+    if(!open) document.getElementById('genInput').focus();
   });
 
   /* ---------- генерация персоны по описанию ---------- */

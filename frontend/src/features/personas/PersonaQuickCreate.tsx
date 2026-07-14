@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { PantheonTemplate, Persona, PersonaScope } from '../../types';
@@ -6,7 +6,8 @@ import { api } from '../../lib/api';
 import { bumpPersonas } from '../../lib/personas';
 import { C, FONT, R, FIELD, SHADOW } from '../../lib/design';
 import { Toolbar, tbBtnGhost } from '../../components/Toolbar';
-import { IconButton } from '../../components/ui';
+import { IconButton, WaitingIndicator } from '../../components/ui';
+import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { SectionLabel } from '../tasks/bits';
 import { agentDotColor } from '../../components/AgentSelector';
 import { PERSONA_TEMPLATES, type PersonaTemplate } from './personaTemplates';
@@ -30,9 +31,31 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
   isMobile?: boolean;
 }) {
   const [prompt, setPrompt] = useState('');
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
+  // Статус/результат — в aiJobStore (singleton-ключ: одновременно можно вести только
+  // один quick-create), переживает уход со страницы во время ожидания (до пары минут).
+  const quickCreateKey = 'personas:quick-create';
+  const quickCreateJob = useAiJob<Persona>(quickCreateKey);
+  const busy = quickCreateJob.status === 'running';
+  // true — если это монтирование застало/начало генерацию само (обычный путь: сразу
+  // открыть созданную персону); false — если задача уже была done ДО монтирования
+  // (вернулись из другого раздела намного позже) — тогда просто предлагаем баннер,
+  // не переключаем экран неожиданно.
+  const wasRunningRef = useRef(quickCreateJob.status === 'running');
+  const justCreated = quickCreateJob.status === 'done' ? quickCreateJob.result ?? null : null;
+
+  useEffect(() => {
+    if (quickCreateJob.status === 'running') wasRunningRef.current = true;
+    if (quickCreateJob.status === 'done' && quickCreateJob.result && wasRunningRef.current) {
+      onCreated(quickCreateJob.result);
+      resetAiJob(quickCreateKey);
+    } else if (quickCreateJob.status === 'error') {
+      setError(quickCreateJob.error ?? 'Не удалось создать персону. Попробуйте ещё раз.');
+      resetAiJob(quickCreateKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickCreateJob.status]);
   // Шаблоны «Пантеон OmO»: каталог живёт на бэкенде (GET /api/personas/pantheon),
   // там же — признак «уже подключена» (connectedPersonaId). Пока грузится —
   // секция просто не показывается.
@@ -45,19 +68,14 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
 
   const canSubmit = !!prompt.trim() && !busy;
 
-  const submit = async () => {
+  const submit = () => {
     if (!canSubmit) return;
-    setBusy(true);
     setError(null);
-    try {
+    runAiJob<Persona>(quickCreateKey, async () => {
       const created = await api.personas.quickCreate({ prompt: prompt.trim(), scope, projectId });
       bumpPersonas();
-      onCreated(created);
-      // busy не сбрасываем: родитель уводит на редактор созданной персоны
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось создать персону. Попробуйте ещё раз.');
-      setBusy(false);
-    }
+      return created;
+    });
   };
 
   return (
@@ -104,7 +122,7 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
               onBlur={() => setFocused(false)}
               onKeyDown={e => {
                 // Ctrl/Cmd+Enter — отправить, как в композере чата
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void submit(); }
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
               }}
               style={{
                 minHeight: 120, resize: 'vertical', lineHeight: 1.5,
@@ -117,24 +135,49 @@ export function PersonaQuickCreate({ scope, projectId, onCreated, onManual, onTe
                 opacity: busy ? 0.65 : 1,
               }}
             />
-            {/* Под полем: мягкий статус во время генерации или ошибка с возможностью повторить */}
+            {/* Под полем: живой статус во время генерации (переживает уход со страницы) или ошибка */}
             {busy ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: C.textMuted }}>
-                <span style={{
-                  width: 8, height: 8, borderRadius: R.full, background: C.accent, flexShrink: 0,
-                  animation: 'cc-quick-pulse 1.2s ease-in-out infinite',
-                }} />
-                Придумываю характер, подбираю умения и генерирую аватар — до пары минут
-                <style>{'@keyframes cc-quick-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }'}</style>
-              </div>
+              <WaitingIndicator hint="Придумываю характер, подбираю умения и генерирую аватар — до пары минут" />
             ) : error ? (
               <div style={{ fontSize: 12.5, color: C.danger, lineHeight: 1.4 }}>{error}</div>
             ) : null}
           </div>
 
+          {/* Персона успела создаться, пока экран был закрыт/в другом разделе — не переключаем
+              экран неожиданно, предлагаем открыть явно */}
+          {justCreated && (
+            <div style={{
+              display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px',
+              background: C.accentLight, border: `1px solid ${C.accent}`, borderRadius: R.lg,
+            }}>
+              <span style={{ fontSize: 13, color: C.textHeading, lineHeight: 1.45 }}>
+                ✓ Персона «{justCreated.name}» уже создана, пока вы были в другом разделе.
+              </span>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => { onCreated(justCreated); resetAiJob(quickCreateKey); }}
+                  style={{
+                    background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.md,
+                    padding: '7px 14px', fontSize: 12.5, fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer',
+                  }}>
+                  Открыть
+                </button>
+                <button
+                  onClick={() => resetAiJob(quickCreateKey)}
+                  style={{
+                    background: 'none', border: `1px solid ${C.border}`, color: C.textSecondary,
+                    borderRadius: R.md, padding: '7px 14px', fontSize: 12.5, fontWeight: 600,
+                    fontFamily: FONT.sans, cursor: 'pointer',
+                  }}>
+                  Скрыть
+                </button>
+              </div>
+            </div>
+          )}
+
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <button
-              onClick={() => void submit()}
+              onClick={submit}
               disabled={!canSubmit}
               style={{
                 background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.md,

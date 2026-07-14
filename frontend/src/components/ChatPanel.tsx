@@ -22,7 +22,7 @@ import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { setChatContext } from '../lib/ai/chatContext';
 import { ChatHeaderBar, RateLimitBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { ChatProjectContext, FalCostContext, AssistantNameContext, PersonaContext } from './chat/contexts';
-import { WaitingIndicator } from './chat/WaitingIndicator';
+import { WaitingIndicator } from './ui/WaitingIndicator';
 import { ChatEmptyState } from './chat/EmptyState';
 import { AttachPicker } from './chat/AttachPicker';
 import { ToolGroupBlock, AgentActionsBlock, itemKey } from './chat/timeline';

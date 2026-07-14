@@ -1,11 +1,16 @@
 import { useState, useEffect } from 'react';
 import { C } from '../../lib/design';
-import { pickVerb } from './thinkingVerbs';
+import { pickVerb } from '../chat/thinkingVerbs';
 
 // Живой индикатор ожидания: пульс-аватар Claude + «печатная машинка» по синонимам.
 // Текст печатается посимвольно с курсором, в конце дописывается «…», держит паузу,
-// затем стирается и сменяется новым случайным синонимом.
-export function WaitingIndicator({ planning }: { planning?: 'planning' | 'replanning' } = {}) {
+// затем стирается и сменяется новым случайным синонимом. Общий для чата и любых
+// других долгих ИИ-операций (подбор/генерация по кнопке «✨ …») — hint поясняет,
+// что именно происходит и сколько примерно ждать.
+export function WaitingIndicator({ planning, hint }: {
+  planning?: 'planning' | 'replanning';
+  hint?: string;
+} = {}) {
   const [text, setText] = useState('');
   const reduced = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -41,23 +46,30 @@ export function WaitingIndicator({ planning }: { planning?: 'planning' | 'replan
   }, [reduced]);
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span className="cc-pulse-ring" style={{
-        width: 22, height: 22, borderRadius: 6, background: pulseColor,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-      }}>
-        <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.bgMain }} />
-      </span>
-      <span style={{ display: 'inline-flex', alignItems: 'baseline', minHeight: 17 }}>
-        <span className="cc-shimmer-text" style={{ fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-          {text}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span className="cc-pulse-ring" style={{
+          width: 22, height: 22, borderRadius: 6, background: pulseColor,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        }}>
+          <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.bgMain }} />
         </span>
-        <span style={{
-          display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2,
-          background: pulseColor, borderRadius: 1, alignSelf: 'center',
-          animation: reduced ? 'none' : 'blink 1s step-start infinite',
-        }} />
-      </span>
+        <span style={{ display: 'inline-flex', alignItems: 'baseline', minHeight: 17 }}>
+          <span className="cc-shimmer-text" style={{ fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+            {text}
+          </span>
+          <span style={{
+            display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2,
+            background: pulseColor, borderRadius: 1, alignSelf: 'center',
+            animation: reduced ? 'none' : 'blink 1s step-start infinite',
+          }} />
+        </span>
+      </div>
+      {hint && (
+        <span style={{ fontSize: 11.5, color: C.textMuted, marginLeft: 32, fontFamily: 'inherit' }}>
+          {hint}
+        </span>
+      )}
     </div>
   );
 }

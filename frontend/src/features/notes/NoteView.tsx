@@ -8,7 +8,8 @@ import { lazy, Suspense } from 'react';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
 const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
-import { BackButton, ConfirmDialog, IconButton, Splitter, Modal } from '../../components/ui';
+import { BackButton, ConfirmDialog, IconButton, Splitter, Modal, WaitingIndicator } from '../../components/ui';
+import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { tbBtnPrimary, tbBtnGhost } from '../../components/Toolbar';
 import { useNotes } from '../../lib/notes';
@@ -91,29 +92,27 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     }
   };
 
-  // ✨ AI-помощь: предложение связей, тегов, конспект дня.
-  // 'error' — ИИ недоступен (нет логина claude/таймаут): показываем явно, не молчим.
-  const [aiLinks, setAiLinks] = useState<{ title: string; why: string }[] | 'loading' | 'error' | null>(null);
-  const [aiTags, setAiTags] = useState<string[] | 'loading' | 'error' | null>(null);
-  const [, setAiBusy] = useState(false);
+  // ✨ AI-помощь: предложение связей, тегов, конспект дня. Статус/результат — в
+  // aiJobStore по ключу заметки (переживает уход со страницы «Заметки» и обратно).
+  const linksKey = `notes:${note?.id ?? '_none'}:suggest-links`;
+  const linksJob = useAiJob<{ title: string; why: string }[]>(linksKey);
+  const tagsKey = `notes:${note?.id ?? '_none'}:suggest-tags`;
+  const tagsJob = useAiJob<string[]>(tagsKey);
   // Ручное добавление тега (инлайн-инпут у чипов)
   const [addingTag, setAddingTag] = useState(false);
   const [newTag, setNewTag] = useState('');
   const isDaily = note?.source === 'personal' && note.path.startsWith('Journal/');
+  const dailyDay = note && isDaily ? note.path.replace(/^Journal\//, '').replace(/\.md$/, '') : null;
+  const dailyKey = `notes:daily-summary:${dailyDay ?? '_none'}`;
+  const dailyJob = useAiJob<NoteDetail>(dailyKey);
 
   const suggestLinks = () => {
     if (!note) return;
-    setAiLinks('loading');
-    api.notes.suggestLinks(note.id)
-      .then(l => setAiLinks(l))
-      .catch(() => setAiLinks('error'));
+    runAiJob(linksKey, () => api.notes.suggestLinks(note.id));
   };
   const suggestTags = () => {
     if (!note) return;
-    setAiTags('loading');
-    api.notes.suggestTags(note.id)
-      .then(t => setAiTags(t))
-      .catch(() => setAiTags('error'));
+    runAiJob(tagsKey, () => api.notes.suggestTags(note.id));
   };
   // Принять связь: секция «## Связанное» с [[…]] в конце заметки
   const acceptLink = async (title: string) => {
@@ -124,7 +123,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       : note.content.trimEnd() + `\n\n## Связанное\n\n- [[${title}]]\n`;
     const updated = await api.notes.update(note.id, { content });
     setNote(updated);
-    setAiLinks(prev => Array.isArray(prev) ? prev.filter(l => l.title !== title) : prev);
+    patchAiJobResult<{ title: string; why: string }[]>(linksKey, prev => prev.filter(l => l.title !== title));
     bumpNotes();
   };
   // Принять тег (ИИ-предложение или ручной ввод): inline #тег в конец заметки
@@ -134,18 +133,25 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     if (!tag || note.tags.some(t => t.toLowerCase() === tag.toLowerCase())) return;
     const updated = await api.notes.update(note.id, { content: note.content.trimEnd() + ` #${tag}\n` });
     setNote(updated);
-    setAiTags(prev => Array.isArray(prev) ? prev.filter(t => t !== tagRaw) : prev);
+    patchAiJobResult<string[]>(tagsKey, prev => prev.filter(t => t !== tagRaw));
     bumpNotes();
   };
   // Конспект дня (только в daily-заметке)
   const makeDailySummary = () => {
-    if (!note) return;
-    setAiBusy(true);
-    const day = note.path.replace(/^Journal\//, '').replace(/\.md$/, '');
-    api.notes.dailySummary(day)
-      .then(n => { setNote(n); bumpNotes(); })
-      .finally(() => setAiBusy(false));
+    if (!note || !dailyDay) return;
+    runAiJob(dailyKey, () => api.notes.dailySummary(dailyDay));
   };
+  useEffect(() => {
+    if (dailyJob.status === 'done' && dailyJob.result) {
+      setNote(dailyJob.result);
+      bumpNotes();
+      resetAiJob(dailyKey);
+    } else if (dailyJob.status === 'error') {
+      showToast('Конспект дня', dailyJob.error ?? 'Не удалось собрать конспект дня', 'info');
+      resetAiJob(dailyKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dailyJob.status]);
 
   // AI-хаб: контекстные действия из палитры делегируются сюда — над открытой заметкой,
   // переиспользуя те же обработчики, что и ✨-кнопки тулбара.
@@ -361,13 +367,16 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 </button>
               )}
               {/* Кнопка «теги (AI)» убрана — предложение тегов только через AI-палитру */}
-              {aiTags === 'error' && (
+              {tagsJob.status === 'running' && (
+                <WaitingIndicator />
+              )}
+              {tagsJob.status === 'error' && (
                 <span style={{ fontSize: 11, color: C.dangerText }}>ИИ недоступен (claude не залогинен на сервере)</span>
               )}
-              {Array.isArray(aiTags) && aiTags.length === 0 && (
+              {tagsJob.status === 'done' && (tagsJob.result ?? []).length === 0 && (
                 <span style={{ fontSize: 11, color: C.textMuted }}>нечего предложить</span>
               )}
-              {Array.isArray(aiTags) && aiTags.map(t => (
+              {tagsJob.status === 'done' && (tagsJob.result ?? []).map(t => (
                 <button key={t} onClick={() => void acceptTag(t)} title="Добавить тег"
                   style={{ fontSize: 11.5, fontWeight: 500, color: C.textSecondary, background: C.bgSelected, border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
                   +#{t}
@@ -375,27 +384,40 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               ))}
           </div>
         )}
-        {!editing && aiLinks != null && (
+        {!editing && linksJob.status !== 'idle' && (
           <div style={{ marginBottom: 12, padding: '9px 12px', background: C.accentLight, borderRadius: R.lg, border: `1px solid ${C.accentMuted}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, color: aiLinks === 'error' ? C.dangerText : C.textSecondary, marginBottom: Array.isArray(aiLinks) && aiLinks.length > 0 ? 8 : 0 }}>
-              <IconSparkle />
-              {aiLinks === 'loading' ? 'Ищу связи…'
-                : aiLinks === 'error' ? 'ИИ недоступен (claude не залогинен на сервере)'
-                : aiLinks.length === 0 ? 'Подходящих связей не нашлось' : 'Предложенные связи'}
-              <button onClick={() => setAiLinks(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex' }}><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
-            </div>
-            {Array.isArray(aiLinks) && aiLinks.map(l => (
-              <div key={l.title} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
-                <span style={{ flex: 1, minWidth: 0, fontSize: 12.5 }}>
-                  <span style={{ fontWeight: 500, color: C.textPrimary }}>{l.title}</span>
-                  <span style={{ color: C.textMuted }}> — {l.why}</span>
-                </span>
-                <button onClick={() => void acceptLink(l.title)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 'none', fontSize: 11, fontWeight: 500, color: C.accent, background: C.bgWhite, border: `1px solid ${C.accentMuted}`, borderRadius: R.sm, padding: '3px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
-                  <IconLink />Связать
-                </button>
+            {linksJob.status === 'running' ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <WaitingIndicator />
+                <button onClick={() => resetAiJob(linksKey)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex' }}><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
               </div>
-            ))}
+            ) : (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, color: linksJob.status === 'error' ? C.dangerText : C.textSecondary, marginBottom: (linksJob.result?.length ?? 0) > 0 ? 8 : 0 }}>
+                  <IconSparkle />
+                  {linksJob.status === 'error' ? 'ИИ недоступен (claude не залогинен на сервере)'
+                    : (linksJob.result?.length ?? 0) === 0 ? 'Подходящих связей не нашлось' : 'Предложенные связи'}
+                  <button onClick={() => resetAiJob(linksKey)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex' }}><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
+                </div>
+                {(linksJob.result ?? []).map(l => (
+                  <div key={l.title} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 12.5 }}>
+                      <span style={{ fontWeight: 500, color: C.textPrimary }}>{l.title}</span>
+                      <span style={{ color: C.textMuted }}> — {l.why}</span>
+                    </span>
+                    <button onClick={() => void acceptLink(l.title)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 'none', fontSize: 11, fontWeight: 500, color: C.accent, background: C.bgWhite, border: `1px solid ${C.accentMuted}`, borderRadius: R.sm, padding: '3px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
+                      <IconLink />Связать
+                    </button>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+        {!editing && dailyJob.status === 'running' && (
+          <div style={{ marginBottom: 12, padding: '9px 12px', background: C.accentLight, borderRadius: R.lg, border: `1px solid ${C.accentMuted}` }}>
+            <WaitingIndicator hint="Собираю конспект дня из заметок и активности" />
           </div>
         )}
         <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}

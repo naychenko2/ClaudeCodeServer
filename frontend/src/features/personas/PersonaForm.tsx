@@ -3,7 +3,8 @@ import { Pencil } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project } from '../../types';
 import { api } from '../../lib/api';
-import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem } from '../../components/ui';
+import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator } from '../../components/ui';
+import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
 import { useModels, useModelCaps, modelProvider } from '../../lib/models';
@@ -129,14 +130,17 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [error, setError] = useState<string | null>(null);
 
   // Аватар: текущее состояние (обновляется после выбора кандидата), возможность
-  // генерации (настроен ли fal), поле промпта и статус генерации.
+  // генерации (настроен ли fal), поле промпта. Статус/результат генерации — в
+  // aiJobStore (переживает уход со страницы во время ожидания fal.ai).
   const [avatar, setAvatar] = useState<Persona['avatar']>(persona?.avatar ?? { kind: 'initials', color: initial?.color ?? 'orange' });
   const [canGenerate, setCanGenerate] = useState(false);
   const [avatarPrompt, setAvatarPrompt] = useState('');
-  const [generating, setGenerating] = useState(false);
-  const [avatarError, setAvatarError] = useState<string | null>(null);
-  // Галерея сгенерированных кандидатов (имена файлов) — выбор перекладывает картинку в аватар
-  const [candidates, setCandidates] = useState<string[]>([]);
+  const avatarKey = `personas:${persona?.id ?? '_new'}:avatar-generate`;
+  const avatarJob = useAiJob<string[]>(avatarKey);
+  const generating = avatarJob.status === 'running';
+  const candidates = avatarJob.status === 'done' ? (avatarJob.result ?? []) : [];
+  const avatarGenError = avatarJob.status === 'error' ? avatarJob.error ?? null : null;
+  const [selectError, setSelectError] = useState<string | null>(null);
   const [selecting, setSelecting] = useState<string | null>(null);
   // Инлайн-панель «Внешность» под hero (открывается из мини-меню ✎)
   const [showAppearance, setShowAppearance] = useState(false);
@@ -147,9 +151,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [cropState, setCropState] = useState<null | { src: string; mode: 'upload' | 'recrop'; file?: File }>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // AI-редактирование характера: активное действие (генерация/улучшение), ошибка,
-  // общий поповер с необязательным уточняющим промптом для обоих режимов.
-  const [aiAction, setAiAction] = useState<null | 'generate' | 'improve'>(null);
+  // AI-редактирование характера: статус/результат в aiJobStore (переживает уход со
+  // страницы), общий поповер с необязательным уточняющим промптом для обоих режимов.
+  const characterKey = `personas:${persona?.id ?? '_new'}:character-generate`;
+  const characterJob = useAiJob<{ mode: 'generate' | 'improve'; contract: PersonaContract }>(characterKey);
+  const characterBusy = characterJob.status === 'running';
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiInstruction, setAiInstruction] = useState('');
   const [aiPopover, setAiPopover] = useState<null | 'generate' | 'improve'>(null);
@@ -191,35 +197,28 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     avatar: avatar.kind === 'image' ? { ...avatar, color } : { kind: 'initials', color },
   };
 
-  // Генерация 4 вариантов аватара — показываем сеткой, аватар не меняем до выбора
-  const generateAvatar = async () => {
+  // Генерация 4 вариантов аватара — показываем сеткой, аватар не меняем до выбора.
+  // Статус/результат в aiJobStore — переживает уход со страницы во время ожидания fal.ai.
+  const generateAvatar = () => {
     if (!persona || generating) return;
-    setGenerating(true);
-    setAvatarError(null);
-    setCandidates([]);
-    try {
-      const { candidates: files } = await api.personas.generateAvatar(persona.id, { prompt: avatarPrompt, count: 4 });
-      setCandidates(files);
-    } catch (e) {
-      setAvatarError(e instanceof Error ? e.message : 'Не удалось сгенерировать аватар');
-    } finally {
-      setGenerating(false);
-    }
+    runAiJob<string[]>(avatarKey, () => api.personas
+      .generateAvatar(persona.id, { prompt: avatarPrompt, count: 4 })
+      .then(r => r.candidates));
   };
 
   // Выбор кандидата из галереи → становится аватаром персоны
   const chooseCandidate = async (file: string) => {
     if (!persona || selecting) return;
     setSelecting(file);
-    setAvatarError(null);
+    setSelectError(null);
     try {
       const updated = await api.personas.selectAvatar(persona.id, file);
       setAvatar(updated.avatar);
       bumpPersonas();
-      setCandidates([]);
+      resetAiJob(avatarKey);
       setAvatarPrompt('');
     } catch (e) {
-      setAvatarError(e instanceof Error ? e.message : 'Не удалось выбрать аватар');
+      setSelectError(e instanceof Error ? e.message : 'Не удалось выбрать аватар');
     } finally {
       setSelecting(null);
     }
@@ -276,29 +275,31 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   // AI-характер: генерация с нуля (по роли/имени/описанию) или улучшение текущего
   // контракта (уходит сериализованным JSON). Необязательный уточняющий промпт — в обоих режимах.
-  const runAiCharacter = async (mode: 'generate' | 'improve') => {
-    if (aiAction) return;
-    setAiAction(mode);
+  // Статус/результат — в aiJobStore, применяются эффектом ниже (переживает уход со страницы).
+  const runAiCharacter = (mode: 'generate' | 'improve') => {
+    if (characterBusy) return;
     setAiError(null);
-    try {
-      const { contract } = await api.personas.aiCharacter({
-        name: name.trim() || undefined,
-        role: role.trim() || undefined,
-        description: description.trim() || undefined,
-        current: mode === 'improve' ? JSON.stringify(buildContract()) : undefined,
-        instruction: aiInstruction.trim() || undefined,
-      });
-      applyContract(contract);
+    runAiJob(characterKey, () => api.personas.aiCharacter({
+      name: name.trim() || undefined,
+      role: role.trim() || undefined,
+      description: description.trim() || undefined,
+      current: mode === 'improve' ? JSON.stringify(buildContract()) : undefined,
+      instruction: aiInstruction.trim() || undefined,
+    }).then(r => ({ mode, contract: r.contract })));
+  };
+
+  useEffect(() => {
+    if (characterJob.status === 'done' && characterJob.result) {
+      applyContract(characterJob.result.contract);
       setAiInstruction('');
       setAiPopover(null);
-    } catch (e) {
-      setAiError(e instanceof Error
-        ? e.message
-        : mode === 'generate' ? 'Не удалось сгенерировать характер' : 'Не удалось улучшить характер');
-    } finally {
-      setAiAction(null);
+      resetAiJob(characterKey);
+    } else if (characterJob.status === 'error') {
+      setAiError(characterJob.error ?? 'Не удалось обновить характер');
+      resetAiJob(characterKey);
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [characterJob.status]);
 
   // При выборе зоны «Проект» без выбранного проекта — подставим первый доступный
   useEffect(() => {
@@ -545,6 +546,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                     {generating ? 'Генерирую 4 варианта…' : '✨ Сгенерировать 4 варианта'}
                   </Button>
                 </div>
+                {generating && (
+                  <WaitingIndicator hint="Обычно занимает 10–30 секунд" />
+                )}
                 {candidates.length > 0 && !generating && persona && (
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, maxWidth: 220 }}>
                     {candidates.map(file => {
@@ -581,8 +585,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                     })}
                   </div>
                 )}
-                {avatarError && (
-                  <span style={{ fontSize: 12, color: C.dangerText, fontFamily: FONT.sans }}>{avatarError}</span>
+                {(avatarGenError || selectError) && (
+                  <span style={{ fontSize: 12, color: C.dangerText, fontFamily: FONT.sans }}>{avatarGenError || selectError}</span>
                 )}
               </>
             )}
@@ -641,17 +645,17 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       <div style={{
         position: 'sticky', top: 0, zIndex: 2, background: C.bgMain,
         margin: '0 0 12px', padding: '8px 0', borderBottom: `1px solid ${C.borderLight}`,
-        display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end',
+        display: 'flex', flexDirection: 'column', gap: 8,
       }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, position: 'relative' }}>
-          <Button variant="ghostAccent" size="sm" loading={aiAction === 'generate'} disabled={!!aiAction}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', position: 'relative' }}>
+          <Button variant="ghostAccent" size="sm" disabled={characterBusy}
             onClick={() => setAiPopover(v => v === 'generate' ? null : 'generate')}>
-            {aiAction === 'generate' ? 'Генерирую…' : '✨ Сгенерировать'}
+            ✨ Сгенерировать
           </Button>
           {contractFilled && (
-            <Button variant="ghostAccent" size="sm" loading={aiAction === 'improve'} disabled={!!aiAction}
+            <Button variant="ghostAccent" size="sm" disabled={characterBusy}
               onClick={() => setAiPopover(v => v === 'improve' ? null : 'improve')}>
-              {aiAction === 'improve' ? 'Улучшаю…' : '✨ Улучшить'}
+              ✨ Улучшить
             </Button>
           )}
           {/* Общий поповер обоих режимов: необязательный уточняющий промпт + запуск */}
@@ -671,11 +675,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                   placeholder={aiPopover === 'generate'
                     ? 'Например: ироничный наставник, любит метафоры'
                     : 'Например: добавить строгости'}
-                  onEnter={() => void runAiCharacter(aiPopover)} />
+                  onEnter={() => runAiCharacter(aiPopover)} />
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <Button variant="primary" size="sm" loading={!!aiAction} disabled={!!aiAction}
+                  <Button variant="primary" size="sm" loading={characterBusy} disabled={characterBusy}
                     onClick={() => runAiCharacter(aiPopover)}>
-                    {aiAction ? (aiPopover === 'generate' ? 'Генерирую…' : 'Улучшаю…')
+                    {characterBusy ? (aiPopover === 'generate' ? 'Генерирую…' : 'Улучшаю…')
                       : (aiPopover === 'generate' ? 'Сгенерировать' : 'Улучшить')}
                   </Button>
                 </div>
@@ -683,6 +687,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             </>
           )}
         </div>
+        {characterBusy && (
+          <WaitingIndicator hint={aiPopover === 'improve' ? 'Улучшаю характер персоны' : 'Придумываю характер персоны'} />
+        )}
       </div>
 
       {/* Слот «Характер»: манера общения свободным текстом + плейсхолдер-скелет при пустом */}

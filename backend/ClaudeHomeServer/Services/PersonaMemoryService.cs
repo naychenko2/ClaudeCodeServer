@@ -289,8 +289,9 @@ public sealed class PersonaMemoryService
 
     // Markdown-блок памяти для системного промпта хода (auto-recall персоны).
     // Рабочий фокус (если есть) — всегда первым блоком, без скоринга; при фокусе
-    // результат не-null даже без хитов. Text=null — нечего подмешивать / память выключена.
-    public async Task<PersonaRecallResult> BuildRecallAsync(string ownerId, string personaId, string query,
+    // результат не-null даже без хитов. null — персона не найдена / память выключена;
+    // Text=null — память включена, но подмешивать нечего.
+    public async Task<PersonaRecallResult?> BuildRecallAsync(string ownerId, string personaId, string query,
         int topK, double minScore)
     {
         var persona = _personas.Get(personaId, ownerId);

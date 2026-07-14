@@ -45,6 +45,11 @@ public class PersonaPipelineService(
         if (string.IsNullOrWhiteSpace(task))
             throw new InvalidOperationException("Пустая задача конвейера");
 
+        // Явные слоты валидируются синхронно — контроллер вернёт 400, а не тихую подмену роли
+        foreach (var slotId in new[] { analystId, plannerId, reviewerId, executorId })
+            if (!string.IsNullOrEmpty(slotId) && personas.Get(slotId, ownerId) is null)
+                throw new InvalidOperationException($"Персона слота не найдена: {slotId}");
+
         var handle = new PipelineHandle { Cts = new CancellationTokenSource() };
         if (!_active.TryAdd(sessionId, handle))
         {
@@ -89,13 +94,15 @@ public class PersonaPipelineService(
     // Слоты ролей конвейера (все опциональны — см. Start)
     private sealed record PipelineSlots(string? AnalystId, string? PlannerId, string? ReviewerId, string? ExecutorId);
 
-    // Резолв роли: 1) явно указанная персона; 2) первая с нужной Specialty у владельца;
-    // 3) дефолт-роль каталога OmO (материализуется идемпотентно). Конвейер НЕ привязан к OmO —
-    // каталог лишь источник ролей по умолчанию, когда нет подходящей спец-персоны (A).
+    // Резолв роли: 1) явно указанная персона (не найдена — ошибка, тихо подменять исполнителя
+    // нельзя); 2) первая с нужной Specialty у владельца; 3) дефолт-роль каталога OmO
+    // (материализуется идемпотентно). Конвейер НЕ привязан к OmO — каталог лишь источник
+    // ролей по умолчанию, когда нет подходящей спец-персоны (A).
     private Persona ResolveRole(string ownerId, PersonaSpecialty specialty, string omoKey, string? explicitId)
     {
-        if (!string.IsNullOrEmpty(explicitId) && personas.Get(explicitId, ownerId) is { } explicitP)
-            return explicitP;
+        if (!string.IsNullOrEmpty(explicitId))
+            return personas.Get(explicitId, ownerId)
+                ?? throw new InvalidOperationException($"Персона слота не найдена: {explicitId}");
         var bySpec = personas.GetByOwner(ownerId).FirstOrDefault(p => p.Specialty == specialty);
         if (bySpec is not null) return bySpec;
         return personas.ConnectPantheon(ownerId, [omoKey]).First(p => p.TemplateKey == omoKey);

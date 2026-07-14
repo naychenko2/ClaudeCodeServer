@@ -13,11 +13,14 @@ namespace ClaudeHomeServer.Services;
 //
 // Первая подсистема на SQLite. WAL + busy_timeout — конкурентные записи (одновременные ходы,
 // задачи) не падают с «database is locked»; записи сериализуются локом дополнительно.
-public class ProjectEventLogService
+public class ProjectEventLogService : IDisposable
 {
     private readonly string _connStr;
     private readonly Lock _writeLock = new();
     private readonly ILogger<ProjectEventLogService>? _log;
+    // Ретенция append-only лога: события старше порога прунятся, иначе БД растёт бесконечно
+    private readonly int _retentionDays;
+    private DateTime _lastPruneUtc = DateTime.MinValue;
 
     public ProjectEventLogService(IConfiguration config, ILogger<ProjectEventLogService>? log = null)
     {
@@ -27,6 +30,7 @@ public class ProjectEventLogService
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
             ?? Path.Combine(AppContext.BaseDirectory, "data");
         Directory.CreateDirectory(dataDir);
+        _retentionDays = int.TryParse(config["ProjectEventsRetentionDays"], out var rd) && rd > 0 ? rd : 90;
         var dbPath = config["ProjectEventsDbPath"] ?? Path.Combine(dataDir, "project-events.db");
         _connStr = new SqliteConnectionStringBuilder
         {
@@ -68,8 +72,14 @@ public class ProjectEventLogService
     {
         var c = new SqliteConnection(_connStr);
         c.Open();
+        // busy_timeout — параметр соединения, а не БД: ставим на каждом (Init покрывал только своё)
+        Exec(c, "PRAGMA busy_timeout=5000;");
         return c;
     }
+
+    // Пул Microsoft.Data.Sqlite держит файл БД открытым и после закрытия соединений —
+    // освобождаем при остановке хоста (иначе каталог данных не удалить: тесты, переезд).
+    public void Dispose() => SqliteConnection.ClearPool(new SqliteConnection(_connStr));
 
     private static void Exec(SqliteConnection c, string sql)
     {
@@ -112,6 +122,8 @@ public class ProjectEventLogService
                 cmd.Parameters.AddWithValue("@summary", ev.Summary);
                 cmd.Parameters.AddWithValue("@ref", (object?)ev.EntityRef ?? DBNull.Value);
                 ev.Id = (long)cmd.ExecuteScalar()!;
+
+                PruneIfDue(c);
             }
             catch (Exception ex)
             {
@@ -120,6 +132,25 @@ public class ProjectEventLogService
             }
         }
         return ev;
+    }
+
+    // Ленивый прунинг (под _writeLock, на живом соединении): не чаще раза в сутки удаляем
+    // события старше ретенции — лента и дайджест смотрят только на недавнее.
+    private void PruneIfDue(SqliteConnection c)
+    {
+        var now = DateTime.UtcNow;
+        if (now - _lastPruneUtc < TimeSpan.FromHours(24)) return;
+        _lastPruneUtc = now;
+        try
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "DELETE FROM project_events WHERE ts < @cutoff;";
+            cmd.Parameters.AddWithValue("@cutoff", now.AddDays(-_retentionDays).ToString("O"));
+            var removed = cmd.ExecuteNonQuery();
+            if (removed > 0)
+                _log?.LogInformation("Лог событий: удалено {Count} записей старше {Days} дн.", removed, _retentionDays);
+        }
+        catch (Exception ex) { _log?.LogWarning(ex, "Прунинг лога событий не удался"); }
     }
 
     // Лента событий проекта (свежие сверху). Фильтры опциональны. limit ограничен [1..500].

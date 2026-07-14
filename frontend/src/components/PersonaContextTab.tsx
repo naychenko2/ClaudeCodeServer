@@ -3,7 +3,7 @@ import { Brain, Calendar, Cog, BookOpen, FileText, Users } from 'lucide-react';
 import { api } from '../lib/api';
 import { usePersonas, personaLabel } from '../lib/personas';
 import { useRecallManifest } from '../lib/recallManifest';
-import type { PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Task } from '../types';
+import type { PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Task, TeamMemoryEntry } from '../types';
 import { C, FONT, R, SHADOW } from '../lib/design';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { BINDING_ICONS, useBindingLabels } from '../features/personas/bindingMeta';
@@ -17,6 +17,8 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
   const usedNow = useRecallManifest(sessionId ?? null);
   const [mem, setMem] = useState<PersonaMemoryEntry[] | null>(null);
   const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [teamMem, setTeamMem] = useState<TeamMemoryEntry[] | null>(null);
+  const projectId = persona?.scope === 'project' ? persona.projectId : undefined;
 
   useEffect(() => {
     let alive = true;
@@ -25,6 +27,16 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
     api.tasks.listByPersona(personaId).then(t => { if (alive) setTasks(t); }).catch(() => { if (alive) setTasks([]); });
     return () => { alive = false; };
   }, [personaId]);
+
+  // Память команды проекта (③-3.4) — только у проектных персон, отдельный запрос
+  // (данные общие для всех персон проекта, не персональные)
+  useEffect(() => {
+    let alive = true;
+    setTeamMem(null);
+    if (!projectId) { setTeamMem([]); return; }
+    api.projects.teamMemory(projectId).then(t => { if (alive) setTeamMem(t); }).catch(() => { if (alive) setTeamMem([]); });
+    return () => { alive = false; };
+  }, [projectId]);
 
   if (!persona) {
     return <div style={emptyStyle}>Персона не найдена.</div>;
@@ -59,12 +71,21 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
         </Section>
       )}
 
-      <Section title={`Память${memoryAll.length ? ` · ${memoryAll.length}` : ''}`}>
+      <Section title={`Память${memoryAll.length + (teamMem?.length ?? 0) ? ` · ${memoryAll.length + (teamMem?.length ?? 0)}` : ''}`}>
         {memoryAll.length === 0 ? (
           mem === null ? <Skeleton /> : <Muted>Пока ничего не запомнено.</Muted>
         ) : (
           <ExpandableRows items={memoryAll} previewCount={5}
             renderRow={m => <Row key={m.id} icon={memoryIcon(m.type)}>{m.text}</Row>} />
+        )}
+        {projectId && (teamMem === null || teamMem.length > 0) && (
+          <>
+            <div style={subsectionTitle}>Команда проекта{teamMem ? ` · ${teamMem.length}` : ''}</div>
+            {teamMem === null ? <Skeleton /> : (
+              <ExpandableRows items={teamMem} previewCount={5}
+                renderRow={e => <Row key={e.id} icon={<Users size={13} color={C.accent} />}>{e.text}</Row>} />
+            )}
+          </>
         )}
       </Section>
 
@@ -160,6 +181,10 @@ const emptyStyle: CSSProperties = { padding: 16, color: C.textMuted, fontFamily:
 const sectionCard: CSSProperties = { background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, boxShadow: SHADOW.card, padding: '12px 14px' };
 const sectionTitle: CSSProperties = { fontSize: 11, fontWeight: 700, color: C.textSecondary, fontFamily: FONT.sans, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 };
 const rowTextStyle: CSSProperties = { fontSize: 12.5, color: C.textPrimary, fontFamily: FONT.sans, lineHeight: 1.45, flex: 1, minWidth: 0 };
+const subsectionTitle: CSSProperties = {
+  fontSize: 10.5, fontWeight: 700, color: C.textMuted, fontFamily: FONT.sans,
+  textTransform: 'uppercase', letterSpacing: '0.03em', margin: '10px 0 6px',
+};
 const showMoreStyle: CSSProperties = {
   alignSelf: 'flex-start', border: 'none', background: 'none', padding: 0, marginTop: 2,
   fontSize: 12, fontFamily: FONT.sans, color: C.accent, cursor: 'pointer',

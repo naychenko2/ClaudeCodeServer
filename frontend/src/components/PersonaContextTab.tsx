@@ -1,11 +1,12 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { Brain, Calendar, Cog, BookOpen, FileText, Folder, Users, Sparkles } from 'lucide-react';
+import { Brain, Calendar, Cog, BookOpen, FileText, Users } from 'lucide-react';
 import { api } from '../lib/api';
 import { usePersonas, personaLabel } from '../lib/personas';
 import { useRecallManifest } from '../lib/recallManifest';
 import type { PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Task } from '../types';
 import { C, FONT, R, SHADOW } from '../lib/design';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
+import { BINDING_ICONS, useBindingLabels } from '../features/personas/bindingMeta';
 
 // Вкладка «Контекст персоны» в ArtifactsPanel (①-L2a + ①-L2b): показывает рядом с чатом то,
 // что делает персону «не stateless» — долгую память, привязанные знания и активные задачи,
@@ -33,6 +34,7 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
   const activeAll = (tasks ?? []).filter(t => t.status !== 'done');
   // Все 6 типов привязок (не только источники знаний — Tool/Skill тоже «то, что персона знает»)
   const bindings = persona.bindings ?? [];
+  const resolveBindingLabel = useBindingLabels(bindings);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '4px 2px' }}>
@@ -69,7 +71,7 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
       <Section title={`Знает${bindings.length ? ` · ${bindings.length}` : ''}`}>
         {bindings.length === 0 ? <Muted>Нет привязанных источников и правил.</Muted> : (
           <ExpandableRows items={bindings} previewCount={5}
-            renderRow={b => <Row key={b.id} icon={bindingIcon(b.type)}>{b.condition || bindingLabel(b)}</Row>} />
+            renderRow={b => <Row key={b.id} icon={bindingIcon(b.type)}>{b.condition || resolveBindingLabel(b)}</Row>} />
         )}
       </Section>
 
@@ -89,9 +91,11 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
 }
 
 function recallIcon(kind: string) {
+  // team — память команды проекта (③-3.4): выделена акцентным цветом, а не общим info,
+  // чтобы отличаться от личной памяти/заметок персоны с первого взгляда
+  if (kind === 'team') return <Users size={13} color={C.accent} />;
   if (kind === 'memory') return <Brain size={13} color={C.info} />;
   if (kind === 'note') return <BookOpen size={13} color={C.info} />;
-  if (kind === 'team') return <Users size={13} color={C.info} />;
   return <FileText size={13} color={C.info} />;
 }
 function memoryIcon(t: PersonaMemoryType) {
@@ -99,23 +103,9 @@ function memoryIcon(t: PersonaMemoryType) {
   if (t === 'episodic') return <Calendar size={13} color={C.info} />;
   return <Cog size={13} color={C.info} />;
 }
-function bindingIcon(type: string) {
-  if (type === 'knowledge') return <BookOpen size={13} color={C.textMuted} />;
-  if (type === 'notes') return <FileText size={13} color={C.textMuted} />;
-  if (type === 'tool') return <Cog size={13} color={C.textMuted} />;
-  if (type === 'skill') return <Sparkles size={13} color={C.textMuted} />;
-  return <Folder size={13} color={C.textMuted} />; // project / projectPath
-}
-function bindingLabel(b: PersonaBinding): string {
-  switch (b.type) {
-    case 'knowledge': return 'база';
-    case 'notes': return 'заметки';
-    case 'project': return 'проект';
-    case 'projectPath': return 'путь';
-    case 'tool': return 'инструмент';
-    case 'skill': return 'навык';
-    default: return b.type;
-  }
+// Те же иконки/цвета типов, что и в редакторе привязок (bindingMeta) — консистентность
+function bindingIcon(type: PersonaBinding['type']) {
+  return <span style={{ display: 'flex', color: C.textMuted }}>{BINDING_ICONS[type](13)}</span>;
 }
 
 // Список с раскрытием: по умолчанию первые previewCount, остальные — по клику «ещё N».

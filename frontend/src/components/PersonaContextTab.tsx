@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { Brain, Calendar, Cog, BookOpen, FileText, Folder, Users } from 'lucide-react';
+import { Brain, Calendar, Cog, BookOpen, FileText, Folder, Users, Sparkles } from 'lucide-react';
 import { api } from '../lib/api';
 import { usePersonas, personaLabel } from '../lib/personas';
 import { useRecallManifest } from '../lib/recallManifest';
@@ -29,10 +29,10 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
     return <div style={emptyStyle}>Персона не найдена.</div>;
   }
 
-  const memory = (mem ?? []).slice(0, 6);
-  const active = (tasks ?? []).filter(t => t.status !== 'done').slice(0, 6);
-  const knowledge = (persona.bindings ?? []).filter(b =>
-    b.type === 'knowledge' || b.type === 'notes' || b.type === 'project' || b.type === 'projectPath');
+  const memoryAll = mem ?? [];
+  const activeAll = (tasks ?? []).filter(t => t.status !== 'done');
+  // Все 6 типов привязок (не только источники знаний — Tool/Skill тоже «то, что персона знает»)
+  const bindings = persona.bindings ?? [];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '4px 2px' }}>
@@ -57,31 +57,31 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
         </Section>
       )}
 
-      <Section title={`Память${mem && mem.length ? ` · ${mem.length}` : ''}`}>
-        {memory.length === 0 ? (
+      <Section title={`Память${memoryAll.length ? ` · ${memoryAll.length}` : ''}`}>
+        {memoryAll.length === 0 ? (
           mem === null ? <Skeleton /> : <Muted>Пока ничего не запомнено.</Muted>
         ) : (
-          memory.map(m => (
-            <Row key={m.id} icon={memoryIcon(m.type)}>{m.text}</Row>
-          ))
+          <ExpandableRows items={memoryAll} previewCount={5}
+            renderRow={m => <Row key={m.id} icon={memoryIcon(m.type)}>{m.text}</Row>} />
         )}
       </Section>
 
-      <Section title={`Знает${knowledge.length ? ` · ${knowledge.length}` : ''}`}>
-        {knowledge.length === 0 ? <Muted>Нет привязанных источников.</Muted> : knowledge.map(b => (
-          <Row key={b.id} icon={bindingIcon(b.type)}>{b.condition || bindingLabel(b)}</Row>
-        ))}
+      <Section title={`Знает${bindings.length ? ` · ${bindings.length}` : ''}`}>
+        {bindings.length === 0 ? <Muted>Нет привязанных источников и правил.</Muted> : (
+          <ExpandableRows items={bindings} previewCount={5}
+            renderRow={b => <Row key={b.id} icon={bindingIcon(b.type)}>{b.condition || bindingLabel(b)}</Row>} />
+        )}
       </Section>
 
-      <Section title={`Задачи${active.length ? ` · ${active.length}` : ''}`}>
-        {active.length === 0 ? (
+      <Section title={`Задачи${activeAll.length ? ` · ${activeAll.length}` : ''}`}>
+        {activeAll.length === 0 ? (
           tasks === null ? <Skeleton /> : <Muted>Нет активных задач.</Muted>
         ) : (
-          active.map(t => (
+          <ExpandableRows items={activeAll} previewCount={5} renderRow={t => (
             <Row key={t.id} icon={<span style={{ width: 8, height: 8, borderRadius: '50%', background: C.accent, flexShrink: 0, marginTop: 4 }} />}>
               {t.title}{t.dueDate ? <span style={{ color: C.textMuted }}> · до {t.dueDate}</span> : null}
             </Row>
-          ))
+          )} />
         )}
       </Section>
     </div>
@@ -102,10 +102,40 @@ function memoryIcon(t: PersonaMemoryType) {
 function bindingIcon(type: string) {
   if (type === 'knowledge') return <BookOpen size={13} color={C.textMuted} />;
   if (type === 'notes') return <FileText size={13} color={C.textMuted} />;
-  return <Folder size={13} color={C.textMuted} />;
+  if (type === 'tool') return <Cog size={13} color={C.textMuted} />;
+  if (type === 'skill') return <Sparkles size={13} color={C.textMuted} />;
+  return <Folder size={13} color={C.textMuted} />; // project / projectPath
 }
 function bindingLabel(b: PersonaBinding): string {
-  return b.type === 'knowledge' ? 'база' : b.type === 'notes' ? 'заметки' : b.type === 'project' ? 'проект' : 'путь';
+  switch (b.type) {
+    case 'knowledge': return 'база';
+    case 'notes': return 'заметки';
+    case 'project': return 'проект';
+    case 'projectPath': return 'путь';
+    case 'tool': return 'инструмент';
+    case 'skill': return 'навык';
+    default: return b.type;
+  }
+}
+
+// Список с раскрытием: по умолчанию первые previewCount, остальные — по клику «ещё N».
+function ExpandableRows<T>({ items, previewCount, renderRow }: {
+  items: T[]; previewCount: number; renderRow: (item: T) => React.ReactElement;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? items : items.slice(0, previewCount);
+  const hiddenCount = items.length - shown.length;
+  return (
+    <>
+      {shown.map(renderRow)}
+      {hiddenCount > 0 && (
+        <button type="button" onClick={() => setExpanded(true)} style={showMoreStyle}>ещё {hiddenCount}</button>
+      )}
+      {expanded && items.length > previewCount && (
+        <button type="button" onClick={() => setExpanded(false)} style={showMoreStyle}>Свернуть</button>
+      )}
+    </>
+  );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -140,6 +170,10 @@ const emptyStyle: CSSProperties = { padding: 16, color: C.textMuted, fontFamily:
 const sectionCard: CSSProperties = { background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, boxShadow: SHADOW.card, padding: '12px 14px' };
 const sectionTitle: CSSProperties = { fontSize: 11, fontWeight: 700, color: C.textSecondary, fontFamily: FONT.sans, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 };
 const rowTextStyle: CSSProperties = { fontSize: 12.5, color: C.textPrimary, fontFamily: FONT.sans, lineHeight: 1.45, flex: 1, minWidth: 0 };
+const showMoreStyle: CSSProperties = {
+  alignSelf: 'flex-start', border: 'none', background: 'none', padding: 0, marginTop: 2,
+  fontSize: 12, fontFamily: FONT.sans, color: C.accent, cursor: 'pointer',
+};
 function skeletonBar(w: number): CSSProperties {
   return { height: 11, width: `${w}%`, background: C.bgInset, borderRadius: R.sm, opacity: 0.6 };
 }

@@ -193,11 +193,12 @@
 
   .icon{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
 
-  /* hero */
+  /* hero — единая шапка: текст слева, компактная карточка возможностей справа */
   .hub-hero{
-    display:flex;align-items:flex-start;justify-content:space-between;gap:40px;
+    display:flex;align-items:stretch;justify-content:space-between;gap:32px;flex-wrap:wrap;
     padding-bottom:26px;border-bottom:1px solid var(--border-light-alt);margin-bottom:28px;
   }
+  .hero-text{flex:1;min-width:320px;}
   .hero-eyebrow{
     font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;letter-spacing:1.5px;
     color:var(--accent);text-transform:uppercase;margin-bottom:10px;
@@ -298,7 +299,7 @@
   .gen-actions{display:flex;flex-direction:column;gap:8px;flex:none;}
   .gen-note{font-size:11px;color:var(--text-secondary-alt);margin-top:8px;padding-left:2px;font-style:italic;}
 
-  /* витрина команды */
+  /* твои помощники — витрина */
   .showcase-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
   .showcase-card{
     position:relative;display:flex;flex-direction:column;gap:9px;background:var(--bg-white);
@@ -364,18 +365,21 @@
   .template-name{font-size:10.5px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .template-owned-tag{font-size:9.5px;color:var(--success-alt);font-weight:700;margin-top:1px;}
 
-  /* возможности */
-  .cap-strip{
-    display:grid;grid-template-columns:repeat(5,1fr);gap:18px;
-    border-top:1px solid var(--border-light-alt);padding-top:26px;
+  /* возможности — теперь компактной карточкой в шапке, справа от hero-текста */
+  .hero-caps{
+    flex:none;width:300px;align-self:stretch;background:var(--bg-white);
+    border:1px solid var(--border-light-alt);border-radius:14px;padding:16px 18px;
+    box-shadow:var(--shadow-card);display:flex;flex-direction:column;gap:11px;
   }
-  .cap-item{display:flex;flex-direction:column;gap:9px;}
-  .cap-icon{
-    width:34px;height:34px;border-radius:10px;background:var(--bg-panel);color:var(--text-muted);
-    display:flex;align-items:center;justify-content:center;
+  .hero-caps-label{
+    font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:600;letter-spacing:.5px;
+    color:var(--text-secondary-alt);text-transform:uppercase;margin-bottom:1px;
   }
-  .cap-title{font-size:13px;font-weight:700;}
-  .cap-desc{font-size:11.8px;color:var(--text-muted);line-height:1.5;}
+  .hero-cap-row{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text-muted);line-height:1.35;}
+  .cap-icon-sm{
+    width:26px;height:26px;border-radius:8px;background:var(--bg-panel);color:var(--text-muted);
+    display:flex;align-items:center;justify-content:center;flex:none;
+  }
 
   /* toast */
   .toast{
@@ -503,20 +507,106 @@
     <!-- ===================== ХАБ / КОНТЕНТ ===================== -->
     <main class="content">
 
-      <!-- HERO -->
+      <!-- HERO: единая шапка — текст слева, компактная карточка «что умеет персона» справа -->
       <div class="hub-hero">
         <div class="hero-text">
           <div class="hero-eyebrow">Персоны</div>
-          <h1>Команда ИИ-агентов со своим характером</h1>
-          <p>Персона — не ещё один режим чата, а участник команды: у неё есть роль, характер, память о прошлых разговорах и свои инструменты. Разговаривай с ней как с коллегой, поручай задачи и зови на совещание вместе с другими персонами.</p>
+          <h1>Твои помощники со своим характером</h1>
+          <p>Персона — не ещё один режим чата, а помощник со своим лицом: у неё есть роль, характер, память о прошлых разговорах и свои инструменты. Разговаривай с ней как с коллегой, поручай задачи и зови на совещание вместе с другими персонами.</p>
+        </div>
+        <div class="hero-caps">
+          <div class="hero-caps-label">Что умеет персона</div>
+          <div class="hero-cap-row"><span class="cap-icon-sm"><svg class="icon" width="14" height="14"><use href="#i-brain"/></svg></span>Помнит факты между разговорами</div>
+          <div class="hero-cap-row"><span class="cap-icon-sm"><svg class="icon" width="14" height="14"><use href="#i-tasks"/></svg></span>Может быть исполнителем задач</div>
+          <div class="hero-cap-row"><span class="cap-icon-sm"><svg class="icon" width="14" height="14"><use href="#i-bolt"/></svg></span>Реагирует на события сама</div>
+          <div class="hero-cap-row"><span class="cap-icon-sm"><svg class="icon" width="14" height="14"><use href="#i-group"/></svg></span>Групповые чаты и совещания</div>
+          <div class="hero-cap-row"><span class="cap-icon-sm"><svg class="icon" width="14" height="14"><use href="#i-at"/></svg></span>Персоны спрашивают друг друга</div>
         </div>
       </div>
 
       <div class="hub-grid">
         <div class="hub-main">
 
-          <!-- НОВАЯ ПЕРСОНА (быстрые действия + шаблоны) -->
+          <!-- ТВОИ ПОМОЩНИКИ (витрина) — поднята выше, первой в колонке -->
           <div class="section">
+            <div class="section-head">
+              <div>
+                <h2>Твои помощники</h2>
+                <div class="section-sub">Все твои персоны — кликни, чтобы поговорить</div>
+              </div>
+            </div>
+            <div class="showcase-grid">
+
+              <div class="showcase-card" data-title="Ревьюер (Марк)">
+                <div class="showcase-top">
+                  <div class="avatar c-orange" style="width:40px;height:40px;border-radius:12px;font-size:16px;">М</div>
+                  <div>
+                    <div class="showcase-name">Ревьюер (Марк)</div>
+                    <div class="showcase-handle">@mark</div>
+                  </div>
+                </div>
+                <div class="showcase-desc">Проверяет код, ищет пропущенные edge-case'ы и лишние console.log.</div>
+                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
+              </div>
+
+              <div class="showcase-card" data-title="Секретарь (Полина)">
+                <div class="showcase-top">
+                  <div class="avatar c-teal" style="width:40px;height:40px;border-radius:12px;font-size:16px;">П</div>
+                  <div>
+                    <div class="showcase-name">Секретарь (Полина)</div>
+                    <div class="showcase-handle">@polina</div>
+                  </div>
+                </div>
+                <div class="showcase-desc">Ведёт расписание, готовит повестки и напоминает о встречах.</div>
+                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
+              </div>
+
+              <div class="showcase-card" data-title="Оркестратор (Сизиф)">
+                <div class="showcase-top">
+                  <div class="avatar c-green" style="width:40px;height:40px;border-radius:12px;font-size:16px;">С</div>
+                  <div>
+                    <div class="showcase-name">Оркестратор (Сизиф)</div>
+                    <div class="showcase-handle">@sizif</div>
+                  </div>
+                </div>
+                <div class="showcase-desc">Распределяет задачи между помощниками и следит за прогрессом.</div>
+                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
+              </div>
+
+              <div class="showcase-card" data-title="Мастер (Гефест)">
+                <div class="showcase-top">
+                  <div class="avatar c-brown" style="width:40px;height:40px;border-radius:12px;font-size:16px;">Г</div>
+                  <div>
+                    <div class="showcase-name">Мастер (Гефест)</div>
+                    <div class="showcase-handle">@gefest</div>
+                  </div>
+                </div>
+                <div class="showcase-desc">Пишет и правит код, выполняет техническую работу руками.</div>
+                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
+              </div>
+
+              <div class="showcase-card" data-title="Планировщик (Прометей)">
+                <div class="showcase-top">
+                  <div class="avatar c-blue" style="width:40px;height:40px;border-radius:12px;font-size:16px;">П</div>
+                  <div>
+                    <div class="showcase-name">Планировщик (Прометей)</div>
+                    <div class="showcase-handle">@prometey</div>
+                  </div>
+                </div>
+                <div class="showcase-desc">Раскладывает большую задачу на понятный план шагов.</div>
+                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
+              </div>
+
+              <div class="showcase-add" id="showcaseAdd">
+                <svg class="icon" width="20" height="20"><use href="#i-plus"/></svg>
+                <span>Новая персона</span>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- НОВАЯ ПЕРСОНА (быстрые действия + шаблоны) -->
+          <div class="section" style="margin-bottom:0;">
             <div class="section-head">
               <div>
                 <h2>Новая персона</h2>
@@ -618,84 +708,6 @@
             </div>
           </div>
 
-          <!-- ВИТРИНА КОМАНДЫ -->
-          <div class="section" style="margin-bottom:0;">
-            <div class="section-head">
-              <div>
-                <h2>Витрина команды</h2>
-                <div class="section-sub">Все ваши персоны — кликните, чтобы поговорить</div>
-              </div>
-            </div>
-            <div class="showcase-grid">
-
-              <div class="showcase-card" data-title="Ревьюер (Марк)">
-                <div class="showcase-top">
-                  <div class="avatar c-orange" style="width:40px;height:40px;border-radius:12px;font-size:16px;">М</div>
-                  <div>
-                    <div class="showcase-name">Ревьюер (Марк)</div>
-                    <div class="showcase-handle">@mark</div>
-                  </div>
-                </div>
-                <div class="showcase-desc">Проверяет код, ищет пропущенные edge-case'ы и лишние console.log.</div>
-                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
-              </div>
-
-              <div class="showcase-card" data-title="Секретарь (Полина)">
-                <div class="showcase-top">
-                  <div class="avatar c-teal" style="width:40px;height:40px;border-radius:12px;font-size:16px;">П</div>
-                  <div>
-                    <div class="showcase-name">Секретарь (Полина)</div>
-                    <div class="showcase-handle">@polina</div>
-                  </div>
-                </div>
-                <div class="showcase-desc">Ведёт расписание, готовит повестки и напоминает о встречах.</div>
-                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
-              </div>
-
-              <div class="showcase-card" data-title="Оркестратор (Сизиф)">
-                <div class="showcase-top">
-                  <div class="avatar c-green" style="width:40px;height:40px;border-radius:12px;font-size:16px;">С</div>
-                  <div>
-                    <div class="showcase-name">Оркестратор (Сизиф)</div>
-                    <div class="showcase-handle">@sizif</div>
-                  </div>
-                </div>
-                <div class="showcase-desc">Распределяет задачи по команде и следит за прогрессом.</div>
-                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
-              </div>
-
-              <div class="showcase-card" data-title="Мастер (Гефест)">
-                <div class="showcase-top">
-                  <div class="avatar c-brown" style="width:40px;height:40px;border-radius:12px;font-size:16px;">Г</div>
-                  <div>
-                    <div class="showcase-name">Мастер (Гефест)</div>
-                    <div class="showcase-handle">@gefest</div>
-                  </div>
-                </div>
-                <div class="showcase-desc">Пишет и правит код, выполняет техническую работу руками.</div>
-                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
-              </div>
-
-              <div class="showcase-card" data-title="Планировщик (Прометей)">
-                <div class="showcase-top">
-                  <div class="avatar c-blue" style="width:40px;height:40px;border-radius:12px;font-size:16px;">П</div>
-                  <div>
-                    <div class="showcase-name">Планировщик (Прометей)</div>
-                    <div class="showcase-handle">@prometey</div>
-                  </div>
-                </div>
-                <div class="showcase-desc">Раскладывает большую задачу на понятный план шагов.</div>
-                <div class="showcase-talk">Поговорить <svg class="icon" width="12" height="12"><use href="#i-arrow"/></svg></div>
-              </div>
-
-              <div class="showcase-add" id="showcaseAdd">
-                <svg class="icon" width="20" height="20"><use href="#i-plus"/></svg>
-                <span>Новая персона</span>
-              </div>
-
-            </div>
-          </div>
-
         </div>
 
         <!-- АКТИВНОСТЬ (правая колонка на десктопе) -->
@@ -777,43 +789,6 @@
         </aside>
       </div>
 
-      <!-- ВОЗМОЖНОСТИ -->
-      <div class="section" style="margin-bottom:8px;">
-        <div class="section-head">
-          <div>
-            <h2>Что умеет персона</h2>
-            <div class="section-sub">Не просто чат — полноценный участник команды</div>
-          </div>
-        </div>
-        <div class="cap-strip">
-          <div class="cap-item">
-            <div class="cap-icon"><svg class="icon" width="17" height="17"><use href="#i-brain"/></svg></div>
-            <div class="cap-title">Память</div>
-            <div class="cap-desc">Помнит факты, события и рабочий фокус между разговорами.</div>
-          </div>
-          <div class="cap-item">
-            <div class="cap-icon"><svg class="icon" width="17" height="17"><use href="#i-tasks"/></svg></div>
-            <div class="cap-title">Задачи</div>
-            <div class="cap-desc">Может быть исполнителем: берёт задачу и ведёт её до готово.</div>
-          </div>
-          <div class="cap-item">
-            <div class="cap-icon"><svg class="icon" width="17" height="17"><use href="#i-bolt"/></svg></div>
-            <div class="cap-title">Автоматизация</div>
-            <div class="cap-desc">Правила «событие → действие» — реагирует сама, без запроса.</div>
-          </div>
-          <div class="cap-item">
-            <div class="cap-icon"><svg class="icon" width="17" height="17"><use href="#i-group"/></svg></div>
-            <div class="cap-title">Команда</div>
-            <div class="cap-desc">Групповые чаты и совещания — несколько персон обсуждают вопрос.</div>
-          </div>
-          <div class="cap-item">
-            <div class="cap-icon"><svg class="icon" width="17" height="17"><use href="#i-at"/></svg></div>
-            <div class="cap-title">@Упоминания</div>
-            <div class="cap-desc">Персоны спрашивают друг друга прямо в переписке с тобой.</div>
-          </div>
-        </div>
-      </div>
-
     </main>
   </div>
 </div>
@@ -865,7 +840,7 @@
   document.getElementById('qaCreate').addEventListener('click', toastCreate);
   document.getElementById('showcaseAdd').addEventListener('click', toastCreate);
 
-  /* ---------- витрина команды: клик по карточке ---------- */
+  /* ---------- твои помощники: клик по карточке ---------- */
   document.querySelectorAll('.showcase-card').forEach(function(card){
     card.addEventListener('click', function(){
       showToast('Открылся бы чат с «' + card.dataset.title + '»');

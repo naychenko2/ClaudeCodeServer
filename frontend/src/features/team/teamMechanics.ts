@@ -182,8 +182,8 @@ const DETECT_PREFIXES: ReadonlyArray<[string, TeamMechanicId]> = [
   [DISCUSS_PREFIX, 'discuss'],
 ];
 
-export function detectTeamMechanic(text: string): TeamMechanicId | null {
-  const trimmed = text.trimStart();
+export function detectTeamMechanic(text: string | null | undefined): TeamMechanicId | null {
+  const trimmed = (text ?? '').trimStart();
   for (const [prefix, id] of DETECT_PREFIXES)
     if (trimmed.startsWith(prefix)) return id;
   return null;

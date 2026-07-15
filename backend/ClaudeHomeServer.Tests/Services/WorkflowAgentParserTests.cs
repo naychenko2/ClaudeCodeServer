@@ -212,6 +212,21 @@ public class WorkflowAgentParserTests : IDisposable
             .Should().BeEmpty();
     }
 
+    [Fact]
+    public void ParseAgentTimeline_StructuredOutput_РазворачиваетсяВТекст()
+    {
+        var path = WriteAgentFile("so",
+            UserLine("p"),
+            ToolUseLine("StructuredOutput", """{"ok":true,"note":"агент на связи"}"""));
+
+        var blocks = WorkflowAgentParser.ParseAgentTimeline(path);
+
+        var block = blocks.Should().ContainSingle().Which;
+        block.Kind.Should().Be("text");
+        block.Text.Should().StartWith("```json").And.Contain("агент на связи");
+        block.ToolName.Should().BeNull();
+    }
+
     // ─── IsPathAllowed ───────────────────────────────────────────────────────
 
     [Fact]

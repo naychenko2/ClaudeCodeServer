@@ -302,12 +302,30 @@ public static class WorkflowAgentParser
                 case "tool_use":
                     if (block.TryGetProperty("name", out var nameEl)
                         && nameEl.GetString() is { } name && name.Length > 0)
-                        blocks.Add(new WorkflowAgentBlockDto("tool_use",
-                            ToolName: name, ToolTarget: ExtractToolTarget(block)));
+                    {
+                        // Агент со schema отдаёт итог вызовом StructuredOutput — полезное
+                        // содержимое в его input, показываем его текстом (json-блок),
+                        // а не голой строкой инструмента
+                        if (name == "StructuredOutput" && block.TryGetProperty("input", out var so)
+                            && so.ValueKind == JsonValueKind.Object)
+                            blocks.Add(new WorkflowAgentBlockDto("text",
+                                "```json\n" + PrettyJson(so) + "\n```"));
+                        else
+                            blocks.Add(new WorkflowAgentBlockDto("tool_use",
+                                ToolName: name, ToolTarget: ExtractToolTarget(block)));
+                    }
                     break;
             }
         }
     }
+
+    // Кириллица и спецсимволы без \uXXXX-эскейпов — блок показывается человеку
+    private static string PrettyJson(JsonElement el) =>
+        JsonSerializer.Serialize(el, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        });
 
     // Короткая «цель» вызова инструмента для строки таймлайна — первый осмысленный ключ input
     private static readonly string[] ToolTargetKeys =

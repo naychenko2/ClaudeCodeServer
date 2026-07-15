@@ -22,7 +22,30 @@ public class ChatHistoryService
     public Task<List<StoredMessage>> LoadAsync(string claudeSessionId)
     {
         var path = GetPath(claudeSessionId);
-        return Task.FromResult(JsonFileStore.Load<List<StoredMessage>>(path, _opts) ?? []);
+
+        // Читаем историю поэлементно, а не целиком как List<StoredMessage>: у старых чатов
+        // в history.json могут лежать записи с уже удалёнными дискриминаторами kind
+        // (например, legacy meeting_phase/pipeline_phase от выпиленных механик «Совещание»
+        // и «Конвейер»). Полиморфная десериализация System.Text.Json на неизвестном kind
+        // бросает исключение — при чтении всего массива разом пропала бы ВСЯ история чата.
+        // Поэтому сначала парсим сырые элементы, затем каждый десериализуем отдельно:
+        // неизвестные/битые записи тихо пропускаем, остальная история остаётся живой.
+        var rawItems = JsonFileStore.Load<List<JsonElement>>(path, _opts);
+        if (rawItems is null) return Task.FromResult(new List<StoredMessage>());
+
+        var messages = new List<StoredMessage>(rawItems.Count);
+        foreach (var raw in rawItems)
+        {
+            try
+            {
+                if (raw.Deserialize<StoredMessage>(_opts) is { } message)
+                    messages.Add(message);
+            }
+            // NotSupportedException — неизвестный дискриминатор kind (легаси-запись),
+            // JsonException — запись не по схеме; в обоих случаях элемент пропускаем
+            catch (Exception ex) when (ex is JsonException or NotSupportedException) { }
+        }
+        return Task.FromResult(messages);
     }
 
     public Task SaveAsync(string claudeSessionId, List<StoredMessage> messages)

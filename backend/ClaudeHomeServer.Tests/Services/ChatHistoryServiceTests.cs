@@ -72,6 +72,35 @@ public class ChatHistoryServiceTests : IDisposable
         result.Should().BeEmpty();
     }
 
+    // История старого чата с записями выпиленных механик (meeting_phase/pipeline_phase)
+    // не должна пропадать: легаси-записи с неизвестным kind тихо пропускаются,
+    // валидные сообщения вокруг них читаются как обычно
+    [Fact]
+    public async Task LoadAsync_LegacyMeetingAndPipelineEntries_SkippedButValidKept()
+    {
+        var sessionId = "legacy-session";
+        var dir = Path.Combine(_tempDir, "sessions", sessionId);
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "history.json"), """
+        [
+          { "kind": "user_message", "text": "привет" },
+          { "kind": "meeting_phase", "meetingId": "m1", "phase": "independent", "question": "q",
+            "entries": [ { "personaId": "p1", "text": "позиция", "isError": false } ] },
+          { "kind": "text", "text": "ответ" },
+          { "kind": "pipeline_phase", "pipelineId": "pl1", "phase": "plan", "task": "t",
+            "personaId": "p2", "text": "план", "round": 1 },
+          { "kind": "result", "subtype": "success", "durationMs": 100, "numTurns": 1 }
+        ]
+        """);
+
+        var loaded = await _sut.LoadAsync(sessionId);
+
+        loaded.Should().HaveCount(3, "легаси-записи пропущены, валидные остались");
+        loaded[0].Should().BeOfType<StoredUserMessage>().Which.Text.Should().Be("привет");
+        loaded[1].Should().BeOfType<StoredTextMessage>().Which.Text.Should().Be("ответ");
+        loaded[2].Should().BeOfType<StoredResultMessage>().Which.Subtype.Should().Be("success");
+    }
+
     [Fact]
     public async Task SaveAsync_OverwritesExisting()
     {

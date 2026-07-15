@@ -5,7 +5,7 @@ namespace ClaudeHomeServer.Services;
 
 // One-shot ответ персоны от её лица: слой персоны (роль + характер) + recall её долгой
 // памяти + вопрос; модель — модель персоны. Вынесен из PersonasController.Ask, чтобы
-// совещания (PersonaMeetingService) спрашивали персон без HTTP. Анти-рекурсия по
+// персон можно было спрашивать без HTTP (persona_ask из MCP персон). Анти-рекурсия по
 // построению: one-shot идёт без MCP-серверов — «спросить третью персону» изнутри нельзя.
 public sealed class PersonaAskService(
     PersonaMemoryService memory,

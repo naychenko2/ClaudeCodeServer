@@ -8,7 +8,7 @@ public class AppNotification
     public string OwnerId { get; set; } = "";
 
     // Категория для иконки/цвета/фильтрации на фронте
-    public string Kind { get; set; } = "info"; // reminder | claude | info | success | meeting
+    public string Kind { get; set; } = "info"; // reminder | claude | info | success
 
     // Подтип для точной классификации (напр. "task_reminder", "execution_completed", "briefing")
     public string Type { get; set; } = "";

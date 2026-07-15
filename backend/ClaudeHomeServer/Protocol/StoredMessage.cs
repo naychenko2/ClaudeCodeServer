@@ -14,8 +14,6 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredResultMessage), "result")]
 [JsonDerivedType(typeof(StoredFalCostMessage), "fal_cost")]
 [JsonDerivedType(typeof(StoredCompactBoundaryMessage), "compact_boundary")]
-[JsonDerivedType(typeof(StoredMeetingPhaseMessage), "meeting_phase")]
-[JsonDerivedType(typeof(StoredPipelinePhaseMessage), "pipeline_phase")]
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
 public abstract class StoredMessage { }
 
@@ -26,14 +24,14 @@ public class StoredUserMessage(string text, string[]? attachedPaths = null, bool
     public string[]? AttachedPaths { get; init; } = attachedPaths;
     // Сообщение прислано не человеком, а агентом из другой сессии (chats_send) — для пометки в UI
     public bool? ViaAgent { get; init; } = viaAgent;
-    // Персона-отправитель (chats_send из чата персоны, авто-ход конвейера/задачи) — для рендера
+    // Персона-отправитель (chats_send из чата персоны, авто-ход задачи) — для рендера
     // сообщения её лицом
     public string? SenderPersonaId { get; init; } = senderPersonaId;
     // Служебная директива механики цикла «до готово» (continuation/verification) — UI прячет
     // сырой текст за компактной плашкой вместо пузыря пользователя
     public bool? SystemDirective { get; init; } = systemDirective;
-    // Сообщение опубликовано автоматически (не человеком): совещание «Продолжить обсуждение»,
-    // план конвейера, промпт задачи. UI показывает источник (персона или стандартный значок)
+    // Сообщение опубликовано автоматически (не человеком), например промпт задачи.
+    // UI показывает источник (персона или стандартный значок)
     public bool? Auto { get; init; } = auto;
 }
 
@@ -92,37 +90,6 @@ public class StoredCompactBoundaryMessage(string trigger, int? preTokens, int? p
     public string Trigger { get; init; } = trigger;
     public int? PreTokens { get; init; } = preTokens;
     public int? PostTokens { get; init; } = postTokens;
-}
-
-// Реплика участника совещания (позиция/критика/синтез). IsError — ответить не удалось,
-// Text тогда содержит текст ошибки.
-public class MeetingEntry
-{
-    public string PersonaId { get; init; } = "";
-    public string Text { get; init; } = "";
-    public bool IsError { get; init; }
-}
-
-// Завершённая фаза совещания персон (P7): independent | attack | synthesis.
-// Пишется вне хода (AppendStoredAsync) после каждой фазы — переживает перезагрузку.
-public class StoredMeetingPhaseMessage : StoredMessage
-{
-    public string MeetingId { get; init; } = "";
-    public string Phase { get; init; } = "";
-    public string Question { get; init; } = "";
-    public List<MeetingEntry> Entries { get; init; } = [];
-}
-
-// Завершённая фаза конвейера пантеона (флаг persona-pipeline): analysis | plan | review | execute.
-// Пишется вне хода (AppendStoredAsync) после каждой фазы — переживает перезагрузку.
-public class StoredPipelinePhaseMessage : StoredMessage
-{
-    public string PipelineId { get; init; } = "";
-    public string Phase { get; init; } = "";
-    public string Task { get; init; } = "";
-    public string PersonaId { get; init; } = "";
-    public string Text { get; init; } = "";
-    public int Round { get; init; } = 1;
 }
 
 // Стоимость генерации fal.ai (фактически списанная), приходит вне хода — хранится отдельной записью

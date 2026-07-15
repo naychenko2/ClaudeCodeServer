@@ -165,34 +165,9 @@ public record SpeakerChangedMessage(string PersonaId, string Label)
 public record WorkLoopMessage(bool Active, int Iteration, int MaxIterations, string? Phase)
     : ServerMessage("work_loop");
 
-// Live-прогресс совещания персон (P7). Phase: independent | attack | synthesis —
-// с PersonaId и Status (running/done/error) построчно по персонам либо без PersonaId
-// со Status="done" (фаза завершена); финал — Phase "done" или "error" (+ Error).
-public record MeetingProgressMessage(string MeetingId, string Phase, string? PersonaId = null,
-    string? Status = null, string? Error = null)
-    : ServerMessage("meeting_progress");
-
-// Завершённая фаза совещания с содержимым (broadcast-пара StoredMeetingPhaseMessage) —
-// live-клиенты получают тексты позиций без перечитывания истории.
-public record MeetingPhaseMessage(string MeetingId, string Phase, string Question,
-    IReadOnlyList<MeetingEntry> Entries)
-    : ServerMessage("meeting_phase");
-
-// Live-прогресс конвейера пантеона (флаг persona-pipeline). Phase: analysis | plan |
-// review | execute — со Status (running/done/error); финал — Phase "done"/"error" (+ Error).
-public record PipelineProgressMessage(string PipelineId, string Phase,
-    string? Status = null, string? Error = null)
-    : ServerMessage("pipeline_progress");
-
-// Завершённая фаза конвейера с содержимым (broadcast-пара StoredPipelinePhaseMessage).
-// Round — номер круга доработки плана (1 = первый проход).
-public record PipelinePhaseMessage(string PipelineId, string Phase, string Task,
-    string PersonaId, string Text, int Round = 1)
-    : ServerMessage("pipeline_phase");
-
 // Пользовательское уведомление (напоминание о задаче, событие Claude-исполнителя и т.п.) —
 // в группу user_{userId}: открытое приложение показывает тост + сохраняет в центр уведомлений.
-// Kind — семантика для иконки/цвета: reminder | claude | info | success | meeting
+// Kind — семантика для иконки/цвета: reminder | claude | info | success
 // NotificationId — id в NotificationStore (для mark-read/delete через тост).
 // Type — подтип: task_reminder | execution_started | execution_completed | briefing | summary | ...
 public record NotificationMessage(string Title, string Body, string? Url = null,

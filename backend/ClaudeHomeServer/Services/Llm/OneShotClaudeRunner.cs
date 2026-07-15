@@ -3,7 +3,7 @@ using System.Text;
 
 namespace ClaudeHomeServer.Services.Llm;
 
-// Абстракция one-shot вызова LLM — для мокирования в тестах (совещания персон).
+// Абстракция one-shot вызова LLM — для мокирования в тестах.
 // В DI интерфейс указывает на тот же singleton OneShotClaudeRunner.
 public interface IOneShotRunner
 {

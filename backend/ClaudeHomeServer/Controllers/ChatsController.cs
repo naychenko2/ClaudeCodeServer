@@ -11,8 +11,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/chats")]
-public class ChatsController(SessionManager sessions, FileService files,
-    PersonaMeetingService meetings, PersonaPipelineService pipelines) : ControllerBase
+public class ChatsController(SessionManager sessions, FileService files) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -112,65 +111,6 @@ public class ChatsController(SessionManager sessions, FileService files,
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
-    // Совещание персон (P7, тот же флаг persona-group-chats): три фазы one-shot —
-    // независимые позиции → перекрёстная критика → синтез от ведущей. Дефолтные
-    // участники — participants группового чата; в обычном чате персоны personaIds обязателен.
-    [HttpPost("{id}/meeting")]
-    public IActionResult StartMeeting(string id, [FromBody] StartMeetingRequest req)
-    {
-        var session = sessions.GetOwned(id, UserId);
-        if (session is null) return NotFound();
-        if (string.IsNullOrWhiteSpace(req.Question))
-            return BadRequest(new { error = "Пустой вопрос совещания" });
-
-        var personaIds = req.PersonaIds is { Count: > 0 } ? req.PersonaIds : session.Participants;
-        if (personaIds is null || personaIds.Count < 2)
-            return BadRequest(new { error = "Укажите 2-4 персоны-участника совещания" });
-
-        try
-        {
-            var meetingId = meetings.Start(UserId, id, req.Question, personaIds);
-            return Ok(new { meetingId });
-        }
-        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
-        catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
-    }
-
-    [HttpPost("{id}/meeting/cancel")]
-    public IActionResult CancelMeeting(string id)
-    {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
-        meetings.Cancel(id);
-        return NoContent();
-    }
-
-    // Конвейер ролей (флаг persona-pipeline): анализ → план → ревью → авто-исполнение.
-    // Работает с любыми персонами (A): слоты опциональны, пустые резолвятся по Specialty/OmO.
-    // Запускается в любом чате владельца (проектном и вне проекта).
-    [HttpPost("{id}/pipeline")]
-    public IActionResult StartPipeline(string id, [FromBody] StartPipelineRequest req)
-    {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
-        if (string.IsNullOrWhiteSpace(req.Task))
-            return BadRequest(new { error = "Пустая задача конвейера" });
-        try
-        {
-            var pipelineId = pipelines.Start(UserId, id, req.Task,
-                req.AnalystId, req.PlannerId, req.ReviewerId, req.ExecutorId);
-            return Ok(new { pipelineId });
-        }
-        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
-        catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
-    }
-
-    [HttpPost("{id}/pipeline/cancel")]
-    public IActionResult CancelPipeline(string id)
-    {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
-        pipelines.Cancel(id);
-        return NoContent();
-    }
-
     // Цикл «до готово» (флаг work-loop): вкл/выкл автопродолжения хода до маркера
     // завершения. Работает и для проектной сессии (GetOwned резолвит владельца через проект).
     [HttpPut("{id}/loop")]
@@ -236,14 +176,4 @@ public record CreateGroupChatRequest(List<string>? PersonaIds, string Mode = "au
 
 public record SetParticipantsRequest(List<string>? PersonaIds);
 
-public record StartMeetingRequest(string Question, List<string>? PersonaIds = null);
-
 public record SetWorkLoopRequest(bool Enabled);
-
-// Слоты ролей конвейера (все опциональны): пустые резолвятся по Specialty → дефолт OmO (A)
-public record StartPipelineRequest(
-    string Task,
-    string? AnalystId = null,
-    string? PlannerId = null,
-    string? ReviewerId = null,
-    string? ExecutorId = null);

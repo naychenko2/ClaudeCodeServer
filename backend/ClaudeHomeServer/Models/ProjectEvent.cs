@@ -7,7 +7,7 @@ namespace ClaudeHomeServer.Models;
 //
 // Type — строка из фиксированного набора (см. ProjectEventTypes): chat_turn, task_created,
 // task_completed, task_spawned, task_deleted, memory_learned, knowledge_changed, note_changed,
-// team_joined, team_left, meeting, pipeline и т.п. — намеренно открытый, чтобы не плодить enum.
+// team_joined, team_left и т.п. — намеренно открытый, чтобы не плодить enum.
 // Actor — personaId / persona «Роль (Имя)» / "user" / "system".
 // EntityRef — опциональная ссылка на сущность (id сессии/задачи/памяти/датасета) для диплинка.
 public class ProjectEvent
@@ -35,6 +35,4 @@ public static class ProjectEventTypes
     public const string NoteChanged = "note_changed";        // заметка проекта создана/изменена
     public const string TeamJoined = "team_joined";          // член команды добавлен (проектная персона)
     public const string TeamLeft = "team_left";              // член команды удалён
-    public const string Meeting = "meeting";                 // совещание команды
-    public const string Pipeline = "pipeline";               // конвейер ролей
 }

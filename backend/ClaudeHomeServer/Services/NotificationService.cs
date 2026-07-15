@@ -102,7 +102,7 @@ public class NotificationService(
         }, sendPush: true);
     }
 
-    // Для системных событий (дайджест, саммари, конвейер)
+    // Для системных событий (дайджест, саммари)
     public async Task SendSystemEventAsync(string userId, string title, string body,
         string kind, string type, string url, string? tag, bool sendPush = false)
     {

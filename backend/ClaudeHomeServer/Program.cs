@@ -98,6 +98,7 @@ builder.Services.AddSingleton<SyncService>();
 builder.Services.AddSingleton<SkillsService>();
 builder.Services.AddSingleton<SkillsCliService>();
 builder.Services.AddSingleton<SkillTranslationService>();
+builder.Services.AddSingleton<PluginSkillLocalizer>();
 builder.Services.AddSingleton<SkillSuggestService>();
 builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddSingleton<ConnectionDiagnostics>();

@@ -41,9 +41,12 @@ public class SkillsController(
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
-    // Список глобальных скиллов (без привязки к проекту) — для чатов вне проекта
+    // Список глобальных скиллов (без привязки к проекту) — для чатов вне проекта.
+    // Workflow-скрипты добавляются в общий список: в композере они вызываются той же
+    // командой /имя, что и скиллы (расширяет их сам CLI).
     [HttpGet("api/skills")]
-    public IActionResult ListGlobal() => Ok(skills.GetGlobalSkills());
+    public IActionResult ListGlobal() =>
+        Ok(skills.GetGlobalSkills().Concat(skills.GetGlobalWorkflows()).ToList());
 
     // --- Реестр: поиск и установка (обёртка npx skills) ---
 

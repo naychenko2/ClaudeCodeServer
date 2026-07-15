@@ -557,7 +557,7 @@ function NoteRow({ title }: { title: string }) {
           const r = await api.notes.resolve(title);
           if (r?.note) {
             window.dispatchEvent(new CustomEvent('cc-open-url', {
-              detail: { url: `#/notes?note=${encodeURIComponent(r.note.id)}` }
+              detail: { url: `#/notes/${encodeURIComponent(r.note.id)}` }
             }));
           }
         } catch { /* заметка не найдена */ }

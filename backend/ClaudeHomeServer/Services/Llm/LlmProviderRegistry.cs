@@ -212,24 +212,9 @@ public class LlmProviderRegistry
         }
         else if (!string.IsNullOrWhiteSpace(oauthToken))
         {
-            // OAuth-токен: пишем .credentials.json — CLI сам прочитает
-            try
-            {
-                var credsPath = Path.Combine(profileDir, ".credentials.json");
-                if (!File.Exists(credsPath) ||
-                    !File.ReadAllText(credsPath).Contains(oauthToken, StringComparison.Ordinal))
-                {
-                    var creds = System.Text.Json.JsonSerializer.Serialize(new
-                    {
-                        claudeAiOauth = new { tokenType = "bearer", accessToken = oauthToken }
-                    });
-                    File.WriteAllText(credsPath, creds);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[LlmProviders] Не удалось записать .credentials.json для подписки {subKey}: {ex.Message}");
-            }
+            // Токен от claude setup-token: передаём через CLAUDE_CODE_OAUTH_TOKEN (env),
+            // изолированный профиль не видит родительский OAuth-токен основного аккаунта
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = oauthToken;
         }
         else
         {

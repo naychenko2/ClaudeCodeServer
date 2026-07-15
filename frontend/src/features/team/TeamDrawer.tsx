@@ -2,13 +2,9 @@
 // и зона настроек выбранной механики (по макету team-discuss-panel). Контролируемый
 // компонент: выбранная механика и настройки живут у родителя (Composer), сюда приходят
 // пропсами. Тему пользователь пишет в самом поле композера.
-import { useState } from 'react';
 import { C, FONT, R, SHADOW } from '../../lib/design';
-import type { PantheonTemplate, Persona } from '../../types';
+import type { Persona } from '../../types';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
-import { usePantheon, materializePantheon } from '../personas/usePantheon';
-import { agentDotColor } from '../../components/AgentSelector';
-import { showToast } from '../../lib/toast';
 import {
   TEAM_MECHANICS, teamMechanic, costEstimate,
   type TeamMechanic, type TeamMechanicId, type TeamMechanicSettings, type TeamPersonaRef,
@@ -97,13 +93,9 @@ function SLabel({ children }: { children: React.ReactNode }) {
 }
 
 export function TeamDrawer({ open, mech, settings, candidates, availableSkills, isMobile, onPick, onSettings, onClose, onResetModes }: TeamDrawerProps) {
-  // Виртуальные роли пантеона — кандидатами в участники (материализуются при выборе,
-  // как в старом диалоге дискуссии)
-  const { virtual: virtualPantheon } = usePantheon();
-  const [materializing, setMaterializing] = useState<string | null>(null);
-  // Локально материализованные роли — показываем их как обычных кандидатов
-  const [extraCandidates, setExtraCandidates] = useState<Persona[]>([]);
-  const allCandidates = [...candidates, ...extraCandidates.filter(e => !candidates.some(c => c.id === e.id))];
+  // Кандидаты — только реальные персоны; виртуальные роли пантеона из селекторов
+  // убраны (подключение — через раздел «Персоны»)
+  const allCandidates = candidates;
 
   const m = mech ? teamMechanic(mech) : null;
   // Лимит участников: дискуссия — 2, панель экспертов — 4
@@ -117,22 +109,6 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
         ? settings.participants
         : [...settings.participants, toRef(p)];
     onSettings({ ...settings, participants: next });
-  };
-
-  // Выбор виртуальной роли пантеона: тихо подключаем персону и добавляем в участники
-  const pickVirtual = async (t: PantheonTemplate) => {
-    if (materializing || settings.participants.length >= maxParticipants) return;
-    setMaterializing(t.key);
-    try {
-      const persona = await materializePantheon(t.key);
-      setExtraCandidates(prev => prev.some(p => p.id === persona.id) ? prev : [...prev, persona]);
-      if (!selectedIds.includes(persona.id) && settings.participants.length < maxParticipants)
-        onSettings({ ...settings, participants: [...settings.participants, toRef(persona)] });
-    } catch (e) {
-      showToast('Пантеон OmO', e instanceof Error ? e.message : 'Не удалось подключить роль', 'info');
-    } finally {
-      setMaterializing(null);
-    }
   };
 
   // Пикер персон-чипов (дискуссия — до 2; панель в режиме «Мои персоны» — до 4)
@@ -162,31 +138,6 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
           </button>
         );
       })}
-      {virtualPantheon.map(t => (
-        <button
-          key={`v-${t.key}`}
-          type="button"
-          onClick={() => void pickVirtual(t)}
-          disabled={materializing !== null || settings.participants.length >= maxParticipants}
-          title={t.description}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            border: `1px dashed ${C.border}`, background: C.bgCard,
-            borderRadius: R.max, padding: '3px 10px 3px 4px',
-            cursor: materializing ? 'default' : 'pointer',
-            fontSize: 11.5, color: C.textSecondary, fontFamily: FONT.sans,
-            opacity: materializing !== null && materializing !== t.key ? 0.5 : 1,
-          }}
-        >
-          <span style={{
-            width: 18, height: 18, borderRadius: R.full, flexShrink: 0,
-            background: agentDotColor(t.color), color: '#fff',
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 9, fontWeight: 700,
-          }}>{t.role.slice(0, 1)}</span>
-          {materializing === t.key ? 'Подключаю…' : t.role}
-        </button>
-      ))}
     </span>
   );
 

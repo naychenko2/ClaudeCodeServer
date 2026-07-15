@@ -163,6 +163,8 @@ public class PersonasController : ControllerBase
             req.AllProjectsAccess ?? false, req.SubagentExecutor ?? false);
         if (bindings.Count > 0)
             persona = _personas.UpdateBindings(persona.Id, UserId, bindings);
+        // Проектной персоне — сразу дефолтные привязки к данным её проекта (файлы/заметки/знания)
+        persona = _bindings.SeedProjectDefaults(UserId, persona);
         // Авто-подбор привязок (autoBindings) — best-effort:
         // сбой подбора не роняет создание, персона остаётся без привязок
         if (req.AutoBindings == true)
@@ -602,6 +604,9 @@ public class PersonasController : ControllerBase
 
         // 3. Фото-аватар — автоматически (не критично: при сбое остаются инициалы)
         persona = await TryAutoGenerateAvatarAsync(persona, draft.AvatarPrompt);
+
+        // 3.5. Проектной персоне — дефолтные привязки к данным проекта (файлы/заметки/знания)
+        persona = _bindings.SeedProjectDefaults(UserId, persona);
 
         // 4. Авто-подбор привязок (по умолчанию включён) —
         // best-effort: сбой не роняет создание, персона остаётся без привязок

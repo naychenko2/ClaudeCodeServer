@@ -116,6 +116,52 @@ public class PersonaBindingsService
         return ids.Count == 0 ? null : ids;
     }
 
+    // --- Дефолтные привязки проектной персоны ---
+
+    // Досеять проектной персоне дефолтные привязки к данным её проекта: файлы, заметки и
+    // (если у проекта есть Dify-датасет) база знаний. Так проектная персона сразу получает
+    // доступ к своему проекту «в умениях» — привязки видны и выключаемы во вкладке «Знания».
+    // Идемпотентно: существующие привязки того же типа+цели не дублируются, вручную заданные
+    // и авто-подобранные не трогаются. ownerId — явно, чтобы метод годился и для фоновой
+    // миграции (без HttpContext). Режим Auto: источник в индексе промпта, без выжимки каждый
+    // ход. Глобальных персон не касается. Возвращает обновлённую персону (или ту же, если
+    // добавлять нечего).
+    public Persona SeedProjectDefaults(string ownerId, Persona persona)
+    {
+        if (persona.Scope != PersonaScope.Project || string.IsNullOrEmpty(persona.ProjectId))
+            return persona;
+        var project = _projects.GetById(persona.ProjectId);
+        if (project is null || project.OwnerId != ownerId) return persona;
+
+        var bindings = new List<PersonaBinding>(persona.Bindings ?? []);
+        bool Missing(PersonaBindingType type, string target) =>
+            !bindings.Any(b => b.Type == type
+                && string.Equals(b.Target, target, StringComparison.OrdinalIgnoreCase));
+
+        var added = false;
+        // Файлы проекта
+        if (Missing(PersonaBindingType.Project, persona.ProjectId))
+        {
+            bindings.Add(new PersonaBinding { Type = PersonaBindingType.Project, Target = persona.ProjectId });
+            added = true;
+        }
+        // Заметки проекта (ключ источника заметок = projectId)
+        if (Missing(PersonaBindingType.Notes, persona.ProjectId))
+        {
+            bindings.Add(new PersonaBinding { Type = PersonaBindingType.Notes, Target = persona.ProjectId });
+            added = true;
+        }
+        // База знаний проекта — только если у проекта есть свой Dify-датасет
+        var dataset = KnownDatasets(ownerId).FirstOrDefault(d => d.ProjectId == persona.ProjectId);
+        if (dataset.Id is not null && Missing(PersonaBindingType.Knowledge, dataset.Id))
+        {
+            bindings.Add(new PersonaBinding { Type = PersonaBindingType.Knowledge, Target = dataset.Id });
+            added = true;
+        }
+
+        return added ? _personas.UpdateBindings(persona.Id, ownerId, bindings) : persona;
+    }
+
     // --- Каталог целей ---
 
     // Известные датасеты владельца: базы знаний его проектов + датасет заметок «{username}:notes».

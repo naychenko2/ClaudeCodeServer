@@ -227,6 +227,38 @@ app.Services.GetRequiredService<JwtService>();
 // до первых запросов (иначе ранние правки персон не долетят до .md-файлов)
 app.Services.GetRequiredService<PersonaAgentFileSync>();
 
+// Однократная миграция @handle персон под контекстное правило: схлопывает лишние суффиксы
+// (masha-2 → masha там, где контексты не пересекаются) и чистит старые .md-файлы сабагентов
+// по прежнему handle. Маркер-файл — чтобы не гонять на каждом старте. Best-effort: сбой
+// миграции не мешает старту.
+try
+{
+    var dataDir = Path.GetDirectoryName(
+        app.Configuration["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
+        ?? Path.Combine(AppContext.BaseDirectory, "data");
+    var marker = Path.Combine(dataDir, "handle-migration-v1.done");
+    if (!File.Exists(marker))
+    {
+        var personaManager = app.Services.GetRequiredService<PersonaManager>();
+        var agentSync = app.Services.GetRequiredService<PersonaAgentFileSync>();
+        var renamed = personaManager.MigrateContextualHandles();
+        // Сначала удалить старые .md по прежнему handle (клон с oldHandle даёт старые пути)
+        foreach (var (persona, oldHandle) in renamed)
+            try { agentSync.RemovePersona(PersonaManager.WithHandle(persona, oldHandle)); } catch { /* не критично */ }
+        // Затем перегенерировать файлы затронутых владельцев под новые handle
+        foreach (var owner in renamed.Select(r => r.Persona.OwnerId).Distinct())
+            try { agentSync.SyncOwner(owner, force: true); } catch { /* не критично */ }
+        Directory.CreateDirectory(dataDir);
+        File.WriteAllText(marker, $"{DateTime.UtcNow:O} renamed={renamed.Count}");
+        if (renamed.Count > 0)
+            Console.WriteLine($"[HandleMigration] контекстные @handle: переименовано персон — {renamed.Count}");
+    }
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"[HandleMigration] миграция пропущена: {ex.Message}");
+}
+
 // Чистка осиротевших temp-конфигов MCP: содержат сервисный токен и могли
 // остаться после крэша (штатно удаляются в finally каждого хода)
 _ = Task.Run(() =>

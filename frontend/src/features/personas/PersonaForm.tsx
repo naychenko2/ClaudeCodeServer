@@ -17,6 +17,27 @@ import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
 import { AvatarCropDialog, type AvatarCropResult } from './AvatarCropDialog';
 
+// Транслит кириллицы — та же таблица, что в backend PersonaManager.Translit: без неё
+// slug русского имени рассинхронится с сохранённым на бэке (превью ≠ факт).
+const TRANSLIT: Record<string, string> = {
+  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y',
+  к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f',
+  х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
+};
+
+// Slug для @handle — зеркалит backend Slugify. live=true не обрезает хвостовой дефис,
+// чтобы его можно было печатать (финальную обрезку сделает бэкенд при сохранении).
+function slugifyHandle(s: string, live = false): string {
+  let out = '';
+  let prevDash = false;
+  for (const ch of s.trim().toLowerCase()) {
+    if (/[a-z0-9]/.test(ch)) { out += ch; prevDash = false; }
+    else if (ch in TRANSLIT) { const t = TRANSLIT[ch]; if (t) { out += t; prevDash = false; } }
+    else if (!prevDash && out.length > 0) { out += '-'; prevDash = true; }
+  }
+  return live ? out : out.replace(/-+$/, '');
+}
+
 // Императивный API формы для тулбара-родителя: сохранить / удалить.
 export interface PersonaFormHandle {
   save: () => Promise<void>;
@@ -86,6 +107,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const bindingsEnabled = true;
 
   const [name, setName] = useState(persona?.name ?? initial?.name ?? '');
+  // Ручной @handle. При создании авто-подставляется из имени, пока пользователь не тронул поле.
+  const [handle, setHandle] = useState(persona?.handle ?? '');
+  const [handleEdited, setHandleEdited] = useState(false);
   const [role, setRole] = useState(persona?.role ?? initial?.role ?? '');
   const [description, setDescription] = useState(persona?.description ?? initial?.description ?? '');
   // Контракт характера (P1) по слотам. Legacy-персона (без contract) — её systemPrompt
@@ -308,11 +332,16 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     if (scope === 'project' && !projectId && projects.length > 0) setProjectId(projects[0].id);
   }, [scope, projectId, projects]);
 
+  // Авто-подстановка handle из имени — только при создании и пока поле не трогали вручную
+  useEffect(() => {
+    if (!isEdit && !handleEdited) setHandle(slugifyHandle(name));
+  }, [name, isEdit, handleEdited]);
+
   const canSave = name.trim().length > 0 && !(scope === 'project' && !projectId);
 
   // Снимок редактируемых полей — для вычисления «есть несохранённые правки» (dirty)
   const snapshot = JSON.stringify({
-    name: name.trim(), role: role.trim(), description: description.trim(),
+    name: name.trim(), handle: handle.trim(), role: role.trim(), description: description.trim(),
     contract: {
       character: character.trim(), tone: tone.trim(),
       mustDo: parseLines(mustDo), mustNot: parseLines(mustNot),
@@ -335,6 +364,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     const s = persona?.scope ?? defaultScope ?? 'global';
     return JSON.stringify({
       name: (persona?.name ?? '').trim(),
+      handle: (persona?.handle ?? '').trim(),
       role: (persona?.role ?? '').trim(),
       description: (persona?.description ?? '').trim(),
       contract: {
@@ -368,6 +398,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     setError(null);
     const dto = {
       name: name.trim(),
+      // Создание: пусто → авто из имени. Правка: шлём только при изменении ("" = сброс к авто)
+      handle: isEdit
+        ? (handle.trim() !== (persona?.handle ?? '') ? handle.trim() : undefined)
+        : (handle.trim() || undefined),
       role: role.trim() || undefined,
       description: description.trim() || undefined,
       // Характер — только контрактом; legacy-поле systemPrompt чистим при каждом сохранении
@@ -522,6 +556,25 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                 <TextField value={description} onChange={setDescription} placeholder="Чем занимается персона" />
               </Field>
             </div>
+          </div>
+          <div style={{ maxWidth: isMobile ? '100%' : 320 }}>
+            <Field label="@handle" hint="Латиницей — по нему @упоминают в чате; пусто = из имени">
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 2,
+                border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgWhite, paddingLeft: 10,
+              }}>
+                <span style={{ color: C.textSecondary, fontFamily: FONT.mono, fontSize: 13 }}>@</span>
+                <input
+                  value={handle}
+                  onChange={e => { setHandle(slugifyHandle(e.target.value, true)); setHandleEdited(true); }}
+                  placeholder="masha"
+                  style={{
+                    flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent',
+                    fontFamily: FONT.mono, fontSize: 13, color: C.textHeading, padding: '8px 10px 8px 2px',
+                  }}
+                />
+              </div>
+            </Field>
           </div>
         </div>
       </div>

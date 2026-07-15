@@ -62,6 +62,10 @@ public sealed class PersonaAgentFileSync
         personas.OnPersonaCreated += p => Safe(() => SyncPersona(p), "create", p);
         personas.OnPersonaChanged += p => Safe(() => SyncPersona(p), "update", p);
         personas.OnPersonaDeleted += p => Safe(() => RemovePersona(p), "delete", p);
+        // Смена handle: удалить .md по СТАРОМУ handle (клон персоны с прежним handle даёт старые
+        // пути в ResolvePaths); новые файлы запишет следующий за этим OnPersonaChanged.
+        personas.OnPersonaHandleChanged += (p, oldHandle) =>
+            Safe(() => RemovePersona(PersonaManager.WithHandle(p, oldHandle)), "rename", p);
     }
 
     // Папки для --add-dir хода: только для чатов БЕЗ проекта (личные сессии).

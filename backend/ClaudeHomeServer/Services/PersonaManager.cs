@@ -53,6 +53,11 @@ public class PersonaManager
     public event Action<Persona>? OnPersonaCreated;
     public event Action<Persona>? OnPersonaDeleted;
 
+    // Смена handle персоны (ручное переименование): PersonaAgentFileSync удаляет .md-файлы
+    // по СТАРОМУ handle (2-й аргумент), затем OnPersonaChanged запишет новые. Поднимается
+    // в Update ДО OnPersonaChanged.
+    public event Action<Persona, string>? OnPersonaHandleChanged;
+
     public IReadOnlyCollection<Persona> GetByOwner(string userId) =>
         _personas.Values.Where(p => p.OwnerId == userId)
             .OrderByDescending(p => p.UpdatedAt).ToList();
@@ -76,10 +81,23 @@ public class PersonaManager
     // где гейт по владельцу делается через саму персону. Не использовать в обработчиках запросов.
     public IReadOnlyCollection<Persona> GetAllInternal() => _personas.Values.ToList();
 
-    // Персона владельца по handle (@упоминания). Handle уникален per-owner.
+    // Персона владельца по handle без учёта контекста (legacy). Handle больше НЕ уникален
+    // per-owner (проектные персоны разных проектов могут делить handle) — предпочитайте
+    // перегрузку с projectId. Оставлено для мест, где контекст неизвестен.
     public Persona? GetByHandle(string userId, string handle) =>
         _personas.Values.FirstOrDefault(p => p.OwnerId == userId
             && string.Equals(p.Handle, handle, StringComparison.OrdinalIgnoreCase));
+
+    // Персона по handle В КОНТЕКСТЕ (глобальные + проектные projectId). Именно так резолвятся
+    // @упоминания и persona_ask: две проектные «маши» из разных проектов не путаются.
+    // Страховка на случай остаточных дублей: проектная приоритетнее глобальной.
+    public Persona? GetByHandle(string userId, string handle, string? projectId) =>
+        _personas.Values.Where(p => p.OwnerId == userId
+                && string.Equals(p.Handle, handle, StringComparison.OrdinalIgnoreCase)
+                && (p.Scope == PersonaScope.Global
+                    || (p.Scope == PersonaScope.Project && p.ProjectId == projectId)))
+            .OrderByDescending(p => p.Scope == PersonaScope.Project)
+            .FirstOrDefault();
 
     // Известные ключи возможностей персоны. Полный набор эквивалентен «без ограничений»
     // и нормализуется в null (поведение как раньше, по фич-флагам владельца).
@@ -134,7 +152,7 @@ public class PersonaManager
         string? color, string? greeting, bool memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess access = PersonaAccess.Full,
         List<string>? disallowedTools = null, PersonaSpecialty specialty = PersonaSpecialty.None,
-        bool allProjectsAccess = false, bool subagentExecutor = false)
+        bool allProjectsAccess = false, bool subagentExecutor = false, string? handle = null)
     {
         var persona = new Persona
         {
@@ -165,7 +183,20 @@ public class PersonaManager
         // с одинаковым именем вычислили бы один и тот же слаг (гонка TOCTOU)
         lock (_saveLock)
         {
-            persona.Handle = MakeUniqueHandle(persona.Name, userId);
+            if (!string.IsNullOrWhiteSpace(handle))
+            {
+                var norm = NormalizeHandle(handle);
+                if (norm is null || PersonaAgentFileSync.IsReserved(norm)
+                    || OccupiedHandles(userId, persona.Scope, persona.ProjectId, null).Contains(norm))
+                    throw new ArgumentException($"Handle @{handle} занят или невалиден");
+                persona.Handle = norm;
+                persona.HandleCustom = true;
+            }
+            else
+            {
+                persona.Handle = MakeUniqueHandle(persona.Name, userId, persona.Scope,
+                    persona.ProjectId, null, persona.Role);
+            }
             _personas[persona.Id] = persona;
         }
         Save();
@@ -252,15 +283,37 @@ public class PersonaManager
         string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess? access = null,
         List<string>? disallowedTools = null, PersonaSpecialty? specialty = null,
-        bool? allProjectsAccess = null, bool? subagentExecutor = null)
+        bool? allProjectsAccess = null, bool? subagentExecutor = null, string? handle = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
 
+        var oldHandle = persona.Handle;
         // Мутации полей — под _saveLock, чтобы параллельные читатели (Save/enumerate _personas)
         // не видели полу-обновлённую персону. Save/OnPersonaChanged — вне лока (внешний код).
         lock (_saveLock)
         {
+            // Эффективный контекст уникальности после этого Update — для валидации handle.
+            // Валидируем ДО мутаций полей: при ошибке персона остаётся нетронутой.
+            var effScope = scope ?? persona.Scope;
+            var effProjectId = effScope == PersonaScope.Project
+                ? (scope is not null ? projectId : projectId ?? persona.ProjectId)
+                : null;
+            // "" — маркер сброса кастомного handle (авто-генерация ниже); непустой — ручной handle
+            string? resolvedHandle = null;
+            if (handle is not null)
+            {
+                if (handle.Trim().Length == 0) resolvedHandle = "";
+                else
+                {
+                    var norm = NormalizeHandle(handle);
+                    if (norm is null || PersonaAgentFileSync.IsReserved(norm)
+                        || OccupiedHandles(userId, effScope, effProjectId, persona.Id).Contains(norm))
+                        throw new ArgumentException($"Handle @{handle} занят или невалиден");
+                    resolvedHandle = norm;
+                }
+            }
+
             if (name is not null) persona.Name = string.IsNullOrWhiteSpace(name) ? persona.Name : name.Trim();
             if (role is not null) persona.Role = role.Length == 0 ? null : role.Trim();
             if (description is not null) persona.Description = description;
@@ -297,9 +350,32 @@ public class PersonaManager
             // null — не менять; иначе — только для глобальной персоны (после применения scope выше)
             if (allProjectsAccess is not null)
                 persona.AllProjectsAccess = allProjectsAccess.Value && persona.Scope == PersonaScope.Global;
+
+            // Handle: ручной ввод приоритетен; сброс ("") → авто-генерация; иначе авто-починка,
+            // если смена scope/projectId столкнула авто-handle с чужим в новом контексте.
+            if (resolvedHandle == "")
+            {
+                persona.HandleCustom = false;
+                persona.Handle = MakeUniqueHandle(persona.Name, userId, persona.Scope,
+                    persona.ProjectId, persona.Id, persona.Role);
+            }
+            else if (resolvedHandle is not null)
+            {
+                persona.Handle = resolvedHandle;
+                persona.HandleCustom = true;
+            }
+            else if (!persona.HandleCustom
+                     && OccupiedHandles(userId, persona.Scope, persona.ProjectId, persona.Id).Contains(persona.Handle))
+            {
+                persona.Handle = MakeUniqueHandle(persona.Name, userId, persona.Scope,
+                    persona.ProjectId, persona.Id, persona.Role);
+            }
             persona.UpdatedAt = DateTime.UtcNow;
         }
         Save();
+        // Сначала чистка старых .md по прежнему handle, затем запись новых через OnPersonaChanged
+        if (!string.Equals(oldHandle, persona.Handle, StringComparison.Ordinal))
+            OnPersonaHandleChanged?.Invoke(persona, oldHandle);
         OnPersonaChanged?.Invoke(persona);
         return persona;
     }
@@ -433,22 +509,80 @@ public class PersonaManager
         return true;
     }
 
-    // Уникальный per-owner slug из имени (латиница/цифры/дефис); коллизии — суффиксом -2, -3…
-    private string MakeUniqueHandle(string name, string userId)
+    // Зона уникальности handle. Глобальная персона видна и пишет файлы сабагентов во ВСЕ
+    // проекты владельца — её handle не должен пересекаться ни с кем. Проектная конфликтует
+    // только с глобальными и проектными СВОЕГО проекта (файлы в разных корнях, per-turn
+    // контекст их не сводит вместе) — проектные других проектов могут делить handle.
+    private HashSet<string> OccupiedHandles(string userId, PersonaScope scope, string? projectId, string? excludeId)
+    {
+        var scoped = _personas.Values.Where(p => p.OwnerId == userId && p.Id != excludeId);
+        if (scope != PersonaScope.Global)
+            scoped = scoped.Where(p => p.Scope == PersonaScope.Global
+                || (p.Scope == PersonaScope.Project && p.ProjectId == projectId));
+        return scoped.Select(p => p.Handle).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    // Пересекаются ли зоны уникальности двух персон одного владельца (тогда одинаковый handle —
+    // это коллизия). Глобальная видна везде → пересекается с любой; две проектные — только внутри
+    // одного проекта. Симметрично.
+    private static bool InUniquenessZone(Persona a, Persona b) =>
+        a.OwnerId == b.OwnerId
+        && (a.Scope == PersonaScope.Global || b.Scope == PersonaScope.Global
+            || a.ProjectId == b.ProjectId);
+
+    // Уникальный В КОНТЕКСТЕ slug из имени. При коллизии — осмысленный суффикс из роли
+    // (masha-analitik), затем числовой (masha-2). Зону уникальности задаёт OccupiedHandles.
+    private string MakeUniqueHandle(string name, string userId, PersonaScope scope,
+        string? projectId, string? excludeId, string? role)
     {
         var baseSlug = Slugify(name);
         if (baseSlug.Length == 0) baseSlug = "agent";
-        var existing = _personas.Values
-            .Where(p => p.OwnerId == userId)
-            .Select(p => p.Handle)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (!existing.Contains(baseSlug)) return baseSlug;
+        var occupied = OccupiedHandles(userId, scope, projectId, excludeId);
+        if (!occupied.Contains(baseSlug)) return baseSlug;
+
+        // Осмысленный суффикс из роли — вместо безликой цифры
+        var roleSlug = Slugify(role ?? "");
+        if (roleSlug.Length > 0 && !roleSlug.Equals(baseSlug, StringComparison.OrdinalIgnoreCase))
+        {
+            var byRole = $"{baseSlug}-{roleSlug}";
+            if (!occupied.Contains(byRole)) return byRole;
+        }
         for (var i = 2; ; i++)
         {
             var candidate = $"{baseSlug}-{i}";
-            if (!existing.Contains(candidate)) return candidate;
+            if (!occupied.Contains(candidate)) return candidate;
         }
     }
+
+    // Нормализация пользовательского handle: тот же slug-алгоритм, что и автоген (транслит
+    // кириллицы, латиница/цифры, дефисы). null — если после нормализации пусто.
+    public static string? NormalizeHandle(string? handle)
+    {
+        if (string.IsNullOrWhiteSpace(handle)) return null;
+        var slug = Slugify(handle.Trim().TrimStart('@'));
+        return slug.Length == 0 ? null : slug;
+    }
+
+    // Свободен ли handle для ручного ввода: валиден, не зарезервирован встроенным агентом CLI
+    // и не занят другой персоной в её зоне уникальности.
+    public bool IsHandleAvailable(string userId, string handle, PersonaScope scope,
+        string? projectId, string? excludeId)
+    {
+        var norm = NormalizeHandle(handle);
+        if (norm is null || PersonaAgentFileSync.IsReserved(norm)) return false;
+        return !OccupiedHandles(userId, scope, projectId, excludeId).Contains(norm);
+    }
+
+    // Лёгкий клон персоны с другим handle — чтобы PersonaAgentFileSync.ResolvePaths указал на
+    // СТАРЫЕ файлы сабагента (для их удаления при переименовании handle / миграции).
+    public static Persona WithHandle(Persona p, string handle) => new()
+    {
+        Id = p.Id,
+        OwnerId = p.OwnerId,
+        Scope = p.Scope,
+        ProjectId = p.ProjectId,
+        Handle = handle,
+    };
 
     // Транслитерация кириллицы для slug: без неё русские имена давали handle «agent»,
     // и @упоминания превращались в безликие @agent-2
@@ -500,30 +634,65 @@ public class PersonaManager
 
         var changed = false;
 
-        // Проход 2: миграция legacy-персон без handle
-        foreach (var p in _personas.Values.Where(p => string.IsNullOrEmpty(p.Handle)))
+        // Проход 2: миграция legacy-персон без handle (детерминированно по CreatedAt)
+        foreach (var p in _personas.Values.Where(p => string.IsNullOrEmpty(p.Handle))
+                     .OrderBy(p => p.CreatedAt).ToList())
         {
-            p.Handle = MakeUniqueHandle(p.Name, p.OwnerId);
+            p.Handle = MakeUniqueHandle(p.Name, p.OwnerId, p.Scope, p.ProjectId, p.Id, p.Role);
             changed = true;
         }
 
-        // Проход 3: самолечение дублей handle (могли появиться до фикса миграции и гонки
-        // Create): handle остаётся у самой старой персоны, остальным перегенерируется
-        foreach (var group in _personas.Values
-                     .GroupBy(p => (p.OwnerId, Handle: p.Handle.ToLowerInvariant()))
-                     .Where(g => g.Count() > 1).ToList())
+        // Проход 3: самолечение КОНТЕКСТНЫХ дублей (глобальные между собой + проектные внутри
+        // одного проекта). Cross-project дубли проектных персон легитимны — не трогаем. Идём по
+        // CreatedAt: старейшая держит handle, младшим (конфликтующим с уже закреплёнными в их
+        // зоне уникальности) перегенерируется. Ручной handle (HandleCustom) не переопределяем.
+        var processed = new List<Persona>();
+        foreach (var p in _personas.Values.OrderBy(p => p.CreatedAt).ToList())
         {
-            foreach (var p in group.OrderBy(p => p.CreatedAt).Skip(1))
+            if (p.HandleCustom || string.IsNullOrEmpty(p.Handle)) { processed.Add(p); continue; }
+            var conflict = processed.Any(q => InUniquenessZone(p, q)
+                && string.Equals(q.Handle, p.Handle, StringComparison.OrdinalIgnoreCase));
+            if (conflict)
             {
                 var old = p.Handle;
-                p.Handle = MakeUniqueHandle(p.Name, p.OwnerId);
-                _log?.LogWarning("Дубль handle у персон владельца {OwnerId}: «{Name}» переименована @{Old} → @{New}",
+                p.Handle = MakeUniqueHandle(p.Name, p.OwnerId, p.Scope, p.ProjectId, p.Id, p.Role);
+                _log?.LogWarning("Дубль handle в контексте у владельца {OwnerId}: «{Name}» @{Old} → @{New}",
                     p.OwnerId, p.Name, old, p.Handle);
                 changed = true;
             }
+            processed.Add(p);
         }
 
         if (changed) Save();
+    }
+
+    // Одноразовая миграция под контекстное правило: схлопывает лишние суффиксы (masha-2 → masha,
+    // если базовый свободен в контексте) и приводит handle к осмысленному виду (роль вместо
+    // цифры). Детерминированно по CreatedAt (старейшая держит базовый handle). Идемпотентно:
+    // повторный вызов на уже минимизированных данных возвращает пустой список. Ручной handle
+    // (HandleCustom) не трогает. Возвращает пары (персона, старый handle) — вызывающий чистит
+    // по ним старые .md-файлы сабагентов (см. Program.cs / PersonaAgentFileSync).
+    public IReadOnlyList<(Persona Persona, string OldHandle)> MigrateContextualHandles()
+    {
+        var renamed = new List<(Persona, string)>();
+        lock (_saveLock)
+        {
+            foreach (var p in _personas.Values.OrderBy(p => p.CreatedAt).ToList())
+            {
+                if (p.HandleCustom || string.IsNullOrEmpty(p.Handle)) continue;
+                var desired = MakeUniqueHandle(p.Name, p.OwnerId, p.Scope, p.ProjectId, p.Id, p.Role);
+                if (string.Equals(desired, p.Handle, StringComparison.Ordinal)) continue;
+                var old = p.Handle;
+                p.Handle = desired;
+                p.UpdatedAt = DateTime.UtcNow;
+                renamed.Add((p, old));
+                _log?.LogInformation("Миграция handle {OwnerId}: «{Name}» @{Old} → @{New}",
+                    p.OwnerId, p.Name, old, desired);
+            }
+            if (renamed.Count > 0)
+                JsonFileStore.Save(_storePath, _personas.Values.ToList(), JsonOpts);
+        }
+        return renamed;
     }
 
     private void Save()

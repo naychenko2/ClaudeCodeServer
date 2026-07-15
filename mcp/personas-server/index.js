@@ -77,6 +77,8 @@ const PERSONA_FIELDS = {
   color: { type: 'string', enum: COLORS, description: 'Цвет аватара из палитры' },
   greeting: { type: 'string', description: 'Приветствие — первое сообщение от лица персоны' },
   memoryEnabled: { type: 'boolean', description: 'Долгая память персоны (по умолчанию включена)' },
+  handle: { type: 'string', description: 'Ручной @handle (латинский slug, для @упоминаний); ' +
+    'пусто при создании — авто-генерация из имени; занят/невалиден → ошибка' },
 };
 
 // Привязка персоны (флаг persona-bindings): источник знаний или правило с условием применения
@@ -408,7 +410,7 @@ function personaBody(args, keys) {
   return body;
 }
 
-const FIELD_KEYS = ['name', 'role', 'description', 'systemPrompt', 'model', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId'];
+const FIELD_KEYS = ['name', 'role', 'description', 'systemPrompt', 'model', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId', 'handle'];
 
 // Запрет самоэскалации: персона не может менять СОБСТВЕННЫЕ привязки
 // (проверка до любого fetch — изменение прав себе блокируется по построению)
@@ -591,6 +593,9 @@ async function callTool(name, args) {
           throw new Error('Это твой собственный handle — отвечай сам, спрашивать себя не нужно.');
       }
       if (args.context) body.context = String(args.context);
+      // Контекст проекта: handle резолвится среди глобальных + проектных этого проекта
+      // (две проектные «маши» из разных проектов не путаются)
+      if (PROJECT_ID) body.projectId = PROJECT_ID;
       const res = await api('/api/personas/ask', { method: 'POST', body: JSON.stringify(body) });
       return { content: [{ type: 'text', text: res?.answer ?? '' }] };
     }

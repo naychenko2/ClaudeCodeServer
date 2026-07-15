@@ -750,7 +750,8 @@ export interface Persona {
   ownerId: string;
   name: string;
   role?: string;              // роль персоны (главная подпись: «Роль (Имя)»)
-  handle: string;             // машинное имя (@handle) — уникально у владельца
+  handle: string;             // машинное имя (@handle) — уникально в контексте (проект/глобально)
+  handleCustom?: boolean;     // handle задан вручную (миграция/авто-переименования не трогают)
   description?: string;
   systemPrompt?: string;      // «характер» — legacy-текст (у персон без contract)
   contract?: PersonaContract | null; // структурированный контракт (P1)
@@ -902,6 +903,9 @@ export interface CreatePersonaDto {
   role?: string;
   description?: string;
   systemPrompt?: string;
+  // Ручной @handle (latin-slug). Создание: пусто — авто из имени. Обновление: undefined —
+  // не менять, "" — сбросить к авто-генерации. Занят/невалиден → 400
+  handle?: string;
   // Контракт характера; при обновлении: undefined — не менять, пустые слоты — сбросить
   contract?: PersonaContract;
   model?: string;

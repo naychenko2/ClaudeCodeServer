@@ -26,7 +26,7 @@ public sealed class MentionTriggerSource(PersonaManager personas)
         {
             var handle = m.Groups[1].Value;
             if (!seenHandle.Add(handle)) continue;
-            var persona = personas.GetByHandle(ownerId, handle);
+            var persona = personas.GetByHandle(ownerId, handle, session.ProjectId);
             if (persona is null) continue;
             if (session.PersonaId == persona.Id) continue;             // уже активный спикер
             if (participants?.Contains(persona.Id) == true) continue;  // участник группы — его роутит GroupChatRouter

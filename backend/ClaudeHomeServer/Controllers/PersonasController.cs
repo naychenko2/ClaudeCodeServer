@@ -156,11 +156,16 @@ public class PersonasController : ControllerBase
             }
         }
 
-        var persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
-            req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled ?? true, req.Tools, req.Contract,
-            access ?? PersonaAccess.Full, req.DisallowedTools, req.Specialty ?? PersonaSpecialty.None,
-            req.AllProjectsAccess ?? false, req.SubagentExecutor ?? false);
+        Persona persona;
+        try
+        {
+            persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
+                req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
+                req.MemoryEnabled ?? true, req.Tools, req.Contract,
+                access ?? PersonaAccess.Full, req.DisallowedTools, req.Specialty ?? PersonaSpecialty.None,
+                req.AllProjectsAccess ?? false, req.SubagentExecutor ?? false, req.Handle);
+        }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         if (bindings.Count > 0)
             persona = _personas.UpdateBindings(persona.Id, UserId, bindings);
         // Проектной персоне — сразу дефолтные привязки к данным её проекта (файлы/заметки/знания)
@@ -190,10 +195,15 @@ public class PersonasController : ControllerBase
         if (!TryParseAccess(req.Access, out var access))
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
 
-        var persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
-            req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-            req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, req.Specialty,
-            req.AllProjectsAccess, req.SubagentExecutor);
+        Persona persona;
+        try
+        {
+            persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
+                req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
+                req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, req.Specialty,
+                req.AllProjectsAccess, req.SubagentExecutor, req.Handle);
+        }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         await Broadcast("updated", id);
         return Ok(persona);
     }
@@ -1734,7 +1744,8 @@ public class PersonasController : ControllerBase
         if (string.IsNullOrWhiteSpace(req.Handle)) return BadRequest(new { error = "Не указан handle персоны" });
         if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest(new { error = "Пустой вопрос" });
 
-        var persona = _personas.GetByHandle(UserId, req.Handle.Trim().TrimStart('@'));
+        var persona = _personas.GetByHandle(UserId, req.Handle.Trim().TrimStart('@'),
+            string.IsNullOrWhiteSpace(req.ProjectId) ? null : req.ProjectId);
         if (persona is null) return NotFound(new { error = $"Персона @{req.Handle} не найдена" });
 
         try
@@ -1804,7 +1815,9 @@ public record CreatePersonaRequest(
     // создание через форму/мастер не шлёт этот параметр, там инициалы или явный выбор
     bool? AutoAvatar = null,
     // Описание внешности для фотопортрета (англ.); пусто — берём из роли/описания персоны
-    string? AvatarPrompt = null);
+    string? AvatarPrompt = null,
+    // Ручной @handle (latin-slug); пусто — авто-генерация из имени. Занят/невалиден → 400
+    string? Handle = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -1831,7 +1844,10 @@ public record UpdatePersonaRequest(
     // Игнорируется (сбрасывается в false), если персона не Scope.Global
     bool? AllProjectsAccess = null,
     // Исполнитель в сабагентах; null — не менять, гаснет при Access != full
-    bool? SubagentExecutor = null);
+    bool? SubagentExecutor = null,
+    // Ручной @handle (latin-slug); null — не менять, "" — сбросить к авто-генерации.
+    // Занят/невалиден → 400
+    string? Handle = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);
@@ -1897,4 +1913,4 @@ public record KnowledgeSearchFilter(string Name, string Operator, string? Value 
 
 public record SelectAvatarRequest(string File);
 
-public record PersonaAskRequest(string Handle, string Question, string? Context = null);
+public record PersonaAskRequest(string Handle, string Question, string? Context = null, string? ProjectId = null);

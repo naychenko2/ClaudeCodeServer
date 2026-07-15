@@ -46,6 +46,10 @@ public sealed class TurnFileWatcher(string rootPath, Func<ServerMessage, Task> o
             fullPath.Contains(sep + ".playwright") ||
             fullPath.Contains(sep + "obj" + sep) ||
             fullPath.Contains(sep + "node_modules" + sep) ||
+            // state-файлы скиллов oh-my-claudecode — служебный шум каждого командного хода
+            fullPath.Contains(sep + ".omc" + sep + "state" + sep) ||
+            fullPath.Contains(sep + ".omc" + sep + "sessions" + sep) ||
+            fileName == "project-memory.json" && fullPath.Contains(sep + ".omc" + sep) ||
             fileName.EndsWith("~") ||
             fileName.EndsWith(".tmp") ||
             fileName.Contains(".tmp.")) return;

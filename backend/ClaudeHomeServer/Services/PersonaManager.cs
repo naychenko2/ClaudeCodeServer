@@ -666,12 +666,13 @@ public class PersonaManager
         if (changed) Save();
     }
 
-    // Одноразовая миграция под контекстное правило: схлопывает лишние суффиксы (masha-2 → masha,
-    // если базовый свободен в контексте) и приводит handle к осмысленному виду (роль вместо
-    // цифры). Детерминированно по CreatedAt (старейшая держит базовый handle). Идемпотентно:
-    // повторный вызов на уже минимизированных данных возвращает пустой список. Ручной handle
-    // (HandleCustom) не трогает. Возвращает пары (персона, старый handle) — вызывающий чистит
-    // по ним старые .md-файлы сабагентов (см. Program.cs / PersonaAgentFileSync).
+    // Одноразовая миграция под контекстное правило: снимает ЛИШНИЙ числовой суффикс с handle
+    // (masha-2 → masha), если базовый свободен в зоне уникальности персоны. ТОЛЬКО суффикс:
+    // «тело» handle не пересчитывается по имени, иначе осмысленные короткие handle (@mark у
+    // «Марк Слиянский») превратились бы в длинные @mark-sliyanskiy. Детерминированно по CreatedAt
+    // (старейшая с данной базой держит её). Идемпотентно: повторный вызов на минимизированных
+    // данных возвращает пустой список. Ручной handle (HandleCustom) не трогает. Возвращает пары
+    // (персона, старый handle) — вызывающий чистит по ним старые .md-файлы сабагентов.
     public IReadOnlyList<(Persona Persona, string OldHandle)> MigrateContextualHandles()
     {
         var renamed = new List<(Persona, string)>();
@@ -680,20 +681,29 @@ public class PersonaManager
             foreach (var p in _personas.Values.OrderBy(p => p.CreatedAt).ToList())
             {
                 if (p.HandleCustom || string.IsNullOrEmpty(p.Handle)) continue;
-                var desired = MakeUniqueHandle(p.Name, p.OwnerId, p.Scope, p.ProjectId, p.Id, p.Role);
-                if (string.Equals(desired, p.Handle, StringComparison.Ordinal)) continue;
+                // Снимаем только числовой хвост «-N»; тело handle не меняем
+                var m = SuffixRe.Match(p.Handle);
+                if (!m.Success) continue;
+                var baseSlug = m.Groups[1].Value;
+                // База не должна быть зарезервирована и должна быть свободна в контексте персоны
+                if (PersonaAgentFileSync.IsReserved(baseSlug)) continue;
+                if (OccupiedHandles(p.OwnerId, p.Scope, p.ProjectId, p.Id).Contains(baseSlug)) continue;
                 var old = p.Handle;
-                p.Handle = desired;
+                p.Handle = baseSlug;
                 p.UpdatedAt = DateTime.UtcNow;
                 renamed.Add((p, old));
                 _log?.LogInformation("Миграция handle {OwnerId}: «{Name}» @{Old} → @{New}",
-                    p.OwnerId, p.Name, old, desired);
+                    p.OwnerId, p.Name, old, baseSlug);
             }
             if (renamed.Count > 0)
                 JsonFileStore.Save(_storePath, _personas.Values.ToList(), JsonOpts);
         }
         return renamed;
     }
+
+    // Числовой суффикс handle: «masha-2» → база «masha»
+    private static readonly System.Text.RegularExpressions.Regex SuffixRe =
+        new(@"^(.+)-\d+$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private void Save()
     {

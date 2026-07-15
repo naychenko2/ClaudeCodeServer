@@ -104,6 +104,15 @@ export function SkillsPanel({ projectId }: Props) {
               </Section>
             )}
 
+            {/* Workflow-скрипты (многоагентные оркестрации) */}
+            {(data.workflows?.length ?? 0) > 0 && (
+              <Section label="Workflow-скрипты">
+                {data.workflows!.map(wf => (
+                  <SkillCard key={wf.name} skill={wf} />
+                ))}
+              </Section>
+            )}
+
             {/* Агенты проекта */}
             {data.agents.length > 0 && (
               <Section label="Агенты проекта">
@@ -114,7 +123,8 @@ export function SkillsPanel({ projectId }: Props) {
             )}
 
             {/* Пустое состояние */}
-            {data.skills.length === 0 && data.projectSkills.length === 0 && data.agents.length === 0 && (
+            {data.skills.length === 0 && data.projectSkills.length === 0 && data.agents.length === 0
+              && (data.workflows?.length ?? 0) === 0 && (
               <EmptyState />
             )}
           </>

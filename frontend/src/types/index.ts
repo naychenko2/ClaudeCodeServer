@@ -472,6 +472,8 @@ export interface SkillsData {
   skills: SkillInfo[];
   projectSkills: SkillInfo[];
   agents: AgentInfo[];
+  // Workflow-скрипты (~/.claude/workflows/*.js) — многоагентные оркестрации (/panel-of-experts и т.п.)
+  workflows?: SkillInfo[];
 }
 
 // Навык из реестра skills.sh (результат поиска/подбора). source — «owner/repo».

@@ -23,6 +23,9 @@ public class SkillsService
     private static string GlobalSkillsDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "skills");
 
+    private static string GlobalWorkflowsDir =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "workflows");
+
     private static string GetProjectSkillsDir(string projectRootPath) =>
         Path.Combine(projectRootPath, ".claude", "skills");
 
@@ -32,6 +35,46 @@ public class SkillsService
     // --- Чтение скиллов и агентов ---
 
     public IReadOnlyList<SkillInfo> GetGlobalSkills() => ReadSkillsFrom(GlobalSkillsDir);
+
+    // Workflow-скрипты (~/.claude/workflows/*.js) — многоагентные оркестрации Claude Code
+    // (например /panel-of-experts). Метаданные — из литерала `export const meta = {...}`
+    // в начале скрипта (name/description); парсим эвристикой по строковым литералам,
+    // полноценный JS-парсер не нужен (meta по контракту — чистый литерал).
+    public IReadOnlyList<SkillInfo> GetGlobalWorkflows()
+    {
+        var dir = GlobalWorkflowsDir;
+        if (!Directory.Exists(dir)) return [];
+
+        var result = new List<SkillInfo>();
+        foreach (var file in Directory.GetFiles(dir, "*.js"))
+        {
+            try
+            {
+                // meta — в начале файла; 4КБ хватает с запасом, весь скрипт не читаем
+                using var reader = new StreamReader(file);
+                var buf = new char[4096];
+                var read = reader.Read(buf, 0, buf.Length);
+                var head = new string(buf, 0, read);
+                result.Add(new SkillInfo
+                {
+                    Name = ExtractMetaString(head, "name") ?? Path.GetFileNameWithoutExtension(file),
+                    Description = ExtractMetaString(head, "description") ?? "",
+                    ArgumentHint = null,
+                    FilePath = file,
+                });
+            }
+            catch { }
+        }
+        return result;
+    }
+
+    // Значение строкового поля из литерала meta: `key: 'значение'` / `key: "значение"`
+    private static string? ExtractMetaString(string source, string key)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(source,
+            key + @"\s*:\s*(['""])((?:\\.|(?!\1).)*)\1");
+        return match.Success ? match.Groups[2].Value.Replace("\\'", "'").Replace("\\\"", "\"") : null;
+    }
 
     // Скиллы уровня проекта (.claude/skills проекта) — сюда CLI устанавливает навыки в scope=project.
     public IReadOnlyList<SkillInfo> GetProjectSkills(string projectRootPath) =>

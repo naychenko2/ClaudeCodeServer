@@ -23,7 +23,7 @@ public class SkillsController(
     private string GetRoot(string projectId) =>
         (projects.GetById(projectId) ?? throw new KeyNotFoundException($"Проект не найден: {projectId}")).RootPath;
 
-    // Список скиллов: глобальные + проектные + агенты проекта
+    // Список скиллов: глобальные + проектные + агенты проекта + workflow-скрипты
     [HttpGet("api/projects/{projectId}/skills")]
     public IActionResult List(string projectId)
     {
@@ -35,6 +35,7 @@ public class SkillsController(
                 skills = skills.GetGlobalSkills(),
                 projectSkills = skills.GetProjectSkills(root),
                 agents = skills.GetProjectAgents(root),
+                workflows = skills.GetGlobalWorkflows(),
             });
         }
         catch (KeyNotFoundException) { return NotFound(); }

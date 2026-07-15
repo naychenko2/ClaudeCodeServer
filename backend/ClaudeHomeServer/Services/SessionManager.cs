@@ -773,7 +773,8 @@ public class SessionManager
                         ResolveTasksApiUrl(), entry.Token, p.Id,
                         p.Scope == PersonaScope.Project ? p.ProjectId : null))
                     .ToList();
-                return new PersonaAgentsContext(addDirs, servers);
+                var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList()!;
+                return new PersonaAgentsContext(addDirs, servers, handles);
             }
             catch (Exception ex)
             {
@@ -1152,6 +1153,16 @@ public class SessionManager
             // Верификационный ход идёт со своей директивой — рабочий протокол не дописываем
             if (loop.Phase != "verifying")
                 result += "\n\n" + OmoPrompts.WorkLoopTurn(loop.Promise);
+        }
+
+        // Процессы oh-my-claudecode: советнические роли плагина замещаются
+        // персонами-сабагентами с подходящей специальностью (таблица соответствий)
+        if (OmcPersonaRouting.MentionsPluginCommand(text) && SessionOwnerId(entry.Info) is { } ownerId)
+        {
+            var (subagents, _) = SplitConsultants(ownerId, entry.Info,
+                ResolveOtherPersonas(ownerId, entry.Info.ProjectId, entry.Info));
+            if (OmcPersonaRouting.BuildHint(subagents) is { } routingHint)
+                result += "\n\n" + routingHint;
         }
 
         return result;

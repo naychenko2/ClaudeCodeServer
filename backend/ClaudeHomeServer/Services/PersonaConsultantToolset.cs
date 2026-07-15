@@ -6,12 +6,17 @@ namespace ClaudeHomeServer.Services;
 // deny-by-default: всё, что не перечислено, сабагенту физически недоступно (поле tools
 // определения агента). Это ОТДЕЛЬНАЯ политика от PersonaAccessPolicy: та задаёт запреты
 // персоны-собеседника, чьи действия одобряет живой пользователь; у сабагента-консультанта
-// permission-канала нет вовсе (фоновый контекст), поэтому набор жёстко read-only — вопрос
-// разрешения не возникает. Write-исключение одно: собственная память персоны (pmem-сервер).
+// permission-канала нет вовсе (фоновый контекст), поэтому базовый набор жёстко read-only.
+// Write-исключения два: собственная память персоны (pmem-сервер) и режим ИСПОЛНИТЕЛЯ —
+// явный опт-ин Persona.SubagentExecutor при Access=Full добавляет файлы+Bash (радиус
+// поражения ограничен песочницей контейнера и папками, проброшенными в сессию).
 public static class PersonaConsultantToolset
 {
     // Встроенные read-инструменты CLI: чтение и поиск по файлам зоны сессии
     public static readonly string[] BuiltIn = ["Read", "Grep", "Glob"];
+
+    // Write-набор исполнителя: правки файлов + команды (сборка/тесты)
+    public static readonly string[] Executor = ["Write", "Edit", "Bash"];
 
     // Веб — read-safe; включается по возможности «web» самой персоны
     public static readonly string[] Web = ["WebSearch", "WebFetch"];
@@ -67,12 +72,19 @@ public static class PersonaConsultantToolset
         return tools;
     }
 
+    // Персона-исполнитель: write-набор в сабагенте разрешён только явным опт-ином
+    // при полном профиле доступа (не-Full профиль гасит флаг и в PersonaManager)
+    public static bool IsExecutor(Persona persona) =>
+        persona.Access == PersonaAccess.Full && persona.SubagentExecutor;
+
     // Полный allow-list консультанта. Custom.DisallowedTools персоны только СУЖАЕТ набор
     // (точное совпадение имени); Access расширить его не может — безопасность сабагента
-    // не зависит от профиля, рассчитанного на живой надзор.
+    // не зависит от профиля, рассчитанного на живой надзор. Единственное расширение —
+    // явный опт-ин исполнителя (IsExecutor).
     public static IReadOnlyList<string> Build(Persona persona, bool webAllowed)
     {
         var tools = new List<string>(BuiltIn);
+        if (IsExecutor(persona)) tools.AddRange(Executor);
         if (webAllowed) tools.AddRange(Web);
         tools.AddRange(TasksRead);
         tools.AddRange(NotesRead);

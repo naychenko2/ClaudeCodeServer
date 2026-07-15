@@ -748,7 +748,7 @@ export type PersonaAccess = 'full' | 'readOnly' | 'custom';
 // группировка/статус команды, роутинг памяти команды. none — не задана.
 export type PersonaSpecialty =
   | 'none' | 'analyst' | 'planner' | 'reviewer' | 'executor' | 'secretary'
-  | 'coordinator' | 'mentor' | 'designer' | 'consultant' | 'librarian';
+  | 'coordinator' | 'mentor' | 'designer' | 'consultant' | 'librarian' | 'tester';
 
 // Параметры кропа загруженного аватара: масштаб + смещение центра окна
 // от центра картинки (в пикселях исходника)
@@ -806,6 +806,8 @@ export interface Persona {
   access?: PersonaAccess;
   // Свой список запрещённых инструментов (только при access === 'custom')
   disallowedTools?: string[] | null;
+  // Исполнитель в сабагентах: write-набор (файлы + Bash) в файловом сабагенте; только при full
+  subagentExecutor?: boolean;
   // Ключ шаблона пантеона OmO, из которого подключена персона (null — создана вручную)
   templateKey?: string | null;
   // Привязки к источникам знаний и правилам (фича persona-bindings); null — нет

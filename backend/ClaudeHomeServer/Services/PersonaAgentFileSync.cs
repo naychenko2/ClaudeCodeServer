@@ -4,105 +4,111 @@ using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services;
 
-// Синхронизация персон в файловые сабагенты Claude Code. Раскладка:
-//   {dataDir}/persona-agents/{ownerId}/{providerKey|shared}/.claude/agents/{handle}.md
-// «shared» — персоны без явной модели (frontmatter без model = inherit, работают у любого
-// провайдера); {providerKey} — персоны с явной моделью (подключаются только в сессии того же
-// провайдера). Сессия получает эти папки через --add-dir на каждый ход — CLI перечитывает
-// файлы при старте процесса, правки персон применяются со следующего хода.
+// Синхронизация персон в файловые сабагенты Claude Code.
+//
+// Проектные персоны: {project.RootPath}/.claude/agents/{handle}.md
+//   — agent({agentType: "handle"}) в Workflow видит их нативно (CLI сканирует cwd).
+//
+// Глобальные персоны: пишутся во ВСЕ проекты владельца + резерв persona-agents.
+//   — видны в любом проекте пользователя.
+//
+// Для чатов вне проекта (личные чаты, без project RootPath):
+//   — файлы пишутся в persona-agents/{ownerId}/... и подключаются через --add-dir
+//   — там работает Task(), agent() не резолвится — но это ок.
 //
 // Стор персон — единственный источник истины (one-way): reconcile перезаписывает отличия
-// и удаляет посторонние *.md (ручные правки файлов не переживают синк — осознанно, это же
-// закрывает переименование handle). События PersonaManager дают мгновенную реакцию,
-// ленивый reconcile перед ходом (троттлинг) — страховку.
+// и удаляет посторонние *.md. События PersonaManager дают мгновенную реакцию.
 public sealed class PersonaAgentFileSync
 {
     private static readonly TimeSpan SyncTtl = TimeSpan.FromMinutes(5);
 
-    // Имена встроенных агентов CLI: персона с таким handle затёрла бы их для всей сессии —
-    // пропускаем с warn (персона остаётся доступной через persona_ask)
+    // Имена встроенных агентов CLI: персона с таким handle затёрла бы их — пропускаем
     public static readonly string[] ReservedAgentNames =
         ["general-purpose", "explore", "plan", "statusline-setup", "output-style-setup", "claude"];
 
-    // Ключ подпапки персон без явной модели
     public const string SharedDirKey = "shared";
 
-    private readonly string _baseDir;
     private readonly int _filesMax;
     private readonly PersonaManager _personas;
-    private readonly LlmProviderRegistry _providers;
+    private readonly ProjectManager _projects;
     private readonly PersonaBindingsService _bindings;
     private readonly PersonaAgentFileGenerator _generator;
+    private readonly LlmProviderRegistry _providers;
+    private readonly UserStore _users;
+    private readonly AppSettingsService _appSettings;
     private readonly ILogger<PersonaAgentFileSync> _log;
+    private readonly string _baseDir;
     private readonly ConcurrentDictionary<string, DateTime> _lastSync = new();
 
     public PersonaAgentFileSync(IConfiguration config, PersonaManager personas,
-        LlmProviderRegistry providers, PersonaBindingsService bindings,
-        PersonaAgentFileGenerator generator, ILogger<PersonaAgentFileSync> log)
+        ProjectManager projects, LlmProviderRegistry providers, PersonaBindingsService bindings,
+        PersonaAgentFileGenerator generator, UserStore users, AppSettingsService appSettings,
+        ILogger<PersonaAgentFileSync> log)
     {
         _personas = personas;
+        _projects = projects;
         _providers = providers;
         _bindings = bindings;
         _generator = generator;
+        _users = users;
+        _appSettings = appSettings;
         _log = log;
-        // Каталог — от DataPath, как у всех сторов (фолбэк BaseDirectory/data эфемерен в контейнере)
+        _filesMax = int.TryParse(config["Persona:AgentFilesMax"], out var max) && max > 0 ? max : 50;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
             ?? Path.Combine(AppContext.BaseDirectory, "data");
         _baseDir = config["PersonaAgentsPath"] ?? Path.Combine(dataDir, "persona-agents");
-        _filesMax = int.TryParse(config["Persona:AgentFilesMax"], out var max) && max > 0 ? max : 50;
 
-        // Мгновенная реакция на изменения; полный reconcile страхует пропуски
         personas.OnPersonaCreated += p => Safe(() => SyncPersona(p), "create", p);
         personas.OnPersonaChanged += p => Safe(() => SyncPersona(p), "update", p);
         personas.OnPersonaDeleted += p => Safe(() => RemovePersona(p), "delete", p);
     }
 
-    // Папки для --add-dir хода: провайдер сессии + shared, и при проектной сессии — те же
-    // пары с суффиксом проекта (проектные персоны видны только в СВОЁМ проекте, зеркало
-    // семантики GetForContext). Лениво реконсилит файлы владельца.
+    // Папки для --add-dir хода: только для чатов БЕЗ проекта (личные сессии).
+    // Для проектных сессий файлы уже лежат в .claude/agents/ на cwd проекта.
     public IReadOnlyList<string> GetAddDirs(string ownerId, string? sessionModel, string? projectId)
     {
         SyncOwner(ownerId);
+        if (projectId is not null) return []; // проектная сессия — cwd сам подхватит .claude/agents/
+
         var providerKey = _providers.ProviderKey(sessionModel);
-        var keys = new List<string> { providerKey, SharedDirKey };
-        if (projectId is not null)
-            keys.AddRange([ProjectDirKey(providerKey, projectId), ProjectDirKey(SharedDirKey, projectId)]);
-        var dirs = keys.Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(k => OwnerDir(ownerId, k)).ToList();
+        var dirs = new List<string> { OwnerDir(ownerId, providerKey), OwnerDir(ownerId, SharedDirKey) };
         foreach (var dir in dirs)
             Directory.CreateDirectory(Path.Combine(dir, ".claude", "agents"));
         return dirs;
     }
 
-    // Персоны владельца, для которых существуют файлы сабагентов: без зарезервированных
-    // handle, свежайшие по UpdatedAt в пределах капа (страховка от разрастания листинга Task)
     public IReadOnlyList<Persona> EligiblePersonas(string ownerId) =>
         _personas.GetByOwner(ownerId)
             .Where(p => !IsReserved(p.Handle))
             .Take(_filesMax)
             .ToList();
 
-    // Файл персоны: генерация в целевую подпапку + удаление одноимённых из прочих
-    // (персона могла сменить модель/провайдера)
     public void SyncPersona(Persona persona)
     {
         if (IsReserved(persona.Handle))
         {
-            _log.LogWarning("Персона @{Handle}: handle совпадает со встроенным агентом CLI — " +
-                            "файл сабагента не создаётся (доступна через persona_ask)", persona.Handle);
+            _log.LogWarning("Персона @{Handle}: handle совпадает со встроенным агентом CLI — файл не создаётся", persona.Handle);
             return;
         }
-        var targetKey = DirKeyFor(persona);
-        WriteIfChanged(AgentFilePath(persona.OwnerId, targetKey, persona.Handle), Generate(persona));
-        RemoveFromOtherDirs(persona.OwnerId, persona.Handle, keepKey: targetKey);
+
+        var content = Generate(persona);
+        var paths = ResolvePaths(persona).ToList();
+
+        foreach (var path in paths)
+            WriteIfChanged(path, content);
+
+        // Чистим старые места (там, где файл был, но больше не должен быть)
+        CleanStale(persona, paths);
     }
 
-    public void RemovePersona(Persona persona) =>
-        RemoveFromOtherDirs(persona.OwnerId, persona.Handle, keepKey: null);
+    public void RemovePersona(Persona persona)
+    {
+        foreach (var path in ResolvePaths(persona))
+            TryDelete(path);
+    }
 
-    // Полный reconcile владельца: ожидаемый набор из стора, запись отличий, удаление лишнего.
-    // Троттлинг 5 мин per-owner (паттерн LlmProviderRegistry._lastSync).
+    // Полный reconcile владельца. Троттлинг 5 мин.
     public void SyncOwner(string ownerId, bool force = false)
     {
         var last = _lastSync.GetOrAdd(ownerId, DateTime.MinValue);
@@ -112,20 +118,23 @@ public sealed class PersonaAgentFileSync
 
         try
         {
-            // Ожидаемое: (подпапка, файл) → контент
             var expected = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var persona in EligiblePersonas(ownerId))
-                expected[AgentFilePath(ownerId, DirKeyFor(persona), persona.Handle)] = Generate(persona);
+                foreach (var path in ResolvePaths(persona))
+                    expected[path] = Generate(persona);
 
             foreach (var (path, content) in expected)
                 WriteIfChanged(path, content);
 
-            // Папка эксклюзивно серверная: всё, чего нет в ожидаемом наборе, удаляется
-            var ownerRoot = Path.Combine(_baseDir, ownerId);
-            if (Directory.Exists(ownerRoot))
-                foreach (var file in Directory.EnumerateFiles(ownerRoot, "*.md", SearchOption.AllDirectories))
+            // Чистка persona-agents: удаляем лишнее
+            foreach (var dirKey in new[] { SharedDirKey }.Concat(_providers.All.Select(p => p.Key)))
+            {
+                var dir = Path.Combine(_baseDir, ownerId, dirKey, ".claude", "agents");
+                if (!Directory.Exists(dir)) continue;
+                foreach (var file in Directory.EnumerateFiles(dir, "*.md"))
                     if (!expected.ContainsKey(file))
                         TryDelete(file);
+            }
         }
         catch (Exception ex)
         {
@@ -135,30 +144,85 @@ public sealed class PersonaAgentFileSync
 
     // --- внутреннее ---
 
-    private string Generate(Persona persona) =>
-        _generator.Generate(persona, _bindings.EffectiveToolEnabled(persona.OwnerId, persona, "web"));
-
-    // Ключ подпапки: провайдер явной модели (или shared без неё) + суффикс проекта
-    // у проектных персон — файл виден только сессиям её проекта
-    private string DirKeyFor(Persona persona)
+    private IEnumerable<string> ResolvePaths(Persona persona)
     {
-        var baseKey = string.IsNullOrWhiteSpace(persona.Model)
+        var ownerId = persona.OwnerId ?? "";
+
+        // Проектная персона → только её проект
+        if (persona.Scope == PersonaScope.Project && persona.ProjectId is not null)
+        {
+            var project = _projects.GetById(persona.ProjectId);
+            if (project?.RootPath is not null)
+                yield return Path.Combine(project.RootPath, ".claude", "agents", persona.Handle + ".md");
+            yield break;
+        }
+
+        // Глобальная персона → все проекты владельца
+        foreach (var p in _projects.GetByOwner(ownerId))
+            if (p.RootPath is not null)
+                yield return Path.Combine(p.RootPath, ".claude", "agents", persona.Handle + ".md");
+
+        // Чат вне проекта: {DefaultProjectsPath}/{username}/Chats/.claude/agents/{handle}.md
+        // CLI использует эту папку как cwd для чатов вне проекта, поэтому agent() находит их.
+        if (ChatRoot(ownerId) is { } chatRoot)
+            yield return Path.Combine(chatRoot, ".claude", "agents", persona.Handle + ".md");
+
+        // Резерв: persona-agents для сессий без проекта и нестандартных cwd (--add-dir)
+        var baseDirKey = string.IsNullOrWhiteSpace(persona.Model)
             ? SharedDirKey : _providers.ProviderKey(persona.Model);
-        return persona is { Scope: PersonaScope.Project, ProjectId: not null }
-            ? ProjectDirKey(baseKey, persona.ProjectId) : baseKey;
+        yield return AgentFilePath(ownerId, baseDirKey, persona.Handle);
     }
 
-    private static string ProjectDirKey(string baseKey, string projectId) => $"{baseKey}@{projectId}";
+    // {DefaultProjectsPath}/{username}/Chats — cwd для чатов без проекта
+    private string? ChatRoot(string ownerId)
+    {
+        try
+        {
+            var basePath = _appSettings.Get().DefaultProjectsPath;
+            if (string.IsNullOrWhiteSpace(basePath)) return null;
+            var username = _users.GetById(ownerId)?.Username;
+            if (string.IsNullOrWhiteSpace(username)) return null;
+            return Path.Combine(basePath, username, "Chats");
+        }
+        catch { return null; }
+    }
+
+    // Удаляет файлы из проектов, где персоны уже быть не должно
+    private void CleanStale(Persona persona, IEnumerable<string> keep)
+    {
+        var keepSet = new HashSet<string>(keep, StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrEmpty(persona.OwnerId)) return;
+
+        // Чистим persona-agents в других dirKey
+        foreach (var dirKey in new[] { SharedDirKey }.Concat(_providers.All.Select(p => p.Key)))
+        {
+            var path = AgentFilePath(persona.OwnerId, dirKey, persona.Handle);
+            if (!keepSet.Contains(path)) TryDelete(path);
+        }
+
+        // Если глобальная — чистим проекты, где её не должно быть (= вернули projectId
+        // или сменили scope с project на global и надо убрать из чужих проектов)
+        foreach (var p in _projects.GetByOwner(persona.OwnerId))
+        {
+            if (p.Id == persona.ProjectId) continue;
+            var path = Path.Combine(p.RootPath ?? "", ".claude", "agents", persona.Handle + ".md");
+            if (!keepSet.Contains(path)) TryDelete(path);
+        }
+    }
+
+    private string AgentFilePath(string ownerId, string dirKey, string handle) =>
+        Path.Combine(_baseDir, ownerId, dirKey, ".claude", "agents", handle + ".md");
+
+    private string OwnerDir(string ownerId, string dirKey) =>
+        Path.Combine(_baseDir, ownerId, dirKey);
+
+    private string Generate(Persona persona) =>
+        _generator.Generate(persona, _bindings.EffectiveToolEnabled(persona.OwnerId ?? "", persona, "web"));
 
     public static bool IsReserved(string handle) =>
         ReservedAgentNames.Contains(handle, StringComparer.OrdinalIgnoreCase);
 
-    private string OwnerDir(string ownerId, string dirKey) => Path.Combine(_baseDir, ownerId, dirKey);
-
-    private string AgentFilePath(string ownerId, string dirKey, string handle) =>
-        Path.Combine(OwnerDir(ownerId, dirKey), ".claude", "agents", handle + ".md");
-
-    private void WriteIfChanged(string path, string content)
+    private static void WriteIfChanged(string path, string content)
     {
         try
         {
@@ -166,29 +230,13 @@ public sealed class PersonaAgentFileSync
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, content);
         }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Не удалось записать файл сабагента {Path}", path);
-        }
+        catch { /* не роняем */ }
     }
 
-    private void RemoveFromOtherDirs(string ownerId, string handle, string? keepKey)
-    {
-        var ownerRoot = Path.Combine(_baseDir, ownerId);
-        if (!Directory.Exists(ownerRoot)) return;
-        foreach (var dir in Directory.EnumerateDirectories(ownerRoot))
-        {
-            var dirKey = Path.GetFileName(dir);
-            if (keepKey is not null && string.Equals(dirKey, keepKey, StringComparison.OrdinalIgnoreCase))
-                continue;
-            TryDelete(Path.Combine(dir, ".claude", "agents", handle + ".md"));
-        }
-    }
-
-    private void TryDelete(string path)
+    private static void TryDelete(string path)
     {
         try { if (File.Exists(path)) File.Delete(path); }
-        catch (Exception ex) { _log.LogWarning(ex, "Не удалось удалить файл сабагента {Path}", path); }
+        catch { /* не роняем */ }
     }
 
     private void Safe(Action action, string op, Persona persona)

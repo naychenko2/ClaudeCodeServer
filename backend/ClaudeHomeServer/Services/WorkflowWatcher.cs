@@ -1,9 +1,13 @@
-﻿using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services;
 
 // Следит за папкой wf_* и шлёт workflow_progress по мере завершения агентов.
-// Завершается сам когда данные стабилизировались (30с без изменений) или по таймауту (20 мин).
+// УБЕРИ САМО-ЗАВЕРШЕНИЕ: между волнами агентов раннер делает паузы, и если
+// ватчер умрёт — новые агенты не попали бы в workflow_progress (см. реальный
+// кейс: Yuliya появилась через 45+ секунд после Sergey — ватчер уже диспознулся).
+// Вместо этого живём, пока жива сессия — чистимся в ClaudeSession.DisposeAsync.
+// PollInterval 5с — копеечная операция.
 public sealed class WorkflowWatcher : IDisposable
 {
     private readonly string _wfPath;
@@ -16,14 +20,10 @@ public sealed class WorkflowWatcher : IDisposable
     private DateTime _lastChange = DateTime.UtcNow;
     private volatile bool _disposed;
 
-    // Ватчер задиспозился сам (workflow стабилизировался или таймаут) — можно убирать из списков
+    // Ватчер задиспозился — можно убирать из списков
     public bool IsDisposed => _disposed;
 
     private static readonly TimeSpan DebounceDelay = TimeSpan.FromSeconds(2);
-    // Тишина после завершения ВСЕХ агентов, после которой считаем workflow стабильным.
-    private static readonly TimeSpan StableDelay = TimeSpan.FromSeconds(5);
-    // Периодический перечёт директории, пока агенты работают (они могут долго молчать
-    // в файлах, выполняя длинную команду — FileSystemWatcher тогда не сработает).
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
     // Аварийный потолок: длинные workflow (после снятия 600с-лимита) могут идти долго.
     private static readonly TimeSpan MaxDuration = TimeSpan.FromMinutes(60);
@@ -52,12 +52,14 @@ public sealed class WorkflowWatcher : IDisposable
     private void AttachFsWatcher()
     {
         if (_fsWatcher != null || !Directory.Exists(_wfPath)) return;
-        _fsWatcher = new FileSystemWatcher(_wfPath, "agent-*.jsonl")
+        _fsWatcher = new FileSystemWatcher(_wfPath)
         {
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
             EnableRaisingEvents = true,
             IncludeSubdirectories = false
         };
+        _fsWatcher.Filters.Add("agent-*.jsonl");
+        _fsWatcher.Filters.Add("journal.jsonl");
         _fsWatcher.Changed += OnFileChanged;
         _fsWatcher.Created += OnFileChanged;
     }
@@ -82,29 +84,32 @@ public sealed class WorkflowWatcher : IDisposable
         if (_disposed) return;
         try
         {
-            // Директория может появиться после Start() — подключаем FSWatcher как только она создана
             AttachFsWatcher();
 
             if (!Directory.Exists(_wfPath))
             {
-                // Директория ещё не создана — поллим каждые 2с
                 ScheduleDebounce(TimeSpan.FromSeconds(2));
                 return;
             }
 
             var agents = WorkflowAgentParser.ParseDirectory(_wfPath);
-            var allDone = agents.Count > 0 && agents.All(a => a.IsDone);
-            // Завершаем (stable=true) ТОЛЬКО когда все агенты done и файлы дописаны (тишина ≥5с).
-            // Пока хоть один агент работает — НЕ завершаемся, даже если файлы молчат: агент может
-            // выполнять длинную команду без вывода в jsonl (иначе рвали статус на промежуточном).
-            var stable = allDone && (DateTime.UtcNow - _lastChange) >= StableDelay;
+            var stable = agents.Count > 0 && agents.All(a => a.IsDone)
+                && (DateTime.UtcNow - _lastChange) >= TimeSpan.FromSeconds(45);
+
+            Console.WriteLine($"[WorkflowWatcher] SendUpdate: agents={agents.Count} done={agents.Count(a => a.IsDone)} types={string.Join(",", agents.Select(a => a.AgentType ?? "null"))} stable={stable}");
+
+            // isDone на фронте считается по result хода + done агентов, stable только для кэша.
+            // НЕ завершаемся — ждём новые волны. Диспозимся при ForceFinishAsync (таймаут)
+            // или из ClaudeSession.DisposeAsync.
             await _onMessage(new WorkflowProgressMessage(_toolUseId, agents, stable));
-            if (stable) { Dispose(); return; }
-            // Продолжаем периодически перечитывать директорию — даже если FileSystemWatcher молчит
-            // (агент в долгой команде), чтобы поймать финальные result и не зависнуть на спиннере.
-            ScheduleDebounce(PollInterval);
         }
-        catch { /* не роняем */ }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[WorkflowWatcher] ошибка SendUpdate: {ex.Message}");
+        }
+
+        if (!_disposed)
+            ScheduleDebounce(PollInterval);
     }
 
     private async Task ForceFinishAsync()

@@ -16,6 +16,9 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
     // Потолок ходов консультации — страховка от зацикливания фонового сабагента
     private const int MaxTurns = 25;
 
+    // У исполнителя потолок выше: реализация с проверкой (сборка/тесты) длиннее консультации
+    private const int ExecutorMaxTurns = 50;
+
     // Цвета, которые понимает CLI (Ky в бандле); прочие цвета палитры аватаров мапим на ближний
     private static readonly HashSet<string> CliColors =
         ["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"];
@@ -43,7 +46,7 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
             sb.AppendLine($"color: {color}");
         if (persona.MemoryEnabled)
             sb.AppendLine($"mcpServers: [{pmemKey}]");
-        sb.AppendLine($"maxTurns: {MaxTurns}");
+        sb.AppendLine($"maxTurns: {(PersonaConsultantToolset.IsExecutor(persona) ? ExecutorMaxTurns : MaxTurns)}");
         sb.AppendLine("---");
         sb.AppendLine();
 
@@ -70,10 +73,22 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
         }
 
         sb.AppendLine();
-        sb.AppendLine("## Границы консультанта");
-        sb.AppendLine("Ты работаешь только на чтение: изучай файлы, заметки, задачи и базы знаний, " +
-                      "но ничего не изменяй (единственное исключение — твоя собственная память). " +
-                      "Не вызывай других сабагентов и персон — консультант здесь ты.");
+        if (PersonaConsultantToolset.IsExecutor(persona))
+        {
+            sb.AppendLine("## Рабочий доступ исполнителя");
+            sb.AppendLine("Тебе доверен рабочий доступ: можешь править файлы и запускать команды, " +
+                          "но ТОЛЬКО в рамках переданной задачи. Вноси наименьшие достаточные изменения, " +
+                          "проверяй результат свидетельствами (сборка/тесты — покажи вывод), ничего не " +
+                          "удаляй безвозвратно и не трогай файлы вне задачи. " +
+                          "Не вызывай других сабагентов и персон — исполнитель здесь ты.");
+        }
+        else
+        {
+            sb.AppendLine("## Границы консультанта");
+            sb.AppendLine("Ты работаешь только на чтение: изучай файлы, заметки, задачи и базы знаний, " +
+                          "но ничего не изменяй (единственное исключение — твоя собственная память). " +
+                          "Не вызывай других сабагентов и персон — консультант здесь ты.");
+        }
 
         return sb.ToString();
     }
@@ -89,7 +104,20 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
             sb.Append(" — ").Append(persona.Description.Trim());
         sb.Append(" Персона-консультант пользователя: вызывай, когда нужна её экспертиза или " +
                   "пользователь упоминает её @handle. Вопрос в prompt формулируй самодостаточно — " +
-                  "она не видит текущий разговор.");
+                  "она не видит текущий разговор. Для вызова в Workflow (скрипт через /workflow " +
+                  "или штатный запуск) используй agentType \"" + persona.Handle + "\" — это имя " +
+                  "её .md-агента в файловой системе.");
+        var isExecutor = PersonaConsultantToolset.IsExecutor(persona);
+        if (isExecutor)
+            sb.Append(" Исполнитель: может править файлы и запускать команды в рамках задачи.");
+        // Нотация oh-my-claudecode: по специальности оркестратор замещает персоной
+        // одноимённые типы плагина (см. OmcPersonaRouting; исполнительские — только с write)
+        var omcTypes = Prompts.OmcPersonaRouting.AgentTypesFor(
+            Prompts.OmcPersonaRouting.EffectiveSpecialty(persona), isExecutor);
+        if (omcTypes.Length > 0)
+            sb.Append(" Замещает типы субагентов: ")
+              .Append(string.Join(", ", omcTypes.Select(t => "oh-my-claudecode:" + t)))
+              .Append('.');
         var text = sb.ToString();
         return text.Length <= DescriptionMaxChars ? text : text[..DescriptionMaxChars].TrimEnd() + "…";
     }

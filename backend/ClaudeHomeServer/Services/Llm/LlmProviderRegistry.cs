@@ -42,6 +42,16 @@ public class LlmProviderRegistry
     // MCP-серверов (claude mcp add), которые изолированный профиль провайдера не видит
     public string UserClaudeJsonPath => _userProfileDir + ".json";
 
+    // Папка, где лежат изолированные профили CLI-провайдеров (claude-profiles/{key})
+    public string ProfilesDir => _profilesDir;
+
+    // Возвращает пути к projects/ внутри профилей всех включённых провайдеров —
+    // для WorkflowAgentParser (транскрипты workflow лежат там, а не в ~/.claude/projects/
+    // при использовании стороннего провайдера).
+    public IEnumerable<string> GetProviderProjectsDirs() =>
+        _providers.Keys.Select(k => Path.Combine(_profilesDir, k, "projects"))
+            .Where(d => Directory.Exists(d));
+
     public IEnumerable<LlmProviderConfig> Enabled => _providers.Values.Where(p => p.Enabled);
 
     public LlmProviderConfig? GetByKey(string? key) =>

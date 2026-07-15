@@ -134,7 +134,7 @@ public class PersonaManager
         string? color, string? greeting, bool memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess access = PersonaAccess.Full,
         List<string>? disallowedTools = null, PersonaSpecialty specialty = PersonaSpecialty.None,
-        bool allProjectsAccess = false)
+        bool allProjectsAccess = false, bool subagentExecutor = false)
     {
         var persona = new Persona
         {
@@ -155,6 +155,8 @@ public class PersonaManager
             Access = access,
             // Свой список запретов имеет смысл только при Custom-профиле
             DisallowedTools = access == PersonaAccess.Custom ? NormalizeDisallowed(disallowedTools) : null,
+            // Write-доступ в сабагентах — только при полном профиле доступа
+            SubagentExecutor = access == PersonaAccess.Full && subagentExecutor,
             // Доступ ко всем проектам имеет смысл только у глобальных персон
             AllProjectsAccess = scope == PersonaScope.Global && allProjectsAccess,
             Avatar = new PersonaAvatar { Kind = PersonaAvatarKind.Initials, Color = color },
@@ -250,7 +252,7 @@ public class PersonaManager
         string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess? access = null,
         List<string>? disallowedTools = null, PersonaSpecialty? specialty = null,
-        bool? allProjectsAccess = null)
+        bool? allProjectsAccess = null, bool? subagentExecutor = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -289,6 +291,9 @@ public class PersonaManager
             if (access is not null) persona.Access = access.Value;
             if (disallowedTools is not null) persona.DisallowedTools = NormalizeDisallowed(disallowedTools);
             if (persona.Access != PersonaAccess.Custom) persona.DisallowedTools = null;
+            // Write-доступ в сабагентах: null — не менять; при не-Full профиле гаснет всегда
+            if (subagentExecutor is not null) persona.SubagentExecutor = subagentExecutor.Value;
+            if (persona.Access != PersonaAccess.Full) persona.SubagentExecutor = false;
             // null — не менять; иначе — только для глобальной персоны (после применения scope выше)
             if (allProjectsAccess is not null)
                 persona.AllProjectsAccess = allProjectsAccess.Value && persona.Scope == PersonaScope.Global;

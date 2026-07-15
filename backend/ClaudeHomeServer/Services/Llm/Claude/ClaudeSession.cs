@@ -267,6 +267,13 @@ public class ClaudeSession : ILlmSessionAdapter
 
             if (hasPersonas)
             {
+                // persona_ask выключен когда есть файловые сабагенты-персоны:
+                // модель должна использовать Task(agentType=...) в Workflow, а не путаться.
+                // Без agentDepth < 1 — на агентном ходу тоже выключаем (анти-рекурсия).
+                var personaMentions = _personasMcp.MentionsHint is not null
+                    && personaAgents is not { AgentHandles.Count: > 0 }
+                    && _currentTurnAgentDepth < 1
+                    ? "1" : "0";
                 servers["personas"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
@@ -278,10 +285,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["PERSONAS_API_TOKEN"] = _personasMcp.Token,
                         ["PERSONAS_PROJECT_ID"] = _personasMcp.ProjectId ?? "",
                         ["PERSONAS_SELF_ID"] = _personasMcp.SelfPersonaId ?? "",
-                        // Инструмент persona_ask регистрируется только при включённых @упоминаниях;
-                        // на агентном ходу (chats_send из другой сессии) выключаем — анти-рекурсия
-                        ["PERSONAS_MENTIONS"] = _personasMcp.MentionsHint is not null && _currentTurnAgentDepth < 1 ? "1" : "0",
-                        // Инструменты привязок (personas_bindings_*) — за флагом persona-bindings
+                        ["PERSONAS_MENTIONS"] = personaMentions,
                         ["PERSONAS_BINDINGS"] = _personasMcp.BindingsEnabled ? "1" : "0",
                     },
                 };
@@ -495,13 +499,14 @@ public class ClaudeSession : ILlmSessionAdapter
     // reject → deny с комментарием, Claude остаётся в режиме планирования
     public void RespondPlan(string requestId, bool approve, string? feedback)
     {
-        if (!_pendingPlans.TryRemove(requestId, out var input)) return;
+        if (!_pendingPlans.TryRemove(requestId, out _)) return;
         if (approve)
         {
-            // Ждём, что Claude реализует план в этом ходу; если завершит без правок — дошлём команду
+            // Ждём, что Claude реализует план в этом ходу; если завершит без правок — дошлём команду.
+            // allow без updatedInput — CLI продолжит с исходным планом (см. HandleControlRequestAsync)
             _awaitPlanExecution = true;
             _sawToolSinceApprove = false;
-            SendControlResponse(requestId, new { behavior = "allow", updatedInput = input });
+            SendControlResponse(requestId, new { behavior = "allow" });
         }
         else
         {
@@ -552,8 +557,12 @@ public class ClaudeSession : ILlmSessionAdapter
 
         var behavior = await DecidePermissionAsync(requestId, toolName, inputEl, input);
         if (behavior == "cancelled") return; // Interrupt — процесс убит, отвечать некому
+        // allow БЕЗ updatedInput: CLI продолжает с исходным вводом модели. Эхо updatedInput
+        // ломало Workflow — возвращённый хэндлером ввод CLI прогоняет через доп. проверку
+        // «управляющие символы, скрытые в диалоге одобрения» (исходный ввод модели ей не
+        // подвергается), и резолвнутый script именованного workflow её не проходил.
         SendControlResponse(requestId, behavior == "allow"
-            ? new { behavior = "allow", updatedInput = input }
+            ? new { behavior = "allow" }
             : (object)new { behavior = "deny", message = "Пользователь отклонил действие" });
     }
 
@@ -906,6 +915,25 @@ public class ClaudeSession : ILlmSessionAdapter
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? mentionsHint
                     : basePrompt + "\n\n" + mentionsHint;
+            }
+
+            // Подсказка про субагентов-персон в Workflow: перечисляем handle'ы доступных
+            // .md-агентов (из --add-dir) — модель должна знать, что их можно вызывать
+            // через agentType в Task(agentType="handle", "prompt": "...") внутри workflow-скрипта.
+            // ВАЖНО: добавляем ВСЕГДА. persona_ask — это одноразовый вопрос в чат, НЕ для Workflow.
+            if (personaAgents is { AgentHandles.Count: > 0 })
+            {
+                var workflowHint =
+                    "## Персоны-субагенты в Workflow\n" +
+                    "У пользователя есть персоны-субагенты (файловые .md-агенты). " +
+                    "Их можно вызывать в Workflow через Task(agentType=\"<handle>\", prompt=\"...\"). " +
+                    "НЕ используй persona_ask (MCP-инструмент) для вызова внутри Workflow — " +
+                    "persona_ask задаёт одноразовый вопрос в отдельный чат, а не запускает субагента. " +
+                    "Для Workflow всегда используй Task(agentType=\"handle\").\n" +
+                    "Доступные agentType: " + string.Join(", ", personaAgents.AgentHandles) + ".";
+                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                    ? workflowHint
+                    : basePrompt + "\n\n" + workflowHint;
             }
 
             // Auto-recall долгой памяти персоны: релевантные записи по тексту хода.
@@ -1360,6 +1388,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 if (m.Success)
                 {
                     var transcriptDir = m.Groups[1].Value.Trim();
+                    Console.WriteLine($"[WorkflowWatcher] старт: dir={transcriptDir} allowed={WorkflowAgentParser.IsPathAllowed(transcriptDir)}");
                     var watcher = new WorkflowWatcher(transcriptDir, toolUseId, _onMessage);
                     lock (_workflowWatchers)
                     {
@@ -1490,11 +1519,11 @@ public class ClaudeSession : ILlmSessionAdapter
         var behavior = await DecidePermissionAsync(requestId, toolName, inputEl, toolInput);
         if (behavior == "cancelled") return; // Interrupt — процесс убит, отвечать некому
 
+        // Без updated_input — CLI продолжает с исходным вводом (см. HandleControlRequestAsync)
         var response = JsonSerializer.Serialize(new
         {
             type = "control_response",
-            behavior,
-            updated_input = toolInput
+            behavior
         });
         WriteLineToStdin(response);
     }

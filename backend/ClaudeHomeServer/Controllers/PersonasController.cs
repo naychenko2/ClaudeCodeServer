@@ -160,7 +160,7 @@ public class PersonasController : ControllerBase
             req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
             req.MemoryEnabled ?? true, req.Tools, req.Contract,
             access ?? PersonaAccess.Full, req.DisallowedTools, req.Specialty ?? PersonaSpecialty.None,
-            req.AllProjectsAccess ?? false);
+            req.AllProjectsAccess ?? false, req.SubagentExecutor ?? false);
         if (bindings.Count > 0)
             persona = _personas.UpdateBindings(persona.Id, UserId, bindings);
         // Авто-подбор привязок (autoBindings) — best-effort:
@@ -191,7 +191,7 @@ public class PersonasController : ControllerBase
         var persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
             req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
             req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, req.Specialty,
-            req.AllProjectsAccess);
+            req.AllProjectsAccess, req.SubagentExecutor);
         await Broadcast("updated", id);
         return Ok(persona);
     }
@@ -1792,6 +1792,8 @@ public record CreatePersonaRequest(
     bool? AutoBindings = null,
     // Доступ ко всем проектам владельца (текущим и будущим) — только для Scope.Global
     bool? AllProjectsAccess = null,
+    // Исполнитель в сабагентах (write-набор в файловом сабагенте); только при Access=full
+    bool? SubagentExecutor = null,
     // true — после создания сгенерировать фото-аватар (best-effort, требует Fal:ApiKey).
     // Опт-ин для авто/LLM-путей создания (напр. пакетная команда из ai/team) — обычное
     // создание через форму/мастер не шлёт этот параметр, там инициалы или явный выбор
@@ -1822,7 +1824,9 @@ public record UpdatePersonaRequest(
     PersonaSpecialty? Specialty = null,
     // Доступ ко всем проектам владельца (текущим и будущим); null — не менять.
     // Игнорируется (сбрасывается в false), если персона не Scope.Global
-    bool? AllProjectsAccess = null);
+    bool? AllProjectsAccess = null,
+    // Исполнитель в сабагентах; null — не менять, гаснет при Access != full
+    bool? SubagentExecutor = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);

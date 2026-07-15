@@ -117,7 +117,7 @@ const REMINDER_MINUTES_SCHEMA = {
 // (MCP personas-server). Назначение персоны автоматически ставит исполнителя Claude.
 const PERSONA_ID_SCHEMA = {
   type: 'string',
-  description: 'ID персоны-исполнителя (см. personas_list). Задачу выполнит Claude от её лица. "" — снять персону.',
+  description: 'ID персоны-исполнителя (см. personas_list). Задачу выполнит Claude от её лица. При указании personaId assignee ставить не нужно — он выставится автоматически. "" — снять персону.',
 };
 
 // Время жизни чата исполнения (актуально только при исполнителе Claude/персона):

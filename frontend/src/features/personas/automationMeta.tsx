@@ -97,5 +97,5 @@ export function rulesCounter(rules: PersonaAutomationRule[]): string {
 export const SPECIALTY_LABEL: Record<string, string> = {
   analyst: 'Аналитик', planner: 'Планировщик', reviewer: 'Ревьюер', executor: 'Исполнитель',
   secretary: 'Секретарь', coordinator: 'Координатор', mentor: 'Ментор', designer: 'Дизайнер',
-  consultant: 'Консультант', librarian: 'Библиотекарь',
+  consultant: 'Консультант', librarian: 'Библиотекарь', tester: 'Тестировщик',
 };

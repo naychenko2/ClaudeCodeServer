@@ -58,8 +58,9 @@ public class SkillTranslationService(
 
     // items: (ключ source@skill, английский текст). Возвращает ключ → русский перевод
     // (только для успешно переведённых). Уже кэшированные (по неизменному тексту) не переводятся повторно.
+    // timeout — переопределение дефолтного (Skills:TranslateTimeoutMs) для неспешных фоновых путей.
     public async Task<IReadOnlyDictionary<string, string>> TranslateDescriptionsAsync(
-        IReadOnlyList<(string Key, string Text)> items, CancellationToken ct = default)
+        IReadOnlyList<(string Key, string Text)> items, TimeSpan? timeout = null, CancellationToken ct = default)
     {
         var result = new Dictionary<string, string>();
         var toTranslate = new List<(string Key, string Text)>();
@@ -85,7 +86,7 @@ public class SkillTranslationService(
 
         try
         {
-            var ans = await runner.RunAsync(sb.ToString(), runner.NormalizeModel(AiModel), Timeout, ct);
+            var ans = await runner.RunAsync(sb.ToString(), runner.NormalizeModel(AiModel), timeout ?? Timeout, ct);
             var map = ParseTranslations(ans);
             for (var i = 0; i < toTranslate.Count; i++)
             {

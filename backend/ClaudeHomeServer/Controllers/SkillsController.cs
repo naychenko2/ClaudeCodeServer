@@ -14,6 +14,7 @@ public class SkillsController(
     SkillsCliService cli,
     SkillSuggestService suggest,
     SkillTranslationService translation,
+    PluginSkillLocalizer pluginLocalizer,
     PersonaManager personas,
     PersonaBindingsService bindings,
     ProjectManager projects) : ControllerBase
@@ -36,7 +37,7 @@ public class SkillsController(
                 projectSkills = skills.GetProjectSkills(root),
                 agents = skills.GetProjectAgents(root),
                 workflows = skills.GetGlobalWorkflows(),
-                plugins = skills.GetPluginSkills(),
+                plugins = pluginLocalizer.Localize(skills.GetPluginSkills()),
             });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -47,7 +48,8 @@ public class SkillsController(
     // вызываются той же командой /имя, что и скиллы (разворачивает их сам CLI).
     [HttpGet("api/skills")]
     public IActionResult ListGlobal() =>
-        Ok(skills.GetGlobalSkills().Concat(skills.GetGlobalWorkflows()).Concat(skills.GetPluginSkills()).ToList());
+        Ok(skills.GetGlobalSkills().Concat(skills.GetGlobalWorkflows())
+            .Concat(pluginLocalizer.Localize(skills.GetPluginSkills())).ToList());
 
     // --- Реестр: поиск и установка (обёртка npx skills) ---
 

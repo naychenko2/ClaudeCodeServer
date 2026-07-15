@@ -61,6 +61,8 @@ public class TaskManager
             id = Guid.NewGuid().ToString();
         }
 
+        // Персона-исполнитель: assignee=Claude выставляется автоматом, если модель забыла
+        var hasPersona = !string.IsNullOrEmpty(req.PersonaId);
         var task = new TaskItem
         {
             Id = id,
@@ -75,9 +77,10 @@ public class TaskManager
             DueTime = string.IsNullOrEmpty(req.DueTime) ? null : req.DueTime,
             ReminderMinutes = req.ReminderMinutes is < 0 ? null : req.ReminderMinutes,
             Recurrence = req.Recurrence is { Type: not TaskRecurrenceType.None } ? req.Recurrence : null,
-            Assignee = req.Assignee,
+            // personaId подразумевает исполнителя Claude — нормализуем, если модель передала не то
+            Assignee = hasPersona ? TaskItemAssignee.Claude : (req.Assignee ?? TaskItemAssignee.Me),
             LinkedSessionId = req.LinkedSessionId,
-            PersonaId = string.IsNullOrEmpty(req.PersonaId) ? null : req.PersonaId,
+            PersonaId = hasPersona ? req.PersonaId : null,
             // Не передано — дефолт 1440 (сутки); отрицательное — бессрочно; N>=0 — TTL
             ExecutionExpiresAfterMinutes = req.ExecutionExpiresAfterMinutes switch
             {

@@ -59,7 +59,7 @@ public record NotificationsMcpContext(string ApiUrl, string Token);
 public sealed record ConsultantMemoryServer(string ServerKey, string ApiUrl, string Token,
     string PersonaId, string? ProjectId = null);
 
-// Файловые сабагенты-персоны (флаг persona-subagents): папки для --add-dir хода
+// Файловые сабагенты-персоны: папки для --add-dir хода
 // (внутри — .claude/agents/{handle}.md) + pmem-серверы смонтированных персон.
 public sealed record PersonaAgentsContext(IReadOnlyList<string> AddDirs,
     IReadOnlyList<ConsultantMemoryServer> MemoryServers);
@@ -103,7 +103,7 @@ public sealed record LlmSessionContext(
     // промпта (null — фича выключена или сессия без персоны). Вычисляется каждый ход;
     // флаг проверяется внутри, ошибки — тихо в null (ход идёт без блока).
     Func<string, Task<string?>>? BindingsProvider = null,
-    // Файловые сабагенты-персоны (флаг persona-subagents): вычисляется на КАЖДЫЙ ход
+    // Файловые сабагенты-персоны: вычисляется на КАЖДЫЙ ход
     // (актуальные персоны/модель сессии), внутри — троттлёный reconcile файлов.
     // null — фича выключена или нет владельца; вызов может вернуть null.
     Func<PersonaAgentsContext?>? PersonaAgentsProvider = null);

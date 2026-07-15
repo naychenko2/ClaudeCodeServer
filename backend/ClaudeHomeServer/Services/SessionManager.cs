@@ -719,13 +719,13 @@ public class SessionManager
             .ToList();
     }
 
-    // Разделение персон по способу консультации (флаг persona-subagents): того же провайдера
-    // с файлом сабагента — через встроенный Task; остальные (другой провайдер, зарезервированный
-    // handle, за капом файлов, флаг выключен) — через persona_ask, как раньше.
+    // Разделение персон по способу консультации: того же провайдера с файлом сабагента —
+    // через встроенный Task; остальные (другой провайдер, зарезервированный handle,
+    // за капом файлов) — через persona_ask, как раньше.
     private (List<Persona> Subagents, List<Persona> ViaAsk) SplitConsultants(
         string ownerId, Session session, List<Persona> personas)
     {
-        if (_agentSync is null || !_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaSubagents))
+        if (_agentSync is null)
             return ([], personas);
         var sessionProvider = _llmProviders.ProviderKey(session.Model);
         var eligible = _agentSync.EligiblePersonas(ownerId).Select(p => p.Id)
@@ -744,10 +744,10 @@ public class SessionManager
         return (subagents, viaAsk);
     }
 
-    // План файловых сабагентов-персон на ход (флаг persona-subagents): папки для --add-dir +
-    // pmem-серверы памяти видимых персон. Замыкание вычисляется на каждый ход (актуальные
-    // персоны и модель сессии); внутри — троттлёный reconcile файлов. Ошибки → null (ход
-    // идёт без консультантов, persona_ask остаётся).
+    // План файловых сабагентов-персон на ход: папки для --add-dir + pmem-серверы памяти
+    // видимых персон. Замыкание вычисляется на каждый ход (актуальные персоны и модель
+    // сессии); внутри — троттлёный reconcile файлов. Ошибки → null (ход идёт без
+    // консультантов, persona_ask остаётся).
     private Func<PersonaAgentsContext?>? BuildPersonaAgentsProvider(string? ownerId, Session session)
     {
         if (ownerId is null || _agentSync is null) return null;
@@ -755,7 +755,6 @@ public class SessionManager
         {
             try
             {
-                if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaSubagents)) return null;
                 var projectId = session.ProjectId;
                 var addDirs = _agentSync.GetAddDirs(ownerId, session.Model, projectId);
                 // pmem — для ВСЕХ видимых персон с памятью (включая персону самого чата):

@@ -69,7 +69,7 @@ builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<TeamMemoryService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
-// Файловые сабагенты-персоны (флаг persona-subagents): генерация + синк .md-агентов
+// Файловые сабагенты-персоны: генерация + синк .md-агентов
 builder.Services.AddSingleton<PersonaAgentFileGenerator>();
 builder.Services.AddSingleton<PersonaAgentFileSync>();
 builder.Services.AddSingleton<FalImageService>();

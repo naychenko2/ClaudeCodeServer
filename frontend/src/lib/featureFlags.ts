@@ -12,8 +12,6 @@ import { useSyncExternalStore } from 'react';
 // (стор, useFeature, модалка «Экспериментальные функции») оставлена для будущих флагов.
 export const FLAGS = {
   workspaceDestructive: 'workspace-destructive',
-  // Персоны-консультанты как файловые сабагенты (read-only инструменты + своя память)
-  personaSubagents: 'persona-subagents',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

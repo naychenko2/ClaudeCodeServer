@@ -106,7 +106,7 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly WorkspaceMcpContext? _workspaceMcp;
     // MCP-сервер уведомлений: создание уведомлений из Claude/агентов
     private readonly NotificationsMcpContext? _notificationsMcp;
-    // Файловые сабагенты-персоны (флаг persona-subagents): план хода — папки --add-dir
+    // Файловые сабагенты-персоны: план хода — папки --add-dir
     // + pmem-серверы памяти консультантов; вычисляется на каждый ход
     private readonly Func<PersonaAgentsContext?>? _personaAgentsProvider;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
@@ -332,7 +332,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 };
             }
 
-            // pmem-серверы персон-консультантов (файловые сабагенты, флаг persona-subagents):
+            // pmem-серверы персон-консультантов (файловые сабагенты):
             // тот же memory-server под уникальным ключом pmem_<handle> с env КОНСУЛЬТАНТА —
             // файл агента ссылается на него по имени (mcpServers: [pmem_<handle>]), токен
             // живёт только в этом временном конфиге. БЕЗ alwaysLoad: ленивое подключение,
@@ -697,7 +697,7 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!string.IsNullOrWhiteSpace(Info.Effort))
             args.AddRange(["--effort", Info.Effort]);
 
-        // Файловые сабагенты-персоны (флаг persona-subagents): на агентном ходу не монтируем
+        // Файловые сабагенты-персоны: на агентном ходу не монтируем
         // (анти-рекурсия, как TASKS_EXECUTE/PERSONAS_MENTIONS); без Task консультанты
         // недостижимы — план не собираем. Ошибки провайдера — ход без консультантов.
         PersonaAgentsContext? personaAgents = null;

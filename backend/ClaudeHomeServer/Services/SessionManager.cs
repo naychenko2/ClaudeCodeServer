@@ -118,6 +118,8 @@ public class SessionManager
     private readonly PersonaPromptBuilder _promptBuilder;
     private readonly ILogger<SessionManager> _log;
 
+    private readonly PersonaAgentFileSync? _agentSync;
+
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
         FalCostService falCost, UsageService usage,
@@ -127,8 +129,11 @@ public class SessionManager
         NotesKnowledgeService notesKb, FeatureFlagService flags, PersonaManager personas,
         PersonaMemoryService personaMemory, PersonaBindingsService bindings,
         PersonaPromptBuilder promptBuilder,
-        ILogger<SessionManager> log)
+        ILogger<SessionManager> log,
+        // Опционально (в тестах не передаётся): синк файловых сабагентов-персон
+        PersonaAgentFileSync? agentSync = null)
     {
+        _agentSync = agentSync;
         _projects = projects;
         _hub = hub;
         _history = history;
@@ -697,9 +702,135 @@ public class SessionManager
         sb.AppendLine("Сейчас отвечаешь ты. Отвечай ТОЛЬКО от своего лица и в своём характере — " +
                       "НЕ сочиняй и не пиши реплики за других участников.");
         sb.Append("Если пользователь обращается ко всем или просит мнение другого участника — " +
-                  "спроси его инструментом persona_ask и передай суть ответа своими словами, " +
-                  "явно указав автора.");
+                  "спроси его (способ указан в блоке о консультациях с персонами) и передай " +
+                  "суть ответа своими словами, явно указав автора.");
         return sb.ToString();
+    }
+
+    // Кандидаты на консультацию: участники группового чата либо доступные в контексте
+    // персоны (глобальные + текущего проекта), без персоны самого чата
+    private List<Persona> ResolveOtherPersonas(string ownerId, string? projectId, Session session)
+    {
+        var isGroup = session.Participants is { Count: > 1 };
+        return (isGroup
+                ? session.Participants!.Select(id => _personas.Get(id, ownerId)).OfType<Persona>()
+                : _personas.GetForContext(ownerId, projectId))
+            .Where(p => p.Id != session.PersonaId)
+            .ToList();
+    }
+
+    // Разделение персон по способу консультации (флаг persona-subagents): того же провайдера
+    // с файлом сабагента — через встроенный Task; остальные (другой провайдер, зарезервированный
+    // handle, за капом файлов, флаг выключен) — через persona_ask, как раньше.
+    private (List<Persona> Subagents, List<Persona> ViaAsk) SplitConsultants(
+        string ownerId, Session session, List<Persona> personas)
+    {
+        if (_agentSync is null || !_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaSubagents))
+            return ([], personas);
+        var sessionProvider = _llmProviders.ProviderKey(session.Model);
+        var eligible = _agentSync.EligiblePersonas(ownerId).Select(p => p.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var subagents = new List<Persona>();
+        var viaAsk = new List<Persona>();
+        foreach (var p in personas)
+        {
+            var sameProvider = string.IsNullOrWhiteSpace(p.Model)
+                || _llmProviders.ProviderKey(p.Model) == sessionProvider;
+            if (sameProvider && eligible.Contains(p.Id) && !PersonaAgentFileSync.IsReserved(p.Handle))
+                subagents.Add(p);
+            else
+                viaAsk.Add(p);
+        }
+        return (subagents, viaAsk);
+    }
+
+    // План файловых сабагентов-персон на ход (флаг persona-subagents): папки для --add-dir +
+    // pmem-серверы памяти видимых персон. Замыкание вычисляется на каждый ход (актуальные
+    // персоны и модель сессии); внутри — троттлёный reconcile файлов. Ошибки → null (ход
+    // идёт без консультантов, persona_ask остаётся).
+    private Func<PersonaAgentsContext?>? BuildPersonaAgentsProvider(string? ownerId, Session session)
+    {
+        if (ownerId is null || _agentSync is null) return null;
+        return () =>
+        {
+            try
+            {
+                if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.PersonaSubagents)) return null;
+                var projectId = session.ProjectId;
+                var addDirs = _agentSync.GetAddDirs(ownerId, session.Model, projectId);
+                // pmem — для ВСЕХ видимых персон с памятью (включая персону самого чата):
+                // файлы в add-dir видны все, определение сервера дешёвое (ленивый, без процесса)
+                var (subagents, _) = SplitConsultants(ownerId, session,
+                    _personas.GetForContext(ownerId, projectId).ToList());
+                var entry = _notesTokens.AddOrUpdate(ownerId,
+                    id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
+                    (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
+                        ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
+                        : old);
+                var servers = subagents
+                    .Where(p => p.MemoryEnabled)
+                    .Select(p => new ConsultantMemoryServer(
+                        PersonaConsultantToolset.PmemServerKey(p.Handle),
+                        ResolveTasksApiUrl(), entry.Token, p.Id,
+                        p.Scope == PersonaScope.Project ? p.ProjectId : null))
+                    .ToList();
+                return new PersonaAgentsContext(addDirs, servers);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "План сабагентов-персон не собрался — ход без файловых консультантов");
+                return null;
+            }
+        };
+    }
+
+    // Блок-подсказка о консультациях: две группы — сабагенты (Task) и persona_ask
+    private string? BuildMentionsHint(string ownerId, Session session, List<Persona> others)
+    {
+        if (others.Count == 0) return null;
+        var (subagents, viaAsk) = SplitConsultants(ownerId, session, others);
+        var sb = new System.Text.StringBuilder();
+        if (subagents.Count > 0)
+        {
+            sb.AppendLine("Персоны-консультанты доступны как сабагенты: вызывай встроенный инструмент " +
+                "Task с subagent_type=\"<handle>\" и самодостаточным вопросом в prompt — персона не видит " +
+                "этот разговор; она сама прочитает нужные файлы, заметки и свою память и ответит от " +
+                "своего лица. Не вызывай сабагента со своим собственным handle — отвечай сам. " +
+                "Инструменты mcp__pmem_* НЕ вызывай напрямую — это личная память персон-консультантов, " +
+                "она доступна только им самим; чтобы узнать, что персона помнит, спроси её через Task. " +
+                "Когда пользователь упоминает персону через @handle — обязательно обратись к ней " +
+                "и учти её ответ. В мультиагентных обсуждениях (workflow /panel-of-experts) по умолчанию " +
+                "распределяй роли панели между этими персонами: передавай их handle в args.participants " +
+                "(роли по порядку: Генератор, Критик, Адвокат, Модератор), подбирая персону под роль " +
+                "по её характеру. Доступные консультанты:");
+            AppendPersonaLines(sb, subagents);
+        }
+        if (viaAsk.Count > 0)
+        {
+            if (subagents.Count > 0)
+                sb.AppendLine("Эти персоны доступны только инструментом persona_ask (параметры: handle, " +
+                    "question, context?) — ответ придёт от их лица, с их характером и памятью:");
+            else
+                sb.AppendLine("Любую персону можно спросить инструментом persona_ask (параметры: handle, " +
+                    "question, context?) — она ответит от своего лица, со своим характером и памятью. " +
+                    "Когда пользователь упоминает персону через @handle — обязательно обратись к ней " +
+                    "через persona_ask и учти её ответ. Вопрос формулируй самодостаточно: персона не " +
+                    "видит этот разговор. Если вызов вернул «No such tool available» — сервер персон ещё " +
+                    "подключается: подожди мгновение и повтори тот же вызов. Доступные собеседники:");
+            AppendPersonaLines(sb, viaAsk);
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    private static void AppendPersonaLines(System.Text.StringBuilder sb, List<Persona> personas)
+    {
+        foreach (var p in personas)
+        {
+            var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
+            sb.Append($"- @{p.Handle} — {title}");
+            if (!string.IsNullOrWhiteSpace(p.Description)) sb.Append($": {p.Description.Trim()}");
+            sb.AppendLine();
+        }
     }
 
     // Контекст MCP-сервера персон: CRUD персон из любого чата (за флагом personas);
@@ -712,34 +843,9 @@ public class SessionManager
         if (ownerId is null) return null;
 
         var selfPersonaId = session.PersonaId;
-        var isGroup = session.Participants is { Count: > 1 };
-        string? mentionsHint = null;
         // @упоминания (persona_ask + подсказка) теперь всегда включены
-        {
-            var others = (isGroup
-                    ? session.Participants!.Select(id => _personas.Get(id, ownerId)).OfType<Persona>()
-                    : _personas.GetForContext(ownerId, projectId))
-                .Where(p => p.Id != selfPersonaId)
-                .ToList();
-            if (others.Count > 0)
-            {
-                var sb = new System.Text.StringBuilder();
-                sb.AppendLine("Любую персону можно спросить инструментом persona_ask (параметры: handle, " +
-                    "question, context?) — она ответит от своего лица, со своим характером и памятью. " +
-                    "Когда пользователь упоминает персону через @handle — обязательно обратись к ней " +
-                    "через persona_ask и учти её ответ. Вопрос формулируй самодостаточно: персона не " +
-                    "видит этот разговор. Если вызов вернул «No such tool available» — сервер персон ещё " +
-                    "подключается: подожди мгновение и повтори тот же вызов. Доступные собеседники:");
-                foreach (var p in others)
-                {
-                    var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
-                    sb.Append($"- @{p.Handle} — {title}");
-                    if (!string.IsNullOrWhiteSpace(p.Description)) sb.Append($": {p.Description.Trim()}");
-                    sb.AppendLine();
-                }
-                mentionsHint = sb.ToString().TrimEnd();
-            }
-        }
+        var mentionsHint = BuildMentionsHint(ownerId, session,
+            ResolveOtherPersonas(ownerId, projectId, session));
 
         var entry = _notesTokens.AddOrUpdate(ownerId,
             id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
@@ -949,7 +1055,8 @@ public class SessionManager
             PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session),
             NotificationsMcp: BuildNotificationsContext(ownerId),
             WorkspaceMcp: workspace,
-            BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections)));
+            BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
+            PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -1166,7 +1273,8 @@ public class SessionManager
                 PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info),
                 NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId),
                 WorkspaceMcp: workspace,
-                BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections));
+                BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
+                PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info));
         }
         else
         {
@@ -1188,7 +1296,8 @@ public class SessionManager
                 PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info),
                 NotificationsMcp: BuildNotificationsContext(project.OwnerId),
                 WorkspaceMcp: workspace,
-                BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections));
+                BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
+                PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

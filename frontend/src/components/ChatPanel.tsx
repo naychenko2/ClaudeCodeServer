@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from 'rea
 import { ArrowDown } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState } from '../types';
 import { useSession } from '../hooks/useSession';
-import { usePersonasVersion, getPersonaById, ensurePersonasLoaded, personaLabel } from '../lib/personas';
+import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
+import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
 import { PersonaGreeting } from '../features/personas/PersonaGreeting';
 import { countFiles, computeTodos } from '../hooks/useSessionArtifacts';
@@ -584,7 +585,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке).
   // useCallback + React.memo на ChatItemView: при дописывании ленты неизменившиеся
   // элементы не перерендериваются (все пропсы-функции стабильны).
-  const renderItem = useCallback((item: ChatItem, i: number) => (
+  const renderItem = useCallback((item: ChatItem, i: number,
+    extras?: {
+      agentActivity?: Extract<ChatItem, { kind: 'tool_use' }>[];
+      agentRenderChild?: (item: ChatItem, idx: number) => React.ReactNode;
+      agentIdxMap?: Map<string, number>;
+    }) => (
     <ChatItemView
       key={itemKey(item, i)}
       item={item}
@@ -610,6 +616,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onSendMessage={handleMeetingContinue}
       onMeetingCancel={handleMeetingCancel}
       onPipelineCancel={handlePipelineCancel}
+      agentActivity={extras?.agentActivity}
+      agentRenderChild={extras?.agentRenderChild}
+      agentIdxMap={extras?.agentIdxMap}
     />
   ), [
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
@@ -723,14 +732,20 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               const inlineChildren = it.kind === 'tool_use'
                 ? (childrenByParentId.get(it.id) ?? []).filter(c => !suppressedByWorkflow.has(c.id))
                 : [];
+              // Консультация персоны-сабагента: активность рендерится СЕКЦИЕЙ ВНУТРИ
+              // карточки (PersonaTaskView), внешняя плашка «N действий» не нужна
+              const isPersonaTask = it.kind === 'tool_use' && inlineChildren.length > 0
+                && !!findConsultedPersona(it, getPersonasSnapshot());
               return (
                 <Fragment key={itemKey(it, idx)}>
                   <div style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
                     {it.kind === 'file_changed'
                       ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={project ? handleRevert : undefined} />
-                      : renderItem(it, idx)}
+                      : renderItem(it, idx, isPersonaTask
+                          ? { agentActivity: inlineChildren, agentRenderChild: renderItem, agentIdxMap: idxMap }
+                          : undefined)}
                   </div>
-                  {inlineChildren.length > 0 && (
+                  {inlineChildren.length > 0 && !isPersonaTask && (
                     <AgentActionsBlock
                       items={inlineChildren}
                       renderChild={renderItem}
@@ -784,7 +799,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       }
     }
     return result;
-  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert]);
+    // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
+    // карточки консультаций пересобираются с активностью внутри
+  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion]);
 
   return (
     <AssistantNameContext.Provider value={asstName}>

@@ -69,6 +69,9 @@ builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<TeamMemoryService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
+// Файловые сабагенты-персоны (флаг persona-subagents): генерация + синк .md-агентов
+builder.Services.AddSingleton<PersonaAgentFileGenerator>();
+builder.Services.AddSingleton<PersonaAgentFileSync>();
 builder.Services.AddSingleton<FalImageService>();
 // Консолидация памяти — singleton + hosted: autolearn ставит заявки через RequestConsolidation
 builder.Services.AddSingleton<PersonaMemoryConsolidationService>();
@@ -204,6 +207,9 @@ app.Services.GetRequiredService<UserStore>();
 // Фоновый прогрев каталога моделей (опрос claude CLI ~5 с — не задерживаем старт)
 _ = Task.Run(() => app.Services.GetRequiredService<ModelCatalogService>().GetModelsAsync());
 app.Services.GetRequiredService<JwtService>();
+// Синк файловых сабагентов-персон: подписки на события PersonaManager должны встать
+// до первых запросов (иначе ранние правки персон не долетят до .md-файлов)
+app.Services.GetRequiredService<PersonaAgentFileSync>();
 
 // Чистка осиротевших temp-конфигов MCP: содержат сервисный токен и могли
 // остаться после крэша (штатно удаляются в finally каждого хода)

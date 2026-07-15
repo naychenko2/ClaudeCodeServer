@@ -47,6 +47,12 @@ public class PersonaManager
     // её живых сессий, чтобы Tool-рубильники и MCP-серверы перемонтировались со следующего хода
     public event Action<Persona>? OnPersonaChanged;
 
+    // Создание/удаление персоны — PersonaAgentFileSync генерирует/удаляет файл сабагента.
+    // RefreshPantheonInstructions в ctor отрабатывает ДО подписок — это покрывает ленивый
+    // полный reconcile синка перед ходом.
+    public event Action<Persona>? OnPersonaCreated;
+    public event Action<Persona>? OnPersonaDeleted;
+
     public IReadOnlyCollection<Persona> GetByOwner(string userId) =>
         _personas.Values.Where(p => p.OwnerId == userId)
             .OrderByDescending(p => p.UpdatedAt).ToList();
@@ -165,6 +171,7 @@ public class PersonaManager
         if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
             _events?.Append(persona.ProjectId, userId, ProjectEventTypes.TeamJoined, "user",
                 $"В команде: {PersonaLabel(persona)}", persona.Id);
+        OnPersonaCreated?.Invoke(persona);
         return persona;
     }
 
@@ -394,15 +401,16 @@ public class PersonaManager
         // с генерацией handle в Create и снапшотом в Save). Чистка ассетов/Save — вне лока.
         string? projectId = null;
         string? label = null;
+        Persona? deleted;
         lock (_saveLock)
         {
-            var persona = Get(id, userId);
-            if (persona is null) return false;
+            deleted = Get(id, userId);
+            if (deleted is null) return false;
             // Запоминаем проектную принадлежность до удаления — для лога команды проекта
-            if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
+            if (deleted.Scope == PersonaScope.Project && !string.IsNullOrEmpty(deleted.ProjectId))
             {
-                projectId = persona.ProjectId;
-                label = PersonaLabel(persona);
+                projectId = deleted.ProjectId;
+                label = PersonaLabel(deleted);
             }
             _personas.TryRemove(id, out _);
         }
@@ -416,6 +424,7 @@ public class PersonaManager
         }
         catch { /* не критично */ }
         Save();
+        OnPersonaDeleted?.Invoke(deleted);
         return true;
     }
 

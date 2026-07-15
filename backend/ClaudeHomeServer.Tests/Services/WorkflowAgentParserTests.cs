@@ -217,7 +217,7 @@ public class WorkflowAgentParserTests : IDisposable
     [Fact]
     public void IsPathAllowed_ПутьВнутриAllowedRoot_True()
     {
-        var inside = Path.Combine(WorkflowAgentParser.AllowedRoot, "proj", "wf_1");
+        var inside = Path.Combine(WorkflowAgentParser.DefaultRoot, "proj", "wf_1");
         WorkflowAgentParser.IsPathAllowed(inside).Should().BeTrue();
     }
 

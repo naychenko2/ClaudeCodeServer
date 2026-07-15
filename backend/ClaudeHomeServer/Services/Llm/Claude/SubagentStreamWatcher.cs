@@ -170,21 +170,24 @@ internal sealed class SubagentStreamWatcher : IDisposable
         }
     }
 
-    // Папка транскриптов сабагентов текущей сессии. Сначала — по соглашению CLI об
-    // уплощении cwd (не-алфавитно-цифровые символы → '-'), затем фолбэк-скан по id сессии.
+    // Папка транскриптов сабагентов текущей сессии. Корни — как у workflow-транскриптов
+    // (~/.claude/projects + профили сторонних провайдеров). Сначала — по соглашению CLI
+    // об уплощении cwd (не-алфавитно-цифровые символы → '-'), затем фолбэк-скан по id сессии.
     private string? ResolveDir()
     {
-        var root = WorkflowAgentParser.AllowedRoot;
-        if (!Directory.Exists(root)) return null;
-
         var flat = string.Concat(_cwd.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-'));
-        var byConvention = Path.Combine(root, flat, _claudeSessionId, "subagents");
-        if (Directory.Exists(byConvention)) return byConvention;
-
-        foreach (var projDir in Directory.GetDirectories(root))
+        foreach (var root in WorkflowAgentParser.AllowedRoots)
         {
-            var candidate = Path.Combine(projDir, _claudeSessionId, "subagents");
-            if (Directory.Exists(candidate)) return candidate;
+            if (!Directory.Exists(root)) continue;
+
+            var byConvention = Path.Combine(root, flat, _claudeSessionId, "subagents");
+            if (Directory.Exists(byConvention)) return byConvention;
+
+            foreach (var projDir in Directory.GetDirectories(root))
+            {
+                var candidate = Path.Combine(projDir, _claudeSessionId, "subagents");
+                if (Directory.Exists(candidate)) return candidate;
+            }
         }
         return null;
     }

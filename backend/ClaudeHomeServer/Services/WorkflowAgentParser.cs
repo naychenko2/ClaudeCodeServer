@@ -30,6 +30,10 @@ public static class WorkflowAgentParser
         path.StartsWith(DefaultRoot, StringComparison.OrdinalIgnoreCase) ||
         _extraRoots.Any(r => path.StartsWith(r, StringComparison.OrdinalIgnoreCase));
 
+    // Все корни транскриптов (родной + профили провайдеров) — для поиска папки
+    // сабагентов сессии (SubagentStreamWatcher)
+    public static IReadOnlyList<string> AllowedRoots => [DefaultRoot, .. _extraRoots];
+
     // Читает все agent-*.jsonl из wfPath и возвращает список агентов.
     public static IReadOnlyList<WorkflowAgentDto> ParseDirectory(string wfPath)
     {

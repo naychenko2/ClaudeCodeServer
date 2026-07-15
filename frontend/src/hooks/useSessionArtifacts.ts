@@ -3,6 +3,7 @@ import type { ChatItem } from '../types';
 import { useSession } from './useSession';
 import { toRelative } from '../lib/paths';
 import { workflowName } from '../lib/workflowMeta';
+import { splitAgentResultTail } from '../lib/agentTail';
 
 // Артефакты, собранные за сессию из ленты чата:
 //  - файлы: измененные (file_changed/Write) + упомянутые путем в тексте ответа,
@@ -304,8 +305,10 @@ export function computeAgents(items: ChatItem[]): { agents: AgentArtifact[]; wor
         toolCount: calls.length,
         lastTool: !settled || isBg ? last?.name : undefined,
         prompt,
-        // Для фоновых result — это подтверждение запуска, а не ответ агента
-        resultText: !isBg && !it.isError && it.result?.trim() ? it.result : undefined,
+        // Для фоновых result — это подтверждение запуска, а не ответ агента;
+        // системный хвост CLI (agentId + <usage>) вырезаем
+        resultText: !isBg && !it.isError && it.result?.trim()
+          ? splitAgentResultTail(it.result).body : undefined,
         calls,
       });
     } else if (name === 'workflow') {

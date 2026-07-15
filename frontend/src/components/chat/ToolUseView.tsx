@@ -3,6 +3,7 @@ import { Plug, Eye, SquarePen, Terminal, Globe, CircleUser, Sparkles, SquareChec
 import type { ChatItem } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
+import { splitAgentResultTail, formatTailTokens, formatTailDuration } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext } from './contexts';
 import { MediaBlock, extractMediaFromResult, extractMediaMeta, mediaLabel } from './MediaBlock';
 
@@ -140,6 +141,12 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
     : [];
   const hasDiff = editHunks.length > 0;
   const hasResult = item.result != null && item.result.trim().length > 0;
+  // Системный хвост результата сабагента (agentId + <usage>…</usage>) — сырым текстом
+  // в ленте выглядит мусором: вырезаем из тела и показываем аккуратной строкой метрик
+  const isAgentTool = n === 'task' || n === 'agent';
+  const agentSplit = useMemo(
+    () => (isAgentTool && item.result != null ? splitAgentResultTail(item.result) : null),
+    [isAgentTool, item.result]);
   // Медиа (изображения + видео) из результата MCP-инструментов
   const media = hasResult && !item.isError ? extractMediaFromResult(item.result!) : [];
   const mediaMeta = hasResult && !item.isError ? extractMediaMeta(item.result!) : {};
@@ -221,24 +228,39 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
       )}
       {open && hasDiff && <DiffBody hunks={editHunks} />}
       {open && !hasDiff && hasResult && !hasMedia && (
-        <pre style={{
-          margin: '0 0 9px', padding: '8px 10px', borderRadius: 7,
-          // Bash → тёмный терминал; остальное → светлая панель вывода
-          background: isConsole ? C.termBg : C.outputBg,
-          border: isConsole ? 'none' : `1px solid ${C.outputBorder}`,
-          // На светлой панели ошибку красим в danger; на тёмной — светлый «терминальный» оттенок
-          color: isConsole
-            ? (item.isError ? C.termError : C.termText)
-            : (item.isError ? C.dangerText : C.textPrimary),
-          fontFamily: FONT.mono,
-          fontSize: 11.5, lineHeight: 1.5, maxHeight: 280, overflow: 'auto',
-          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-        }}>
-          {(() => {
-            const r = stripRoot(item.result!, project?.rootPath);
-            return r.length > 4000 ? r.slice(0, 4000) + '\n…(обрезано)' : r;
-          })()}
-        </pre>
+        <>
+          <pre style={{
+            margin: agentSplit?.tail ? '0 0 4px' : '0 0 9px', padding: '8px 10px', borderRadius: 7,
+            // Bash → тёмный терминал; остальное → светлая панель вывода
+            background: isConsole ? C.termBg : C.outputBg,
+            border: isConsole ? 'none' : `1px solid ${C.outputBorder}`,
+            // На светлой панели ошибку красим в danger; на тёмной — светлый «терминальный» оттенок
+            color: isConsole
+              ? (item.isError ? C.termError : C.termText)
+              : (item.isError ? C.dangerText : C.textPrimary),
+            fontFamily: FONT.mono,
+            fontSize: 11.5, lineHeight: 1.5, maxHeight: 280, overflow: 'auto',
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          }}>
+            {(() => {
+              const r = stripRoot(agentSplit?.body ?? item.result!, project?.rootPath);
+              return r.length > 4000 ? r.slice(0, 4000) + '\n…(обрезано)' : r;
+            })()}
+          </pre>
+          {/* Метрики сабагента из системного хвоста — вместо сырых строк CLI */}
+          {agentSplit?.tail && (
+            <div style={{
+              margin: '0 0 9px', display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap',
+              fontFamily: FONT.sans, fontSize: 11, color: C.textMuted,
+            }}>
+              {agentSplit.tail.tokens != null && <span>{formatTailTokens(agentSplit.tail.tokens)} токенов</span>}
+              {agentSplit.tail.tokens != null && (agentSplit.tail.toolUses != null || agentSplit.tail.durationMs != null) && <span>·</span>}
+              {agentSplit.tail.toolUses != null && <span>{agentSplit.tail.toolUses} {toolWord(agentSplit.tail.toolUses)}</span>}
+              {agentSplit.tail.toolUses != null && agentSplit.tail.durationMs != null && <span>·</span>}
+              {agentSplit.tail.durationMs != null && <span>{formatTailDuration(agentSplit.tail.durationMs)}</span>}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

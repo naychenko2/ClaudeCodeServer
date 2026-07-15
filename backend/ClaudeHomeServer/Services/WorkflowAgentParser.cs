@@ -117,7 +117,31 @@ public static class WorkflowAgentParser
 
         IReadOnlyList<string>? files = filesSet.Count > 0 ? filesSet.Take(10).ToArray() : null;
 
-        return new WorkflowAgentDto(agentId, prompt, summary, tools, files, isDone);
+        return new WorkflowAgentDto(agentId, prompt, summary, tools, files, isDone,
+            ReadAgentTypeFromMeta(filePath));
+    }
+
+    // agent-*.meta.json лежит рядом с jsonl и несёт agentType вызова — по нему фронт
+    // узнаёт персону-консультанта (handle) и рисует её карточку вместо безликой строки
+    private static string? ReadAgentTypeFromMeta(string agentFilePath)
+    {
+        var metaPath = Path.ChangeExtension(agentFilePath, ".meta.json");
+        if (!File.Exists(metaPath)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(metaPath));
+            if (doc.RootElement.TryGetProperty("agentType", out var t) &&
+                t.ValueKind == JsonValueKind.String)
+            {
+                var value = t.GetString();
+                return string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.LogDebug(ex, "Не удалось прочитать meta-файл агента: {Path}", metaPath);
+        }
+        return null;
     }
 
     private static void ProcessLine(string jsonLine, ref string? summary, ref bool isDone,

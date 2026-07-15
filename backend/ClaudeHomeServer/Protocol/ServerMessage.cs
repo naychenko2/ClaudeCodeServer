@@ -109,7 +109,8 @@ public record UsageInfo(int InputTokens, int OutputTokens, int CacheReadTokens, 
 public record WorkflowToolDto(string Name, int Count);
 
 public record WorkflowAgentDto(string Id, string Prompt, string? Summary,
-    IReadOnlyList<WorkflowToolDto>? Tools, IReadOnlyList<string>? Files, bool IsDone = false);
+    IReadOnlyList<WorkflowToolDto>? Tools, IReadOnlyList<string>? Files, bool IsDone = false,
+    string? AgentType = null);
 
 public record WorkflowProgressMessage(string ToolUseId, IReadOnlyList<WorkflowAgentDto> Agents, bool IsDone)
     : ServerMessage("workflow_progress");

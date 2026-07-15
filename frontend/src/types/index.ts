@@ -273,6 +273,9 @@ export interface WorkflowAgentInfo {
   tools?: { name: string; count: number }[];
   files?: string[];
   isDone?: boolean;
+  // Тип сабагента из agent-*.meta.json (agentType вызова agent()) — совпал с handle
+  // персоны → рисуем карточку персоны-консультанта вместо безликой строки
+  agentType?: string;
 }
 
 // WebSocket сообщения от сервера — sessionId присутствует во всех типах

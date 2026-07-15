@@ -2,8 +2,10 @@ import { memo, useState, useEffect, useRef } from 'react';
 import { Check, Terminal, SquarePen, Search, CircleUser } from 'lucide-react';
 import { api, type WorkflowAgentInfo } from '../../lib/api';
 import { parseWorkflowMeta } from '../../lib/workflowMeta';
+import { usePersonas, ensurePersonasLoaded } from '../../lib/personas';
 import { C, FONT, R } from '../../lib/design';
 import { ToolUseView, toolWord, type ToolUseItem } from './ToolUseView';
+import { PersonaConsultCard, PersonaTaskView, findConsultedPersona, findPersonaByAgentType } from './PersonaTaskView';
 import { MarkdownContent } from './MarkdownContent';
 
 function parseTranscriptDir(result: string | undefined): string | null {
@@ -23,6 +25,11 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   const [expanded, setExpanded] = useState(false);
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
   const [expandedTranscriptAgents, setExpandedTranscriptAgents] = useState<Set<string>>(new Set());
+
+  // Персоны владельца: агенты workflow с agentType == handle персоны рендерятся
+  // её карточкой-консультацией (как Task-вызовы персон в обычной ленте)
+  useEffect(() => { void ensurePersonasLoaded(); }, []);
+  const personas = usePersonas();
 
   // Локальный фоллбэк — используется только для старых сессий без серверного ватчера
   const [localAgents, setLocalAgents] = useState<WorkflowAgentInfo[] | null>(null);
@@ -197,6 +204,14 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
             <div style={{ borderTop: phases.length > 0 ? `1px solid ${C.border}` : undefined }}>
               {agents.map((agent, idx) => {
                 const tools = childrenByParentId.get(agent.id) ?? [];
+                // Стрим-агент консультируется с персоной → её карточка с активностью внутри
+                if (findConsultedPersona(agent, personas)) {
+                  return (
+                    <div key={agent.id} style={{ padding: '8px 14px', borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
+                      <PersonaTaskView item={agent} online activity={tools.length > 0 ? tools : undefined} onOpenFile={onOpenFile} />
+                    </div>
+                  );
+                }
                 const isAgentExpanded = expandedAgents.has(agent.id);
                 const inp = (agent.input ?? {}) as Record<string, unknown>;
                 const rawLabel =
@@ -265,6 +280,26 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
               {!transcriptLoading && transcriptAgents && transcriptAgents.length > 0 && (
                 <div style={{ padding: '4px 0' }}>
                   {transcriptAgents.map((agent, idx) => {
+                    // Агент-персона (agentType == handle) → карточка консультации персоны:
+                    // идентичность, вопрос (prompt), инструменты и ответ (summary) внутри
+                    const persona = findPersonaByAgentType(agent.agentType, personas);
+                    if (persona) {
+                      return (
+                        <div key={agent.id} style={{ padding: '6px 14px', borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
+                          <PersonaConsultCard
+                            persona={persona}
+                            question={agent.prompt}
+                            running={agent.isDone !== true}
+                            isError={false}
+                            answer={agent.summary ?? ''}
+                          >
+                            {(agent.tools?.length || agent.files?.length) ? (
+                              <TranscriptAgentChips tools={agent.tools} files={agent.files} />
+                            ) : null}
+                          </PersonaConsultCard>
+                        </div>
+                      );
+                    }
                     const isOpen = expandedTranscriptAgents.has(agent.id);
                     const hasDetails = !!(agent.summary || agent.tools?.length || agent.files?.length);
 
@@ -376,3 +411,36 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
     </div>
   );
 });
+
+// Компактная сводка активности transcript-агента для слота карточки персоны:
+// чипсы инструментов + затронутые файлы (тот же стиль, что в раскрытых деталях агента)
+function TranscriptAgentChips({ tools, files }: {
+  tools?: { name: string; count: number }[];
+  files?: string[];
+}) {
+  return (
+    <div style={{ borderBottom: `1px solid ${C.borderLight}` }}>
+      {tools && tools.length > 0 && (
+        <div style={{ padding: '6px 12px', display: 'flex', flexWrap: 'wrap' as const, gap: 4 }}>
+          {tools.map(t => (
+            <span key={t.name} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '1px 5px', lineHeight: 1.6 }}>
+              {t.name}{t.count > 1 ? ` ×${t.count}` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+      {files && files.length > 0 && (
+        <div style={{ padding: tools?.length ? '2px 12px 7px' : '6px 12px 7px', display: 'flex', flexWrap: 'wrap' as const, gap: '2px 10px' }}>
+          {files.slice(0, 5).map(f => (
+            <span key={f} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, lineHeight: 1.6 }}>
+              {f.split(/[\\/]/).pop() ?? f}
+            </span>
+          ))}
+          {files.length > 5 && (
+            <span style={{ fontFamily: FONT.sans, fontSize: 10, color: C.textMuted }}>+{files.length - 5}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

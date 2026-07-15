@@ -235,6 +235,8 @@ export interface Session {
   updatedAt: string;
   name?: string;
   model?: string;
+  // "claude" | "deepseek" | "glm" | ключ из подписок ClaudeSubscriptionPool
+  provider?: string;
   effort?: string;
   agentName?: string;
   // Временный чат: авто-удаление через N минут после последней активности (updatedAt)

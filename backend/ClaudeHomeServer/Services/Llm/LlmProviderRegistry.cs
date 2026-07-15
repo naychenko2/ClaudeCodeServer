@@ -133,6 +133,9 @@ public class LlmProviderRegistry
     private static readonly TimeSpan SyncTtl = TimeSpan.FromMinutes(5);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _lastSync = new();
 
+    // Для тестов и подписок: читают адрес профиля
+    public string GetProfileDir(string key) => Path.Combine(_profilesDir, key);
+
     private string ProfileDir(string key)
     {
         var dir = Path.Combine(_profilesDir, key);
@@ -186,6 +189,48 @@ public class LlmProviderRegistry
         {
             Console.Error.WriteLine($"[LlmProviders] Синк настройки {src} → {dst} не удался: {ex.Message}");
         }
+    }
+
+    // Построить env для дополнительной OAuth-подписки Claude (см. ClaudeSubscriptionPool).
+    // Изолированный CLAUDE_CONFIG_DIR + .credentials.json из OAuthToken, БЕЗ ANTHROPIC_AUTH_TOKEN
+    // и ANTHROPIC_BASE_URL — процесс использует родной эндпоинт Anthropic.
+    // null → подписка не найдена или неактивна.
+    public IReadOnlyDictionary<string, string>? BuildOAuthCliEnv(
+        string subKey, string oauthToken, string? model = null)
+    {
+        var env = new Dictionary<string, string>();
+        var profileDir = ProfileDir("sub-" + subKey);
+        env["CLAUDE_CONFIG_DIR"] = profileDir;
+
+        // Пишем .credentials.json с OAuth-токеном для подписки
+        try
+        {
+            var credsPath = Path.Combine(profileDir, ".credentials.json");
+            if (!File.Exists(credsPath) ||
+                !File.ReadAllText(credsPath).Contains(oauthToken, StringComparison.Ordinal))
+            {
+                var creds = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    claudeAiOauth = new { tokenType = "bearer", accessToken = oauthToken }
+                });
+                File.WriteAllText(credsPath, creds);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LlmProviders] Не удалось записать .credentials.json для подписки {subKey}: {ex.Message}");
+        }
+
+        // Модель-дефолты (как для CLI-провайдеров, но без ANTHROPIC_AUTH_TOKEN/BASE_URL)
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            env["ANTHROPIC_MODEL"] = model;
+            env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model;
+            env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model;
+            // haiku-слот — дефолт от Claude CLI, явно не задаём
+        }
+
+        return env;
     }
 
     // Стоимость хода по ценам конфига модели. CLI на чужом эндпоинте считает

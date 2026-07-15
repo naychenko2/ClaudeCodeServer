@@ -2,22 +2,20 @@ import { describe, it, expect } from 'vitest';
 import { hasUltraworkKeyword } from '../ultrawork';
 
 describe('hasUltraworkKeyword', () => {
-  it('матчит ключевые слова отдельными словами', () => {
-    expect(hasUltraworkKeyword('сделай ультра качественно')).toBe(true);
-    expect(hasUltraworkKeyword('ulw')).toBe(true);
+  it('детектит слова, которые ловит keyword-detector плагина oh-my-claudecode', () => {
     expect(hasUltraworkKeyword('запусти ultrawork прямо сейчас')).toBe(true);
-    expect(hasUltraworkKeyword('нужен ультраворк')).toBe(true);
-  });
-
-  it('регистронезависим и терпит пунктуацию вокруг слова', () => {
-    expect(hasUltraworkKeyword('УЛЬТРА!')).toBe(true);
+    expect(hasUltraworkKeyword('ulw')).toBe(true);
     expect(hasUltraworkKeyword('Сделай (ULW), пожалуйста')).toBe(true);
   });
 
+  it('не детектит кириллические алиасы — серверной вставки больше нет, хук их не знает', () => {
+    expect(hasUltraworkKeyword('сделай ультра качественно')).toBe(false);
+    expect(hasUltraworkKeyword('нужен ультраворк')).toBe(false);
+  });
+
   it('не матчит части других слов', () => {
-    expect(hasUltraworkKeyword('ультразвук')).toBe(false);
-    expect(hasUltraworkKeyword('формула')).toBe(false);
     expect(hasUltraworkKeyword('culw2')).toBe(false);
+    expect(hasUltraworkKeyword('schulwahl')).toBe(false);
     expect(hasUltraworkKeyword('обычное сообщение')).toBe(false);
   });
 });

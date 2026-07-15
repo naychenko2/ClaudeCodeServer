@@ -1,26 +1,12 @@
-using System.Text.RegularExpressions;
-
 namespace ClaudeHomeServer.Services.Prompts;
 
 // Рантайм-тексты, перенесённые из oh-my-openagent по договорённости с авторами
 // (русский перевод — обязательное условие; соответствие оригиналам — docs/omo-adoption.md,
 // полные переводы — docs/omo/translations/).
+// Собственная вставка ultrawork удалена (2026-07): магслово ловит keyword-detector
+// плагина oh-my-claudecode, дублирующая серверная накачка промпта не нужна.
 public static partial class OmoPrompts
 {
-    // --- Магическое слово ultrawork (флаг ultrawork-keyword) ---
-
-    // ultrawork/ulw — как в оригинале; «ультра» — русский эквивалент отдельным словом
-    [GeneratedRegex(@"(?<![\p{L}\p{N}])(ultrawork|ulw|ультраворк|ультра)(?![\p{L}\p{N}])",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex UltraworkKeyword();
-
-    public static bool ContainsUltraworkKeyword(string text) =>
-        !string.IsNullOrEmpty(text) && UltraworkKeyword().IsMatch(text);
-
-    // Блок режима максимального усилия (const Ultrawork) — в OmoPrompts.Ultrawork.cs
-    // (генерируется из docs/omo/translations/ultrawork.md); дописывается к тексту хода
-    // только для CLI — история и UI хранят исходное сообщение.
-
     // --- Цикл «до готово» (флаг work-loop) ---
     // Тексты — перевод RALPH_LOOP_TEMPLATE / ULW_LOOP_TEMPLATE и continuation-промптов
     // (docs/omo/translations/loops.md); рабочий тег <promise> — протокол детектора, не переводится.

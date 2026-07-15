@@ -1133,18 +1133,12 @@ public class SessionManager
         entry.Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
     }
 
-    // Текст хода для CLI: исходное сообщение + обвязки OmO.
-    // Ultrawork (флаг ultrawork-keyword) — по магическому слову в сообщении;
-    // протокол цикла «до готово» — пока Session.WorkLoop активен.
+    // Текст хода для CLI: исходное сообщение + обвязки.
+    // Протокол цикла «до готово» — пока Session.WorkLoop активен. Своей вставки ultrawork
+    // больше нет: слова ultrawork/ulw ловит keyword-detector плагина oh-my-claudecode.
     private string BuildCliTurnText(SessionEntry entry, string text)
     {
         var result = text;
-
-        if (OmoPrompts.ContainsUltraworkKeyword(text)
-            && OmoPrompts.Ultrawork.Length > 0)
-        {
-            result += "\n\n" + OmoPrompts.Ultrawork;
-        }
 
         if (entry.Info.WorkLoop is { } loop)
         {

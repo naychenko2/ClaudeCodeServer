@@ -67,3 +67,6 @@ Thumbs.db
 *.jpg
 *.log
 onlyoffice/local.json
+
+# state-файлы скиллов oh-my-claudecode (пишутся в cwd проекта)
+.omc/

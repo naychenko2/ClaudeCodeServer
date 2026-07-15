@@ -54,6 +54,15 @@ public class ClaudeSession : ILlmSessionAdapter
     // Если claude не выдаёт ни одной строки дольше этого — считаем зависшим
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(60);
 
+    // Грейс после result: штатно CLI выходит сам, но плагинные хуки/MCP-мосты (наблюдалось
+    // с oh-my-claudecode) могут держать процесс живым бесконечно — тогда завершаем ход сами,
+    // не дожидаясь часового watchdog.
+    private static readonly TimeSpan ResultExitGrace = TimeSpan.FromSeconds(15);
+
+    // Выставляется при получении финального result текущего хода (см. ProcessLineAsync);
+    // читается только потоком чтения stdout — синхронизация не нужна.
+    private bool _resultSeen;
+
     // Коннекторы аккаунта claude.ai (Calendar, Drive, Gamma, Miro и др.) вливаются в каждую
     // сессию автоматически помимо --mcp-config — их нельзя убрать через конфиг. Блокируем
     // через --disallowedTools; список задаётся из конфига (Claude:DisallowedTools).
@@ -1073,12 +1082,14 @@ public class ClaudeSession : ILlmSessionAdapter
 
         try
         {
+            _resultSeen = false;
             while (!ct.IsCancellationRequested)
             {
                 // Watchdog: пересоздаём linked CTS на каждую строку.
                 // Если claude замолчал дольше IdleTimeout — прерываем и сообщаем об ошибке.
+                // После result ждём лишь короткий грейс: ход завершён, зависший процесс убиваем молча.
                 using var watchdogCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                watchdogCts.CancelAfter(IdleTimeout);
+                watchdogCts.CancelAfter(_resultSeen ? ResultExitGrace : IdleTimeout);
 
                 string? line;
                 try
@@ -1087,6 +1098,13 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
+                    if (_resultSeen)
+                    {
+                        // result уже отдан — процесс держат плагинные хуки/мосты, завершаем без ошибки
+                        try { process.Kill(entireProcessTree: true); }
+                        catch { /* процесс уже завершился */ }
+                        break;
+                    }
                     // Сработал watchdog (не внешняя отмена сессии)
                     await _onMessage(new ErrorMessage(
                         $"Claude не отвечает более {IdleTimeout.TotalMinutes:0} мин — прерываем"));
@@ -1263,6 +1281,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     await _onMessage(new ErrorMessage(resText.GetString()!));
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials));
+                // Ход завершён — дальше ждём выхода процесса не дольше ResultExitGrace
+                _resultSeen = true;
                 // Закрываем stdin: все permission-запросы уже обработаны, Claude может завершить процесс
                 CloseStdin(_currentProcess);
                 // Гарантия исполнения одобренного плана: если ход завершился, а Claude так и не

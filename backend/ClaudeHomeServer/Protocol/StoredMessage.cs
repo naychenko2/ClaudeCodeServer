@@ -43,17 +43,22 @@ public class StoredSessionStartedMessage(string model, string mode) : StoredMess
     public string Mode { get; init; } = mode;
 }
 
-public class StoredTextMessage(string text, string? personaId = null) : StoredMessage
+public class StoredTextMessage(string text, string? personaId = null, string? parentToolUseId = null) : StoredMessage
 {
     public string Text { get; init; } = text;
     // Персона, от лица которой написан ответ (на момент хода) — чтобы после смены
     // собеседника у старых реплик оставался прежний аватар. null — обычный ассистент.
     public string? PersonaId { get; init; } = personaId;
+    // Текст сабагента (Task/Agent): ссылка на родительский tool_use — рендерится внутри
+    // его карточки, а не в основной ленте. null — текст основного агента.
+    public string? ParentToolUseId { get; init; } = parentToolUseId;
 }
 
-public class StoredThinkingMessage(string text) : StoredMessage
+public class StoredThinkingMessage(string text, string? parentToolUseId = null) : StoredMessage
 {
     public string Text { get; init; } = text;
+    // См. StoredTextMessage.ParentToolUseId
+    public string? ParentToolUseId { get; init; } = parentToolUseId;
 }
 
 public class StoredFileChangedMessage(string path, int added, int removed) : StoredMessage

@@ -128,7 +128,8 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
     private static object? ToItem(StoredMessage m) => m switch
     {
         StoredUserMessage u => new { kind = "user", text = Truncate(u.Text), viaAgent = u.ViaAgent, senderPersonaId = u.SenderPersonaId, auto = u.Auto },
-        StoredTextMessage t => new { kind = "assistant", text = Truncate(t.Text), personaId = t.PersonaId },
+        // Текст сабагента (ParentToolUseId != null) — внутренность его карточки, в дайджест не идёт
+        StoredTextMessage { ParentToolUseId: null } t => new { kind = "assistant", text = Truncate(t.Text), personaId = t.PersonaId },
         StoredToolUseMessage t => new { kind = "tool", name = t.Name, isError = t.IsError } as object,
         StoredResultMessage r => new { kind = "result", subtype = r.Subtype, numTurns = r.NumTurns },
         StoredErrorMessage e => new { kind = "error", text = Truncate(e.Text) },

@@ -120,7 +120,8 @@ public class SessionSummaryService(
                     sb.AppendLine(u.Text.Trim());
                     sb.AppendLine();
                     break;
-                case StoredTextMessage t when !string.IsNullOrWhiteSpace(t.Text):
+                // Текст сабагента (ParentToolUseId != null) — не реплика Claude в диалоге
+                case StoredTextMessage { ParentToolUseId: null } t when !string.IsNullOrWhiteSpace(t.Text):
                     sb.AppendLine("Claude:");
                     sb.AppendLine(t.Text.Trim());
                     sb.AppendLine();

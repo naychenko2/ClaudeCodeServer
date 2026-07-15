@@ -225,6 +225,89 @@ public static class WorkflowAgentParser
         }
     }
 
+    // Полный поток агента из транскрипта: упорядоченные блоки thinking/text/tool_use.
+    // Первая строка (промпт) пропускается — карточка показывает её отдельно как «вопрос».
+    public static IReadOnlyList<WorkflowAgentBlockDto> ParseAgentTimeline(string filePath)
+    {
+        var blocks = new List<WorkflowAgentBlockDto>();
+        bool isFirst = true;
+        try
+        {
+            foreach (var line in File.ReadLines(filePath))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                if (isFirst) { isFirst = false; continue; }
+                try { ProcessTimelineLine(line, blocks); }
+                catch (Exception ex)
+                {
+                    Log.LogDebug(ex, "Битая строка таймлайна в {Path}", filePath);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.LogDebug(ex, "Не удалось прочитать agent-файл для таймлайна: {Path}", filePath);
+        }
+        return blocks;
+    }
+
+    private static void ProcessTimelineLine(string jsonLine, List<WorkflowAgentBlockDto> blocks)
+    {
+        using var doc = JsonDocument.Parse(jsonLine);
+        var root = doc.RootElement;
+        if (!root.TryGetProperty("message", out var message)) return;
+        if (!message.TryGetProperty("role", out var role) || role.GetString() != "assistant") return;
+        if (!message.TryGetProperty("content", out var content)) return;
+
+        if (content.ValueKind == JsonValueKind.String)
+        {
+            var text = content.GetString();
+            if (!string.IsNullOrWhiteSpace(text))
+                blocks.Add(new WorkflowAgentBlockDto("text", text.Trim()));
+            return;
+        }
+        if (content.ValueKind != JsonValueKind.Array) return;
+
+        foreach (var block in content.EnumerateArray())
+        {
+            if (!block.TryGetProperty("type", out var typeEl)) continue;
+            switch (typeEl.GetString())
+            {
+                case "text":
+                    if (block.TryGetProperty("text", out var textEl)
+                        && textEl.GetString() is { } t && !string.IsNullOrWhiteSpace(t))
+                        blocks.Add(new WorkflowAgentBlockDto("text", t.Trim()));
+                    break;
+                case "thinking":
+                    if (block.TryGetProperty("thinking", out var thEl)
+                        && thEl.GetString() is { } th && !string.IsNullOrWhiteSpace(th))
+                        blocks.Add(new WorkflowAgentBlockDto("thinking", th.Trim()));
+                    break;
+                case "tool_use":
+                    if (block.TryGetProperty("name", out var nameEl)
+                        && nameEl.GetString() is { } name && name.Length > 0)
+                        blocks.Add(new WorkflowAgentBlockDto("tool_use",
+                            ToolName: name, ToolTarget: ExtractToolTarget(block)));
+                    break;
+            }
+        }
+    }
+
+    // Короткая «цель» вызова инструмента для строки таймлайна — первый осмысленный ключ input
+    private static readonly string[] ToolTargetKeys =
+        ["description", "file_path", "path", "pattern", "command", "url", "query", "skill"];
+
+    private static string? ExtractToolTarget(JsonElement toolBlock)
+    {
+        if (!toolBlock.TryGetProperty("input", out var input) ||
+            input.ValueKind != JsonValueKind.Object) return null;
+        foreach (var key in ToolTargetKeys)
+            if (input.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
+                && v.GetString() is { } s && !string.IsNullOrWhiteSpace(s))
+                return Truncate(s.Trim(), 120);
+        return null;
+    }
+
     private static string ExtractText(string jsonLine)
     {
         using var doc = JsonDocument.Parse(jsonLine);

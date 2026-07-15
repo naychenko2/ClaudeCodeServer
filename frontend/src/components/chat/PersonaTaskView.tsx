@@ -7,6 +7,8 @@ import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView, toolWord } from './ToolUseView';
+import { AgentTextBlock, AgentThinkingBlock } from './AgentContentBlocks';
+import { itemKey, type ActivityEntry } from './timeline';
 
 type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
@@ -195,17 +197,16 @@ export function PersonaConsultCard({ persona, question, summary, running, isErro
 // вместо безликой строки инструмента; не совпал (Explore/general-purpose/кастомные
 // агенты) — обычный ToolUseView (фолбэк здесь, а не в ChatItemView: usePersonas —
 // хук, звать его условно нельзя).
-export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onOpenFile, activity, renderChild, idxMap }: {
+export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onOpenFile, activity, renderChild }: {
   item: ToolUseItem;
   online: boolean;
   onOpenFile?: (path: string) => void;
-  // Вложенная активность консультанта (дочерние tool_use по parentToolUseId) —
-  // рендерится раскрывающейся секцией внутри карточки (передаёт ChatPanel)
-  activity?: ToolUseItem[];
-  // Универсальный рендер элемента ленты (renderItem из ChatPanel): активность рисуется
+  // Вложенная активность консультанта (дочерние tool_use/text/thinking по parentToolUseId
+  // с их глобальными индексами) — рендерится раскрывающейся секцией внутри карточки
+  activity?: ActivityEntry[];
+  // Универсальный рендер элемента ленты (renderItem из ChatPanel): инструменты рисуются
   // ТЕМИ ЖЕ карточками, что и обычный чат (сворачивание тулов, TodoWrite-чек-лист и т.д.)
   renderChild?: (item: ChatItem, idx: number) => React.ReactNode;
-  idxMap?: Map<string, number>;
 }) {
   // В чатах без персоны стор мог быть ещё не загружен — подтягиваем список
   useEffect(() => { void ensurePersonasLoaded(); }, []);
@@ -233,35 +234,37 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
       isError={!!item.isError}
       answer={item.result ?? ''}
     >
-      {/* Активность консультанта: какие инструменты дёргает (чтение файлов, поиск, память).
+      {/* Активность консультанта: весь поток сабагента — инструменты, текст, размышления.
           Пока идёт работа — раскрыта (виден живой прогресс), по завершении сворачивается */}
       {activity && activity.length > 0 && (
         <ActivitySection activity={activity} running={running} accent={accent}
-          online={online} onOpenFile={onOpenFile} renderChild={renderChild} idxMap={idxMap} />
+          online={online} onOpenFile={onOpenFile} renderChild={renderChild} />
       )}
     </PersonaConsultCard>
   );
 });
 
-// Раскрывающаяся секция активности консультанта внутри карточки. Автораскрытие,
-// пока идёт работа (живой прогресс без клика); по завершении сворачивается — ручной
-// клик пользователя приоритетнее автоповедения до следующей смены running.
-// Элементы рендерятся универсальным renderChild (renderItem из ChatPanel) — те же
-// карточки и возможности, что в обычной ленте; фолбэк без него — компактный ToolUseView.
-function ActivitySection({ activity, running, accent, online, onOpenFile, renderChild, idxMap }: {
-  activity: ToolUseItem[];
+// Раскрывающаяся секция активности консультанта внутри карточки: ВЕСЬ поток сабагента.
+// Инструменты рендерятся универсальным renderChild (renderItem из ChatPanel) — те же
+// карточки и возможности, что в обычной ленте (фолбэк — компактный ToolUseView); текст —
+// AgentTextBlock (markdown как в чате, в расцветке персоны), thinking — AgentThinkingBlock.
+// Автораскрытие, пока идёт работа (живой прогресс без клика); по завершении сворачивается —
+// ручной клик пользователя приоритетнее автоповедения до следующей смены running.
+function ActivitySection({ activity, running, accent, online, onOpenFile, renderChild }: {
+  activity: ActivityEntry[];
   running: boolean;
   accent: string;
   online: boolean;
   onOpenFile?: (path: string) => void;
   renderChild?: (item: ChatItem, idx: number) => React.ReactNode;
-  idxMap?: Map<string, number>;
 }) {
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   // Смена фазы running сбрасывает ручной выбор — секция снова следует автоповедению
   useEffect(() => { setUserOpen(null); }, [running]);
   const open = userOpen ?? running;
-  const label = activity.length === 1 ? '1 действие' : `${activity.length} действий`;
+  // «Действия» — только вызовы инструментов; текст/thinking считать действиями странно
+  const toolCount = activity.filter(e => e.item.kind === 'tool_use').length;
+  const label = toolCount === 1 ? '1 действие' : `${toolCount} действий`;
 
   return (
     <div style={{ borderBottom: `1px solid ${C.divider}` }}>
@@ -279,16 +282,20 @@ function ActivitySection({ activity, running, accent, online, onOpenFile, render
           transform: open ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s',
         }}>▾</span>
         <span style={{ fontWeight: 600 }}>Активность</span>
-        <span style={{ color: C.textMuted }}>· {label}</span>
+        {toolCount > 0 && <span style={{ color: C.textMuted }}>· {label}</span>}
         {running && <div className="tool-spinner" style={{ width: 10, height: 10, marginLeft: 4 }} />}
       </button>
       {open && (
         <div style={{ padding: '2px 10px 8px', maxHeight: 360, overflowY: 'auto' }}>
-          {activity.map((child, ci) => (
-            <div key={child.id} style={ci === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
-              {renderChild
-                ? renderChild(child, idxMap?.get(child.id) ?? 0)
-                : <ToolUseView item={child} online={online} onOpenFile={onOpenFile} />}
+          {activity.map((e, ci) => (
+            <div key={itemKey(e.item, e.idx)} style={ci === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
+              {e.item.kind === 'text'
+                ? <AgentTextBlock text={e.item.text} accent={accent} />
+                : e.item.kind === 'thinking'
+                  ? <AgentThinkingBlock text={e.item.text} />
+                  : renderChild
+                    ? renderChild(e.item, e.idx)
+                    : <ToolUseView item={e.item as ToolUseItem} online={online} onOpenFile={onOpenFile} />}
             </div>
           ))}
         </div>

@@ -83,6 +83,27 @@ internal class TurnAccumulator
         }
     }
 
+    // Текст/thinking сабагента приходят целыми блоками (не дельтами) — сразу отдельными
+    // записями. FlushBuffers обязателен: live-редьюсер в этот момент «разрезает» накапливаемый
+    // текст основного агента, история должна повторить тот же порядок элементов.
+    public void OnAgentText(string parentToolUseId, string text)
+    {
+        lock (_lock)
+        {
+            FlushBuffers();
+            _currentTurn.Add(new StoredTextMessage(text, null, parentToolUseId));
+        }
+    }
+
+    public void OnAgentThinking(string parentToolUseId, string text)
+    {
+        lock (_lock)
+        {
+            FlushBuffers();
+            _currentTurn.Add(new StoredThinkingMessage(text, parentToolUseId));
+        }
+    }
+
     public void OnToolResult(string toolUseId, string content, bool isError)
     {
         lock (_lock)

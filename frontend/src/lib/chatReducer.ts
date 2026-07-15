@@ -88,7 +88,7 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
       continue;
     }
 
-    if (opts?.deriveSpeakers && m.kind === 'text') {
+    if (opts?.deriveSpeakers && m.kind === 'text' && !(m as { parentToolUseId?: string }).parentToolUseId) {
       const pid = (m as { personaId?: string }).personaId;
       if (sawText && pid && pid !== lastPersonaId)
         items.push({ kind: 'companion_switched', label: '', personaId: pid });
@@ -119,8 +119,11 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
 
     case 'text_delta': {
       const last = prev.items[prev.items.length - 1];
-      // spread сохраняет прочие поля реплики (personaId — авторство)
-      if (last?.kind === 'text') return withItems([...prev.items.slice(0, -1), { ...last, text: last.text + msg.text }]);
+      // spread сохраняет прочие поля реплики (personaId — авторство).
+      // К тексту сабагента (parentToolUseId) дельту основного агента не приклеиваем —
+      // начинаем новый элемент (тот же «разрез», что делает FlushBuffers в истории).
+      if (last?.kind === 'text' && !last.parentToolUseId)
+        return withItems([...prev.items.slice(0, -1), { ...last, text: last.text + msg.text }]);
       return withItems([...prev.items, { kind: 'text', text: msg.text }]);
     }
 
@@ -137,9 +140,23 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
 
     case 'thinking_delta': {
       const last = prev.items[prev.items.length - 1];
-      if (last?.kind === 'thinking') return withItems([...prev.items.slice(0, -1), { ...last, text: last.text + msg.text }]);
+      if (last?.kind === 'thinking' && !last.parentToolUseId)
+        return withItems([...prev.items.slice(0, -1), { ...last, text: last.text + msg.text }]);
       return withItems([...prev.items, { kind: 'thinking', text: msg.text, expanded: false }]);
     }
+
+    // Текст/thinking сабагента: приходят целыми блоками, каждый — отдельным элементом ленты
+    // (рендерится внутри карточки родительского tool_use). Мягкий дедуп по (parent, text)
+    // закрывает гонку «история уже загружена + live-событие догнало» при reconnect.
+    case 'agent_text':
+      return prev.items.some(it => it.kind === 'text' && it.parentToolUseId === msg.parentToolUseId && it.text === msg.text)
+        ? prev
+        : withItems([...prev.items, { kind: 'text', text: msg.text, parentToolUseId: msg.parentToolUseId }]);
+
+    case 'agent_thinking':
+      return prev.items.some(it => it.kind === 'thinking' && it.parentToolUseId === msg.parentToolUseId && it.text === msg.text)
+        ? prev
+        : withItems([...prev.items, { kind: 'thinking', text: msg.text, expanded: false, parentToolUseId: msg.parentToolUseId }]);
 
     case 'tool_use': {
       // Дедуп по id: ранняя карточка из стрима + финальный assistant с тем же id → обновляем

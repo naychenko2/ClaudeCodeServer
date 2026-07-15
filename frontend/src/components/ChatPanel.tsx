@@ -26,7 +26,8 @@ import { ChatProjectContext, FalCostContext, AssistantNameContext, PersonaContex
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { ChatEmptyState } from './chat/EmptyState';
 import { AttachPicker } from './chat/AttachPicker';
-import { ToolGroupBlock, AgentActionsBlock, itemKey } from './chat/timeline';
+import { ToolGroupBlock, AgentActionsBlock, itemKey, type ActivityEntry } from './chat/timeline';
+import { splitAgentResultTail } from '../lib/agentTail';
 import { ChatItemView, FileChangedRow } from './chat/ChatItemView';
 import { type ToolUseItem } from './chat/ToolUseView';
 import { WorkflowBlockView } from './chat/WorkflowBlockView';
@@ -587,9 +588,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // элементы не перерендериваются (все пропсы-функции стабильны).
   const renderItem = useCallback((item: ChatItem, i: number,
     extras?: {
-      agentActivity?: Extract<ChatItem, { kind: 'tool_use' }>[];
+      agentActivity?: ActivityEntry[];
       agentRenderChild?: (item: ChatItem, idx: number) => React.ReactNode;
-      agentIdxMap?: Map<string, number>;
     }) => (
     <ChatItemView
       key={itemKey(item, i)}
@@ -618,7 +618,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onPipelineCancel={handlePipelineCancel}
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
-      agentIdxMap={extras?.agentIdxMap}
     />
   ), [
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
@@ -638,62 +637,66 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     // на его месте рисуется отдельная карточка чек-листа, ей не место внутри контура
     const isTool = (it: ChatItem, idx: number) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && idx !== lastTaskIdx && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow';
     const inBlock = (it: ChatItem, idx: number) => isTool(it, idx) || it.kind === 'file_changed';
-    // Строим карту дочерних tool_use для Workflow-блоков
-    const childrenByParentId = new Map<string, ToolUseItem[]>();
-    for (const it of items) {
-      if (it.kind === 'tool_use' && it.parentToolUseId) {
-        const arr = childrenByParentId.get(it.parentToolUseId) ?? [];
-        arr.push(it as ToolUseItem);
-        childrenByParentId.set(it.parentToolUseId, arr);
-      }
-    }
-    // ID субагентов и их инструментов, которые рендерятся внутри WorkflowBlockView
-    const suppressedByWorkflow = new Set<string>();
+    // Ссылка на родителя есть у tool_use и у текста/thinking сабагента
+    const parentOf = (it: ChatItem): string | undefined =>
+      it.kind === 'tool_use' || it.kind === 'text' || it.kind === 'thinking' ? it.parentToolUseId : undefined;
+    // Карта детей: ВСЕ parented-элементы (инструменты + текст/thinking сабагента)
+    // в порядке ленты, с глобальными индексами для renderChild
+    const childrenByParentId = new Map<string, ActivityEntry[]>();
+    items.forEach((it, k) => {
+      const pid = parentOf(it);
+      if (!pid) return;
+      const arr = childrenByParentId.get(pid) ?? [];
+      arr.push({ item: it, idx: k });
+      childrenByParentId.set(pid, arr);
+    });
+    // Элементы, которые рендерятся внутри WorkflowBlockView (субагенты, их инструменты
+    // и текст). Наборы — по ссылке: у text/thinking нет id, а ссылки стабильны в проходе.
+    const suppressedByWorkflow = new Set<ChatItem>();
     for (const it of items) {
       if (it.kind !== 'tool_use' || it.name.toLowerCase() !== 'workflow') continue;
-      for (const agent of (childrenByParentId.get(it.id) ?? [])) {
-        suppressedByWorkflow.add(agent.id);
-        for (const tool of (childrenByParentId.get(agent.id) ?? [])) suppressedByWorkflow.add(tool.id);
+      for (const e of (childrenByParentId.get(it.id) ?? [])) {
+        suppressedByWorkflow.add(e.item);
+        if (e.item.kind === 'tool_use')
+          for (const g of (childrenByParentId.get(e.item.id) ?? [])) suppressedByWorkflow.add(g.item);
       }
     }
     // Дети top-level agent-вызовов рендерятся inline под родителем в блоке действий:
     // при параллельных агентах инструменты приходят вперемешку, и без группировки по родителю
     // все sub-tool строки сливаются в один безымянный блок.
-    const suppressedByAgentParent = new Set<string>();
-    const idxMap = new Map<string, number>();
-    items.forEach((it, k) => { if (it.kind === 'tool_use') idxMap.set(it.id, k); });
+    const suppressedByAgentParent = new Set<ChatItem>();
     for (const it of items) {
       if (it.kind !== 'tool_use' || !!it.parentToolUseId || it.name.toLowerCase() === 'workflow') continue;
-      for (const child of (childrenByParentId.get(it.id) ?? [])) {
-        if (!suppressedByWorkflow.has(child.id)) suppressedByAgentParent.add(child.id);
+      for (const e of (childrenByParentId.get(it.id) ?? [])) {
+        if (!suppressedByWorkflow.has(e.item)) suppressedByAgentParent.add(e.item);
       }
     }
-    // Дочерние вызовы субагента (не-Workflow, не inline) — рисуем единой линией-коннектором слева
-    const isSubTool = (it: ChatItem) => it.kind === 'tool_use' && !!it.parentToolUseId && !suppressedByWorkflow.has(it.id) && !suppressedByAgentParent.has(it.id);
+    // Дочерние элементы субагента (не-Workflow, не inline) — рисуем единой линией-коннектором слева
+    const isSubItem = (it: ChatItem) => !!parentOf(it) && !suppressedByWorkflow.has(it) && !suppressedByAgentParent.has(it);
     // Узлы ленты с пометкой стартового индекса — нужно для обёртки success-коннектором
     const nodes: Array<{ node: React.ReactNode; start: number }> = [];
     const pushNode = (node: React.ReactNode, start: number) => nodes.push({ node, start });
     let i = 0;
     let prevNodeWasBlock = false;
     while (i < items.length) {
-      // Workflow-блок рендерим специальным компонентом
+      // Workflow-блок рендерим специальным компонентом. agents — стрим-субагенты
+      // (tool_use-дети воркфлоу); их полный поток отдаёт карта childrenByParentId
       if (items[i].kind === 'tool_use' && (items[i] as ToolUseItem).name.toLowerCase() === 'workflow') {
         const wf = items[i] as ToolUseItem;
-        pushNode(<WorkflowBlockView key={`wf-${wf.id}`} workflow={wf} agents={childrenByParentId.get(wf.id) ?? []} childrenByParentId={childrenByParentId} onOpenFile={onOpenFile} />, i);
+        const wfAgents = (childrenByParentId.get(wf.id) ?? [])
+          .filter(e => e.item.kind === 'tool_use').map(e => e.item as ToolUseItem);
+        pushNode(<WorkflowBlockView key={`wf-${wf.id}`} workflow={wf} agents={wfAgents} childrenByParentId={childrenByParentId} onOpenFile={onOpenFile} />, i);
         i++; prevNodeWasBlock = false; continue;
       }
-      // Субагенты Workflow и их инструменты рендерятся внутри WorkflowBlockView
-      if (items[i].kind === 'tool_use' && suppressedByWorkflow.has((items[i] as ToolUseItem).id)) {
+      // Элементы, отрисованные внутри WorkflowBlockView или inline под родителем-агентом,
+      // в основной ленте пропускаем (любой kind: инструменты, текст, thinking)
+      if (suppressedByWorkflow.has(items[i]) || suppressedByAgentParent.has(items[i])) {
         i++; continue;
       }
-      // Дочерние инструменты top-level агентов рендерятся inline под родителем — пропускаем здесь
-      if (items[i].kind === 'tool_use' && suppressedByAgentParent.has((items[i] as ToolUseItem).id)) {
-        i++; continue;
-      }
-      if (isSubTool(items[i])) {
+      if (isSubItem(items[i])) {
         const start = i;
         const sub: Array<[ChatItem, number]> = [];
-        while (i < items.length && isSubTool(items[i])) { sub.push([items[i], i]); i++; }
+        while (i < items.length && isSubItem(items[i])) { sub.push([items[i], i]); i++; }
         // Один контейнер с borderLeft на всю стопку дочерних → линия не прерывается gap'ом ленты
         const subDiv = (
           <div key={`sub-${itemKey(sub[0][0], start)}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `2px solid ${C.border}` }}>
@@ -729,8 +732,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         pushNode(
           <ToolGroupBlock key={`grp-${itemKey(slice[0][0], start)}`} isGroupDone={isGroupDone} toolCount={toolCount}>
             {slice.map(([it, idx], gi) => {
-              const inlineChildren = it.kind === 'tool_use'
-                ? (childrenByParentId.get(it.id) ?? []).filter(c => !suppressedByWorkflow.has(c.id))
+              // Финальный текст сабагента из транскрипта дублирует тело ответа (tool_result) —
+              // после завершения в активности его не показываем (ответ рендерит сама карточка)
+              const answerBody = it.kind === 'tool_use' && typeof it.result === 'string'
+                ? splitAgentResultTail(it.result).body.trim() : null;
+              const inlineChildren: ActivityEntry[] = it.kind === 'tool_use'
+                ? (childrenByParentId.get(it.id) ?? []).filter(e => !suppressedByWorkflow.has(e.item)
+                    && !(answerBody !== null && e.item.kind === 'text' && e.item.text.trim() === answerBody))
                 : [];
               // Консультация персоны-сабагента: активность рендерится СЕКЦИЕЙ ВНУТРИ
               // карточки (PersonaTaskView), внешняя плашка «N действий» не нужна
@@ -742,14 +750,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
                     {it.kind === 'file_changed'
                       ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={project ? handleRevert : undefined} />
                       : renderItem(it, idx, isPersonaTask
-                          ? { agentActivity: inlineChildren, agentRenderChild: renderItem, agentIdxMap: idxMap }
+                          ? { agentActivity: inlineChildren, agentRenderChild: renderItem }
                           : undefined)}
                   </div>
                   {inlineChildren.length > 0 && !isPersonaTask && (
                     <AgentActionsBlock
-                      items={inlineChildren}
+                      entries={inlineChildren}
                       renderChild={renderItem}
-                      idxMap={idxMap}
                     />
                   )}
                 </Fragment>

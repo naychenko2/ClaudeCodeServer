@@ -165,6 +165,53 @@ public class WorkflowAgentParserTests : IDisposable
         agent.Files.Should().BeEquivalentTo("first.cs", "*.ts");
     }
 
+    // ─── ParseAgentTimeline ──────────────────────────────────────────────────
+
+    [Fact]
+    public void ParseAgentTimeline_СобираетБлокиПоПорядку_БезПромпта()
+    {
+        var path = WriteAgentFile("tl",
+            UserLine("Промпт не должен попасть в таймлайн"),
+            """{"message":{"role":"assistant","content":[{"type":"thinking","thinking":"размышляю"}]}}""",
+            AssistantTextLine("Начинаю"),
+            ToolUseLine("Read", """{"file_path":"/a/b/target.cs"}"""),
+            """{"message":{"role":"user","content":[{"type":"tool_result","content":"не попадает"}]}}""",
+            AssistantTextLine("Готово", endTurn: true));
+
+        var blocks = WorkflowAgentParser.ParseAgentTimeline(path);
+
+        blocks.Should().HaveCount(4);
+        blocks[0].Kind.Should().Be("thinking");
+        blocks[0].Text.Should().Be("размышляю");
+        blocks[1].Kind.Should().Be("text");
+        blocks[1].Text.Should().Be("Начинаю");
+        blocks[2].Kind.Should().Be("tool_use");
+        blocks[2].ToolName.Should().Be("Read");
+        blocks[2].ToolTarget.Should().Be("/a/b/target.cs");
+        blocks[3].Kind.Should().Be("text");
+        blocks[3].Text.Should().Be("Готово");
+    }
+
+    [Fact]
+    public void ParseAgentTimeline_БитыеСтроки_Пропускаются()
+    {
+        var path = WriteAgentFile("tlbad",
+            UserLine("p"),
+            "{оборванный json",
+            AssistantTextLine("Живой блок"));
+
+        var blocks = WorkflowAgentParser.ParseAgentTimeline(path);
+
+        blocks.Should().ContainSingle().Which.Text.Should().Be("Живой блок");
+    }
+
+    [Fact]
+    public void ParseAgentTimeline_НесуществующийФайл_ПустойСписок()
+    {
+        WorkflowAgentParser.ParseAgentTimeline(Path.Combine(_dir, "agent-ghost.jsonl"))
+            .Should().BeEmpty();
+    }
+
     // ─── IsPathAllowed ───────────────────────────────────────────────────────
 
     [Fact]

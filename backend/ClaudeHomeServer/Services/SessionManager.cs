@@ -1567,6 +1567,11 @@ public class SessionManager
                     if (entry?.Info.WorkLoop is not null) entry.LoopTurnText.Append(m.Text);
                     break;
                 case ThinkingDeltaMessage m: acc.OnThinkingDelta(m.Text); break;
+                case AgentTextMessage m:
+                    acc.OnAgentText(m.ParentToolUseId, m.Text);
+                    await acc.SaveSnapshotAsync(_history); // reload посреди долгого сабагента видит уже написанное
+                    break;
+                case AgentThinkingMessage m: acc.OnAgentThinking(m.ParentToolUseId, m.Text); break;
                 case ToolUseMessage m:      acc.OnToolUse(m.Id, m.Name, m.Input, m.ParentToolUseId); break;
                 case ToolResultMessage m:
                     acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);
@@ -1820,7 +1825,8 @@ public class SessionManager
     // Текст последней реплики ассистента текущего хода (сообщения после baseline) —
     // ответ для синхронного ожидателя SendMessageAndWaitAsync
     private static string LastAssistantText(TurnAccumulator acc, int baseline) =>
-        acc.GetAll().Skip(Math.Max(0, baseline)).OfType<StoredTextMessage>().LastOrDefault()?.Text ?? "";
+        acc.GetAll().Skip(Math.Max(0, baseline)).OfType<StoredTextMessage>()
+            .LastOrDefault(t => t.ParentToolUseId is null)?.Text ?? "";
 
     // Для fire-and-forget задач: ошибку логируем, а не теряем молча
     private static void FireAndForget(Task task, string context) =>

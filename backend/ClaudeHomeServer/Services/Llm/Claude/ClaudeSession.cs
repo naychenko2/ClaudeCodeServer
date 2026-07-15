@@ -47,6 +47,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Ватчеры фоновых Workflow (по одному на каждый запущенный workflow в сессии)
     private readonly List<WorkflowWatcher> _workflowWatchers = [];
+    // Полный поток inline-сабагентов из их транскриптов (CLI шлёт в stdout только tool_use);
+    // создаётся на system/init каждого хода, диспозится по завершении процесса
+    private SubagentStreamWatcher? _subagentWatcher;
 
     // Если claude не выдаёт ни одной строки дольше этого — считаем зависшим
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(60);
@@ -1107,6 +1110,14 @@ public class ClaudeSession : ILlmSessionAdapter
             // Ватчеры завершившихся workflow задиспозились сами — убираем их из списка
             lock (_workflowWatchers) _workflowWatchers.RemoveAll(w => w.IsDisposed);
 
+            // Дочитываем хвосты транскриптов сабагентов и останавливаем ватчер хода
+            if (_subagentWatcher is not null)
+            {
+                await _subagentWatcher.DrainAsync();
+                _subagentWatcher.Dispose();
+                _subagentWatcher = null;
+            }
+
             // Ход закончился — следующий (если его инициирует человек) идёт с полным набором инструментов
             _currentTurnAgentDepth = 0;
 
@@ -1153,6 +1164,11 @@ public class ClaudeSession : ILlmSessionAdapter
                     await _onMessage(new SessionStartedMessage(
                         Info.ClaudeSessionId!, isResume, model, Info.Mode.ToWireToken(), cwd, toolCount, mcp,
                         Capabilities.Provider, Capabilities));
+
+                    // Поток inline-сабагентов этого хода — из их транскриптов на диске
+                    _subagentWatcher?.Dispose();
+                    _subagentWatcher = new SubagentStreamWatcher(cwd ?? _rootPath, Info.ClaudeSessionId!, _onMessage);
+                    _subagentWatcher.Start();
                 }
                 else if (sysSubtype == "compact_boundary")
                 {
@@ -1331,6 +1347,10 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
             }
 
+            // Дочитываем транскрипты сабагентов ДО трансляции результата: весь текст сабагента
+            // должен лечь в ленту раньше tool_result (и продолжения текста основного агента)
+            if (_subagentWatcher is not null) await _subagentWatcher.DrainAsync();
+
             await _onMessage(new ToolResultMessage(toolUseId, resultContent, isError));
 
             // Если это результат Workflow с транскриптом — запускаем watcher
@@ -1355,6 +1375,11 @@ public class ClaudeSession : ILlmSessionAdapter
 
     private async Task HandleStreamEventAsync(JsonElement root)
     {
+        // Стрим-события сабагента (если CLI вдруг начнёт их слать) не подмешиваем в текст
+        // основного агента — его контент придёт целыми блоками в HandleAssistantToolsAsync
+        if (root.TryGetProperty("parent_tool_use_id", out var sePid) && sePid.ValueKind == JsonValueKind.String)
+            return;
+
         if (!root.TryGetProperty("event", out var evt)) return;
         if (!evt.TryGetProperty("type", out var et)) return;
         var eventType = et.GetString();
@@ -1417,8 +1442,17 @@ public class ClaudeSession : ILlmSessionAdapter
             if (!block.TryGetProperty("type", out var bt)) continue;
             var blockType = bt.GetString();
 
-            // Скрытое размышление — показываем плашку-плейсхолдер
-            if (blockType == "redacted_thinking") { await _onMessage(new RedactedThinkingMessage()); continue; }
+            // Скрытое размышление — показываем плашку-плейсхолдер (только у основного агента:
+            // от сабагента плейсхолдер попал бы в основную ленту)
+            if (blockType == "redacted_thinking")
+            {
+                if (parentId is null) await _onMessage(new RedactedThinkingMessage());
+                continue;
+            }
+
+            // Текст/thinking сабагента CLI в stdout НЕ транслирует (сюда приходят только его
+            // tool_use) — полный поток эмитит SubagentStreamWatcher из транскрипта на диске.
+            // Текстовые блоки основного агента пропускаем: они уже пришли дельтами stream_event.
             if (blockType != "tool_use") continue;
 
             var toolId = block.TryGetProperty("id", out var tid) ? tid.GetString() ?? "" : "";
@@ -1434,8 +1468,9 @@ public class ClaudeSession : ILlmSessionAdapter
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }
 
-        // Ответ оборван по лимиту токенов
-        if (msg.TryGetProperty("stop_reason", out var stopReason) && stopReason.GetString() == "max_tokens")
+        // Ответ оборван по лимиту токенов (у сабагента — не показываем плашку в основной ленте)
+        if (parentId is null && msg.TryGetProperty("stop_reason", out var stopReason)
+            && stopReason.GetString() == "max_tokens")
             await _onMessage(new TruncatedMessage());
     }
 
@@ -1478,6 +1513,8 @@ public class ClaudeSession : ILlmSessionAdapter
     public async ValueTask DisposeAsync()
     {
         _fileWatcher.Dispose();
+        _subagentWatcher?.Dispose();
+        _subagentWatcher = null;
         lock (_workflowWatchers)
         {
             foreach (var w in _workflowWatchers) w.Dispose();

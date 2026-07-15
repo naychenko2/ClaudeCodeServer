@@ -1,11 +1,15 @@
 import { memo, useState, useEffect, useRef } from 'react';
 import { Check, Terminal, SquarePen, Search, CircleUser } from 'lucide-react';
-import { api, type WorkflowAgentInfo } from '../../lib/api';
+import { api, type WorkflowAgentInfo, type WorkflowAgentBlock } from '../../lib/api';
 import { parseWorkflowMeta } from '../../lib/workflowMeta';
 import { usePersonas, ensurePersonasLoaded } from '../../lib/personas';
 import { C, FONT, R } from '../../lib/design';
-import { ToolUseView, toolWord, type ToolUseItem } from './ToolUseView';
+import { ToolUseView, toolWord, toolLabel, type ToolUseItem } from './ToolUseView';
+import { splitAgentResultTail } from '../../lib/agentTail';
 import { PersonaConsultCard, PersonaTaskView, findConsultedPersona, findPersonaByAgentType } from './PersonaTaskView';
+import { AgentTextBlock, AgentThinkingBlock } from './AgentContentBlocks';
+import { AGENT_COLORS } from '../AgentSelector';
+import { type ActivityEntry } from './timeline';
 import { MarkdownContent } from './MarkdownContent';
 
 function parseTranscriptDir(result: string | undefined): string | null {
@@ -19,7 +23,8 @@ function parseTranscriptDir(result: string | undefined): string | null {
 export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, agents, childrenByParentId, onOpenFile }: {
   workflow: ToolUseItem;
   agents: ToolUseItem[];
-  childrenByParentId: Map<string, ToolUseItem[]>;
+  // Все дочерние элементы по родителю (инструменты + текст/thinking сабагентов)
+  childrenByParentId: Map<string, ActivityEntry[]>;
   onOpenFile?: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -203,12 +208,18 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
           {agents.length > 0 && (
             <div style={{ borderTop: phases.length > 0 ? `1px solid ${C.border}` : undefined }}>
               {agents.map((agent, idx) => {
-                const tools = childrenByParentId.get(agent.id) ?? [];
+                // Финальный текст сабагента дублирует тело его ответа (tool_result) —
+                // после завершения в активности не показываем (ответ рендерит карточка)
+                const agentAnswer = typeof agent.result === 'string'
+                  ? splitAgentResultTail(agent.result).body.trim() : null;
+                const children = (childrenByParentId.get(agent.id) ?? []).filter(e =>
+                  !(agentAnswer !== null && e.item.kind === 'text' && e.item.text.trim() === agentAnswer));
+                const toolCount = children.filter(e => e.item.kind === 'tool_use').length;
                 // Стрим-агент консультируется с персоной → её карточка с активностью внутри
                 if (findConsultedPersona(agent, personas)) {
                   return (
                     <div key={agent.id} style={{ padding: '8px 14px', borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
-                      <PersonaTaskView item={agent} online activity={tools.length > 0 ? tools : undefined} onOpenFile={onOpenFile} />
+                      <PersonaTaskView item={agent} online activity={children.length > 0 ? children : undefined} onOpenFile={onOpenFile} />
                     </div>
                   );
                 }
@@ -224,8 +235,8 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                 return (
                   <div key={agent.id} style={{ borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
                     <div
-                      onClick={tools.length > 0 ? () => toggleAgent(agent.id) : undefined}
-                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', cursor: tools.length > 0 ? 'pointer' : 'default' }}
+                      onClick={children.length > 0 ? () => toggleAgent(agent.id) : undefined}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', cursor: children.length > 0 ? 'pointer' : 'default' }}
                     >
                       <span style={{ flexShrink: 0, width: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         {agentDone
@@ -235,18 +246,22 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                       <span style={{ flex: 1, fontFamily: FONT.sans, fontSize: 12.5, color: label ? C.textPrimary : C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {label || `Агент ${idx + 1}`}
                       </span>
-                      {tools.length > 0 && (
-                        <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{tools.length} {toolWord(tools.length)}</span>
+                      {toolCount > 0 && (
+                        <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{toolCount} {toolWord(toolCount)}</span>
                       )}
-                      {tools.length > 0 && (
+                      {children.length > 0 && (
                         <span style={{ color: C.textMuted, fontSize: 11, flexShrink: 0, display: 'inline-block', transform: isAgentExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
                       )}
                     </div>
-                    {isAgentExpanded && tools.length > 0 && (
+                    {isAgentExpanded && children.length > 0 && (
                       <div style={{ paddingLeft: 22, paddingRight: 14, paddingBottom: 4, borderTop: `1px solid ${C.bgInset}` }}>
-                        {tools.map((tool, ti) => (
-                          <div key={tool.id} style={ti > 0 ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
-                            <ToolUseView item={tool} onOpenFile={onOpenFile} />
+                        {children.map((e, ti) => (
+                          <div key={e.item.kind === 'tool_use' ? e.item.id : `b-${e.idx}`} style={ti > 0 ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
+                            {e.item.kind === 'text'
+                              ? <AgentTextBlock text={e.item.text} accent={C.accent} />
+                              : e.item.kind === 'thinking'
+                                ? <AgentThinkingBlock text={e.item.text} />
+                                : <ToolUseView item={e.item as ToolUseItem} onOpenFile={onOpenFile} />}
                           </div>
                         ))}
                       </div>
@@ -280,8 +295,9 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
               {!transcriptLoading && transcriptAgents && transcriptAgents.length > 0 && (
                 <div style={{ padding: '4px 0' }}>
                   {transcriptAgents.map((agent, idx) => {
+                    const transcriptDir = parseTranscriptDir(workflow.result as string | undefined);
                     // Агент-персона (agentType == handle) → карточка консультации персоны:
-                    // идентичность, вопрос (prompt), инструменты и ответ (summary) внутри
+                    // идентичность, вопрос (prompt), полный поток (таймлайн) и ответ (summary)
                     const persona = findPersonaByAgentType(agent.agentType, personas);
                     if (persona) {
                       return (
@@ -296,6 +312,11 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                             {(agent.tools?.length || agent.files?.length) ? (
                               <TranscriptAgentChips tools={agent.tools} files={agent.files} />
                             ) : null}
+                            {transcriptDir && (
+                              <TranscriptAgentTimeline dir={transcriptDir} agentId={agent.id}
+                                accent={AGENT_COLORS[persona.avatar?.color ?? ''] ?? C.accent}
+                                running={agent.isDone !== true} />
+                            )}
                           </PersonaConsultCard>
                         </div>
                       );
@@ -391,6 +412,11 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                                 )}
                               </div>
                             )}
+                            {/* Полный поток агента (текст/thinking/инструменты) — лениво из транскрипта */}
+                            {transcriptDir && (
+                              <TranscriptAgentTimeline dir={transcriptDir} agentId={agent.id}
+                                accent={C.accent} running={agent.isDone !== true} edge="top" />
+                            )}
                           </div>
                         )}
                       </div>
@@ -411,6 +437,90 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
     </div>
   );
 });
+
+// Ленивый таймлайн workflow-агента: полный поток (текст/thinking/инструменты) из его
+// транскрипта, подгружается по REST при раскрытии. Пока агент работает (running) —
+// рефетч раз в 5с; по завершении — финальный снапшот. Текст — AgentTextBlock в расцветке
+// персоны (или нейтральной), thinking — AgentThinkingBlock, инструмент — компактная строка.
+function TranscriptAgentTimeline({ dir, agentId, accent, running, edge = 'bottom' }: {
+  dir: string;
+  agentId: string;
+  accent: string;
+  running: boolean;
+  // Сторона разделителя: bottom — слот карточки персоны, top — низ панели деталей агента
+  edge?: 'top' | 'bottom';
+}) {
+  const [open, setOpen] = useState(false);
+  const [blocks, setBlocks] = useState<WorkflowAgentBlock[] | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const load = () => {
+      api.workflow.getTimeline(dir, agentId)
+        .then(r => { if (!cancelled) setBlocks(r.blocks); })
+        .catch(() => { if (!cancelled) setBlocks(prev => prev ?? []); });
+    };
+    load();
+    if (!running) return () => { cancelled = true; };
+    const t = setInterval(load, 5000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [open, running, dir, agentId]);
+
+  return (
+    <div style={edge === 'bottom' ? { borderBottom: `1px solid ${C.divider}` } : { borderTop: `1px solid ${C.borderLight}` }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+          padding: '6px 12px', border: 'none', background: `${accent}0d`,
+          cursor: 'pointer', textAlign: 'left',
+          fontFamily: FONT.sans, fontSize: 11.5, color: C.textSecondary,
+        }}
+      >
+        <span style={{
+          display: 'inline-block', fontSize: 10, color: C.textMuted,
+          transform: open ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s',
+        }}>▾</span>
+        <span style={{ fontWeight: 600 }}>Ход работы</span>
+        {running && open && <div className="tool-spinner" style={{ width: 10, height: 10, marginLeft: 4 }} />}
+      </button>
+      {open && (
+        <div style={{ padding: '2px 10px 8px', maxHeight: 360, overflowY: 'auto' }}>
+          {blocks === null ? (
+            <div style={{ padding: '6px 0' }}>
+              {[85, 60].map((w, i) => (
+                <div key={i} style={{ height: 10, width: `${w}%`, borderRadius: 4, background: C.borderLight, marginTop: i > 0 ? 6 : 0 }} />
+              ))}
+            </div>
+          ) : blocks.length === 0 ? (
+            <div style={{ padding: '6px 2px', fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, fontStyle: 'italic' }}>
+              {running ? 'Агент ещё не начал писать…' : 'Поток недоступен'}
+            </div>
+          ) : (
+            // Ключ по индексу безопасен: транскрипт append-only, блоки не переставляются
+            blocks.map((b, i) => b.kind === 'text'
+              ? <AgentTextBlock key={i} text={b.text ?? ''} accent={accent} />
+              : b.kind === 'thinking'
+                ? <AgentThinkingBlock key={i} text={b.text ?? ''} />
+                : (
+                  <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '3px 2px', minWidth: 0 }}>
+                    <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textSecondary, flexShrink: 0 }}>
+                      {toolLabel(b.toolName ?? '')}
+                    </span>
+                    {b.toolTarget && (
+                      <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {b.toolTarget}
+                      </span>
+                    )}
+                  </div>
+                ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Компактная сводка активности transcript-агента для слота карточки персоны:
 // чипсы инструментов + затронутые файлы (тот же стиль, что в раскрытых деталях агента)

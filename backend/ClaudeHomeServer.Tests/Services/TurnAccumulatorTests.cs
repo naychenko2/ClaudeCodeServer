@@ -96,6 +96,54 @@ public class TurnAccumulatorTests : IDisposable
     }
 
     [Fact]
+    public void OnAgentText_AddsRecordWithParent_AndFlushesMainText()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnTextDelta("main "); // накапливаемый текст основного агента
+        acc.OnAgentText("task1", "реплика сабагента");
+
+        var all = acc.GetAll();
+        all.Should().HaveCount(2);
+        // буфер разрезан ПЕРЕД текстом сабагента — порядок совпадает с live-лентой
+        all[0].Should().BeOfType<StoredTextMessage>()
+            .Which.Should().Match<StoredTextMessage>(t => t.Text == "main " && t.ParentToolUseId == null);
+        all[1].Should().BeOfType<StoredTextMessage>()
+            .Which.Should().Match<StoredTextMessage>(t =>
+                t.Text == "реплика сабагента" && t.ParentToolUseId == "task1");
+    }
+
+    [Fact]
+    public void OnAgentThinking_AddsRecordWithParent()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnAgentThinking("task1", "мысль сабагента");
+        acc.OnAgentText("task1", "текст после");
+
+        var all = acc.GetAll();
+        all.Should().HaveCount(2);
+        all[0].Should().BeOfType<StoredThinkingMessage>()
+            .Which.Should().Match<StoredThinkingMessage>(t =>
+                t.Text == "мысль сабагента" && t.ParentToolUseId == "task1");
+        all[1].Should().BeOfType<StoredTextMessage>();
+    }
+
+    [Fact]
+    public async Task AgentText_SurvivesRoundtripToDisk()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnToolUse("task1", "Task", new { });
+        acc.OnAgentThinking("task1", "думаю");
+        acc.OnAgentText("task1", "пишу");
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc);
+
+        var loaded = await _histSvc.LoadAsync(sessionId);
+        loaded.Should().HaveCount(4);
+        loaded[1].Should().BeOfType<StoredThinkingMessage>().Which.ParentToolUseId.Should().Be("task1");
+        loaded[2].Should().BeOfType<StoredTextMessage>().Which.ParentToolUseId.Should().Be("task1");
+    }
+
+    [Fact]
     public void OnToolResult_UpdatesPendingToolUse()
     {
         var acc = new TurnAccumulator([]);

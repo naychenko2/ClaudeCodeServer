@@ -32,6 +32,15 @@ public record UserMessageMessage(string Text, IReadOnlyList<string>? AttachedPat
 public record ThinkingDeltaMessage(string Text)
     : ServerMessage("thinking_delta");
 
+// Текст/размышление сабагента (Task/Agent): CLI не шлёт для вложенных сообщений дельт —
+// блоки приходят целиком в assistant-сообщениях с parent_tool_use_id. Рендерятся внутри
+// карточки сабагента (секция «Активность»), в основную ленту не попадают.
+public record AgentTextMessage(string ParentToolUseId, string Text)
+    : ServerMessage("agent_text");
+
+public record AgentThinkingMessage(string ParentToolUseId, string Text)
+    : ServerMessage("agent_thinking");
+
 public record ToolUseMessage(string Id, string Name, object Input, string? ParentToolUseId = null)
     : ServerMessage("tool_use");
 
@@ -114,6 +123,11 @@ public record WorkflowAgentDto(string Id, string Prompt, string? Summary,
 
 public record WorkflowProgressMessage(string ToolUseId, IReadOnlyList<WorkflowAgentDto> Agents, bool IsDone)
     : ServerMessage("workflow_progress");
+
+// Блок таймлайна workflow-агента (полный поток из его транскрипта): text | thinking | tool_use.
+// Отдаётся лениво по REST при раскрытии карточки — в workflow_progress не входит (тяжёлый).
+public record WorkflowAgentBlockDto(string Kind, string? Text = null,
+    string? ToolName = null, string? ToolTarget = null);
 
 // Изменение задачи (created/updated/deleted) — шлётся в группу user_{userId},
 // чтобы все устройства пользователя обновили списки и календарь

@@ -16,6 +16,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { PersonaTaskView, isAgentToolUse } from './PersonaTaskView';
+import type { ActivityEntry } from './timeline';
 import { MeetingView } from './MeetingView';
 import { PipelineView } from './PipelineView';
 import { AskQuestionView } from './AskQuestionView';
@@ -277,19 +278,19 @@ interface ItemProps {
   onMeetingCancel?: () => void;
   // Отмена идущего конвейера (кнопка на карточке)
   onPipelineCancel?: () => void;
-  // Вложенная активность сабагента-персоны (дочерние tool_use) — рендерится секцией
-  // внутри карточки консультации (передаёт ChatPanel только для персона-вызовов Task)
-  agentActivity?: Extract<ChatItem, { kind: 'tool_use' }>[];
-  // Универсальный рендер элементов активности (renderItem из ChatPanel) + карта индексов —
+  // Вложенная активность сабагента-персоны (дочерние tool_use/text/thinking с индексами) —
+  // рендерится секцией внутри карточки консультации (передаёт ChatPanel только для
+  // персона-вызовов Task)
+  agentActivity?: ActivityEntry[];
+  // Универсальный рендер элементов активности (renderItem из ChatPanel) —
   // чтобы внутри секции работали ВСЕ возможности обычной ленты
   agentRenderChild?: (item: ChatItem, idx: number) => React.ReactNode;
-  agentIdxMap?: Map<string, number>;
 }
 
 // React.memo: переключатель по kind — самый массовый компонент ленты. Элементы ChatItem
 // иммутабельны по ссылке (обновление элемента = новый объект), пропсы-функции стабильны
 // (useCallback в ChatPanel) — при дописывании ленты старые элементы не перерендериваются.
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan, onSendMessage, onMeetingCancel, onPipelineCancel, agentActivity, agentRenderChild, agentIdxMap }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan, onSendMessage, onMeetingCancel, onPipelineCancel, agentActivity, agentRenderChild }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
@@ -487,7 +488,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // (несовпадение — обычный ToolUseView, фолбэк внутри PersonaTaskView)
       if (isAgentToolUse(item.name))
         return <PersonaTaskView item={item} online={online} onOpenFile={onOpenFile}
-          activity={agentActivity} renderChild={agentRenderChild} idxMap={agentIdxMap} />;
+          activity={agentActivity} renderChild={agentRenderChild} />;
       return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
 
     case 'ask_question':

@@ -53,7 +53,7 @@ const TOOL_LABELS: Record<string, string> = {
   killshell: 'Остановка команды',
 };
 // Имя инструмента для показа: MCP → «server · tool», известные — по-русски, прочее — как есть
-function toolLabel(name: string): string {
+export function toolLabel(name: string): string {
   if (name.startsWith('mcp__')) return name.slice(5).replace(/__/g, ' · ');
   return TOOL_LABELS[name.toLowerCase()] ?? name;
 }

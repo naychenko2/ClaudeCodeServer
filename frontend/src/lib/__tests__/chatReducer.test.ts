@@ -69,6 +69,63 @@ describe('applyServerMessage: дельты текста', () => {
     const next = run([{ type: 'thinking_delta', text: 'думаю' }]);
     expect(next.items).toEqual([{ kind: 'thinking', text: 'думаю', expanded: false }]);
   });
+
+  it('text_delta не приклеивается к тексту сабагента — открывает новый элемент', () => {
+    const next = run(
+      [{ type: 'text_delta', text: 'основной' }],
+      state({ items: [{ kind: 'text', text: 'сабагент', parentToolUseId: 'task1' }] }),
+    );
+    expect(next.items).toHaveLength(2);
+    expect(next.items[1]).toEqual({ kind: 'text', text: 'основной' });
+  });
+
+  it('thinking_delta не приклеивается к thinking сабагента', () => {
+    const next = run(
+      [{ type: 'thinking_delta', text: 'основной' }],
+      state({ items: [{ kind: 'thinking', text: 'сабагент', expanded: false, parentToolUseId: 'task1' }] }),
+    );
+    expect(next.items).toHaveLength(2);
+    expect(next.items[1]).toEqual({ kind: 'thinking', text: 'основной', expanded: false });
+  });
+});
+
+// --- agent_text / agent_thinking (поток сабагента) ---
+
+describe('applyServerMessage: поток сабагента', () => {
+  it('agent_text добавляет text с parentToolUseId отдельным элементом', () => {
+    const next = run([
+      { type: 'text_delta', text: 'основной' },
+      { type: 'agent_text', parentToolUseId: 'task1', text: 'реплика сабагента' },
+    ]);
+    expect(next.items).toEqual([
+      { kind: 'text', text: 'основной' },
+      { kind: 'text', text: 'реплика сабагента', parentToolUseId: 'task1' },
+    ]);
+  });
+
+  it('два agent_text подряд не склеиваются (хронология между инструментами)', () => {
+    const next = run([
+      { type: 'agent_text', parentToolUseId: 'task1', text: 'первый ход' },
+      { type: 'agent_text', parentToolUseId: 'task1', text: 'второй ход' },
+    ]);
+    expect(next.items).toHaveLength(2);
+  });
+
+  it('agent_text дедуплицируется по (parentToolUseId, text) — та же ссылка', () => {
+    const first = run([{ type: 'agent_text', parentToolUseId: 'task1', text: 'реплика' }]);
+    const second = applyServerMessage(first, msg({ type: 'agent_text', parentToolUseId: 'task1', text: 'реплика' }));
+    expect(second).toBe(first);
+    // Тот же текст у другого родителя — не дубль
+    const third = applyServerMessage(second, msg({ type: 'agent_text', parentToolUseId: 'task2', text: 'реплика' }));
+    expect(third.items).toHaveLength(2);
+  });
+
+  it('agent_thinking добавляет свёрнутый thinking с parentToolUseId и дедуплицируется', () => {
+    const first = run([{ type: 'agent_thinking', parentToolUseId: 'task1', text: 'мысль' }]);
+    expect(first.items).toEqual([{ kind: 'thinking', text: 'мысль', expanded: false, parentToolUseId: 'task1' }]);
+    const second = applyServerMessage(first, msg({ type: 'agent_thinking', parentToolUseId: 'task1', text: 'мысль' }));
+    expect(second).toBe(first);
+  });
 });
 
 // --- tool_use / tool_input_delta / tool_result ---
@@ -316,6 +373,22 @@ describe('групповой чат', () => {
       { kind: 'text', text: 'b', personaId: 'p2' },
     ];
     expect(normalizeHistory(raw)).toHaveLength(2);
+  });
+
+  it('текст сабагента (parentToolUseId) не рождает разделитель и проходит насквозь', () => {
+    const raw = [
+      { kind: 'text', text: 'ответ первой', personaId: 'p1' },
+      { kind: 'text', text: 'реплика сабагента', parentToolUseId: 'task1' },
+      { kind: 'thinking', text: 'мысль сабагента', parentToolUseId: 'task1' },
+      { kind: 'text', text: 'продолжение первой', personaId: 'p1' },
+    ];
+    const items = normalizeHistory(raw, { deriveSpeakers: true });
+    expect(items).toEqual([
+      { kind: 'text', text: 'ответ первой', personaId: 'p1' },
+      { kind: 'text', text: 'реплика сабагента', parentToolUseId: 'task1' },
+      { kind: 'thinking', text: 'мысль сабагента', parentToolUseId: 'task1', expanded: false },
+      { kind: 'text', text: 'продолжение первой', personaId: 'p1' },
+    ]);
   });
 });
 

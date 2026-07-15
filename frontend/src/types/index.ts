@@ -278,12 +278,24 @@ export interface WorkflowAgentInfo {
   agentType?: string;
 }
 
+// Блок таймлайна workflow-агента (полный поток из транскрипта, лениво по REST):
+// text | thinking | tool_use
+export interface WorkflowAgentBlock {
+  kind: 'text' | 'thinking' | 'tool_use';
+  text?: string;
+  toolName?: string;
+  toolTarget?: string;
+}
+
 // WebSocket сообщения от сервера — sessionId присутствует во всех типах
 export type ServerMessage = { sessionId: string } & (
   | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   | { type: 'text_delta'; text: string }
   | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean }
   | { type: 'thinking_delta'; text: string }
+  // Текст/thinking сабагента (Task/Agent) — целыми блоками, с привязкой к родительскому tool_use
+  | { type: 'agent_text'; parentToolUseId: string; text: string }
+  | { type: 'agent_thinking'; parentToolUseId: string; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown; parentToolUseId?: string }
   | { type: 'tool_input_delta'; toolUseId: string; partialJson: string }
   | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean }
@@ -424,8 +436,10 @@ export type ChatItem =
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
-  | { kind: 'text'; text: string; personaId?: string }
-  | { kind: 'thinking'; text: string; expanded: boolean }
+  // parentToolUseId — текст/thinking сабагента: рендерится внутри карточки родительского
+  // tool_use (секция «Активность»), а не в основной ленте.
+  | { kind: 'text'; text: string; personaId?: string; parentToolUseId?: string }
+  | { kind: 'thinking'; text: string; expanded: boolean; parentToolUseId?: string }
   | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean }
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean; answers?: Record<string, string | string[]> }

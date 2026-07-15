@@ -2,7 +2,12 @@ import { useState, useEffect } from 'react';
 import { ChevronUp, ChevronDown } from 'lucide-react';
 import type { ChatItem } from '../../types';
 import { C, FONT } from '../../lib/design';
-import { toolWord, type ToolUseItem } from './ToolUseView';
+import { toolWord } from './ToolUseView';
+import { AgentTextBlock, AgentThinkingBlock } from './AgentContentBlocks';
+
+// Элемент активности сабагента: дочерний элемент ленты (tool_use/text/thinking с
+// parentToolUseId) + его глобальный индекс — нужен renderChild'у (renderItem из ChatPanel)
+export interface ActivityEntry { item: ChatItem; idx: number }
 
 // Блок группы инструментов: во время стриминга — раскрыт плоско; после завершения —
 // N≤5 остаётся раскрытым, N>5 автоматически сворачивается. Кнопка заголовка переключает.
@@ -53,13 +58,15 @@ export function itemKey(item: ChatItem, i: number): string {
   }
 }
 
-export function AgentActionsBlock({ items, renderChild, idxMap }: {
-  items: ToolUseItem[];
+// Плашка активности обычного (не-персона) сабагента: вызовы инструментов + его
+// текст/thinking (полный поток, как в карточке персоны, но с нейтральным акцентом)
+export function AgentActionsBlock({ entries, renderChild }: {
+  entries: ActivityEntry[];
   renderChild: (item: ChatItem, idx: number) => React.ReactNode;
-  idxMap: Map<string, number>;
 }) {
   const [open, setOpen] = useState(false);
-  const label = items.length === 1 ? '1 действие' : `${items.length} действий`;
+  const toolCount = entries.filter(e => e.item.kind === 'tool_use').length;
+  const label = toolCount === 1 ? '1 действие' : `${toolCount} действий`;
   return (
     <div style={{ marginLeft: 8 }}>
       <div
@@ -76,13 +83,17 @@ export function AgentActionsBlock({ items, renderChild, idxMap }: {
           transition: 'transform 0.15s',
           fontSize: 10,
         }}>▾</span>
-        {label}
+        {toolCount > 0 ? label : 'ход агента'}
       </div>
       {open && (
         <div style={{ paddingLeft: 14, borderLeft: `2px solid ${C.border}` }}>
-          {items.map((child, ci) => (
-            <div key={child.id} style={ci === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
-              {renderChild(child, idxMap.get(child.id) ?? 0)}
+          {entries.map((e, ci) => (
+            <div key={itemKey(e.item, e.idx)} style={ci === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
+              {e.item.kind === 'text'
+                ? <AgentTextBlock text={e.item.text} accent={C.accent} />
+                : e.item.kind === 'thinking'
+                  ? <AgentThinkingBlock text={e.item.text} />
+                  : renderChild(e.item, e.idx)}
             </div>
           ))}
         </div>

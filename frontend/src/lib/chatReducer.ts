@@ -3,10 +3,7 @@
 // тестировать без рендера React. Побочные эффекты (загрузка истории, SignalR)
 // остаются в хуке; редьюсер только считает следующее состояние.
 
-import type { ChatItem, ServerMessage, RateLimitInfo, MeetingEntryItem, MeetingPhaseKey, WorkLoopState, PipelinePhaseItem, PipelinePhaseKey } from '../types';
-
-type MeetingItem = Extract<ChatItem, { kind: 'meeting' }>;
-type PipelineItem = Extract<ChatItem, { kind: 'pipeline' }>;
+import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState } from '../types';
 
 // Часть состояния сессии, которой управляет редьюсер
 export interface ChatState {
@@ -34,59 +31,25 @@ interface StoredHistoryMessage {
   [field: string]: unknown;
 }
 
+// Записи снесённых механик в истории старых чатов: рендера для них больше нет —
+// молча пропускаем, чтобы старые чаты открывались без ошибок и мусорных элементов
+const LEGACY_KINDS = new Set(['meeting', 'meeting_phase', 'pipeline', 'pipeline_phase']);
+
 // Приводит сырую историю к ChatItem[]: проставляет UI-поля дефолтами —
 // thinking свёрнут, error без кнопки повтора (повторять исторические ошибки нельзя).
 // deriveSpeakers (групповой чат): между соседними text-сообщениями с разным personaId
 // вставляется разделитель «Теперь отвечает: …» (label резолвится по personaId при рендере).
+// Неизвестные kind проходят насквозь — ChatItemView игнорирует их в default-ветке.
 export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boolean }): ChatItem[] {
   const items: ChatItem[] = [];
   // Автор последней виденной text-реплики (undefined — реплик ещё не было)
   let lastPersonaId: string | undefined;
   let sawText = false;
 
-  // Карточки совещаний: фазы одного meetingId из истории склеиваются в один элемент
-  const meetings = new Map<string, MeetingItem>();
-  // Карточки конвейеров: фазы одного pipelineId склеиваются в один элемент
-  const pipelines = new Map<string, PipelineItem>();
-
   for (const msg of raw) {
     const m = msg as StoredHistoryMessage;
 
-    if (m.kind === 'meeting') {
-      // StoredMeetingPhaseMessage приходит с kind "meeting_phase", но на случай
-      // уже нормализованных данных — пропускаем как есть
-      items.push(m as unknown as ChatItem);
-      continue;
-    }
-    if ((m.kind as string) === 'meeting_phase') {
-      const mp = m as unknown as { meetingId: string; phase: MeetingPhaseKey; question: string; entries: MeetingEntryItem[] };
-      let it = meetings.get(mp.meetingId);
-      if (!it) {
-        it = { kind: 'meeting', meetingId: mp.meetingId, question: mp.question, phases: {} };
-        meetings.set(mp.meetingId, it);
-        items.push(it);
-      }
-      it.phases[mp.phase] = mp.entries;
-      if (!it.question) it.question = mp.question;
-      if (mp.phase === 'synthesis') it.status = 'done';
-      continue;
-    }
-    if ((m.kind as string) === 'pipeline_phase') {
-      const pp = m as unknown as { pipelineId: string; phase: PipelinePhaseKey; task: string; personaId: string; text: string; round?: number };
-      let it = pipelines.get(pp.pipelineId);
-      if (!it) {
-        it = { kind: 'pipeline', pipelineId: pp.pipelineId, task: pp.task, phases: [] };
-        pipelines.set(pp.pipelineId, it);
-        items.push(it);
-      }
-      const entry = { phase: pp.phase, personaId: pp.personaId, text: pp.text, round: pp.round ?? 1 };
-      // Идемпотентность по (phase, round) — как в live-редьюсере (защита от дублей)
-      const pIdx = it.phases.findIndex(p => p.phase === entry.phase && p.round === entry.round);
-      if (pIdx >= 0) it.phases[pIdx] = entry; else it.phases.push(entry);
-      if (!it.task) it.task = pp.task;
-      if (pp.phase === 'execute') it.status = 'done';
-      continue;
-    }
+    if (LEGACY_KINDS.has(m.kind as string)) continue;
 
     if (opts?.deriveSpeakers && m.kind === 'text' && !(m as { parentToolUseId?: string }).parentToolUseId) {
       const pid = (m as { personaId?: string }).personaId;
@@ -309,115 +272,6 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           : item
       ));
 
-    case 'meeting_phase': {
-      // Фаза совещания завершена — вливаем её в карточку совещания (или создаём)
-      const idx = prev.items.findIndex(it => it.kind === 'meeting' && it.meetingId === msg.meetingId);
-      if (idx >= 0) {
-        const ex = prev.items[idx] as MeetingItem;
-        const updated: MeetingItem = {
-          ...ex,
-          question: ex.question || msg.question,
-          phases: { ...ex.phases, [msg.phase]: msg.entries },
-          // Завершение фазы снимает построчные спиннеры этой фазы
-          running: ex.running?.phase === msg.phase ? undefined : ex.running,
-          status: msg.phase === 'synthesis' ? 'done' : ex.status,
-        };
-        return withItems(prev.items.map((it, i) => i === idx ? updated : it));
-      }
-      return withItems([...prev.items, {
-        kind: 'meeting', meetingId: msg.meetingId, question: msg.question,
-        phases: { [msg.phase]: msg.entries },
-        status: msg.phase === 'synthesis' ? 'done' : 'running',
-      }]);
-    }
-
-    case 'meeting_progress': {
-      const idx = prev.items.findIndex(it => it.kind === 'meeting' && it.meetingId === msg.meetingId);
-      // Финальные статусы совещания
-      if (msg.phase === 'done' || msg.phase === 'error') {
-        if (idx < 0) return prev;
-        const ex = prev.items[idx] as MeetingItem;
-        const updated: MeetingItem = {
-          ...ex, running: undefined,
-          status: msg.phase === 'done' ? 'done' : 'error',
-          error: msg.phase === 'error' ? (msg.error ?? 'Совещание прервано') : undefined,
-        };
-        return withItems(prev.items.map((it, i) => i === idx ? updated : it));
-      }
-      // Прогресс по персоне внутри фазы (running/done/error) либо «фаза done» (без personaId)
-      const base: MeetingItem = idx >= 0
-        ? prev.items[idx] as MeetingItem
-        : { kind: 'meeting', meetingId: msg.meetingId, question: '', phases: {}, status: 'running' };
-      const running = msg.personaId
-        ? {
-            phase: msg.phase,
-            persona: {
-              ...(base.running?.phase === msg.phase ? base.running.persona : {}),
-              [msg.personaId]: (msg.status ?? 'running') as 'running' | 'done' | 'error',
-            },
-          }
-        : base.running?.phase === msg.phase ? undefined : base.running;
-      const updated: MeetingItem = { ...base, running, status: base.status ?? 'running' };
-      return idx >= 0
-        ? withItems(prev.items.map((it, i) => i === idx ? updated : it))
-        : withItems([...prev.items, updated]);
-    }
-
-    case 'pipeline_phase': {
-      // Фаза конвейера завершена — добавляем в карточку (или создаём)
-      const idx = prev.items.findIndex(it => it.kind === 'pipeline' && it.pipelineId === msg.pipelineId);
-      const entry: PipelinePhaseItem = { phase: msg.phase, personaId: msg.personaId, text: msg.text, round: msg.round ?? 1 };
-      if (idx >= 0) {
-        const ex = prev.items[idx] as PipelineItem;
-        // Идемпотентность по (phase, round): одно и то же событие приходит дважды —
-        // внеходовой broadcast шлёт и в session-группу, и в user/project-группу, а клиент
-        // подписан на обе. Существующую фазу обновляем, а не добавляем дубликат.
-        const pIdx = ex.phases.findIndex(p => p.phase === entry.phase && p.round === entry.round);
-        const phases = pIdx >= 0
-          ? ex.phases.map((p, i) => i === pIdx ? entry : p)
-          : [...ex.phases, entry];
-        const updated: PipelineItem = {
-          ...ex,
-          task: ex.task || msg.task,
-          phases,
-          runningPhase: undefined,
-          status: msg.phase === 'execute' ? 'done' : ex.status,
-        };
-        return withItems(prev.items.map((it, i) => i === idx ? updated : it));
-      }
-      return withItems([...prev.items, {
-        kind: 'pipeline', pipelineId: msg.pipelineId, task: msg.task, phases: [entry],
-        status: msg.phase === 'execute' ? 'done' : 'running',
-      }]);
-    }
-
-    case 'pipeline_progress': {
-      const idx = prev.items.findIndex(it => it.kind === 'pipeline' && it.pipelineId === msg.pipelineId);
-      // Финальные статусы конвейера
-      if (msg.phase === 'done' || msg.phase === 'error') {
-        if (idx < 0) return prev;
-        const ex = prev.items[idx] as PipelineItem;
-        const updated: PipelineItem = {
-          ...ex, runningPhase: undefined,
-          status: msg.phase === 'done' ? 'done' : 'error',
-          error: msg.phase === 'error' ? (msg.error ?? 'Конвейер прерван') : undefined,
-        };
-        return withItems(prev.items.map((it, i) => i === idx ? updated : it));
-      }
-      // Идёт фаза (running) — показываем спиннер этой фазы
-      const base: PipelineItem = idx >= 0
-        ? prev.items[idx] as PipelineItem
-        : { kind: 'pipeline', pipelineId: msg.pipelineId, task: '', phases: [], status: 'running' };
-      const updated: PipelineItem = {
-        ...base,
-        runningPhase: msg.status === 'running' ? msg.phase : base.runningPhase,
-        status: base.status ?? 'running',
-      };
-      return idx >= 0
-        ? withItems(prev.items.map((it, i) => i === idx ? updated : it))
-        : withItems([...prev.items, updated]);
-    }
-
     case 'speaker_changed':
       // Групповой чат: сервер переключил активного спикера по @упоминанию —
       // локальный разделитель тем же рендером, что и смена собеседника вручную
@@ -441,7 +295,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return prev;
 
     default:
-      // task_changed, notification и прочие — на состояние чата не влияют
+      // task_changed, notification, неизвестные/устаревшие типы — на состояние чата не влияют
       return prev;
   }
 }

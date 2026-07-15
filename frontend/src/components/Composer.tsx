@@ -4,7 +4,11 @@ import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { SkillsDropdown } from './SkillsDropdown';
 import { MentionsDropdown } from './MentionsDropdown';
 import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
-import { DiscussTeamDialog } from '../features/personas/DiscussTeamDialog';
+import { TeamDrawer } from '../features/team/TeamDrawer';
+import {
+  DEFAULT_TEAM_SETTINGS, buildTeamTurnText, teamMechanic,
+  type TeamMechanicId, type TeamMechanicSettings,
+} from '../features/team/teamMechanics';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
@@ -48,9 +52,13 @@ export interface ComposerProps {
   // Создание нового группового чата из селектора собеседника (флаг persona-group-chats)
   onCreateGroup?: (personaIds: string[]) => void;
   // Цикл «до готово» (флаг work-loop): текущее состояние (live с фолбэком на Session.workLoop);
-  // null — цикл выключен. Тумблер виден при заданном onToggleWorkLoop
+  // null — цикл выключен. Тумблер виден при заданном onToggleWorkLoop.
+  // Promise — чтобы автопилот с «до готово» мог дождаться включения цикла до отправки
   workLoop?: WorkLoopState | null;
-  onToggleWorkLoop?: () => void;
+  onToggleWorkLoop?: () => void | Promise<void>;
+  // Краткий контекст последних реплик чата — для механики «Панель экспертов»
+  // с настройкой «Приложить контекст чата» (собирает ChatPanel из ленты)
+  chatContext?: string;
 }
 
 // Получить имя файла из пути
@@ -129,6 +137,7 @@ export function Composer({
   onCreateGroup,
   workLoop = null,
   onToggleWorkLoop,
+  chatContext,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
@@ -182,9 +191,12 @@ export function Composer({
     const rank = (p: Persona) => participantIds!.includes(p.id) ? 0 : 1;
     return [...base].sort((a, b) => rank(a) - rank(b));
   })();
-  // Мультиперсонная дискуссия: в чате персоны — когда есть кого позвать; конвейер — в любом чате
-  const [showDiscuss, setShowDiscuss] = useState(false);
-  const canDiscuss = (!!selectedPersona && mentionable.length > 0) || !!sessionId;
+  // Раскрывашка «Обсудить с командой»: выбранная механика + её настройки живут здесь
+  // (TeamDrawer — контролируемый компонент), тема пишется в само поле композера
+  const [teamOpen, setTeamOpen] = useState(false);
+  const [teamMech, setTeamMech] = useState<TeamMechanicId | null>(null);
+  const [teamSettings, setTeamSettings] = useState<TeamMechanicSettings>(DEFAULT_TEAM_SETTINGS);
+  const canDiscuss = !!sessionId;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
   const recCancelRef = useRef(false);
@@ -199,12 +211,13 @@ export function Composer({
     return () => clearInterval(id);
   }, [isListening]);
 
-  // Автозапуск «Обсудить с командой» — чат открыт через «Созвать команду» из центра (#3)
+  // Автозапуск «Обсудить с командой» — чат открыт через «Созвать команду» из центра
+  // команды: раскрываем панель механик
   useEffect(() => {
     if (!sessionId) return;
     if (sessionStorage.getItem('cc_auto_discuss') === sessionId) {
       sessionStorage.removeItem('cc_auto_discuss');
-      setShowDiscuss(true);
+      setTeamOpen(true);
     }
   }, [sessionId]);
 
@@ -311,14 +324,42 @@ export function Composer({
     autoResize();
   }, [text, autoResize]);
 
-  const handleSend = () => {
-    const t = text.trim();
-    if (!t && attachments.length === 0) return;
-    onSend(t, attachments);
+  const resetInput = () => {
     setText('');
     if (textareaRef.current) {
       textareaRef.current.style.height = '34px';
     }
+  };
+
+  const handleSend = async () => {
+    const t = text.trim();
+
+    // Командный ход: текст поля — тема, обвязка собирается buildTeamTurnText
+    if (teamMech) {
+      // Валидация: тема обязательна для всех механик, кроме QA-цикла;
+      // дискуссии нужен хотя бы один участник (подсказка — в зоне настроек)
+      if (!t && teamMech !== 'qa') { setTeamOpen(true); return; }
+      if (teamMech === 'discuss' && teamSettings.participants.length === 0) { setTeamOpen(true); return; }
+      // «Остановиться на плане» у автопилота = честный консенсус-план (ralplan):
+      // у скилла autopilot нет флага «стоп на плане», а ralplan делает ровно это —
+      // план через спор до одобрения критика, без исполнения
+      const effective: TeamMechanicId =
+        teamMech === 'autopilot' && !teamSettings.untilDone ? 'consensus' : teamMech;
+      // Автопилот «до готово»: включаем цикл work-loop ДО отправки (PUT /chats/{id}/loop),
+      // только если он ещё не активен — тумблер переключает состояние
+      if (teamMech === 'autopilot' && teamSettings.untilDone && !workLoop?.active && onToggleWorkLoop) {
+        await onToggleWorkLoop();
+      }
+      onSend(buildTeamTurnText(effective, t, teamSettings, chatContext), [], { auto: true });
+      setTeamMech(null);
+      setTeamOpen(false);
+      resetInput();
+      return;
+    }
+
+    if (!t && attachments.length === 0) return;
+    onSend(t, attachments);
+    resetInput();
   };
 
   // Вставка картинки из буфера (скриншот) → отдаём File-объекты родителю на загрузку
@@ -350,7 +391,7 @@ export function Composer({
     // На мобиле Enter переносит строку, отправка — только кнопкой (десктоп: Enter отправляет)
     if (e.key === 'Enter' && !e.shiftKey && !isMobile) {
       e.preventDefault();
-      handleSend();
+      void handleSend();
     }
   };
 
@@ -487,19 +528,46 @@ export function Composer({
     </button>
   ) : null;
 
-  // Кнопка «Обсудить с командой» — открывает диалог выбора участников дискуссии
+  // Кнопка «Обсудить с командой» — тоггл раскрывашки механик (активная — как loopButton)
   const discussButton = canDiscuss ? (
     <button
-      onClick={() => setShowDiscuss(true)}
+      onClick={() => setTeamOpen(o => !o)}
       title="Обсудить с командой"
       style={{
-        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none', background: 'none',
-        cursor: 'pointer', color: C.textMuted, display: 'flex', alignItems: 'center',
-        justifyContent: 'center', flexShrink: 0,
+        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
+        background: teamOpen ? C.accentLight : 'none',
+        cursor: 'pointer', color: teamOpen ? C.accent : C.textMuted,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        transition: 'color 0.15s, background 0.15s',
       }}
     >
       <Users size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
+  ) : null;
+
+  // Чип выбранной командной механики — слева от поля ввода; крестик снимает режим
+  const teamMechMeta = teamMech ? teamMechanic(teamMech) : null;
+  const TeamMechIcon = teamMechMeta?.icon;
+  const teamChip = teamMechMeta && TeamMechIcon ? (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6, height: isMobile ? 26 : 24,
+      padding: '0 4px 0 10px', borderRadius: R.max, background: C.accentLight, color: C.accent,
+      fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
+    }}>
+      <TeamMechIcon size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+      {teamMechMeta.name}
+      <button
+        onClick={() => setTeamMech(null)}
+        title="Отменить режим"
+        style={{
+          border: 'none', background: 'none', color: C.accent, cursor: 'pointer',
+          width: 18, height: 18, borderRadius: R.full, padding: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}
+      >
+        <X size={12} strokeWidth={ICON_STROKE} />
+      </button>
+    </span>
   ) : null;
 
   // Цикл «до готово»: тумблер + компактный бейдж прогресса итераций
@@ -549,7 +617,7 @@ export function Composer({
       onKeyDown={handleKeyDown}
       onInput={autoResize}
       onPaste={handlePaste}
-      placeholder={`Спросите ${asstName}…`}
+      placeholder={teamMechMeta ? teamMechMeta.placeholder : `Спросите ${asstName}…`}
       rows={1}
       style={{
         flex: 1,
@@ -678,7 +746,8 @@ export function Composer({
     </button>
   );
 
-  const canSend = hasText || attachments.length > 0;
+  // QA-цикл отправляется и без темы (комментарий необязателен)
+  const canSend = hasText || attachments.length > 0 || teamMech === 'qa';
   // «Стоп» показываем, только когда чат активен и в поле ничего не введено.
   // Как только появился текст — кнопка становится «Отправить» (даже во время генерации).
   const sendButton = isGenerating && !canSend ? (
@@ -761,6 +830,28 @@ export function Composer({
   ) : null;
 
   return (
+    <div>
+      {/* Раскрывашка «Обсудить с командой» — над полем композера */}
+      {canDiscuss && (
+        <TeamDrawer
+          open={teamOpen}
+          mech={teamMech}
+          settings={teamSettings}
+          candidates={mentionable}
+          availableSkills={skills.map(s => s.name)}
+          isMobile={isMobile}
+          onPick={id => { setTeamMech(id); textareaRef.current?.focus(); }}
+          onSettings={setTeamSettings}
+          onClose={() => setTeamOpen(false)}
+          onResetModes={skills.some(s => s.name === 'oh-my-claudecode:cancel')
+            ? () => {
+                // Тихий ход: чистит state зависших OMC-режимов (autopilot/ultraqa/ralph)
+                onSend('/oh-my-claudecode:cancel', [], { auto: true });
+                setTeamOpen(false);
+              }
+            : undefined}
+        />
+      )}
     <div style={containerStyle} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={() => setDragOver(false)}>
       {/* Dropdown скиллов (показывается над полем ввода при /query) */}
       {showSkillsDropdown && skills.length > 0 && (
@@ -848,7 +939,7 @@ export function Composer({
       {isMobile ? (
         /* Мобильная раскладка: поле ввода во всю ширину, контролы — отдельным рядом снизу */
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ display: 'flex' }}>{inputArea}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{teamChip}{inputArea}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {/* Левая группа — переносится на 2-ю строку при нехватке места:
                 mode/companion уходят вниз, а не выпихивают mic/send */}
@@ -875,6 +966,7 @@ export function Composer({
           {discussButton}
           {loopButton}
           {loopBadge}
+          {teamChip}
           {inputArea}
           {companionSelector}
           {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <><div style={{ width: 12, flexShrink: 0 }} />{micButton}{sendButton}</>}
@@ -889,18 +981,7 @@ export function Composer({
           onCancel={() => setPendingMode(null)}
         />
       )}
-
-      {showDiscuss && (
-        <DiscussTeamDialog
-          candidates={mentionable}
-          chatPersona={selectedPersona}
-          sessionId={sessionId}
-          meetingEnabled={true}
-          pipelineEnabled={true}
-          onSend={t => onSend(t, [], { auto: true })}
-          onClose={() => setShowDiscuss(false)}
-        />
-      )}
+    </div>
     </div>
   );
 }

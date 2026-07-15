@@ -566,22 +566,17 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }, [items]);
   const taskTodos = useMemo(() => (lastTaskIdx >= 0 ? computeTodos(items) : []), [items, lastTaskIdx]);
 
-  // «Продолжить обсуждение» из карточки совещания: краткий итог уходит обычным сообщением
-  const handleMeetingContinue = useCallback((text: string) => {
-    atBottomRef.current = true;
-    void send(text, [], mode, { auto: true });
-  }, [send, mode]);
-  // Отмена идущего совещания (карточка знает только о факте, id чата — тут)
-  const handleMeetingCancel = useCallback(() => {
-    api.chats.cancelMeeting(session.id)
-      .catch(() => showToast('Совещание', 'Не удалось отменить совещание', 'info'));
-  }, [session.id]);
-
-  // Отмена идущего конвейера пантеона
-  const handlePipelineCancel = useCallback(() => {
-    api.chats.cancelPipeline(session.id)
-      .catch(() => showToast('Конвейер', 'Не удалось отменить конвейер', 'info'));
-  }, [session.id]);
+  // Краткий контекст чата для командной механики «Панель экспертов» (attachContext):
+  // последние ~6 реплик диалога (пользователь + ассистент), каждая обрезана до 300 символов
+  const chatContext = useMemo(() => {
+    const parts: string[] = [];
+    for (const it of items) {
+      if (it.kind === 'user_message' && !it.systemDirective) parts.push(`Пользователь: ${it.text}`);
+      else if (it.kind === 'text' && !it.parentToolUseId) parts.push(`Ассистент: ${it.text}`);
+    }
+    const tail = parts.slice(-6).map(t => t.length > 300 ? t.slice(0, 300) + '…' : t);
+    return tail.length > 0 ? tail.join('\n') : undefined;
+  }, [items]);
 
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке).
   // useCallback + React.memo на ChatItemView: при дописывании ленты неизменившиеся
@@ -613,9 +608,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onRetry={handleRetry}
       onInterrupt={interrupt}
       taskPlan={i === lastTaskIdx && taskTodos.length > 0 ? taskTodos : undefined}
-      onSendMessage={handleMeetingContinue}
-      onMeetingCancel={handleMeetingCancel}
-      onPipelineCancel={handlePipelineCancel}
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
     />
@@ -623,8 +615,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, lastTaskIdx, taskTodos, handleMeetingContinue, handleMeetingCancel,
-    handlePipelineCancel,
+    interrupt, lastTaskIdx, taskTodos,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем
@@ -984,6 +975,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onCreateGroup={handleCreateGroup}
             workLoop={workLoopState}
             onToggleWorkLoop={handleToggleWorkLoop}
+            chatContext={chatContext}
           />
           </div>
         </div>

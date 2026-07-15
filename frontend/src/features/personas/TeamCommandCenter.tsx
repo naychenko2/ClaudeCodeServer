@@ -91,11 +91,6 @@ export function TeamCommandCenter({
     for (const e of events ?? []) if (e.type === 'chat_turn' && e.actor && e.actor !== 'user' && e.actor !== 'system' && now - new Date(e.ts).getTime() < 10 * 60_000) s.add(e.actor);
     return s;
   }, [events]);
-  const live = useMemo(() => {
-    const now = Date.now(); let last: EventRow | null = null;
-    for (const e of events ?? []) if ((e.type === 'meeting' || e.type === 'pipeline') && now - new Date(e.ts).getTime() < 30 * 60_000 && (!last || e.ts > last.ts)) last = e;
-    return last;
-  }, [events]);
   const tasksActive = (tasks ?? []).filter(t => t.status !== 'done').length;
   const chatsToday = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10); const s = new Set<string>();
@@ -183,10 +178,10 @@ export function TeamCommandCenter({
         <div style={{ maxWidth: 720, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
           {tab === 'overview' && (
             <OverviewPanel project={project} team={team} events={events} mem={mem} tasks={tasks}
-              inFlight={inFlight} onlineSet={onlineSet} live={live} tasksActive={tasksActive} chatsToday={chatsToday}
+              inFlight={inFlight} onlineSet={onlineSet} tasksActive={tasksActive} chatsToday={chatsToday}
               personaById={personaById} onOpenPersona={onOpenPersona} onSwitchTab={switchTab} onOpenEvent={openEvent}
               onPickerOpen={() => setPickerOpen(true)} onNewTaskOpen={() => setNewTaskOpen(true)} onNewPersona={onNewPersona}
-              onFormTeamOpen={() => setFormTeamOpen(true)} onOpenSessionById={onOpenSessionById} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe} />
+              onFormTeamOpen={() => setFormTeamOpen(true)} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe} />
           )}
           {tab === 'memory' && (
             <TeamMemoryPanel mem={mem} onAdd={addMem} onUpdate={updateMem} onRemove={removeMem} stripe={stripe} />
@@ -208,11 +203,11 @@ export function TeamCommandCenter({
 // ===== Вкладка 1: Обзор =====
 function OverviewPanel(props: {
   project: Project; team: Persona[]; events: EventRow[] | null; mem: TeamMemoryEntry[] | null; tasks: Task[] | null;
-  inFlight: Map<string, string>; onlineSet: Set<string>; live: EventRow | null; tasksActive: number; chatsToday: number;
+  inFlight: Map<string, string>; onlineSet: Set<string>; tasksActive: number; chatsToday: number;
   personaById: (id: string) => Persona | undefined; onOpenPersona: (id: string) => void; onSwitchTab: (t: Tab) => void; onOpenEvent: (e: EventRow) => void;
-  onPickerOpen: () => void; onNewTaskOpen: () => void; onNewPersona: () => void; onFormTeamOpen: () => void; onOpenSessionById: (id: string) => void; onMenuOpen: () => void; stripe: string;
+  onPickerOpen: () => void; onNewTaskOpen: () => void; onNewPersona: () => void; onFormTeamOpen: () => void; onMenuOpen: () => void; stripe: string;
 }) {
-  const { project, team, events, mem, inFlight, onlineSet, live, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onOpenSessionById, onMenuOpen, stripe } = props;
+  const { project, team, events, mem, inFlight, onlineSet, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onMenuOpen, stripe } = props;
   const recent = (events ?? []).slice(0, 6);
   const topMem = (mem ?? []).slice(0, 3);
 
@@ -246,16 +241,6 @@ function OverviewPanel(props: {
           <StatusChip color={C.textSecondary}>{tasksActive} задач активно</StatusChip>
           <StatusChip color={C.textSecondary}>{chatsToday} чатов сегодня</StatusChip>
         </div>
-        {live && (
-          <div style={{ marginTop: 12, background: C.accentLight, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
-            {live.type === 'meeting' ? <Mic size={16} color={C.accent} /> : <Workflow size={16} color={C.accent} />}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.accent, fontFamily: FONT.sans }}>{live.type === 'meeting' ? 'СОВЕЩАНИЕ ИДЁТ' : 'КОНВЕЙЕР ИДЁТ'}</div>
-              <div style={{ fontSize: 12, color: C.textSecondary, fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{live.summary}</div>
-            </div>
-            {live.entityRef && <button onClick={() => onOpenSessionById(live.entityRef!)} style={linkBtn}>Открыть →</button>}
-          </div>
-        )}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
           <button onClick={onPickerOpen} disabled={team.length < 2} style={primaryBtn}><MessageSquare size={15} /> Созвать команду</button>
           <button onClick={onNewTaskOpen} style={ghostBtn}><Plus size={15} /> Новая задача</button>
@@ -612,6 +597,8 @@ function onEventClick(e: EventRow, projectId: string, openSession: (id: string) 
   else if (t.nav === 'knowledge') window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: `#/knowledge/${t.id}` } }));
 }
 
+// meeting/pipeline — снесённые механики: новые события не пишутся, но старые строки
+// журнала проекта должны оставаться читаемыми и кликабельными
 const CATEGORY: Record<string, FilterKey> = {
   chat_turn: 'chats', meeting: 'chats', pipeline: 'chats',
   task_created: 'tasks', task_completed: 'tasks', task_spawned: 'tasks', task_deleted: 'tasks',

@@ -6,6 +6,7 @@ import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW, R } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { hasUltraworkKeyword } from '../../lib/ultrawork';
+import { detectTeamMechanic, teamMechanic, type TeamMechanicId } from '../../features/team/teamMechanics';
 import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
@@ -17,8 +18,6 @@ import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { PersonaTaskView, isAgentToolUse } from './PersonaTaskView';
 import type { ActivityEntry } from './timeline';
-import { MeetingView } from './MeetingView';
-import { PipelineView } from './PipelineView';
 import { AskQuestionView } from './AskQuestionView';
 import { PlanReviewView } from './PlanReviewView';
 
@@ -198,6 +197,24 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
 // Нейтральный акцент для агента без персоны (как в PersonaAskView)
 const AGENT_NEUTRAL = '#8A8070';
 
+// Бейдж командной механики на отправленном сообщении: текст такого хода — скилл-команда
+// (/oh-my-claudecode:…, /panel-of-experts) или промпт-обвязка дискуссии, и без подсказки
+// непонятен. Детект — detectTeamMechanic по тексту (тот же принцип, что «⚡ ультра»).
+function TeamMechanicBadge({ id }: { id: TeamMechanicId }) {
+  const m = teamMechanic(id);
+  const Icon = m.icon;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5, height: 22, padding: '0 9px',
+      borderRadius: R.max, background: C.accentLight, color: C.accent,
+      fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+    }}>
+      <Icon size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+      {m.name}
+    </span>
+  );
+}
+
 // Сообщение с источником (не от человека): входящее от персоны через chats_send, либо
 // авто-публикация — совещание/конвейер/задача. Карточка с лицом автора (персона или
 // стандартный значок) и телом в Markdown — вместо безликого пузыря пользователя.
@@ -272,12 +289,6 @@ interface ItemProps {
   onInterrupt: () => void;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
-  // «Продолжить обсуждение» из карточки совещания — обычное сообщение в чат
-  onSendMessage?: (text: string) => void;
-  // Отмена идущего совещания (кнопка на карточке)
-  onMeetingCancel?: () => void;
-  // Отмена идущего конвейера (кнопка на карточке)
-  onPipelineCancel?: () => void;
   // Вложенная активность сабагента-персоны (дочерние tool_use/text/thinking с индексами) —
   // рендерится секцией внутри карточки консультации (передаёт ChatPanel только для
   // персона-вызовов Task)
@@ -290,7 +301,7 @@ interface ItemProps {
 // React.memo: переключатель по kind — самый массовый компонент ленты. Элементы ChatItem
 // иммутабельны по ссылке (обновление элемента = новый объект), пропсы-функции стабильны
 // (useCallback в ChatPanel) — при дописывании ленты старые элементы не перерендериваются.
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan, onSendMessage, onMeetingCancel, onPipelineCancel, agentActivity, agentRenderChild }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan, agentActivity, agentRenderChild }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
@@ -319,11 +330,15 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           </div>
         );
       }
+      // Командный ход из раскрывашки «Обсудить с командой»: текст — скилл-команда или
+      // промпт-обвязка, поэтому даже auto-отправленный рендерим пузырём пользователя
+      // с бейджем механики (пользователь сам его инициировал темой из композера)
+      const teamMech = detectTeamMechanic(item.text);
       // Сообщение не от человека — показываем источник карточкой с лицом автора:
       //  • viaAgent — прислано персоной/агентом из другого чата (chats_send)
-      //  • auto — авто-публикация (совещание «Продолжить обсуждение», план конвейера, задача)
+      //  • auto — авто-публикация (задача, автоматизация)
       // Персона резолвится по senderPersonaId; иначе — стандартный значок.
-      if (item.viaAgent || item.auto) {
+      if (item.viaAgent || (item.auto && !teamMech)) {
         const sender = item.senderPersonaId ? (getPersonaById(item.senderPersonaId) ?? null) : null;
         return item.viaAgent
           ? <AgentMessageView text={item.text} persona={sender} note="прислал(а) в чат" />
@@ -335,21 +350,24 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             background: C.accentMuted, color: C.textHeading,
             borderRadius: '18px 18px 4px 18px', padding: '12px 17px', fontSize: 14,
           }}>
-            {/* Ключевое слово максимального усилия — бэкенд включает режим на этот ход */}
-            {hasUltraworkKeyword(item.text) && (
-              <div style={{ marginBottom: 5 }}>
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 3,
-                  background: C.accent, color: C.onAccent, borderRadius: R.pill,
-                  padding: '2px 8px', fontSize: 9.5, fontWeight: 700,
-                  letterSpacing: 0.6, textTransform: 'uppercase',
-                }}>
-                  ⚡ ультра
-                </span>
+            {/* Бейджи хода: командная механика и/или ключевое слово максимального усилия */}
+            {(teamMech || hasUltraworkKeyword(item.text)) && (
+              <div style={{ marginBottom: 5, display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                {teamMech && <TeamMechanicBadge id={teamMech} />}
+                {hasUltraworkKeyword(item.text) && (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 3,
+                    background: C.accent, color: C.onAccent, borderRadius: R.pill,
+                    padding: '2px 8px', fontSize: 9.5, fontWeight: 700,
+                    letterSpacing: 0.6, textTransform: 'uppercase',
+                  }}>
+                    ⚡ ультра
+                  </span>
+                )}
               </div>
             )}
-            {/* Markdown и в пузыре пользователя: авто-публикуемые сообщения (итог совещания,
-                план конвейера, обвязка «Обсудить с командой») приходят в MD — форматируем их;
+            {/* Markdown и в пузыре пользователя: авто-публикуемые сообщения (обвязка
+                «Обсудить с командой», задачи) приходят в MD — форматируем их;
                 обычный текст рендерится идентично */}
             <div className="cc-user-md">
               <MarkdownContent text={item.text} />
@@ -810,14 +828,6 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
     case 'resumed':
       // Разделитель «продолжение чата» убран — декоративный, без полезной нагрузки
       return null;
-
-    case 'meeting':
-      // Карточка совещания персон (P7): фазы, live-прогресс, итог от ведущей
-      return <MeetingView item={item} onContinue={onSendMessage} onCancel={onMeetingCancel} />;
-
-    case 'pipeline':
-      // Карточка конвейера пантеона: фазы анализ → план → ревью → исполнение
-      return <PipelineView item={item} onCancel={onPipelineCancel} />;
 
     case 'companion_switched': {
       // Разделитель смены собеседника/спикера. label задан явно (ручная смена,

@@ -247,7 +247,6 @@ const FILTERS = [
   { key: 'claude', label: '● Claude' },
   { key: 'info', label: 'ℹ Системные' },
   { key: 'success', label: '✓ Выполнено' },
-  { key: 'meeting', label: '🏁 Совещания' },
 ];
 
 // ====== NotificationsPage ======

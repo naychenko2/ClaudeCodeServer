@@ -392,68 +392,42 @@ describe('групповой чат', () => {
   });
 });
 
-// --- Совещание персон (P7): meeting_phase / meeting_progress / история ---
+// --- Неизвестные/устаревшие записи истории и события ---
 
-describe('совещание персон', () => {
-  const entries = [
-    { personaId: 'p1', text: 'позиция 1', isError: false },
-    { personaId: 'p2', text: 'позиция 2', isError: false },
-  ];
-
-  it('meeting_progress создаёт карточку и ведёт построчные статусы', () => {
-    const next = run([
-      { type: 'meeting_progress', meetingId: 'm1', phase: 'independent', personaId: 'p1', status: 'running' },
-      { type: 'meeting_progress', meetingId: 'm1', phase: 'independent', personaId: 'p2', status: 'running' },
-      { type: 'meeting_progress', meetingId: 'm1', phase: 'independent', personaId: 'p1', status: 'done' },
-    ]);
-    expect(next.items).toHaveLength(1);
-    const m = next.items[0] as Extract<ChatItem, { kind: 'meeting' }>;
-    expect(m.kind).toBe('meeting');
-    expect(m.running).toEqual({ phase: 'independent', persona: { p1: 'done', p2: 'running' } });
-    expect(m.status).toBe('running');
-  });
-
-  it('meeting_phase вливает фазу в карточку и снимает спиннеры фазы', () => {
-    const next = run([
-      { type: 'meeting_progress', meetingId: 'm1', phase: 'independent', personaId: 'p1', status: 'running' },
-      { type: 'meeting_phase', meetingId: 'm1', phase: 'independent', question: 'вопрос?', entries },
-    ]);
-    const m = next.items[0] as Extract<ChatItem, { kind: 'meeting' }>;
-    expect(m.phases.independent).toEqual(entries);
-    expect(m.question).toBe('вопрос?');
-    expect(m.running).toBeUndefined();
-  });
-
-  it('финальный meeting_progress done/error завершает карточку', () => {
-    const done = run([
-      { type: 'meeting_phase', meetingId: 'm1', phase: 'synthesis', question: 'в?', entries: [entries[0]] },
-      { type: 'meeting_progress', meetingId: 'm1', phase: 'done', status: 'done' },
-    ]);
-    expect((done.items[0] as Extract<ChatItem, { kind: 'meeting' }>).status).toBe('done');
-
-    const err = run([
-      { type: 'meeting_progress', meetingId: 'm2', phase: 'independent', personaId: 'p1', status: 'running' },
-      { type: 'meeting_progress', meetingId: 'm2', phase: 'error', error: 'таймаут' },
-    ]);
-    const m = err.items[0] as Extract<ChatItem, { kind: 'meeting' }>;
-    expect(m.status).toBe('error');
-    expect(m.error).toBe('таймаут');
-  });
-
-  it('normalizeHistory склеивает фазы одного meetingId в одну карточку', () => {
+describe('неизвестные типы записей', () => {
+  it('устаревшие записи снесённых механик (meeting/pipeline) молча выкидываются из истории', () => {
     const raw = [
       { kind: 'user_message', text: 'старт' },
-      { kind: 'meeting_phase', meetingId: 'm1', phase: 'independent', question: 'в?', entries },
-      { kind: 'meeting_phase', meetingId: 'm1', phase: 'attack', question: 'в?', entries },
-      { kind: 'meeting_phase', meetingId: 'm1', phase: 'synthesis', question: 'в?', entries: [entries[0]] },
+      { kind: 'meeting_phase', meetingId: 'm1', phase: 'independent', question: 'в?', entries: [] },
+      { kind: 'meeting', meetingId: 'm1', question: 'в?', phases: {} },
+      { kind: 'pipeline_phase', pipelineId: 'pl1', phase: 'plan', task: 'т', personaId: 'p1', text: 'план' },
+      { kind: 'pipeline', pipelineId: 'pl1', task: 'т', phases: [] },
+      { kind: 'text', text: 'ответ' },
     ];
     const items = normalizeHistory(raw);
-    expect(items).toHaveLength(2);
-    const m = items[1] as Extract<ChatItem, { kind: 'meeting' }>;
-    expect(m.kind).toBe('meeting');
-    expect(m.phases.independent).toEqual(entries);
-    expect(m.phases.attack).toEqual(entries);
-    expect(m.phases.synthesis).toEqual([entries[0]]);
-    expect(m.status).toBe('done');
+    expect(items).toEqual([
+      { kind: 'user_message', text: 'старт' },
+      { kind: 'text', text: 'ответ' },
+    ]);
+  });
+
+  it('неизвестный тип stored-записи в истории игнорируется без ошибки (проходит насквозь)', () => {
+    const raw = [
+      { kind: 'text', text: 'до' },
+      { kind: 'something_from_the_future', payload: { x: 1 } },
+      { kind: 'text', text: 'после' },
+    ];
+    expect(() => normalizeHistory(raw)).not.toThrow();
+    const items = normalizeHistory(raw);
+    // Запись не теряется и не ломает соседей; рендер игнорирует её в default-ветке
+    expect(items).toHaveLength(3);
+    expect(items[0]).toEqual({ kind: 'text', text: 'до' });
+    expect(items[2]).toEqual({ kind: 'text', text: 'после' });
+  });
+
+  it('неизвестный тип live-события не меняет состояние (та же ссылка)', () => {
+    const initial = state({ items: [{ kind: 'text', text: 'x' }] });
+    const next = applyServerMessage(initial, msg({ type: 'meeting_progress', meetingId: 'm1', phase: 'independent' } as unknown as Omit<ServerMessage, 'sessionId'>));
+    expect(next).toBe(initial);
   });
 });

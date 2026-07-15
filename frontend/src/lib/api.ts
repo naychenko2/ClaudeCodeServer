@@ -582,25 +582,6 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ enabled }),
       }),
-    // Совещание персон (P7): независимые позиции → перекрёстная критика → синтез ведущей.
-    // personaIds опциональны в групповом чате (дефолт — его участники)
-    startMeeting: (id: string, question: string, personaIds?: string[]) =>
-      request<{ meetingId: string }>(`/chats/${id}/meeting`, {
-        method: 'POST',
-        body: JSON.stringify({ question, personaIds }),
-      }),
-    cancelMeeting: (id: string) =>
-      request<void>(`/chats/${id}/meeting/cancel`, { method: 'POST' }),
-    // Конвейер ролей (флаг persona-pipeline): анализ → план → ревью → авто-исполнение.
-    // Слоты опциональны (A): пустые резолвятся по Specialty → дефолт OmO на бэке.
-    startPipeline: (id: string, task: string,
-      slots?: { analystId?: string; plannerId?: string; reviewerId?: string; executorId?: string }) =>
-      request<{ pipelineId: string }>(`/chats/${id}/pipeline`, {
-        method: 'POST',
-        body: JSON.stringify({ task, ...(slots ?? {}) }),
-      }),
-    cancelPipeline: (id: string) =>
-      request<void>(`/chats/${id}/pipeline/cancel`, { method: 'POST' }),
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
     uploadFile: async (id: string, file: File): Promise<{ path: string }> => {

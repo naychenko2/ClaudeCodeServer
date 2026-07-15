@@ -322,10 +322,6 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'team_memory_changed'; action: 'added' | 'updated' | 'removed'; projectId: string; entryId?: string }
   | { type: 'speaker_changed'; personaId: string; label: string }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
-  | { type: 'meeting_progress'; meetingId: string; phase: string; personaId?: string; status?: string; error?: string }
-  | { type: 'meeting_phase'; meetingId: string; phase: MeetingPhaseKey; question: string; entries: MeetingEntryItem[] }
-  | { type: 'pipeline_progress'; pipelineId: string; phase: string; status?: string; error?: string }
-  | { type: 'pipeline_phase'; pipelineId: string; phase: PipelinePhaseKey; task: string; personaId: string; text: string; round?: number }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
 );
@@ -389,24 +385,6 @@ export interface FalAccountResponse {
   usage?: FalUsageSummary | null;
 }
 
-// === Совещание персон (P7, флаг persona-group-chats) ===
-
-// Фазы совещания: независимые позиции → перекрёстная критика → синтез ведущей
-export type MeetingPhaseKey = 'independent' | 'attack' | 'synthesis';
-
-// Реплика участника фазы; isError — персона не ответила (text = текст ошибки)
-export interface MeetingEntryItem {
-  personaId: string;
-  text: string;
-  isError: boolean;
-}
-
-// Live-статусы участников текущей фазы (из meeting_progress)
-export interface MeetingRunningState {
-  phase: string;
-  persona: Record<string, 'running' | 'done' | 'error'>;
-}
-
 // Live-состояние цикла «до готово» (из события work_loop; флаг work-loop)
 export interface WorkLoopState {
   active: boolean;
@@ -415,23 +393,12 @@ export interface WorkLoopState {
   phase: string | null;
 }
 
-// Фазы конвейера пантеона: анализ → план → ревью → исполнение
-export type PipelinePhaseKey = 'analysis' | 'plan' | 'review' | 'execute';
-
-// Завершённая фаза конвейера (карточка в ленте). round — круг доработки плана (по REJECT)
-export interface PipelinePhaseItem {
-  phase: PipelinePhaseKey;
-  personaId: string;
-  text: string;
-  round: number;
-}
-
 // Элементы чата
 export type ChatItem =
   // viaAgent — сообщение прислано не человеком, а агентом из другой сессии (chats_send);
   // senderPersonaId — персона-автор (рендерим сообщение её лицом);
   // systemDirective — служебная директива цикла «до готово» (компактная плашка вместо пузыря);
-  // auto — опубликовано автоматически (не человеком): совещание/конвейер/задача — показываем источник
+  // auto — опубликовано автоматически (не человеком): командная механика/задача — показываем источник
   | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
@@ -457,15 +424,6 @@ export type ChatItem =
   // Разделитель «сменился собеседник»: label задан явно (смена вручную / speaker_changed
   // с сервера) либо резолвится по personaId (derived из истории группового чата)
   | { kind: 'companion_switched'; label: string; personaId?: string }
-  // Карточка совещания персон: агрегат всех фаз одного meetingId (собирается из
-  // meeting_phase/meeting_progress и из истории — StoredMeetingPhaseMessage)
-  | { kind: 'meeting'; meetingId: string; question: string;
-      phases: Partial<Record<MeetingPhaseKey, MeetingEntryItem[]>>;
-      running?: MeetingRunningState; status?: 'running' | 'done' | 'error'; error?: string }
-  // Карточка конвейера пантеона: последовательность фаз одного pipelineId
-  // (собирается из pipeline_phase/pipeline_progress и из истории)
-  | { kind: 'pipeline'; pipelineId: string; task: string; phases: PipelinePhaseItem[];
-      runningPhase?: string | null; status?: 'running' | 'done' | 'error'; error?: string }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 // Скиллы и агенты

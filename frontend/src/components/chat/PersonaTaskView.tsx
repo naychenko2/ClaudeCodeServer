@@ -1,13 +1,14 @@
 import { memo, useEffect, useMemo, useState } from 'react';
+import { Bot } from 'lucide-react';
 import type { ChatItem, Persona } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
-import { splitAgentResultTail, formatTailTokens, formatTailDuration } from '../../lib/agentTail';
+import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck } from '../../lib/agentTail';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView, toolWord } from './ToolUseView';
-import { AgentTextBlock, AgentThinkingBlock } from './AgentContentBlocks';
+import { AgentTextBlock, AgentThinkingBlock, NEUTRAL_AGENT_ACCENT } from './AgentContentBlocks';
 import { itemKey, type ActivityEntry } from './timeline';
 
 type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
@@ -44,16 +45,22 @@ const LONG_ANSWER_CHARS = 1200;
 // Презентационная карточка «консультация персоны»: идентичность (аватар + «Роль (Имя)» +
 // @handle + цвет), вопрос, слот активности (children) и ответ. Используется и для
 // Task-вызовов чата (PersonaTaskView), и для агентов Workflow (WorkflowBlockView).
+// Без persona — карточка «просто агента»: нейтральная серая шапка «Агент» + роль вызова
+// (agentRole), остальная структура идентична.
 // Системный хвост CLI в ответе (agentId + <usage>) вырезается и рендерится
 // аккуратной строкой метрик «токены · действия · время».
-export function PersonaConsultCard({ persona, question, summary, running, isError, answer, children }: {
-  persona: Persona;
+export function PersonaConsultCard({ persona, agentRole, question, summary, running, isError, answer, children, badge = 'консультант' }: {
+  persona?: Persona | null;
+  agentRole?: string;         // тип/роль обычного агента (не-персоны), если информативна
   question: string;           // полный вопрос (раскрывается кликом)
   summary?: string;           // короткое описание вопроса (description вызова)
   running: boolean;
   isError: boolean;
   answer: string;
   children?: React.ReactNode; // секция активности между вопросом и ответом
+  // Чип роли вызова в шапке: 'консультант' у Task-консультаций чата; null — скрыть
+  // (в Workflow персона — полноценный агент, «консультант» там неверен)
+  badge?: string | null;
 }) {
   const { body: answerBody, tail } = useMemo(() => splitAgentResultTail(answer), [answer]);
 
@@ -64,8 +71,10 @@ export function PersonaConsultCard({ persona, question, summary, running, isErro
   const [answerOpen, setAnswerOpen] = useState(false);
   const answerCollapsed = answerLong && !answerOpen;
 
-  const accent = AGENT_COLORS[persona.avatar?.color ?? ''] ?? C.accent;
-  const title = personaLabel(persona);
+  const accent = persona
+    ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? NEUTRAL_AGENT_ACCENT)
+    : NEUTRAL_AGENT_ACCENT;
+  const title = persona ? personaLabel(persona) : 'Агент';
   const hasTailMetrics = !!tail && (tail.tokens != null || tail.toolUses != null || tail.durationMs != null);
 
   return (
@@ -74,25 +83,40 @@ export function PersonaConsultCard({ persona, question, summary, running, isErro
       borderRadius: 12, background: C.bgWhite, overflow: 'hidden',
       boxShadow: SHADOW.card, maxWidth: '100%',
     }}>
-      {/* Шапка идентичности — лёгкая подложка цвета персоны */}
+      {/* Шапка идентичности — лёгкая подложка цвета персоны (у обычного агента — серая) */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px',
         background: `${accent}17`, borderBottom: `1px solid ${C.divider}`,
       }}>
-        <PersonaAvatar persona={persona} size={30} />
+        {persona
+          ? <PersonaAvatar persona={persona} size={30} />
+          : (
+            <div style={{
+              width: 30, height: 30, borderRadius: '50%', flexShrink: 0,
+              background: `${accent}22`, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Bot size={17} color={C.textMuted} strokeWidth={2} />
+            </div>
+          )}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 7, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
             {title}
           </span>
-          <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>@{persona.handle}</span>
+          {persona
+            ? <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>@{persona.handle}</span>
+            : agentRole
+              ? <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>{agentRole}</span>
+              : null}
           {/* Отличие от one-shot persona_ask: работает с инструментами (файлы/заметки/память) */}
-          <span style={{
-            fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 999,
-            background: `${accent}22`, color: C.textSecondary,
-            textTransform: 'uppercase', letterSpacing: '0.05em',
-          }}>
-            консультант
-          </span>
+          {persona && badge && (
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 999,
+              background: `${accent}22`, color: C.textSecondary,
+              textTransform: 'uppercase', letterSpacing: '0.05em',
+            }}>
+              {badge}
+            </span>
+          )}
         </div>
         {running && (
           <span style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
@@ -197,7 +221,7 @@ export function PersonaConsultCard({ persona, question, summary, running, isErro
 // вместо безликой строки инструмента; не совпал (Explore/general-purpose/кастомные
 // агенты) — обычный ToolUseView (фолбэк здесь, а не в ChatItemView: usePersonas —
 // хук, звать его условно нельзя).
-export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onOpenFile, activity, renderChild }: {
+export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onOpenFile, activity, renderChild, badge }: {
   item: ToolUseItem;
   online: boolean;
   onOpenFile?: (path: string) => void;
@@ -207,6 +231,8 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
   // Универсальный рендер элемента ленты (renderItem из ChatPanel): инструменты рисуются
   // ТЕМИ ЖЕ карточками, что и обычный чат (сворачивание тулов, TodoWrite-чек-лист и т.д.)
   renderChild?: (item: ChatItem, idx: number) => React.ReactNode;
+  // Чип роли в шапке карточки (см. PersonaConsultCard.badge); undefined — дефолт «консультант»
+  badge?: string | null;
 }) {
   // В чатах без персоны стор мог быть ещё не загружен — подтягиваем список
   useEffect(() => { void ensurePersonasLoaded(); }, []);
@@ -218,12 +244,25 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
   const question = typeof inp.prompt === 'string' ? inp.prompt : '';
   const summary = typeof inp.description === 'string' ? inp.description : '';
 
-  const running = item.result === undefined;
+  // Фоновый запуск (run_in_background): tool_result — служебная квитанция CLI («Async
+  // agent launched successfully… agentId… output_file…»), НЕ ответ — её не показываем.
+  // Ответом делаем последний текст из потока агента (транскрипт доезжает по мере работы),
+  // из активности его при этом убираем, чтобы не дублировался.
+  const asyncAck = item.result !== undefined && isAsyncLaunchAck(item.result);
+  const lastTextIdx = asyncAck && activity
+    ? activity.reduce((last, e, i) => (e.item.kind === 'text' ? i : last), -1)
+    : -1;
+  const shownActivity = lastTextIdx >= 0 ? activity!.filter((_, i) => i !== lastTextIdx) : activity;
+  const answer = asyncAck
+    ? (lastTextIdx >= 0 ? (activity![lastTextIdx].item as { text: string }).text : '')
+    : (item.result ?? '');
+  // Фоновый агент без единого текста — ещё работает (спиннер до первой реплики)
+  const running = item.result === undefined || (asyncAck && lastTextIdx < 0);
 
   // Обычный сабагент (не персона) — стандартная карточка инструмента
   if (!persona) return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
 
-  const accent = AGENT_COLORS[persona.avatar?.color ?? ''] ?? C.accent;
+  const accent = AGENT_COLORS[persona.avatar?.color ?? ''] ?? NEUTRAL_AGENT_ACCENT;
 
   return (
     <PersonaConsultCard
@@ -232,12 +271,13 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
       summary={summary}
       running={running}
       isError={!!item.isError}
-      answer={item.result ?? ''}
+      answer={answer}
+      badge={badge}
     >
       {/* Активность консультанта: весь поток сабагента — инструменты, текст, размышления.
           Пока идёт работа — раскрыта (виден живой прогресс), по завершении сворачивается */}
-      {activity && activity.length > 0 && (
-        <ActivitySection activity={activity} running={running} accent={accent}
+      {shownActivity && shownActivity.length > 0 && (
+        <ActivitySection activity={shownActivity} running={running} accent={accent}
           online={online} onOpenFile={onOpenFile} renderChild={renderChild} />
       )}
     </PersonaConsultCard>

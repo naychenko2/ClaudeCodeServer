@@ -167,10 +167,10 @@ public sealed class PersonaAgentFileSync
         if (ChatRoot(ownerId) is { } chatRoot)
             yield return Path.Combine(chatRoot, ".claude", "agents", persona.Handle + ".md");
 
-        // Резерв: persona-agents для сессий без проекта и нестандартных cwd (--add-dir)
-        var baseDirKey = string.IsNullOrWhiteSpace(persona.Model)
-            ? SharedDirKey : _providers.ProviderKey(persona.Model);
-        yield return AgentFilePath(ownerId, baseDirKey, persona.Handle);
+        // Резерв: persona-agents для сессий без проекта и нестандартных cwd (--add-dir).
+        // Всегда shared: файлы генерируются без пина модели (сабагент бежит на модели
+        // сессии), раскладка по провайдерам потеряла смысл — CleanStale уберёт старые копии
+        yield return AgentFilePath(ownerId, SharedDirKey, persona.Handle);
     }
 
     // {DefaultProjectsPath}/{username}/Chats — cwd для чатов без проекта

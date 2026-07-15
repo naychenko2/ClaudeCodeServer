@@ -719,24 +719,22 @@ public class SessionManager
             .ToList();
     }
 
-    // Разделение персон по способу консультации: того же провайдера с файлом сабагента —
-    // через встроенный Task; остальные (другой провайдер, зарезервированный handle,
-    // за капом файлов) — через persona_ask, как раньше.
+    // Разделение персон по способу консультации: с файлом сабагента — через встроенный
+    // Task; остальные (зарезервированный handle, за капом файлов) — через persona_ask.
+    // Провайдер модели персоны роли НЕ играет: файлы сабагентов генерируются без пина
+    // модели (бегут на модели сессии), иначе кросс-провайдерная персона незапускаема.
     private (List<Persona> Subagents, List<Persona> ViaAsk) SplitConsultants(
         string ownerId, Session session, List<Persona> personas)
     {
         if (_agentSync is null)
             return ([], personas);
-        var sessionProvider = _llmProviders.ProviderKey(session.Model);
         var eligible = _agentSync.EligiblePersonas(ownerId).Select(p => p.Id)
             .ToHashSet(StringComparer.Ordinal);
         var subagents = new List<Persona>();
         var viaAsk = new List<Persona>();
         foreach (var p in personas)
         {
-            var sameProvider = string.IsNullOrWhiteSpace(p.Model)
-                || _llmProviders.ProviderKey(p.Model) == sessionProvider;
-            if (sameProvider && eligible.Contains(p.Id) && !PersonaAgentFileSync.IsReserved(p.Handle))
+            if (eligible.Contains(p.Id) && !PersonaAgentFileSync.IsReserved(p.Handle))
                 subagents.Add(p);
             else
                 viaAsk.Add(p);

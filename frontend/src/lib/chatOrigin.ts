@@ -3,40 +3,30 @@
 // сторы задач/персон (ensureTasksLoaded/ensurePersonasLoaded должны быть вызваны
 // где-то выше в дереве компонентов).
 import type { Session } from '../types';
-import { getTaskById, openTaskInSection } from './tasks';
+import { getTaskById } from './tasks';
 import { getPersonaById } from './personas';
 
 export interface ChatOriginInfo {
   kind: 'task' | 'automation';
   label: string;
   tone: 'info' | 'warning';
-  // Отсутствует, если цель (задача/правило) удалена — бейдж показывается, но некликабелен
-  onOpen?: () => void;
 }
 
+// Бейдж происхождения чата — чисто информационный контекст. Клик по нему НЕ уводит с
+// карточки чата в раздел (задачи/проактивности): переход намеренно убран, бейдж
+// показывает лишь, откуда пришёл чат (см. ChatOriginBadge — всегда некликабельный span).
 export function resolveChatOrigin(session: Session): ChatOriginInfo | null {
   if (session.origin === 'task') {
     const task = session.taskId ? getTaskById(session.taskId) : undefined;
     if (!task) return { kind: 'task', label: 'Задача (удалена)', tone: 'info' };
-    return { kind: 'task', label: `Задача: ${task.title}`, tone: 'info', onOpen: () => openTaskInSection(task) };
+    return { kind: 'task', label: `Задача: ${task.title}`, tone: 'info' };
   }
 
   if (session.origin === 'automation') {
     const persona = session.personaId ? getPersonaById(session.personaId) : undefined;
     const rule = persona?.automationRules?.find(r => r.id === session.automationRuleId);
     if (!persona || !rule) return { kind: 'automation', label: 'Автоматизация (правило удалено)', tone: 'warning' };
-    // Персона может быть глобальной (раздел «Персоны») или проектной (вкладка «Команда»
-    // внутри её проекта) — у каждой свой URL-раздел. Суффикс /automation — сразу открыть
-    // вкладку «Проактивность» в студии персоны, а не общий профиль.
-    const url = persona.scope === 'project' && persona.projectId
-      ? `#/project/${persona.projectId}/persona/${persona.id}/automation`
-      : `#/personas/${persona.id}/automation`;
-    return {
-      kind: 'automation',
-      label: `Автоматизация: ${rule.name}`,
-      tone: 'warning',
-      onOpen: () => window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url } })),
-    };
+    return { kind: 'automation', label: `Автоматизация: ${rule.name}`, tone: 'warning' };
   }
 
   return null;

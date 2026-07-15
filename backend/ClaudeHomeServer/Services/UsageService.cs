@@ -29,13 +29,15 @@ public class UsageService
     // Регистрирует снимок. Троттлинг: пропускаем, если для этого окна последний снимок свежий
     // (<3 мин) И значение/статус практически не изменились. Иначе — добавляем, прунем, сохраняем.
     public void Record(string limitType, double? utilization, string? status, bool isUsingOverage,
-        string? resetsAt, string? overageStatus = null, string? overageResetsAt = null)
+        string? resetsAt, string? overageStatus = null, string? overageResetsAt = null,
+        string? subscriptionKey = null)
     {
         if (string.IsNullOrEmpty(limitType) && utilization is null) return;
+        var subKey = subscriptionKey ?? "claude";
         lock (_lock)
         {
             var now = DateTime.UtcNow;
-            var last = _snapshots.LastOrDefault(s => s.LimitType == limitType);
+            var last = _snapshots.LastOrDefault(s => s.LimitType == limitType && s.SubscriptionKey == subKey);
             if (last is not null
                 && now - last.Timestamp < Throttle
                 && last.Status == status
@@ -43,7 +45,7 @@ public class UsageService
                 && Math.Abs((last.Utilization ?? 0) - (utilization ?? 0)) < UtilEpsilon)
                 return; // дубль в окне троттлинга — не пишем
 
-            _snapshots.Add(new UsageSnapshot(now, limitType, utilization, status, isUsingOverage, resetsAt, overageStatus, overageResetsAt));
+            _snapshots.Add(new UsageSnapshot(now, limitType, utilization, status, isUsingOverage, resetsAt, overageStatus, overageResetsAt, subKey));
 
             var cutoff = now - Retention;
             _snapshots.RemoveAll(s => s.Timestamp < cutoff);
@@ -87,6 +89,18 @@ public class UsageService
     public IReadOnlyList<UsageSnapshot> GetAll()
     {
         lock (_lock) return _snapshots.ToList();
+    }
+
+    // Снимки, сгруппированные по ключу подписки ("claude", "my-second", …).
+    // Для каждой подписки — её снимки, отсортированные по времени.
+    public Dictionary<string, List<UsageSnapshot>> GetAllBySubscription()
+    {
+        lock (_lock)
+        {
+            return _snapshots
+                .GroupBy(s => s.SubscriptionKey)
+                .ToDictionary(g => g.Key, g => g.OrderBy(s => s.Timestamp).ToList());
+        }
     }
 
     private void Load()

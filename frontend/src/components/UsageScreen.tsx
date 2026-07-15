@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { X, AlertTriangle } from 'lucide-react';
 import { api } from '../lib/api';
-import type { UsageResponse, FalAccountResponse } from '../types';
+import type { UsageResponse, FalAccountResponse, UsageSnapshot } from '../types';
 import { C, FONT, SHADOW } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, seriesByWindow, worstWindow } from '../lib/rateLimit';
 import { cliProviderKeys, providerCapsByKey, providerLabel } from '../lib/models';
@@ -14,7 +14,6 @@ const money = (c: number) => '$' + (c < 0.01 ? c.toFixed(4) : c < 1 ? c.toFixed(
 const shortModel = (ep: string) => ep.split('/').slice(-2).join('/');
 const fmtDay = (iso: string) => { const d = new Date(iso); return isNaN(d.getTime()) ? iso : String(d.getDate()); };
 
-// Метрик-карточка: крупная цифра + лейбл + опц. содержимое (бар/подпись)
 function MetricCard({ value, label, valueColor = C.textHeading, tone, children }: {
   value: string; label: string; valueColor?: string; tone?: 'warn' | 'danger'; children?: React.ReactNode;
 }) {
@@ -79,8 +78,7 @@ function WindowCard({ w }: { w: RateWindow }) {
   );
 }
 
-function ClaudeTab({ usage }: { usage: UsageResponse | null }) {
-  const snapshots = usage?.snapshots ?? null;
+function ClaudeTab({ snapshots }: { snapshots: UsageSnapshot[] | null | undefined }) {
   const windows = snapshots ? latestPerWindow(snapshots) : [];
   const series = snapshots ? seriesByWindow(snapshots) : {};
   const latestTs = windows.reduce<number>((a, w) => { const t = w.timestamp ? new Date(w.timestamp).getTime() : 0; return t > a ? t : a; }, 0);
@@ -88,7 +86,7 @@ function ClaudeTab({ usage }: { usage: UsageResponse | null }) {
   const worst = worstWindow(windows);
   const trend = worst ? (series[worst.limitType] ?? []) : [];
 
-  if (snapshots === null)
+  if (snapshots === null || snapshots === undefined)
     return <div style={{ padding: '40px 0', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>;
   if (windows.length === 0)
     return (
@@ -125,7 +123,6 @@ type ProviderUsage = {
   snapshots: { timestamp: string; balance: number; currency: string }[];
 };
 
-// Ссылки пополнения и кабинетов по провайдерам (для карточки баланса / заглушки)
 const TOPUP_URL: Record<string, string> = {
   deepseek: 'https://platform.deepseek.com/top_up',
 };
@@ -136,7 +133,6 @@ const CABINET_URL: Record<string, string> = {
 
 function ProviderTab({ providerKey, data }: { providerKey: string; data: ProviderUsage | null | undefined }) {
   const name = providerLabel(providerKey);
-  // Провайдер без балансового API (GLM): показываем пояснение вместо пустой вкладки
   if (!providerCapsByKey(providerKey).hasBalance)
     return (
       <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
@@ -164,7 +160,6 @@ function ProviderTab({ providerKey, data }: { providerKey: string; data: Provide
   const cur = data.balance ? parseFloat(data.balance.totalBalance) : NaN;
   const currency = data.balance?.currency ?? snaps[snaps.length - 1]?.currency ?? 'USD';
   const low = !isNaN(cur) && cur < 1;
-  // Расход ≈ сумма падений баланса между снапшотами (пополнения не учитываются как «отрицательный расход»)
   let spent = 0;
   for (let i = 1; i < snaps.length; i++) {
     const d = snaps[i - 1].balance - snaps[i].balance;
@@ -313,8 +308,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<string>('claude');
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [days, setDays] = useState(7);
-  const [falBalance, setFalBalance] = useState<number | null | undefined>(undefined); // для строки-сводки + бейджа вкладки
-  // По каждому CLI-провайдеру с балансовым API: undefined — грузим, null — недоступен
+  const [falBalance, setFalBalance] = useState<number | null | undefined>(undefined);
   const [provData, setProvData] = useState<Record<string, ProviderUsage | null | undefined>>({});
   const providerKeys = cliProviderKeys();
 
@@ -323,7 +317,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
     api.usage.get().then(d => { if (!c) setUsage(d); }).catch(() => { if (!c) setUsage({ snapshots: [] }); });
     api.fal.account(7).then(d => { if (!c) setFalBalance(d.enabled ? (d.balance ?? null) : null); }).catch(() => { if (!c) setFalBalance(null); });
     for (const key of cliProviderKeys()) {
-      if (!providerCapsByKey(key).hasBalance) continue; // без балансового API — заглушка в ProviderTab
+      if (!providerCapsByKey(key).hasBalance) continue;
       api.providers.usage(key)
         .then(d => { if (!c) setProvData(prev => ({ ...prev, [key]: d })); })
         .catch(() => { if (!c) setProvData(prev => ({ ...prev, [key]: null })); });
@@ -340,9 +334,11 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
     return b ? parseFloat(b.totalBalance) : NaN;
   };
   const provLow = (key: string) => { const b = provBalanceOf(key); return !isNaN(b) && b < 1; };
-  // Вкладка на каждый настроенный CLI-провайдер (в каталог попадают только с ApiKey);
-  // у провайдера без балансового API внутри — пояснение с ссылкой на кабинет
+
+  // Подписки из пула ClaudeSubscriptionPool — табы utilisation
+  const subKeys = usage?.subscriptions ? Object.keys(usage.subscriptions) : [];
   const tabs = ([['claude', 'Claude']] as [string, string][])
+    .concat(subKeys.filter(k => k !== 'claude').map(k => [k, usage!.subscriptions![k].name ?? k] as [string, string]))
     .concat(providerKeys.map(k => [k, providerLabel(k)] as [string, string]))
     .concat([['fal', 'fal.ai']]);
 
@@ -352,12 +348,10 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div style={{ width: '100%', maxWidth: 720, maxHeight: '85vh', background: C.bgCard, borderRadius: 18, boxShadow: SHADOW.dropdown, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {/* Шапка */}
         <div style={{ padding: '13px 20px 6px', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexShrink: 0 }}>
           <span style={{ fontSize: 15, fontWeight: 700, color: C.textHeading, fontFamily: FONT.sans }}>Использование</span>
           <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 18, padding: '0 4px', borderRadius: 6, display: 'flex', alignItems: 'center' }}><X size={18} strokeWidth={2} /></button>
         </div>
-        {/* Строка-сводка */}
         <div style={{ padding: '0 20px 10px', fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, flexShrink: 0 }}>
           {plan && <span>{plan.label}</span>}
           {worst?.hasUtil && <span> · {windowLabel(worst.limitType)} <span style={{ color: RATE_COLORS[worst.level].text, fontWeight: 700 }}>{worst.pct}%</span></span>}
@@ -366,7 +360,6 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
           ))}
           {typeof falBalance === 'number' && <span> · fal <span style={{ fontFamily: FONT.mono, color: lowBal ? C.dangerText : MONEY, fontWeight: 700 }}>{money(falBalance)}</span></span>}
         </div>
-        {/* Вкладки */}
         <div style={{ display: 'flex', gap: 6, padding: '0 18px', borderBottom: `1px solid ${C.bgInset}`, flexShrink: 0 }}>
           {tabs.map(([key, lbl]) => (
             <button key={key} type="button" onClick={() => setTab(key)}
@@ -375,13 +368,13 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
                 borderBottom: `2px solid ${tab === key ? C.accent : 'transparent'}`, marginBottom: -1, display: 'flex', alignItems: 'center', gap: 6 }}>
               {lbl}
               {key === 'fal' && lowBal && <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.danger }} />}
-              {key !== 'fal' && key !== 'claude' && provLow(key) && <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.danger }} />}
+              {key !== 'fal' && key !== 'claude' && !subKeys.includes(key) && provLow(key) && <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.danger }} />}
             </button>
           ))}
         </div>
-        {/* Тело вкладки */}
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px 18px' }}>
-          {tab === 'claude' ? <ClaudeTab usage={usage} />
+          {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? usage?.snapshots} />
+            : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} />
             : tab === 'fal' ? <FalTab days={days} setDays={setDays} />
             : <ProviderTab providerKey={tab} data={provData[tab]} />}
         </div>

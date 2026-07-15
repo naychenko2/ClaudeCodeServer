@@ -1637,7 +1637,7 @@ public class SessionManager
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
                     break;
                 case RateLimitMessage m:
-                    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt);
+                    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider);
                     // Исчерпание лимита подписки → помечаем exhausted в пуле, чтобы новые чаты
                     // пошли на другую подписку (если utilization >= 1.0 или статус exhausted)
                     if (entry is not null && (m.Utilization >= 1.0 || m.Status == "exhausted"))

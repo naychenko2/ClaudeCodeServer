@@ -374,6 +374,12 @@ export interface PlanInfo {
 export interface UsageResponse {
   snapshots: UsageSnapshot[];
   plan?: PlanInfo;
+  subscriptions?: Record<string, SubscriptionUsage>;
+}
+
+export interface SubscriptionUsage {
+  snapshots: UsageSnapshot[];
+  name?: string;
 }
 
 // Статистика аккаунта fal.ai (баланс + расход за период)

@@ -1345,6 +1345,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 if (m.Success)
                 {
                     var transcriptDir = m.Groups[1].Value.Trim();
+                    Console.WriteLine($"[WorkflowWatcher] старт: dir={transcriptDir} allowed={WorkflowAgentParser.IsPathAllowed(transcriptDir)}");
                     var watcher = new WorkflowWatcher(transcriptDir, toolUseId, _onMessage);
                     lock (_workflowWatchers)
                     {

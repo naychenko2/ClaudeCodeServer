@@ -3,7 +3,8 @@
 namespace ClaudeHomeServer.Services;
 
 // Следит за папкой wf_* и шлёт workflow_progress по мере завершения агентов.
-// Завершается сам когда данные стабилизировались (30с без изменений) или по таймауту (20 мин).
+// Завершается сам когда данные стабилизировались (все агенты done + StableDelay тишины)
+// или по таймауту MaxDuration.
 public sealed class WorkflowWatcher : IDisposable
 {
     private readonly string _wfPath;
@@ -21,7 +22,13 @@ public sealed class WorkflowWatcher : IDisposable
 
     private static readonly TimeSpan DebounceDelay = TimeSpan.FromSeconds(2);
     // Тишина после завершения ВСЕХ агентов, после которой считаем workflow стабильным.
-    private static readonly TimeSpan StableDelay = TimeSpan.FromSeconds(5);
+    // ВАЖНО: между волнами агентов раннер делает паузы (барьер parallel(), спавн следующего
+    // агента, setTimeout в скрипте) — в этот момент все СУЩЕСТВУЮЩИЕ агенты done, и короткая
+    // тишина ложно выглядела как завершение workflow: ватчер слал isDone и умирал, дальше
+    // блок в чате не обновлялся до рефреша. 45с закрывают реальные межволновые зазоры;
+    // финальный ✓ в UI от этого не задерживается (isSettled на фронте считается по result
+    // хода + done всех агентов), stable нужен только для самозавершения ватчера и чистки кэша.
+    private static readonly TimeSpan StableDelay = TimeSpan.FromSeconds(45);
     // Периодический перечёт директории, пока агенты работают (они могут долго молчать
     // в файлах, выполняя длинную команду — FileSystemWatcher тогда не сработает).
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
@@ -52,12 +59,16 @@ public sealed class WorkflowWatcher : IDisposable
     private void AttachFsWatcher()
     {
         if (_fsWatcher != null || !Directory.Exists(_wfPath)) return;
-        _fsWatcher = new FileSystemWatcher(_wfPath, "agent-*.jsonl")
+        _fsWatcher = new FileSystemWatcher(_wfPath)
         {
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
             EnableRaisingEvents = true,
             IncludeSubdirectories = false
         };
+        // journal.jsonl тоже считается активностью: раннер пишет в него started/result
+        // между волнами агентов — иначе тишина в agent-файлах ложно выглядит как конец
+        _fsWatcher.Filters.Add("agent-*.jsonl");
+        _fsWatcher.Filters.Add("journal.jsonl");
         _fsWatcher.Changed += OnFileChanged;
         _fsWatcher.Created += OnFileChanged;
     }

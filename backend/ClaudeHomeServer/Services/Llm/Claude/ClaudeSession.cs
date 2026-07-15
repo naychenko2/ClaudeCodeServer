@@ -1051,7 +1051,7 @@ public class ClaudeSession : ILlmSessionAdapter
             var sub = _subscriptionPool.All.FirstOrDefault(s => s.Key == Info.Provider);
             if (sub?.Enabled == true)
             {
-                var oauthEnv = _providers?.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, Info.Model);
+                var oauthEnv = _providers?.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, sub.ApiKey, Info.Model);
                 if (oauthEnv is not null)
                     foreach (var (k, v) in oauthEnv)
                         psi.Environment[k] = v;

@@ -194,40 +194,54 @@ public class LlmProviderRegistry
     // Построить env для дополнительной OAuth-подписки Claude (см. ClaudeSubscriptionPool).
     // Изолированный CLAUDE_CONFIG_DIR + .credentials.json из OAuthToken, БЕЗ ANTHROPIC_AUTH_TOKEN
     // и ANTHROPIC_BASE_URL — процесс использует родной эндпоинт Anthropic.
+    // Если у подписки есть ApiKey — используем ANTHROPIC_AUTH_TOKEN (как CLI-провайдеры,
+    // но без ANTHROPIC_BASE_URL, т.к. эндпоинт родной).
     // null → подписка не найдена или неактивна.
     public IReadOnlyDictionary<string, string>? BuildOAuthCliEnv(
-        string subKey, string oauthToken, string? model = null)
+        string subKey, string oauthToken, string? apiKey = null, string? model = null)
     {
         var env = new Dictionary<string, string>();
         var profileDir = ProfileDir("sub-" + subKey);
         env["CLAUDE_CONFIG_DIR"] = profileDir;
 
-        // Пишем .credentials.json с OAuth-токеном для подписки
-        try
+        if (!string.IsNullOrWhiteSpace(apiKey))
         {
-            var credsPath = Path.Combine(profileDir, ".credentials.json");
-            if (!File.Exists(credsPath) ||
-                !File.ReadAllText(credsPath).Contains(oauthToken, StringComparison.Ordinal))
+            // API-ключ: ставим ANTHROPIC_AUTH_TOKEN, как для CLI-провайдеров
+            env["ANTHROPIC_AUTH_TOKEN"] = apiKey;
+            env["ANTHROPIC_API_KEY"] = apiKey;
+        }
+        else if (!string.IsNullOrWhiteSpace(oauthToken))
+        {
+            // OAuth-токен: пишем .credentials.json — CLI сам прочитает
+            try
             {
-                var creds = System.Text.Json.JsonSerializer.Serialize(new
+                var credsPath = Path.Combine(profileDir, ".credentials.json");
+                if (!File.Exists(credsPath) ||
+                    !File.ReadAllText(credsPath).Contains(oauthToken, StringComparison.Ordinal))
                 {
-                    claudeAiOauth = new { tokenType = "bearer", accessToken = oauthToken }
-                });
-                File.WriteAllText(credsPath, creds);
+                    var creds = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        claudeAiOauth = new { tokenType = "bearer", accessToken = oauthToken }
+                    });
+                    File.WriteAllText(credsPath, creds);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[LlmProviders] Не удалось записать .credentials.json для подписки {subKey}: {ex.Message}");
             }
         }
-        catch (Exception ex)
+        else
         {
-            Console.Error.WriteLine($"[LlmProviders] Не удалось записать .credentials.json для подписки {subKey}: {ex.Message}");
+            return null; // нечего ставить — неактивна
         }
 
-        // Модель-дефолты (как для CLI-провайдеров, но без ANTHROPIC_AUTH_TOKEN/BASE_URL)
+        // Модель-дефолты (как для CLI-провайдеров, но без ANTHROPIC_BASE_URL)
         if (!string.IsNullOrWhiteSpace(model))
         {
             env["ANTHROPIC_MODEL"] = model;
             env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model;
             env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model;
-            // haiku-слот — дефолт от Claude CLI, явно не задаём
         }
 
         return env;

@@ -15,6 +15,11 @@ public class ClaudeSubscriptionConfig
     // Получить: запустить `claude setup-token` на машине с браузером, залогиненной в нужный аккаунт.
     public string OAuthToken { get; set; } = "";
 
-    // Провайдер включён только при наличии токена
-    public bool Enabled => !string.IsNullOrWhiteSpace(OAuthToken);
+    // Альтернатива OAuth: API-ключ (sk-ant-...). Если задан — используется как
+    // ANTHROPIC_AUTH_TOKEN в изолированном профиле, без .credentials.json.
+    // Приоритет: ApiKey > OAuthToken.
+    public string ApiKey { get; set; } = "";
+
+    // Провайдер включён при наличии хотя бы одного способа аутентификации
+    public bool Enabled => !string.IsNullOrWhiteSpace(OAuthToken) || !string.IsNullOrWhiteSpace(ApiKey);
 }

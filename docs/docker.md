@@ -130,6 +130,26 @@ docker exec -it claude-server-prod claude login   # один раз: вход п
 `restart: unless-stopped` (базовый compose) поднимает контейнер сам — нужно лишь, чтобы
 стартовал Docker: **Docker Desktop → Settings → General → «Start Docker Desktop when you sign in»**.
 
+## Плагин oh-my-claudecode
+
+[oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) (MIT) — мульти-агентная
+оркестрация для Claude Code: `/oh-my-claudecode:autopilot`, `:ultraqa`, `:deep-interview`
+и ещё ~40 скиллов. Ставится **автоматически при старте контейнера** (entrypoint в
+`docker-compose.claude.yml`): `claude plugin marketplace add Yeachan-Heo/oh-my-claudecode`
++ `claude plugin install oh-my-claudecode@omc`. Установка идемпотентна (проверка по
+`~/.claude/plugins/`), состояние живёт в volume `claude-home`, при недоступной сети старт
+сервера не блокируется (best-effort, таймаут 180 с; клон идёт через `CLAUDE_EGRESS_PROXY`).
+
+- Скиллы плагина видны в панели навыков (секция «Плагины») и в попапе «/» композера;
+  вызов — с namespace: `/oh-my-claudecode:<имя>`.
+- Обновление — вручную: `docker exec claude-server claude plugin update oh-my-claudecode`.
+- В профили сторонних CLI-провайдеров (DeepSeek/GLM) каталог `plugins` синкается
+  автоматически (без `.git` клонов marketplace).
+- **Ограничения**: team-режим (tmux-воркеры) и npm-CLI `omc` не поддерживаются — ставится
+  только plugin-часть; `/oh-my-claudecode:setup` (он же omc-setup) НЕ запускать — он
+  настраивает hooks и npm-рантайм, которые нам не нужны и могут мешать stream-json.
+  Скиллы на английском (upstream, не переводим).
+
 ## Проверка изоляции
 
 В чате попросить Claude выполнить `ls /` и `cat /etc/hostname`, затем попробовать прочитать

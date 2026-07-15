@@ -113,11 +113,11 @@ public class LlmProviderRegistry
     }
 
     // Общие настройки пользователя, докладываемые в профиль провайдера (ТОЛЬКО белый
-    // список: глобальная память, настройки, правила, скиллы, агенты, команды, workflow-скрипты).
-    // Креденшалы (.credentials.json) НЕ копируем никогда — иначе изоляция теряет смысл
+    // список: глобальная память, настройки, правила, скиллы, агенты, команды, workflow-скрипты,
+    // плагины). Креденшалы (.credentials.json) НЕ копируем никогда — иначе изоляция теряет смысл
     // и OAuth-токен подписки утёк бы на сторонний эндпоинт.
     private static readonly string[] SyncFiles = ["CLAUDE.md", "settings.json"];
-    private static readonly string[] SyncDirs = ["rules", "skills", "agents", "commands", "workflows"];
+    private static readonly string[] SyncDirs = ["rules", "skills", "agents", "commands", "workflows", "plugins"];
 
     // Троттлинг синка: не чаще раза в 5 минут на провайдера
     private static readonly TimeSpan SyncTtl = TimeSpan.FromMinutes(5);
@@ -156,6 +156,8 @@ public class LlmProviderRegistry
             foreach (var src in Directory.EnumerateFiles(srcDir, "*", SearchOption.AllDirectories))
             {
                 var rel = Path.GetRelativePath(_userProfileDir, src);
+                // .git клонов marketplace в plugins/ — десятки тысяч объектов, CLI они не нужны
+                if (rel.Split('\\', '/').Contains(".git")) continue;
                 CopyIfNewer(src, Path.Combine(profileDir, rel));
             }
         }

@@ -113,6 +113,15 @@ export function SkillsPanel({ projectId }: Props) {
               </Section>
             )}
 
+            {/* Скиллы установленных плагинов Claude Code */}
+            {(data.plugins?.length ?? 0) > 0 && (
+              <Section label="Плагины">
+                {data.plugins!.map(pl => (
+                  <SkillCard key={pl.name} skill={pl} />
+                ))}
+              </Section>
+            )}
+
             {/* Агенты проекта */}
             {data.agents.length > 0 && (
               <Section label="Агенты проекта">
@@ -124,7 +133,7 @@ export function SkillsPanel({ projectId }: Props) {
 
             {/* Пустое состояние */}
             {data.skills.length === 0 && data.projectSkills.length === 0 && data.agents.length === 0
-              && (data.workflows?.length ?? 0) === 0 && (
+              && (data.workflows?.length ?? 0) === 0 && (data.plugins?.length ?? 0) === 0 && (
               <EmptyState />
             )}
           </>

@@ -215,9 +215,9 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   useEffect(() => {
     api.skills.list(project.id).then(setSkillsData).catch(() => {});
   }, [project.id]);
-  // Скиллы для «/» композера: глобальные + workflow-скрипты (вызываются той же командой /имя)
+  // Скиллы для «/» композера: глобальные + workflow-скрипты + плагины (вызываются той же командой /имя)
   const composerSkills = useMemo(
-    () => [...(skillsData?.skills ?? []), ...(skillsData?.workflows ?? [])],
+    () => [...(skillsData?.skills ?? []), ...(skillsData?.workflows ?? []), ...(skillsData?.plugins ?? [])],
     [skillsData]);
   // мобайл: показываем либо sidebar, либо chat
   const [mobileView, setMobileView] = useState<'sidebar' | 'chat'>('sidebar');

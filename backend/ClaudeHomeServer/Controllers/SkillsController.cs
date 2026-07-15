@@ -23,7 +23,7 @@ public class SkillsController(
     private string GetRoot(string projectId) =>
         (projects.GetById(projectId) ?? throw new KeyNotFoundException($"Проект не найден: {projectId}")).RootPath;
 
-    // Список скиллов: глобальные + проектные + агенты проекта + workflow-скрипты
+    // Список скиллов: глобальные + проектные + агенты проекта + workflow-скрипты + плагины
     [HttpGet("api/projects/{projectId}/skills")]
     public IActionResult List(string projectId)
     {
@@ -36,17 +36,18 @@ public class SkillsController(
                 projectSkills = skills.GetProjectSkills(root),
                 agents = skills.GetProjectAgents(root),
                 workflows = skills.GetGlobalWorkflows(),
+                plugins = skills.GetPluginSkills(),
             });
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
     // Список глобальных скиллов (без привязки к проекту) — для чатов вне проекта.
-    // Workflow-скрипты добавляются в общий список: в композере они вызываются той же
-    // командой /имя, что и скиллы (расширяет их сам CLI).
+    // Workflow-скрипты и скиллы плагинов добавляются в общий список: в композере они
+    // вызываются той же командой /имя, что и скиллы (разворачивает их сам CLI).
     [HttpGet("api/skills")]
     public IActionResult ListGlobal() =>
-        Ok(skills.GetGlobalSkills().Concat(skills.GetGlobalWorkflows()).ToList());
+        Ok(skills.GetGlobalSkills().Concat(skills.GetGlobalWorkflows()).Concat(skills.GetPluginSkills()).ToList());
 
     // --- Реестр: поиск и установка (обёртка npx skills) ---
 

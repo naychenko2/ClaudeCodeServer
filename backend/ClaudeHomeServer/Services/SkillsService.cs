@@ -26,6 +26,10 @@ public class SkillsService
     private static string GlobalWorkflowsDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "workflows");
 
+    private static string InstalledPluginsManifest =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".claude", "plugins", "installed_plugins.json");
+
     private static string GetProjectSkillsDir(string projectRootPath) =>
         Path.Combine(projectRootPath, ".claude", "skills");
 
@@ -66,6 +70,75 @@ public class SkillsService
             catch { }
         }
         return result;
+    }
+
+    // Скиллы и команды установленных плагинов Claude Code (например oh-my-claudecode).
+    // Источник — ~/.claude/plugins/installed_plugins.json (v2): plugins → "имя@marketplace" →
+    // [{ installPath }]. Имена отдаём с namespace «плагин:имя» — ровно так их вызывает CLI
+    // (/oh-my-claudecode:autopilot), поэтому вставка из попапа «/» работает как есть.
+    public IReadOnlyList<SkillInfo> GetPluginSkills()
+    {
+        var manifest = InstalledPluginsManifest;
+        if (!File.Exists(manifest)) return [];
+
+        var result = new List<SkillInfo>();
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifest));
+            if (!doc.RootElement.TryGetProperty("plugins", out var plugins) ||
+                plugins.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return [];
+
+            foreach (var plugin in plugins.EnumerateObject())
+            {
+                var pluginName = plugin.Name.Split('@')[0];
+                if (plugin.Value.ValueKind != System.Text.Json.JsonValueKind.Array) continue;
+
+                foreach (var install in plugin.Value.EnumerateArray())
+                {
+                    if (!install.TryGetProperty("installPath", out var pathEl)) continue;
+                    var installPath = pathEl.GetString();
+                    if (string.IsNullOrEmpty(installPath) || !Directory.Exists(installPath)) continue;
+                    AddPluginEntries(result, pluginName, installPath);
+                    break; // одна установка плагина (первая по scope)
+                }
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    // Скиллы (skills/*/SKILL.md) и команды (commands/*.md) одного плагина; дубли имён схлопываются.
+    private static void AddPluginEntries(List<SkillInfo> result, string pluginName, string installPath)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var skill in ReadSkillsFrom(Path.Combine(installPath, "skills")))
+        {
+            if (!seen.Add(skill.Name)) continue;
+            skill.Name = $"{pluginName}:{skill.Name}";
+            result.Add(skill);
+        }
+
+        var commandsDir = Path.Combine(installPath, "commands");
+        if (!Directory.Exists(commandsDir)) return;
+        foreach (var file in Directory.GetFiles(commandsDir, "*.md"))
+        {
+            var name = Path.GetFileNameWithoutExtension(file);
+            if (!seen.Add(name)) continue;
+            try
+            {
+                var meta = ParseFrontmatter(File.ReadAllText(file));
+                result.Add(new SkillInfo
+                {
+                    Name = $"{pluginName}:{name}",
+                    Description = meta.TryGetValue("description", out var d) ? d : "",
+                    ArgumentHint = meta.TryGetValue("argument-hint", out var ah) ? ah : null,
+                    FilePath = file,
+                });
+            }
+            catch { }
+        }
     }
 
     // Значение строкового поля из литерала meta: `key: 'значение'` / `key: "значение"`

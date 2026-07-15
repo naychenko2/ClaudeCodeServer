@@ -94,6 +94,15 @@ services:
         # ДРУГИМИ именами не трогаются
         mkdir -p /home/app/.claude/workflows
         cp -f /app/claude-defaults/workflows/*.js /home/app/.claude/workflows/ 2>/dev/null || true
+        # Плагин oh-my-claudecode (marketplace «omc»): ставится один раз, состояние живёт
+        # в volume claude-home. Best-effort: без сети старт сервера не валим.
+        # Обновление — вручную: docker exec claude-server claude plugin update oh-my-claudecode
+        if [ ! -d /home/app/.claude/plugins/marketplaces/omc ]; then
+          timeout 180 claude plugin marketplace add Yeachan-Heo/oh-my-claudecode || true
+        fi
+        if ! grep -q '"oh-my-claudecode@omc"' /home/app/.claude/plugins/installed_plugins.json 2>/dev/null; then
+          timeout 180 claude plugin install oh-my-claudecode@omc || true
+        fi
         exec dotnet ClaudeHomeServer.dll
 
 volumes:

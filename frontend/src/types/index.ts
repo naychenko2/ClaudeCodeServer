@@ -474,6 +474,9 @@ export interface SkillsData {
   agents: AgentInfo[];
   // Workflow-скрипты (~/.claude/workflows/*.js) — многоагентные оркестрации (/panel-of-experts и т.п.)
   workflows?: SkillInfo[];
+  // Скиллы установленных плагинов Claude Code (~/.claude/plugins) — имена с namespace
+  // «плагин:скилл» (/oh-my-claudecode:autopilot и т.п.)
+  plugins?: SkillInfo[];
 }
 
 // Навык из реестра skills.sh (результат поиска/подбора). source — «owner/repo».

@@ -38,8 +38,9 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
         sb.AppendLine($"name: {persona.Handle}");
         sb.AppendLine($"description: {YamlQuote(BuildDescription(persona))}");
         sb.AppendLine($"tools: {string.Join(", ", tools)}");
-        if (!string.IsNullOrWhiteSpace(persona.Model))
-            sb.AppendLine($"model: {persona.Model.Trim()}");
+        // model НЕ пинится: файл виден чатам всех провайдеров (cwd проекта/Chats), а пин
+        // чужой модели делает сабагента незапускаемым (Claude-чат не запустит deepseek-модель).
+        // Сабагент бежит на модели сессии; личность даёт промпт + инструменты + память.
         if (!string.IsNullOrWhiteSpace(persona.Effort))
             sb.AppendLine($"effort: {persona.Effort.Trim()}");
         if (MapColor(persona.Avatar?.Color) is { } color)

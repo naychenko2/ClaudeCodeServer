@@ -43,12 +43,14 @@ public class PersonaAgentFileGeneratorTests
     }
 
     [Fact]
-    public void Model_ТолькоПриЯвной()
+    public void Model_НеПинитсяДажеПриЯвной()
     {
+        // Файл виден чатам всех провайдеров: пин чужой модели делает сабагента
+        // незапускаемым — сабагент всегда бежит на модели сессии
         MakeGenerator().Generate(MakePersona(), webAllowed: false)
             .Should().NotContain("\nmodel:");
         MakeGenerator().Generate(MakePersona(model: "opus"), webAllowed: false)
-            .Should().Contain("model: opus");
+            .Should().NotContain("\nmodel:");
     }
 
     [Fact]

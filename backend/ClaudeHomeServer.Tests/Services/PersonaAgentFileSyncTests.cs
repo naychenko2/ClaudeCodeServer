@@ -72,11 +72,12 @@ public class PersonaAgentFileSyncTests : IDisposable
     }
 
     [Fact]
-    public void ЯвнаяМодельClaude_ПодпапкаClaude()
+    public void ЯвнаяМодель_ВсёРавноShared()
     {
+        // Файлы без пина модели — раскладка по провайдерам не нужна, всё в shared
         var p = Create("Опус", model: "opus");
-        File.Exists(AgentPath("claude", p.Handle)).Should().BeTrue();
-        File.Exists(AgentPath("shared", p.Handle)).Should().BeFalse();
+        File.Exists(AgentPath("shared", p.Handle)).Should().BeTrue();
+        File.Exists(AgentPath("claude", p.Handle)).Should().BeFalse();
     }
 
     [Fact]
@@ -92,7 +93,7 @@ public class PersonaAgentFileSyncTests : IDisposable
     }
 
     [Fact]
-    public void СменаМодели_ПереноситФайл()
+    public void СменаМодели_ФайлОстаётсяВShared()
     {
         var p = Create("Мигрант");
         File.Exists(AgentPath("shared", p.Handle)).Should().BeTrue();
@@ -101,8 +102,8 @@ public class PersonaAgentFileSyncTests : IDisposable
             systemPrompt: null, model: "opus", effort: null, scope: null, projectId: null,
             color: null, greeting: null, memoryEnabled: null);
 
-        File.Exists(AgentPath("claude", p.Handle)).Should().BeTrue();
-        File.Exists(AgentPath("shared", p.Handle)).Should().BeFalse("старый файл удалён");
+        File.Exists(AgentPath("shared", p.Handle)).Should().BeTrue("модель не пинится — раскладка не меняется");
+        File.Exists(AgentPath("claude", p.Handle)).Should().BeFalse();
     }
 
     [Fact]

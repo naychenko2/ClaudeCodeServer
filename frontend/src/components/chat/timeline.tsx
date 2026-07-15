@@ -10,7 +10,8 @@ import { AgentTextBlock, AgentThinkingBlock, NEUTRAL_AGENT_ACCENT } from './Agen
 export interface ActivityEntry { item: ChatItem; idx: number }
 
 // Блок группы инструментов: во время стриминга — раскрыт плоско; после завершения —
-// N≤5 остаётся раскрытым, N>5 автоматически сворачивается. Кнопка заголовка переключает.
+// одиночное действие остаётся раскрытым, N>1 автоматически сворачивается в строку
+// «N действий». Кнопка заголовка переключает.
 export function ToolGroupBlock({ isGroupDone, toolCount, children }: {
   isGroupDone: boolean;
   toolCount: number;
@@ -18,7 +19,7 @@ export function ToolGroupBlock({ isGroupDone, toolCount, children }: {
 }) {
   const [expanded, setExpanded] = useState(true);
   useEffect(() => {
-    if (isGroupDone && toolCount > 5) setExpanded(false);
+    if (isGroupDone && toolCount > 1) setExpanded(false);
   }, [isGroupDone, toolCount]);
 
   return (

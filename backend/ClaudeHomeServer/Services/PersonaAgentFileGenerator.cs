@@ -104,7 +104,9 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
             sb.Append(" — ").Append(persona.Description.Trim());
         sb.Append(" Персона-консультант пользователя: вызывай, когда нужна её экспертиза или " +
                   "пользователь упоминает её @handle. Вопрос в prompt формулируй самодостаточно — " +
-                  "она не видит текущий разговор.");
+                  "она не видит текущий разговор. Для вызова в Workflow (скрипт через /workflow " +
+                  "или штатный запуск) используй agentType \"" + persona.Handle + "\" — это имя " +
+                  "её .md-агента в файловой системе.");
         var isExecutor = PersonaConsultantToolset.IsExecutor(persona);
         if (isExecutor)
             sb.Append(" Исполнитель: может править файлы и запускать команды в рамках задачи.");

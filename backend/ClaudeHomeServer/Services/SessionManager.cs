@@ -773,7 +773,8 @@ public class SessionManager
                         ResolveTasksApiUrl(), entry.Token, p.Id,
                         p.Scope == PersonaScope.Project ? p.ProjectId : null))
                     .ToList();
-                return new PersonaAgentsContext(addDirs, servers);
+                var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList()!;
+                return new PersonaAgentsContext(addDirs, servers, handles);
             }
             catch (Exception ex)
             {

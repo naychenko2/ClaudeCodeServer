@@ -264,6 +264,13 @@ public class ClaudeSession : ILlmSessionAdapter
 
             if (hasPersonas)
             {
+                // persona_ask выключен когда есть файловые сабагенты-персоны:
+                // модель должна использовать Task(agentType=...) в Workflow, а не путаться.
+                // Без agentDepth < 1 — на агентном ходу тоже выключаем (анти-рекурсия).
+                var personaMentions = _personasMcp.MentionsHint is not null
+                    && personaAgents is not { AgentHandles.Count: > 0 }
+                    && _currentTurnAgentDepth < 1
+                    ? "1" : "0";
                 servers["personas"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
@@ -275,10 +282,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["PERSONAS_API_TOKEN"] = _personasMcp.Token,
                         ["PERSONAS_PROJECT_ID"] = _personasMcp.ProjectId ?? "",
                         ["PERSONAS_SELF_ID"] = _personasMcp.SelfPersonaId ?? "",
-                        // Инструмент persona_ask регистрируется только при включённых @упоминаниях;
-                        // на агентном ходу (chats_send из другой сессии) выключаем — анти-рекурсия
-                        ["PERSONAS_MENTIONS"] = _personasMcp.MentionsHint is not null && _currentTurnAgentDepth < 1 ? "1" : "0",
-                        // Инструменты привязок (personas_bindings_*) — за флагом persona-bindings
+                        ["PERSONAS_MENTIONS"] = personaMentions,
                         ["PERSONAS_BINDINGS"] = _personasMcp.BindingsEnabled ? "1" : "0",
                     },
                 };
@@ -908,6 +912,25 @@ public class ClaudeSession : ILlmSessionAdapter
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? mentionsHint
                     : basePrompt + "\n\n" + mentionsHint;
+            }
+
+            // Подсказка про субагентов-персон в Workflow: перечисляем handle'ы доступных
+            // .md-агентов (из --add-dir) — модель должна знать, что их можно вызывать
+            // через agentType в Task(agentType="handle", "prompt": "...") внутри workflow-скрипта.
+            // ВАЖНО: добавляем ВСЕГДА. persona_ask — это одноразовый вопрос в чат, НЕ для Workflow.
+            if (personaAgents is { AgentHandles.Count: > 0 })
+            {
+                var workflowHint =
+                    "## Персоны-субагенты в Workflow\n" +
+                    "У пользователя есть персоны-субагенты (файловые .md-агенты). " +
+                    "Их можно вызывать в Workflow через Task(agentType=\"<handle>\", prompt=\"...\"). " +
+                    "НЕ используй persona_ask (MCP-инструмент) для вызова внутри Workflow — " +
+                    "persona_ask задаёт одноразовый вопрос в отдельный чат, а не запускает субагента. " +
+                    "Для Workflow всегда используй Task(agentType=\"handle\").\n" +
+                    "Доступные agentType: " + string.Join(", ", personaAgents.AgentHandles) + ".";
+                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                    ? workflowHint
+                    : basePrompt + "\n\n" + workflowHint;
             }
 
             // Auto-recall долгой памяти персоны: релевантные записи по тексту хода.

@@ -60,9 +60,11 @@ public sealed record ConsultantMemoryServer(string ServerKey, string ApiUrl, str
     string PersonaId, string? ProjectId = null);
 
 // Файловые сабагенты-персоны: папки для --add-dir хода
-// (внутри — .claude/agents/{handle}.md) + pmem-серверы смонтированных персон.
+// (внутри — .claude/agents/{handle}.md) + pmem-серверы смонтированных персон
+// + список имён (handle) для подсказки в системный промпт.
 public sealed record PersonaAgentsContext(IReadOnlyList<string> AddDirs,
-    IReadOnlyList<ConsultantMemoryServer> MemoryServers);
+    IReadOnlyList<ConsultantMemoryServer> MemoryServers,
+    IReadOnlyList<string> AgentHandles);
 
 // Per-session контекст, общий для всех адаптеров — то, что SessionManager передаёт
 // при создании сессии независимо от провайдера. Claude-специфичные зависимости

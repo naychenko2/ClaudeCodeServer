@@ -52,6 +52,18 @@ public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items);
 // создавать уведомления через инструмент notifications_create.
 public record NotificationsMcpContext(string ApiUrl, string Token);
 
+// Выделенный memory-сервер персоны-консультанта (файлового сабагента): ключ сервера
+// в MCP-конфиге хода ("pmem_<handle>") + env memory-server ЭТОЙ персоны. Файл агента
+// ссылается на сервер по имени (mcpServers: [pmem_<handle>]), а определение с токеном
+// живёт только во временном конфиге хода — секреты не попадают в персистентные файлы.
+public sealed record ConsultantMemoryServer(string ServerKey, string ApiUrl, string Token,
+    string PersonaId, string? ProjectId = null);
+
+// Файловые сабагенты-персоны (флаг persona-subagents): папки для --add-dir хода
+// (внутри — .claude/agents/{handle}.md) + pmem-серверы смонтированных персон.
+public sealed record PersonaAgentsContext(IReadOnlyList<string> AddDirs,
+    IReadOnlyList<ConsultantMemoryServer> MemoryServers);
+
 // Per-session контекст, общий для всех адаптеров — то, что SessionManager передаёт
 // при создании сессии независимо от провайдера. Claude-специфичные зависимости
 // (MCP-конфиг, скиллы, disallowed tools) живут в фабрике адаптеров.
@@ -90,4 +102,8 @@ public sealed record LlmSessionContext(
     // возвращает индекс привязанных источников + выжимки режима «всегда» для системного
     // промпта (null — фича выключена или сессия без персоны). Вычисляется каждый ход;
     // флаг проверяется внутри, ошибки — тихо в null (ход идёт без блока).
-    Func<string, Task<string?>>? BindingsProvider = null);
+    Func<string, Task<string?>>? BindingsProvider = null,
+    // Файловые сабагенты-персоны (флаг persona-subagents): вычисляется на КАЖДЫЙ ход
+    // (актуальные персоны/модель сессии), внутри — троттлёный reconcile файлов.
+    // null — фича выключена или нет владельца; вызов может вернуть null.
+    Func<PersonaAgentsContext?>? PersonaAgentsProvider = null);

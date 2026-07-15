@@ -73,8 +73,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // иначе персоны и автоматизации вязнут в перманентных permission-запросах на каждый
     // созданный чат/процесс claude, хотя доступ уже ограничен на уровне Persona.Tools/
     // ExtraDisallowedTools и project deny-правил (проверяются раньше, см. DecidePermissionAsync).
+    // mcp__pmem_ — выделенные memory-серверы персон-консультантов (pmem_<handle>, файловые
+    // сабагенты): их permission-запросы падают в фоновом контексте сабагента, где отвечать
+    // некому — авторазрешаем, как и остальные свои серверы (доступ ограничен allow-list агента).
     private static readonly string[] BuiltInMcpServerPrefixes =
-        ["mcp__tasks__", "mcp__notes__", "mcp__memory__", "mcp__personas__", "mcp__wsp__", "mcp__notifications__", "mcp__dify__"];
+        ["mcp__tasks__", "mcp__notes__", "mcp__memory__", "mcp__personas__", "mcp__wsp__", "mcp__notifications__", "mcp__dify__", "mcp__pmem_"];
 
     // Отслеживание изменений файлов на время хода
     private readonly TurnFileWatcher _fileWatcher;
@@ -103,6 +106,9 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly WorkspaceMcpContext? _workspaceMcp;
     // MCP-сервер уведомлений: создание уведомлений из Claude/агентов
     private readonly NotificationsMcpContext? _notificationsMcp;
+    // Файловые сабагенты-персоны (флаг persona-subagents): план хода — папки --add-dir
+    // + pmem-серверы памяти консультантов; вычисляется на каждый ход
+    private readonly Func<PersonaAgentsContext?>? _personaAgentsProvider;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -131,6 +137,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _personasMcp = context.PersonasMcp;
         _workspaceMcp = context.WorkspaceMcp;
         _notificationsMcp = context.NotificationsMcp;
+        _personaAgentsProvider = context.PersonaAgentsProvider;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
             ? [.. (disallowedTools ?? []), .. extra]
@@ -148,14 +155,16 @@ public class ClaudeSession : ILlmSessionAdapter
     // dataset id) + tasks-server с контекстом сессии; для сессий сторонних провайдеров —
     // ещё и user-scope серверы из ~/.claude.json (fal-ai и др.: изолированный
     // CLAUDE_CONFIG_DIR их не видит). null → базовый конфиг как есть.
-    private string? BuildTurnMcpConfig(string? datasetId)
+    private string? BuildTurnMcpConfig(string? datasetId, PersonaAgentsContext? personaAgents = null)
     {
         var tasksServerPath = _tasksMcp is not null ? TasksServerLocator.FindTasksServerPath() : null;
         var hasTasks = tasksServerPath is not null;
         var notesServerPath = _notesMcp is not null ? NotesServerLocator.FindNotesServerPath() : null;
         var hasNotes = notesServerPath is not null;
-        var memoryServerPath = _memoryMcp is not null ? MemoryServerLocator.FindMemoryServerPath() : null;
-        var hasMemory = memoryServerPath is not null;
+        var hasConsultants = personaAgents is { MemoryServers.Count: > 0 };
+        var memoryServerPath = _memoryMcp is not null || hasConsultants
+            ? MemoryServerLocator.FindMemoryServerPath() : null;
+        var hasMemory = _memoryMcp is not null && memoryServerPath is not null;
         var personasServerPath = _personasMcp is not null ? PersonasServerLocator.FindPersonasServerPath() : null;
         var hasPersonas = personasServerPath is not null;
         var workspaceServerPath = _workspaceMcp is not null ? WorkspaceServerLocator.FindWorkspaceServerPath() : null;
@@ -164,7 +173,8 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasNotifications = notificationsServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var userServers = LoadUserScopeMcpServers();
-        if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications && !hasDataset && userServers is null) return null;
+        if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
+            && !hasDataset && userServers is null && !(hasConsultants && memoryServerPath is not null)) return null;
 
         try
         {
@@ -320,6 +330,31 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["NOTIFICATIONS_API_TOKEN"] = _notificationsMcp.Token,
                     },
                 };
+            }
+
+            // pmem-серверы персон-консультантов (файловые сабагенты, флаг persona-subagents):
+            // тот же memory-server под уникальным ключом pmem_<handle> с env КОНСУЛЬТАНТА —
+            // файл агента ссылается на него по имени (mcpServers: [pmem_<handle>]), токен
+            // живёт только в этом временном конфиге. БЕЗ alwaysLoad: ленивое подключение,
+            // node-процесс не спавнится, пока консультанта не позвали (определение ~200 байт;
+            // ретрай «No such tool available» вшит в тело файла агента).
+            if (hasConsultants && memoryServerPath is not null)
+            {
+                foreach (var c in personaAgents!.MemoryServers)
+                {
+                    servers[c.ServerKey] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = "node",
+                        ["args"] = new System.Text.Json.Nodes.JsonArray { memoryServerPath },
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["MEMORY_API_URL"] = c.ApiUrl,
+                            ["MEMORY_API_TOKEN"] = c.Token,
+                            ["MEMORY_PERSONA_ID"] = c.PersonaId,
+                            ["MEMORY_PROJECT_ID"] = c.ProjectId ?? "",
+                        },
+                    };
+                }
             }
 
             if (servers.Count == 0) return null;
@@ -662,13 +697,43 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!string.IsNullOrWhiteSpace(Info.Effort))
             args.AddRange(["--effort", Info.Effort]);
 
+        // Файловые сабагенты-персоны (флаг persona-subagents): на агентном ходу не монтируем
+        // (анти-рекурсия, как TASKS_EXECUTE/PERSONAS_MENTIONS); без Task консультанты
+        // недостижимы — план не собираем. Ошибки провайдера — ход без консультантов.
+        PersonaAgentsContext? personaAgents = null;
+        if (agentDepth < 1 && _personaAgentsProvider is not null
+            && !_disallowedTools.Contains("Task", StringComparer.Ordinal))
+        {
+            try { personaAgents = _personaAgentsProvider(); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] План сабагентов-персон не собрался: {ex.Message}");
+            }
+        }
+
         // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)
         var currentWk = _wkStore?.GetByPath(_rootPath);
         var currentDatasetId = currentWk?.DifyDatasetId;
-        string? turnMcpPath = BuildTurnMcpConfig(currentDatasetId);
+        string? turnMcpPath = BuildTurnMcpConfig(currentDatasetId, personaAgents);
         var effectiveMcpConfig = turnMcpPath ?? _mcpConfigPath;
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
             args.AddRange(["--mcp-config", effectiveMcpConfig]);
+
+        // Папки файловых сабагентов: CLI сканирует {dir}/.claude/agents при старте процесса —
+        // правки персон применяются со следующего хода
+        if (personaAgents is not null)
+            foreach (var dir in personaAgents.AddDirs)
+                args.AddRange(["--add-dir", dir]);
+
+        // pmem-серверы консультантов: сессионный allow, БЕЗ него вызов из фонового сабагента
+        // упирается в permission-запрос, на который некому ответить (проверено вживую).
+        // Закрыть их от ГЛАВНОЙ сессии технически нельзя — permission-правила общие на процесс,
+        // а disallow имени сервера проникает и в сабагента, глуша его allow-list (проверено
+        // вживую: сабагент получил только Read/Grep). Осознанный компромисс: главную сессию
+        // ограничиваем инструкцией в hint (BuildMentionsHint) — «не трогай mcp__pmem_*».
+        if (personaAgents is { MemoryServers.Count: > 0 })
+            args.AddRange(["--allowedTools",
+                string.Join(",", personaAgents.MemoryServers.Select(s => "mcp__" + s.ServerKey))]);
 
         // Блокируем коннекторы аккаунта claude.ai — они вливаются помимо --mcp-config.
         if (_disallowedTools.Length > 0)

@@ -116,6 +116,7 @@ public class SessionManager
     private readonly PersonaMemoryService _personaMemory;
     private readonly PersonaBindingsService _bindings;
     private readonly PersonaPromptBuilder _promptBuilder;
+    private readonly ClaudeSubscriptionPool _subscriptionPool;
     private readonly ILogger<SessionManager> _log;
 
     private readonly PersonaAgentFileSync? _agentSync;
@@ -129,6 +130,7 @@ public class SessionManager
         NotesKnowledgeService notesKb, FeatureFlagService flags, PersonaManager personas,
         PersonaMemoryService personaMemory, PersonaBindingsService bindings,
         PersonaPromptBuilder promptBuilder,
+        ClaudeSubscriptionPool subscriptionPool,
         ILogger<SessionManager> log,
         // Опционально (в тестах не передаётся): синк файловых сабагентов-персон
         PersonaAgentFileSync? agentSync = null)
@@ -152,6 +154,7 @@ public class SessionManager
         _personaMemory = personaMemory;
         _bindings = bindings;
         _promptBuilder = promptBuilder;
+        _subscriptionPool = subscriptionPool;
         _log = log;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
         _falCost.OnCostResolved = PublishFalCostAsync;
@@ -399,6 +402,16 @@ public class SessionManager
     }
 
     // Рабочая папка чата вне проекта: {DefaultProjectsPath}/{username}/Chats (создаётся при отсутствии)
+
+    // Выбрать подписку Claude для новой сессии: если модель Claude (не сторонний провайдер),
+    // выбираем из пула подписок (random non-exhausted); для сторонних — по модели.
+    private string ResolveSubscriptionProvider(string? model)
+    {
+        var provider = _llmProviders.ResolveByModel(model);
+        if (provider is not null)
+            return provider.Key;
+        return _subscriptionPool.Pick();
+    }
     private string ResolveChatRoot(string ownerId)
     {
         var basePath = _appSettings.Get().DefaultProjectsPath;
@@ -437,6 +450,7 @@ public class SessionManager
             Name = name,
             Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
             AgentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim(),
+            Provider = ResolveSubscriptionProvider(model),
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
             // Персона-слой подхватится общим механизмом (BuildPersonaLayer).
             // Маршрутизация остаётся по вызывающему коду (задача), не по зоне персоны.
@@ -468,6 +482,7 @@ public class SessionManager
             Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
             // Персона-слой подхватится общим механизмом (BuildPersonaLayer)
+            Provider = ResolveSubscriptionProvider(model),
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
             TaskExecution = taskExecution,
             TaskId = taskId,
@@ -506,6 +521,7 @@ public class SessionManager
                 ClaudeSessionId = resumeSessionId,
                 Name = name,
                 Model = persona.Model,
+                Provider = ResolveSubscriptionProvider(persona.Model),
                 Effort = persona.Effort,
                 AutomationRuleId = automationRuleId,
             };
@@ -525,6 +541,7 @@ public class SessionManager
             ClaudeSessionId = resumeSessionId,
             Name = name,
             Model = persona.Model,
+            Provider = ResolveSubscriptionProvider(persona.Model),
             Effort = persona.Effort,
             AutomationRuleId = automationRuleId,
         };
@@ -554,6 +571,7 @@ public class SessionManager
                 Mode = mode,
                 Name = name,
                 Model = leader.Model,
+                Provider = ResolveSubscriptionProvider(leader.Model),
                 Effort = leader.Effort,
             };
             await StartNewSessionAsync(projectSession, project.RootPath, project.SystemPrompt,
@@ -573,6 +591,7 @@ public class SessionManager
             Name = name,
             Model = leader.Model,
             Effort = leader.Effort,
+            Provider = ResolveSubscriptionProvider(leader.Model),
         };
         await StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);
         return session;
@@ -1327,7 +1346,12 @@ public class SessionManager
 
         // Смена провайдера: контекст сессии живёт у провайдера (транскрипт эндпоинта),
         // «переехавшая» сессия молча потеряла бы его — для начатых сессий запрещаем.
-        if (_llmProviders.ProviderKey(newModel) != _llmProviders.ProviderKey(entry.Info.Model))
+        // Проверяем: если новый model ведёт к другому стороннему провайдеру (DeepSeek/GLM),
+        // а сессия начата — запрещаем. В рамках одного провайдера/пула модель менять можно.
+        var newProvKey = _llmProviders.ResolveByModel(newModel)?.Key;
+        var curProvKey = _llmProviders.ResolveByModel(entry.Info.Model)?.Key;
+        // Если обе модели не матчатся стороннему провайдеру — обе «Claude»; смена внутри пула разрешена.
+        if (newProvKey != curProvKey)
         {
             if (entry.Info.ClaudeSessionId is not null)
                 throw new InvalidOperationException(
@@ -1343,6 +1367,9 @@ public class SessionManager
 
         entry.Info.Name = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
         entry.Info.Model = newModel;
+        // При смене модели на стороннего провайдера — обновляем Provider
+        if (newModel is not null && _llmProviders.ResolveByModel(newModel) is { } newProv)
+            entry.Info.Provider = newProv.Key;
         entry.Info.Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim();
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
@@ -1609,7 +1636,17 @@ public class SessionManager
                     await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history);
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
                     break;
-                case RateLimitMessage m:    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt); break;
+                case RateLimitMessage m:
+                    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider);
+                    // Исчерпание лимита подписки → помечаем exhausted в пуле, чтобы новые чаты
+                    // пошли на другую подписку (если utilization >= 1.0 или статус exhausted)
+                    if (entry is not null && (m.Utilization >= 1.0 || m.Status == "exhausted"))
+                    {
+                        var resetsAt = m.ResetsAt is not null && DateTime.TryParse(m.ResetsAt, out var dt)
+                            ? (DateTime?)dt.ToUniversalTime() : null;
+                        _subscriptionPool.MarkExhausted(entry.Info.Provider, resetsAt);
+                    }
+                    break;
                 case ErrorMessage m:        await acc.OnErrorAsync(m.Text, _history); break;
             }
         }
@@ -1908,4 +1945,6 @@ public abstract record SendAndWaitResult
     public sealed record Busy(SessionStatus CurrentStatus) : SendAndWaitResult;
     public sealed record Completed(TurnResult Result) : SendAndWaitResult;
     public sealed record Running : SendAndWaitResult;
+
+
 }

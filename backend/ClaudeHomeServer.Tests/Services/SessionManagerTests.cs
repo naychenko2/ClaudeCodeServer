@@ -50,8 +50,9 @@ public class SessionManagerTests : IDisposable
         hub.Setup(h => h.Clients).Returns(clients.Object);
 
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
+        var subPool = new ClaudeSubscriptionPool(config);
         var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
-            config, new SkillsService(), new WorkspaceKnowledgeStore(config), llmProviders);
+            config, new SkillsService(), new WorkspaceKnowledgeStore(config), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var jwt = new JwtService(config, NullLogger<JwtService>.Instance);
@@ -70,7 +71,7 @@ public class SessionManagerTests : IDisposable
         var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
         var promptBuilder = new PersonaPromptBuilder(llmProviders);
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, NullLogger<SessionManager>.Instance);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance);
     }
 
     public void Dispose()

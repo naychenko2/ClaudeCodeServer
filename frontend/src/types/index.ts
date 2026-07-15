@@ -235,6 +235,8 @@ export interface Session {
   updatedAt: string;
   name?: string;
   model?: string;
+  // "claude" | "deepseek" | "glm" | ключ из подписок ClaudeSubscriptionPool
+  provider?: string;
   effort?: string;
   agentName?: string;
   // Временный чат: авто-удаление через N минут после последней активности (updatedAt)
@@ -372,6 +374,12 @@ export interface PlanInfo {
 export interface UsageResponse {
   snapshots: UsageSnapshot[];
   plan?: PlanInfo;
+  subscriptions?: Record<string, SubscriptionUsage>;
+}
+
+export interface SubscriptionUsage {
+  snapshots: UsageSnapshot[];
+  name?: string;
 }
 
 // Статистика аккаунта fal.ai (баланс + расход за период)

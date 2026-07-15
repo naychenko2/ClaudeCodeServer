@@ -62,8 +62,9 @@ public class SessionStatusTests : IDisposable
     private SessionManager CreateSessionManager()
     {
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(_config);
+        var subPool = new ClaudeSubscriptionPool(_config);
         var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
-            _config, new SkillsService(), new WorkspaceKnowledgeStore(_config), llmProviders);
+            _config, new SkillsService(), new WorkspaceKnowledgeStore(_config), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, _config);
         var usage = new UsageService(_config);
         var userStore = new UserStore(_config, NullLogger<UserStore>.Instance);
@@ -83,7 +84,7 @@ public class SessionStatusTests : IDisposable
         var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance);
         var promptBuilder = new PersonaPromptBuilder(llmProviders);
-        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, NullLogger<SessionManager>.Instance);
+        return new SessionManager(_projectManager, _hub.Object, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance);
     }
 
     private void WriteSessions(IEnumerable<Session> sessions)

@@ -80,6 +80,12 @@ public class Session
     public bool PersonaSwitched { get; set; }
     // Заметка-итог сессии (кнопка «Итог сессии»): повторная генерация обновляет её, а не плодит дубли
     public string? SummaryNoteId { get; set; }
+    // Провайдер/подписка, обслуживающая сессию:
+    // "claude" — основная подписка (дефолт, ~/.claude с OAuth);
+    // для сторонних провайдеров — ключ из LlmProviders (deepseek, glm);
+    // для дополнительных подписок Claude — ключ из ClaudeSubscriptions (sub-*).
+    // Единственный источник истины, НЕ выводится из Model на лету.
+    public string Provider { get; set; } = "claude";
     // Временный чат: авто-удаление через N минут после последней активности (UpdatedAt). null — обычный
     public int? ExpiresAfterMinutes { get; set; }
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения

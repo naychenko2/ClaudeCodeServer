@@ -782,7 +782,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const sessionModelLabel = useModelLabel(session.model);
   const asstName = assistantName(session.model);
-  const providerKey = modelProvider(session.model);
+  const providerKey = session.provider ?? modelProvider(session.model);
   const isCliProvider = providerKey !== 'claude';
   // Баланс провайдера — только для сессий сторонних провайдеров (для плашки статистики);
   // 404 (провайдер без источника баланса, напр. GLM) — просто без блока баланса

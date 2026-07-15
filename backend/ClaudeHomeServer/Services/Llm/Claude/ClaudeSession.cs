@@ -124,13 +124,16 @@ public class ClaudeSession : ILlmSessionAdapter
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
+    private readonly ClaudeSubscriptionPool? _subscriptionPool;
 
     public ClaudeSession(Session info, LlmSessionContext context,
         string? mcpConfigPath = null, SkillsService? skills = null,
         WorkspaceKnowledgeStore? workspaceStore = null, string[]? disallowedTools = null,
-        LlmProviderRegistry? providers = null)
+        LlmProviderRegistry? providers = null,
+        ClaudeSubscriptionPool? subscriptionPool = null)
     {
         _providers = providers;
+        _subscriptionPool = subscriptionPool;
         Info = info;
         _rootPath = context.RootPath;
         _onMessage = context.OnMessage;
@@ -1037,8 +1040,23 @@ public class ClaudeSession : ILlmSessionAdapter
         // эндпоинт. Env считаются каждый ход — модель сессии могла смениться между ходами.
         var cliEnv = _providers?.BuildCliEnv(Info.Model);
         if (cliEnv is not null)
+        {
             foreach (var (k, v) in cliEnv)
                 psi.Environment[k] = v;
+        }
+        else if (_subscriptionPool?.HasExtra == true
+            && Info.Provider != "claude"
+            && _providers?.GetByKey(Info.Provider) is null)
+        {
+            var sub = _subscriptionPool.All.FirstOrDefault(s => s.Key == Info.Provider);
+            if (sub?.Enabled == true)
+            {
+                var oauthEnv = _providers?.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, Info.Model);
+                if (oauthEnv is not null)
+                    foreach (var (k, v) in oauthEnv)
+                        psi.Environment[k] = v;
+            }
+        }
 
         var process = new Process { StartInfo = psi };
 

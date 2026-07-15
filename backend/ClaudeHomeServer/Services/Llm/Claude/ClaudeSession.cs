@@ -492,13 +492,14 @@ public class ClaudeSession : ILlmSessionAdapter
     // reject → deny с комментарием, Claude остаётся в режиме планирования
     public void RespondPlan(string requestId, bool approve, string? feedback)
     {
-        if (!_pendingPlans.TryRemove(requestId, out var input)) return;
+        if (!_pendingPlans.TryRemove(requestId, out _)) return;
         if (approve)
         {
-            // Ждём, что Claude реализует план в этом ходу; если завершит без правок — дошлём команду
+            // Ждём, что Claude реализует план в этом ходу; если завершит без правок — дошлём команду.
+            // allow без updatedInput — CLI продолжит с исходным планом (см. HandleControlRequestAsync)
             _awaitPlanExecution = true;
             _sawToolSinceApprove = false;
-            SendControlResponse(requestId, new { behavior = "allow", updatedInput = input });
+            SendControlResponse(requestId, new { behavior = "allow" });
         }
         else
         {
@@ -549,8 +550,12 @@ public class ClaudeSession : ILlmSessionAdapter
 
         var behavior = await DecidePermissionAsync(requestId, toolName, inputEl, input);
         if (behavior == "cancelled") return; // Interrupt — процесс убит, отвечать некому
+        // allow БЕЗ updatedInput: CLI продолжает с исходным вводом модели. Эхо updatedInput
+        // ломало Workflow — возвращённый хэндлером ввод CLI прогоняет через доп. проверку
+        // «управляющие символы, скрытые в диалоге одобрения» (исходный ввод модели ей не
+        // подвергается), и резолвнутый script именованного workflow её не проходил.
         SendControlResponse(requestId, behavior == "allow"
-            ? new { behavior = "allow", updatedInput = input }
+            ? new { behavior = "allow" }
             : (object)new { behavior = "deny", message = "Пользователь отклонил действие" });
     }
 
@@ -1455,11 +1460,11 @@ public class ClaudeSession : ILlmSessionAdapter
         var behavior = await DecidePermissionAsync(requestId, toolName, inputEl, toolInput);
         if (behavior == "cancelled") return; // Interrupt — процесс убит, отвечать некому
 
+        // Без updated_input — CLI продолжает с исходным вводом (см. HandleControlRequestAsync)
         var response = JsonSerializer.Serialize(new
         {
             type = "control_response",
-            behavior,
-            updated_input = toolInput
+            behavior
         });
         WriteLineToStdin(response);
     }

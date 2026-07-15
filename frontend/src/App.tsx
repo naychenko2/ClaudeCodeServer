@@ -529,6 +529,14 @@ export default function App() {
       else switchHubTab('notes')
       return
     }
+    // Диплинк на базу знаний (#/knowledge/{id}) — событие knowledge_changed в ленте
+    // активности командного центра. Канал cc_pending_knowledge + cc-open-knowledge.
+    if (target?.screen === 'knowledge' && target.knowledgeId) {
+      sessionStorage.setItem('cc_pending_knowledge', target.knowledgeId)
+      if (effectiveHubTab === 'knowledge') window.dispatchEvent(new Event('cc-open-knowledge'))
+      else switchHubTab('knowledge')
+      return
+    }
     // Диплинк на раздел без глубокой цели — просто переключаемся на него
     if (target) {
       switchHubTab(target.screen === 'project' ? 'projects' : target.screen)

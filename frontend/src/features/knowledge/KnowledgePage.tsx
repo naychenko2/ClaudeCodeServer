@@ -47,6 +47,23 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
     if (t?.screen === 'knowledge' && t.knowledgeId) { setSelectedId(t.knowledgeId); setMobileView('item'); }
   }, []);
 
+  // Открытие базы по id из ленты активности (событие knowledge_changed в командном
+  // центре): pending в sessionStorage + событие cc-open-knowledge (канал как у заметок).
+  // При монтировании после switchHubTab id подхватывается сразу через consume().
+  useEffect(() => {
+    const consume = () => {
+      const id = sessionStorage.getItem('cc_pending_knowledge');
+      if (id) {
+        sessionStorage.removeItem('cc_pending_knowledge');
+        setSelectedId(id); setMobileView('item');
+        navPush({ screen: 'knowledge', knowledge: id });
+      }
+    };
+    consume();
+    window.addEventListener('cc-open-knowledge', consume);
+    return () => window.removeEventListener('cc-open-knowledge', consume);
+  }, []);
+
   // Back/forward браузера внутри вкладки «Знания»
   useEffect(() => {
     const onPop = (e: PopStateEvent) => {

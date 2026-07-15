@@ -12,11 +12,23 @@ public static class WorkflowAgentParser
     // Битые строки — норма (файл дописывается на лету), поэтому уровень Debug.
     public static ILogger Log { get; set; } = NullLogger.Instance;
 
-    public static readonly string AllowedRoot = Path.GetFullPath(
+    // Дефолтный корень — ~/.claude/projects/ (сессии родного Claude)
+    public static readonly string DefaultRoot = Path.GetFullPath(
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "projects"));
+    // Дополнительные корни — пути транскриптов профилей сторонних провайдеров
+    // (GLM/DeepSeek: /data/claude-profiles/{key}/projects/). Регистрируются из Program.cs.
+    private static readonly List<string> _extraRoots = new();
+
+    public static void AddAllowedRoot(string root)
+    {
+        var full = Path.GetFullPath(root);
+        if (Directory.Exists(full) && !_extraRoots.Contains(full, StringComparer.OrdinalIgnoreCase))
+            _extraRoots.Add(full);
+    }
 
     public static bool IsPathAllowed(string path) =>
-        path.StartsWith(AllowedRoot, StringComparison.OrdinalIgnoreCase);
+        path.StartsWith(DefaultRoot, StringComparison.OrdinalIgnoreCase) ||
+        _extraRoots.Any(r => path.StartsWith(r, StringComparison.OrdinalIgnoreCase));
 
     // Читает все agent-*.jsonl из wfPath и возвращает список агентов.
     public static IReadOnlyList<WorkflowAgentDto> ParseDirectory(string wfPath)

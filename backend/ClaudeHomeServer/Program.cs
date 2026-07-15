@@ -202,6 +202,21 @@ var app = builder.Build();
 // Логгер статического парсера workflow-транскриптов (DI туда не дотягивается)
 WorkflowAgentParser.Log = app.Services.GetRequiredService<ILoggerFactory>()
     .CreateLogger(nameof(WorkflowAgentParser));
+// Дополнительные разрешённые корни транскриптов — пути проектов сторонних CLI-провайдеров
+// (GLM/DeepSeek используют изолированные профили, транскрипты пишутся не в ~/.claude)
+try
+{
+    var registry = app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>();
+    foreach (var dir in registry.GetProviderProjectsDirs())
+    {
+        WorkflowAgentParser.AddAllowedRoot(dir);
+        Console.WriteLine($"[WorkflowAgentParser] разрешён корень провайдера: {dir}");
+    }
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"[WorkflowAgentParser] не удалось зарегистрировать корни провайдеров: {ex.Message}");
+}
 
 // Прогрев сервисов на старте — UserStore печатает предупреждение если создал admin/admin
 app.Services.GetRequiredService<UserStore>();

@@ -14,6 +14,7 @@ public class PersonaAgentFileSyncTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly PersonaManager _personas;
+    private readonly ProjectManager _projects;
     private readonly PersonaAgentFileSync _sut;
     private readonly string _agentsBase;
 
@@ -32,6 +33,7 @@ public class PersonaAgentFileSyncTests : IDisposable
         var users = new UserStore(config, NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(config);
         var projects = new ProjectManager(config, users, appSettings);
+        _projects = projects;
         var providers = new LlmProviderRegistry(config);
         _personas = new PersonaManager(config);
         var wkStore = new WorkspaceKnowledgeStore(config);
@@ -43,8 +45,8 @@ public class PersonaAgentFileSyncTests : IDisposable
         var bindings = new PersonaBindingsService(_personas, projects, wkStore, notes, notesKb,
             knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance);
         var generator = new PersonaAgentFileGenerator(new PersonaPromptBuilder(providers));
-        _sut = new PersonaAgentFileSync(config, _personas, providers, bindings, generator,
-            NullLogger<PersonaAgentFileSync>.Instance);
+        _sut = new PersonaAgentFileSync(config, _personas, projects, providers, bindings, generator,
+            users, appSettings, NullLogger<PersonaAgentFileSync>.Instance);
         _agentsBase = Path.Combine(_tempDir, "persona-agents");
     }
 
@@ -78,10 +80,15 @@ public class PersonaAgentFileSyncTests : IDisposable
     }
 
     [Fact]
-    public void ПроектнаяПерсона_ПодпапкаСПроектом()
+    public void ПроектнаяПерсона_ПишетсяВПапкуПроекта()
     {
-        var p = Create("Проектный", scope: PersonaScope.Project, projectId: "proj-1");
-        File.Exists(AgentPath("shared@proj-1", p.Handle)).Should().BeTrue();
+        // Новая схема: файл проектной персоны живёт в {project.RootPath}/.claude/agents/
+        var projRoot = Path.Combine(_tempDir, "proj-root");
+        Directory.CreateDirectory(projRoot);
+        var project = _projects.Create("Проект", projRoot, "owner-1", "owner");
+
+        var p = Create("Проектный", scope: PersonaScope.Project, projectId: project.Id);
+        File.Exists(Path.Combine(projRoot, ".claude", "agents", p.Handle + ".md")).Should().BeTrue();
     }
 
     [Fact]
@@ -170,12 +177,12 @@ public class PersonaAgentFileSyncTests : IDisposable
     }
 
     [Fact]
-    public void GetAddDirs_ПроектнаяСессия_ДобавляетПроектныеПапки()
+    public void GetAddDirs_ПроектнаяСессия_ПустоCwdПодхватитСам()
     {
+        // Новая схема: файлы проектных персон уже лежат в .claude/agents/ на cwd проекта —
+        // дополнительные --add-dir не нужны
         var dirs = _sut.GetAddDirs("owner-1", sessionModel: null, projectId: "proj-9");
 
-        dirs.Should().HaveCount(4);
-        dirs.Should().Contain(d => d.EndsWith(Path.Combine("owner-1", "claude@proj-9")))
-            .And.Contain(d => d.EndsWith(Path.Combine("owner-1", "shared@proj-9")));
+        dirs.Should().BeEmpty();
     }
 }

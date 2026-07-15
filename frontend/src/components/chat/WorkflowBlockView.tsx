@@ -211,7 +211,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                 if (findConsultedPersona(agent, personas)) {
                   return (
                     <div key={agent.id} style={{ padding: '8px 14px', borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
-                      <PersonaTaskView item={agent} online activity={children.length > 0 ? children : undefined} onOpenFile={onOpenFile} />
+                      <PersonaTaskView item={agent} online activity={children.length > 0 ? children : undefined} onOpenFile={onOpenFile} badge={null} />
                     </div>
                   );
                 }
@@ -302,6 +302,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                         <PersonaConsultCard
                           persona={persona}
                           agentRole={role}
+                          badge={null}
                           question={agent.prompt}
                           running={agent.isDone !== true}
                           isError={false}

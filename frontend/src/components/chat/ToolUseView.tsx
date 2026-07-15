@@ -3,7 +3,7 @@ import { Plug, Eye, SquarePen, Terminal, Globe, CircleUser, Sparkles, SquareChec
 import type { ChatItem } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
-import { splitAgentResultTail, formatTailTokens, formatTailDuration } from '../../lib/agentTail';
+import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext } from './contexts';
 import { MediaBlock, extractMediaFromResult, extractMediaMeta, mediaLabel } from './MediaBlock';
 
@@ -144,9 +144,14 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // Системный хвост результата сабагента (agentId + <usage>…</usage>) — сырым текстом
   // в ленте выглядит мусором: вырезаем из тела и показываем аккуратной строкой метрик
   const isAgentTool = n === 'task' || n === 'agent';
-  const agentSplit = useMemo(
-    () => (isAgentTool && item.result != null ? splitAgentResultTail(item.result) : null),
-    [isAgentTool, item.result]);
+  const agentSplit = useMemo(() => {
+    if (!isAgentTool || item.result == null) return null;
+    // Квитанция фонового запуска (run_in_background) — служебная метаинформация CLI,
+    // сырым текстом её не показываем; ход агента виден в его блоке действий
+    if (isAsyncLaunchAck(item.result))
+      return { body: 'Агент работает в фоне — его ход виден в списке действий.', tail: null };
+    return splitAgentResultTail(item.result);
+  }, [isAgentTool, item.result]);
   // Медиа (изображения + видео) из результата MCP-инструментов
   const media = hasResult && !item.isError ? extractMediaFromResult(item.result!) : [];
   const mediaMeta = hasResult && !item.isError ? extractMediaMeta(item.result!) : {};

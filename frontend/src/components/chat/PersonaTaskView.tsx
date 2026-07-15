@@ -3,7 +3,7 @@ import { Bot } from 'lucide-react';
 import type { ChatItem, Persona } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
-import { splitAgentResultTail, formatTailTokens, formatTailDuration } from '../../lib/agentTail';
+import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck } from '../../lib/agentTail';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
 import { MarkdownContent } from './MarkdownContent';
@@ -49,7 +49,7 @@ const LONG_ANSWER_CHARS = 1200;
 // (agentRole), остальная структура идентична.
 // Системный хвост CLI в ответе (agentId + <usage>) вырезается и рендерится
 // аккуратной строкой метрик «токены · действия · время».
-export function PersonaConsultCard({ persona, agentRole, question, summary, running, isError, answer, children }: {
+export function PersonaConsultCard({ persona, agentRole, question, summary, running, isError, answer, children, badge = 'консультант' }: {
   persona?: Persona | null;
   agentRole?: string;         // тип/роль обычного агента (не-персоны), если информативна
   question: string;           // полный вопрос (раскрывается кликом)
@@ -58,6 +58,9 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
   isError: boolean;
   answer: string;
   children?: React.ReactNode; // секция активности между вопросом и ответом
+  // Чип роли вызова в шапке: 'консультант' у Task-консультаций чата; null — скрыть
+  // (в Workflow персона — полноценный агент, «консультант» там неверен)
+  badge?: string | null;
 }) {
   const { body: answerBody, tail } = useMemo(() => splitAgentResultTail(answer), [answer]);
 
@@ -105,13 +108,13 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
               ? <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>{agentRole}</span>
               : null}
           {/* Отличие от one-shot persona_ask: работает с инструментами (файлы/заметки/память) */}
-          {persona && (
+          {persona && badge && (
             <span style={{
               fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 999,
               background: `${accent}22`, color: C.textSecondary,
               textTransform: 'uppercase', letterSpacing: '0.05em',
             }}>
-              консультант
+              {badge}
             </span>
           )}
         </div>
@@ -218,7 +221,7 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
 // вместо безликой строки инструмента; не совпал (Explore/general-purpose/кастомные
 // агенты) — обычный ToolUseView (фолбэк здесь, а не в ChatItemView: usePersonas —
 // хук, звать его условно нельзя).
-export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onOpenFile, activity, renderChild }: {
+export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onOpenFile, activity, renderChild, badge }: {
   item: ToolUseItem;
   online: boolean;
   onOpenFile?: (path: string) => void;
@@ -228,6 +231,8 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
   // Универсальный рендер элемента ленты (renderItem из ChatPanel): инструменты рисуются
   // ТЕМИ ЖЕ карточками, что и обычный чат (сворачивание тулов, TodoWrite-чек-лист и т.д.)
   renderChild?: (item: ChatItem, idx: number) => React.ReactNode;
+  // Чип роли в шапке карточки (см. PersonaConsultCard.badge); undefined — дефолт «консультант»
+  badge?: string | null;
 }) {
   // В чатах без персоны стор мог быть ещё не загружен — подтягиваем список
   useEffect(() => { void ensurePersonasLoaded(); }, []);
@@ -239,7 +244,20 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
   const question = typeof inp.prompt === 'string' ? inp.prompt : '';
   const summary = typeof inp.description === 'string' ? inp.description : '';
 
-  const running = item.result === undefined;
+  // Фоновый запуск (run_in_background): tool_result — служебная квитанция CLI («Async
+  // agent launched successfully… agentId… output_file…»), НЕ ответ — её не показываем.
+  // Ответом делаем последний текст из потока агента (транскрипт доезжает по мере работы),
+  // из активности его при этом убираем, чтобы не дублировался.
+  const asyncAck = item.result !== undefined && isAsyncLaunchAck(item.result);
+  const lastTextIdx = asyncAck && activity
+    ? activity.reduce((last, e, i) => (e.item.kind === 'text' ? i : last), -1)
+    : -1;
+  const shownActivity = lastTextIdx >= 0 ? activity!.filter((_, i) => i !== lastTextIdx) : activity;
+  const answer = asyncAck
+    ? (lastTextIdx >= 0 ? (activity![lastTextIdx].item as { text: string }).text : '')
+    : (item.result ?? '');
+  // Фоновый агент без единого текста — ещё работает (спиннер до первой реплики)
+  const running = item.result === undefined || (asyncAck && lastTextIdx < 0);
 
   // Обычный сабагент (не персона) — стандартная карточка инструмента
   if (!persona) return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
@@ -253,12 +271,13 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
       summary={summary}
       running={running}
       isError={!!item.isError}
-      answer={item.result ?? ''}
+      answer={answer}
+      badge={badge}
     >
       {/* Активность консультанта: весь поток сабагента — инструменты, текст, размышления.
           Пока идёт работа — раскрыта (виден живой прогресс), по завершении сворачивается */}
-      {activity && activity.length > 0 && (
-        <ActivitySection activity={activity} running={running} accent={accent}
+      {shownActivity && shownActivity.length > 0 && (
+        <ActivitySection activity={shownActivity} running={running} accent={accent}
           online={online} onOpenFile={onOpenFile} renderChild={renderChild} />
       )}
     </PersonaConsultCard>

@@ -48,6 +48,14 @@ export function splitAgentResultTail(result: string): { body: string; tail: Agen
   return found ? { body: body.trimEnd(), tail } : { body: result, tail: null };
 }
 
+// Квитанция ФОНОВОГО запуска сабагента (run_in_background): tool_result приходит сразу,
+// но это служебная метаинформация CLI («Async agent launched successfully… agentId…
+// output_file…»), а не ответ — показывать её пользователю нельзя. Ответ агента
+// доезжает в ленту его транскриптом (agent_text) по мере работы.
+export function isAsyncLaunchAck(result: string): boolean {
+  return /^Async agent launched successfully/i.test(result.trimStart());
+}
+
 // «30161» → «30,2k», «133903» → «134k» — как fmtTok в плашке result
 export function formatTailTokens(n: number): string {
   return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace('.', ',') + 'k' : String(n);

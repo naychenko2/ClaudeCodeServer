@@ -2,6 +2,11 @@ import { useState } from 'react';
 import { C, FONT } from '../../lib/design';
 import { MarkdownContent } from './MarkdownContent';
 
+// Нейтральный акцент «безликого» агента (не-персоны): тёплый серый под палитру.
+// Обязательно hex — акцент используется с alpha-суффиксами (`${accent}17`),
+// с CSS-переменными (C.accent = var(--c-accent)) это не работает.
+export const NEUTRAL_AGENT_ACCENT = '#8A8578';
+
 // Блоки контента сабагента внутри секции «Активность» (PersonaTaskView, AgentActionsBlock,
 // таймлайн Workflow): текст — тем же markdown-рендером, что и основной чат, но компактнее
 // и в расцветке агента (accent персоны или нейтральный C.accent); thinking — сворачиваемое

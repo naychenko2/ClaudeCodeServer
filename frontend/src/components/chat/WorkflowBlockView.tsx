@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useRef } from 'react';
-import { Check, Terminal, SquarePen, Search, CircleUser } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { api, type WorkflowAgentInfo, type WorkflowAgentBlock } from '../../lib/api';
 import { parseWorkflowMeta } from '../../lib/workflowMeta';
 import { usePersonas, ensurePersonasLoaded } from '../../lib/personas';
@@ -7,10 +7,9 @@ import { C, FONT, R } from '../../lib/design';
 import { ToolUseView, toolWord, type ToolUseItem } from './ToolUseView';
 import { splitAgentResultTail } from '../../lib/agentTail';
 import { PersonaConsultCard, PersonaTaskView, findConsultedPersona, findPersonaByAgentType } from './PersonaTaskView';
-import { AgentTextBlock, AgentThinkingBlock, AgentStructuredBlock } from './AgentContentBlocks';
+import { AgentTextBlock, AgentThinkingBlock, AgentStructuredBlock, NEUTRAL_AGENT_ACCENT } from './AgentContentBlocks';
 import { AGENT_COLORS } from '../AgentSelector';
 import { type ActivityEntry } from './timeline';
-import { MarkdownContent } from './MarkdownContent';
 
 function parseTranscriptDir(result: string | undefined): string | null {
   if (!result) return null;
@@ -29,7 +28,6 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
 }) {
   const [expanded, setExpanded] = useState(false);
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
-  const [expandedTranscriptAgents, setExpandedTranscriptAgents] = useState<Set<string>>(new Set());
 
   // Персоны владельца: агенты workflow с agentType == handle персоны рендерятся
   // её карточкой-консультацией (как Task-вызовы персон в обычной ленте)
@@ -100,12 +98,6 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
       .catch(() => setLocalAgents([]))
       .finally(() => setLocalLoading(false));
   }, [isDone, localAgents, workflow.result, serverAgents]);
-
-  const toggleTranscriptAgent = (id: string) => setExpandedTranscriptAgents(prev => {
-    const next = new Set(prev);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  });
 
   const toggleAgent = (id: string) => setExpandedAgents(prev => {
     const next = new Set(prev);
@@ -258,7 +250,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                         {children.map((e, ti) => (
                           <div key={e.item.kind === 'tool_use' ? e.item.id : `b-${e.idx}`} style={ti > 0 ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
                             {e.item.kind === 'text'
-                              ? <AgentTextBlock text={e.item.text} accent={C.accent} />
+                              ? <AgentTextBlock text={e.item.text} accent={NEUTRAL_AGENT_ACCENT} />
                               : e.item.kind === 'thinking'
                                 ? <AgentThinkingBlock text={e.item.text} />
                                 : <ToolUseView item={e.item as ToolUseItem} onOpenFile={onOpenFile} />}
@@ -296,130 +288,30 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                 <div style={{ padding: '4px 0' }}>
                   {transcriptAgents.map((agent, idx) => {
                     const transcriptDir = parseTranscriptDir(workflow.result as string | undefined);
-                    // Агент-персона (agentType == handle) → карточка консультации персоны:
-                    // идентичность, вопрос (prompt), полный поток (таймлайн) и ответ (summary)
+                    // Персона (agentType == handle) → её карточка; обычный агент — та же
+                    // карточка с нейтральной серой шапкой «Агент» + роль вызова (agentType,
+                    // если информативен — дефолтный workflow-subagent не показываем)
                     const persona = findPersonaByAgentType(agent.agentType, personas);
-                    if (persona) {
-                      return (
-                        <div key={agent.id} style={{ padding: '6px 14px', borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
-                          <PersonaConsultCard
-                            persona={persona}
-                            question={agent.prompt}
-                            running={agent.isDone !== true}
-                            isError={false}
-                            answer={agent.summary ?? ''}
-                          >
-                            {(agent.tools?.length || agent.files?.length) ? (
-                              <TranscriptAgentChips tools={agent.tools} files={agent.files} />
-                            ) : null}
-                            {transcriptDir && (
-                              <TranscriptAgentTimeline dir={transcriptDir} agentId={agent.id}
-                                accent={AGENT_COLORS[persona.avatar?.color ?? ''] ?? C.accent}
-                                running={agent.isDone !== true} onOpenFile={onOpenFile} />
-                            )}
-                          </PersonaConsultCard>
-                        </div>
-                      );
-                    }
-                    const isOpen = expandedTranscriptAgents.has(agent.id);
-                    const hasDetails = !!(agent.summary || agent.tools?.length || agent.files?.length);
-
-                    // Определяем тип агента по инструментам
-                    const toolNames = agent.tools?.map(t => t.name.toLowerCase()) ?? [];
-                    const hasBash = toolNames.some(n => n.includes('bash') || n.includes('execute') || n.includes('run'));
-                    const hasRead = toolNames.some(n => n.includes('read') || n.includes('grep') || n.includes('glob') || n.includes('search'));
-                    const hasWrite = toolNames.some(n => n.includes('write') || n.includes('edit') || n.includes('create'));
-
-                    // Иконка типа агента
-                    const agentIconSvg = hasBash
-                      ? <Terminal size={13} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
-                      : hasWrite
-                      ? <SquarePen size={13} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
-                      : hasRead
-                      ? <Search size={13} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
-                      : <CircleUser size={13} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />;
-
-                    // Заголовок строки: первый md-заголовок из summary, иначе первая строка, иначе prompt
-                    const summaryFirstLine = agent.summary
-                      ? (() => {
-                          const h = agent.summary!.match(/^#{1,6}\s+(.+)$/m);
-                          if (h) return h[1].replace(/\*\*/g, '').trim();
-                          return agent.summary!.replace(/^#+\s*/, '').replace(/\*\*/g, '').split('\n')[0].trim();
-                        })()
-                      : '';
-                    const promptFirstLine = agent.prompt.split('\n')[0].trim();
-                    const rowLabel = (summaryFirstLine || promptFirstLine).slice(0, 90) || `Агент ${idx + 1}`;
-
+                    const role = !persona && agent.agentType && agent.agentType !== 'workflow-subagent'
+                      ? agent.agentType : undefined;
+                    const accent = persona
+                      ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? NEUTRAL_AGENT_ACCENT)
+                      : NEUTRAL_AGENT_ACCENT;
                     return (
-                      <div key={agent.id} style={{ borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
-                        <div
-                          onClick={hasDetails ? () => toggleTranscriptAgent(agent.id) : undefined}
-                          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', cursor: hasDetails ? 'pointer' : 'default', userSelect: 'none' as const }}
+                      <div key={agent.id} style={{ padding: '6px 14px', borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
+                        <PersonaConsultCard
+                          persona={persona}
+                          agentRole={role}
+                          question={agent.prompt}
+                          running={agent.isDone !== true}
+                          isError={false}
+                          answer={agent.summary ?? ''}
                         >
-                          {/* Галочка только если агент завершён (isDone=true), иначе спиннер */}
-                          {agent.isDone === true
-                            ? <Check size={13} color={C.success} strokeWidth={2.5} style={{ flexShrink: 0 }} />
-                            : <div className="tool-spinner" style={{ width: 11, height: 11, flexShrink: 0 }} />}
-                          {/* Иконка типа агента */}
-                          {agentIconSvg}
-                          {/* Основной текст строки — summary или prompt */}
-                          <span style={{ flex: 1, fontFamily: FONT.sans, fontSize: 12, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.4 }}>
-                            {rowLabel}
-                          </span>
-                          {/* Счётчик инструментов */}
-                          {agent.tools && agent.tools.length > 0 && (
-                            <span style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0 }}>
-                              {agent.tools.reduce((s, t) => s + t.count, 0)}
-                            </span>
+                          {transcriptDir && (
+                            <TranscriptAgentTimeline dir={transcriptDir} agentId={agent.id}
+                              accent={accent} running={agent.isDone !== true} onOpenFile={onOpenFile} />
                           )}
-                          {hasDetails && (
-                            <span style={{ color: C.textMuted, fontSize: 10, flexShrink: 0, display: 'inline-block', transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>▾</span>
-                          )}
-                        </div>
-                        {isOpen && hasDetails && (
-                          <div style={{ margin: '0 14px 8px', background: C.bgInset, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, overflow: 'hidden' }}>
-                            {/* Summary — основной результат */}
-                            {agent.summary && (
-                              <div style={{ padding: '8px 12px', fontFamily: FONT.sans, fontSize: 12, lineHeight: 1.5, color: C.textSecondary, borderBottom: `1px solid ${C.borderLight}` }}>
-                                <MarkdownContent text={agent.summary} />
-                              </div>
-                            )}
-                            {/* Задача (prompt) — второстепенный контекст */}
-                            <div style={{ padding: '5px 12px 6px', fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, lineHeight: 1.4, borderBottom: (agent.tools?.length || agent.files?.length) ? `1px solid ${C.borderLight}` : undefined }}>
-                              <span style={{ fontWeight: 600, marginRight: 4 }}>Задача:</span>
-                              <span style={{ fontStyle: 'italic' }}>{agent.prompt.split('\n')[0].slice(0, 120)}{agent.prompt.length > 120 ? '…' : ''}</span>
-                            </div>
-                            {/* Инструменты */}
-                            {agent.tools && agent.tools.length > 0 && (
-                              <div style={{ padding: '6px 12px', display: 'flex', flexWrap: 'wrap' as const, gap: 4, borderBottom: agent.files?.length ? `1px solid ${C.borderLight}` : undefined }}>
-                                {agent.tools.map(t => (
-                                  <span key={t.name} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '1px 5px', lineHeight: 1.6 }}>
-                                    {t.name}{t.count > 1 ? ` ×${t.count}` : ''}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                            {/* Файлы */}
-                            {agent.files && agent.files.length > 0 && (
-                              <div style={{ padding: '5px 12px 7px', display: 'flex', flexWrap: 'wrap' as const, gap: '2px 10px' }}>
-                                {agent.files.slice(0, 5).map(f => (
-                                  <span key={f} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, lineHeight: 1.6 }}>
-                                    {f.split(/[\\/]/).pop() ?? f}
-                                  </span>
-                                ))}
-                                {agent.files.length > 5 && (
-                                  <span style={{ fontFamily: FONT.sans, fontSize: 10, color: C.textMuted }}>+{agent.files.length - 5}</span>
-                                )}
-                              </div>
-                            )}
-                            {/* Полный поток агента (текст/thinking/инструменты) — лениво из транскрипта */}
-                            {transcriptDir && (
-                              <TranscriptAgentTimeline dir={transcriptDir} agentId={agent.id}
-                                accent={C.accent} running={agent.isDone !== true} edge="top"
-                                onOpenFile={onOpenFile} />
-                            )}
-                          </div>
-                        )}
+                        </PersonaConsultCard>
                       </div>
                     );
                   })}
@@ -532,35 +424,3 @@ function TranscriptAgentTimeline({ dir, agentId, accent, running, edge = 'bottom
   );
 }
 
-// Компактная сводка активности transcript-агента для слота карточки персоны:
-// чипсы инструментов + затронутые файлы (тот же стиль, что в раскрытых деталях агента)
-function TranscriptAgentChips({ tools, files }: {
-  tools?: { name: string; count: number }[];
-  files?: string[];
-}) {
-  return (
-    <div style={{ borderBottom: `1px solid ${C.borderLight}` }}>
-      {tools && tools.length > 0 && (
-        <div style={{ padding: '6px 12px', display: 'flex', flexWrap: 'wrap' as const, gap: 4 }}>
-          {tools.map(t => (
-            <span key={t.name} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '1px 5px', lineHeight: 1.6 }}>
-              {t.name}{t.count > 1 ? ` ×${t.count}` : ''}
-            </span>
-          ))}
-        </div>
-      )}
-      {files && files.length > 0 && (
-        <div style={{ padding: tools?.length ? '2px 12px 7px' : '6px 12px 7px', display: 'flex', flexWrap: 'wrap' as const, gap: '2px 10px' }}>
-          {files.slice(0, 5).map(f => (
-            <span key={f} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, lineHeight: 1.6 }}>
-              {f.split(/[\\/]/).pop() ?? f}
-            </span>
-          ))}
-          {files.length > 5 && (
-            <span style={{ fontFamily: FONT.sans, fontSize: 10, color: C.textMuted }}>+{files.length - 5}</span>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}

@@ -3,7 +3,7 @@ import { ChevronUp, ChevronDown } from 'lucide-react';
 import type { ChatItem } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { toolWord } from './ToolUseView';
-import { AgentTextBlock, AgentThinkingBlock } from './AgentContentBlocks';
+import { AgentTextBlock, AgentThinkingBlock, NEUTRAL_AGENT_ACCENT } from './AgentContentBlocks';
 
 // Элемент активности сабагента: дочерний элемент ленты (tool_use/text/thinking с
 // parentToolUseId) + его глобальный индекс — нужен renderChild'у (renderItem из ChatPanel)
@@ -90,7 +90,7 @@ export function AgentActionsBlock({ entries, renderChild }: {
           {entries.map((e, ci) => (
             <div key={itemKey(e.item, e.idx)} style={ci === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
               {e.item.kind === 'text'
-                ? <AgentTextBlock text={e.item.text} accent={C.accent} />
+                ? <AgentTextBlock text={e.item.text} accent={NEUTRAL_AGENT_ACCENT} />
                 : e.item.kind === 'thinking'
                   ? <AgentThinkingBlock text={e.item.text} />
                   : renderChild(e.item, e.idx)}

@@ -21,8 +21,13 @@ public class PluginSkillLocalizer
 
     private sealed record CacheEntry(string Hash, string Ru);
 
-    // Батч перевода: не грузим весь каталог плагина в один промпт
-    private const int BatchSize = 20;
+    // Батч перевода: не грузим весь каталог плагина в один промпт. 10 — чтобы один
+    // one-shot вызов (старт CLI ~15с + генерация) гарантированно укладывался в таймаут.
+    private const int BatchSize = 10;
+
+    // Свой таймаут на батч: фоновому переводу некуда спешить, а дефолтных 60с
+    // (Skills:TranslateTimeoutMs) на нагруженном сервере не хватало
+    private readonly TimeSpan _batchTimeout;
 
     public PluginSkillLocalizer(SkillTranslationService translation, IConfiguration config,
         ILogger<PluginSkillLocalizer> log)
@@ -34,6 +39,8 @@ public class PluginSkillLocalizer
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
             ?? Path.Combine(AppContext.BaseDirectory, "data");
         _storePath = Path.Combine(dataDir, "skill-translations.json");
+        _batchTimeout = TimeSpan.FromMilliseconds(
+            int.TryParse(config["Skills:PluginTranslateTimeoutMs"], out var ms) ? ms : 180_000);
         Load();
     }
 
@@ -77,14 +84,18 @@ public class PluginSkillLocalizer
         {
             try
             {
+                var savedAny = false;
                 foreach (var batch in missing.Chunk(BatchSize))
                 {
-                    var translated = await _translation.TranslateDescriptionsAsync(batch);
+                    var translated = await _translation.TranslateDescriptionsAsync(batch, _batchTimeout);
                     foreach (var (key, text) in batch)
                         if (translated.TryGetValue(key, out var ru) && !string.IsNullOrWhiteSpace(ru))
+                        {
                             _cache[key] = new CacheEntry(Sha256(text), ru);
+                            savedAny = true;
+                        }
                 }
-                Save();
+                if (savedAny) Save();
             }
             catch (Exception ex)
             {

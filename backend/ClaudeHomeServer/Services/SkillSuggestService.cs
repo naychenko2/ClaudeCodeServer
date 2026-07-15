@@ -158,7 +158,7 @@ public class SkillSuggestService(
             .ToList();
         if (toTranslate.Count == 0) return items;
 
-        var ru = await translation.TranslateDescriptionsAsync(toTranslate, ct);
+        var ru = await translation.TranslateDescriptionsAsync(toTranslate, ct: ct);
         if (ru.Count == 0) return items;
 
         return items.Select(i =>

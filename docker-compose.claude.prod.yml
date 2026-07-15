@@ -39,8 +39,11 @@ services:
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: "*"
     volumes:
-      # Прод-папка проектов (переопределяет dev-mount /projects из базового файла)
-      - ${CLAUDE_PROJECTS_DIR:-C:/ClaudeHome}:/projects
+      # Прод-папка проектов (переопределяет dev-mount /projects из базового файла).
+      # ОТДЕЛЬНАЯ переменная, НЕ CLAUDE_PROJECTS_DIR: та задаёт dev-папку в общем .env,
+      # и прод молча уезжал на неё при деплое (15.07 прод смонтировал пустой
+      # C:/Temp/ClaudeHome вместо C:/ClaudeHome — чаты падали «No such file or directory»).
+      - ${CLAUDE_PROD_PROJECTS_DIR:-C:/ClaudeHome}:/projects
       - ${CLAUDE_CERTS_DIR:-C:/certs/naychenko}:/certs:ro
       # Источник «Что нового» — git-репозиторий продукта (только чтение)
       - ${CLAUDE_SOURCE_REPO:-C:/Sources/ClaudeCodeServer}:/product-repo:ro

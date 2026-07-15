@@ -213,10 +213,12 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
   const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string, opts?: { auto?: boolean }) => {
     if (!sessionId) return;
     const auto = opts?.auto ?? false;
+    // Авто-ходы (командные механики, «продолжить обсуждение») НЕ добавляем оптимистично:
+    // сервер рассылает их событием user_message в session-группу — иначе дубль в ленте
     setState(sessionId, prev => ({
       ...prev,
       isWaiting: true,
-      items: [...prev.items, { kind: 'user_message', text, attachedPaths, ...(auto ? { auto: true } : {}) }],
+      items: auto ? prev.items : [...prev.items, { kind: 'user_message', text, attachedPaths }],
     }));
     try {
       // Всегда подтверждаем членство в группе перед отправкой:

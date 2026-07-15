@@ -279,12 +279,17 @@ export interface WorkflowAgentInfo {
 }
 
 // Блок таймлайна workflow-агента (полный поток из транскрипта, лениво по REST):
-// text | thinking | tool_use
+// text | thinking | tool_use | structured (итог StructuredOutput, text = pretty-json,
+// рендерится свёрнутым). tool_use несёт полный input и результат —
+// рендерится тем же ToolUseView, что и обычный чат.
 export interface WorkflowAgentBlock {
-  kind: 'text' | 'thinking' | 'tool_use';
+  kind: 'text' | 'thinking' | 'tool_use' | 'structured';
   text?: string;
   toolName?: string;
-  toolTarget?: string;
+  toolId?: string;
+  toolInput?: unknown;
+  toolResult?: string;
+  isError?: boolean;
 }
 
 // WebSocket сообщения от сервера — sessionId присутствует во всех типах

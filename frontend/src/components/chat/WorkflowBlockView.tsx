@@ -4,10 +4,10 @@ import { api, type WorkflowAgentInfo, type WorkflowAgentBlock } from '../../lib/
 import { parseWorkflowMeta } from '../../lib/workflowMeta';
 import { usePersonas, ensurePersonasLoaded } from '../../lib/personas';
 import { C, FONT, R } from '../../lib/design';
-import { ToolUseView, toolWord, toolLabel, type ToolUseItem } from './ToolUseView';
+import { ToolUseView, toolWord, type ToolUseItem } from './ToolUseView';
 import { splitAgentResultTail } from '../../lib/agentTail';
 import { PersonaConsultCard, PersonaTaskView, findConsultedPersona, findPersonaByAgentType } from './PersonaTaskView';
-import { AgentTextBlock, AgentThinkingBlock } from './AgentContentBlocks';
+import { AgentTextBlock, AgentThinkingBlock, AgentStructuredBlock } from './AgentContentBlocks';
 import { AGENT_COLORS } from '../AgentSelector';
 import { type ActivityEntry } from './timeline';
 import { MarkdownContent } from './MarkdownContent';
@@ -315,7 +315,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                             {transcriptDir && (
                               <TranscriptAgentTimeline dir={transcriptDir} agentId={agent.id}
                                 accent={AGENT_COLORS[persona.avatar?.color ?? ''] ?? C.accent}
-                                running={agent.isDone !== true} />
+                                running={agent.isDone !== true} onOpenFile={onOpenFile} />
                             )}
                           </PersonaConsultCard>
                         </div>
@@ -415,7 +415,8 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                             {/* Полный поток агента (текст/thinking/инструменты) — лениво из транскрипта */}
                             {transcriptDir && (
                               <TranscriptAgentTimeline dir={transcriptDir} agentId={agent.id}
-                                accent={C.accent} running={agent.isDone !== true} edge="top" />
+                                accent={C.accent} running={agent.isDone !== true} edge="top"
+                                onOpenFile={onOpenFile} />
                             )}
                           </div>
                         )}
@@ -440,15 +441,17 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
 
 // Ленивый таймлайн workflow-агента: полный поток (текст/thinking/инструменты) из его
 // транскрипта, подгружается по REST при раскрытии. Пока агент работает (running) —
-// рефетч раз в 5с; по завершении — финальный снапшот. Текст — AgentTextBlock в расцветке
-// персоны (или нейтральной), thinking — AgentThinkingBlock, инструмент — компактная строка.
-function TranscriptAgentTimeline({ dir, agentId, accent, running, edge = 'bottom' }: {
+// рефетч раз в 5с; по завершении — финальный снапшот. Рендер — как в обычном чате:
+// текст — AgentTextBlock (MarkdownContent в расцветке персоны/нейтральной), thinking —
+// AgentThinkingBlock, инструмент — полноценный ToolUseView (input + раскрываемый результат).
+function TranscriptAgentTimeline({ dir, agentId, accent, running, edge = 'bottom', onOpenFile }: {
   dir: string;
   agentId: string;
   accent: string;
   running: boolean;
   // Сторона разделителя: bottom — слот карточки персоны, top — низ панели деталей агента
   edge?: 'top' | 'bottom';
+  onOpenFile?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [blocks, setBlocks] = useState<WorkflowAgentBlock[] | null>(null);
@@ -503,16 +506,23 @@ function TranscriptAgentTimeline({ dir, agentId, accent, running, edge = 'bottom
               ? <AgentTextBlock key={i} text={b.text ?? ''} accent={accent} />
               : b.kind === 'thinking'
                 ? <AgentThinkingBlock key={i} text={b.text ?? ''} />
+                : b.kind === 'structured'
+                ? <AgentStructuredBlock key={i} json={b.text ?? ''} accent={accent} />
                 : (
-                  <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '3px 2px', minWidth: 0 }}>
-                    <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textSecondary, flexShrink: 0 }}>
-                      {toolLabel(b.toolName ?? '')}
-                    </span>
-                    {b.toolTarget && (
-                      <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {b.toolTarget}
-                      </span>
-                    )}
+                  // Тот же ToolUseView, что и в обычном чате: иконка, статус,
+                  // раскрываемые аргументы и результат, diff у правок
+                  <div key={b.toolId ?? i} style={i > 0 ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
+                    <ToolUseView
+                      item={{
+                        kind: 'tool_use',
+                        id: b.toolId ?? `tl-${agentId}-${i}`,
+                        name: b.toolName ?? '',
+                        input: b.toolInput,
+                        result: b.toolResult,
+                        isError: b.isError,
+                      }}
+                      onOpenFile={onOpenFile}
+                    />
                   </div>
                 ))
           )}

@@ -243,9 +243,14 @@ public static class WorkflowAgentParser
 
     // Полный поток агента из транскрипта: упорядоченные блоки thinking/text/tool_use.
     // Первая строка (промпт) пропускается — карточка показывает её отдельно как «вопрос».
+    // Потолок результата инструмента в таймлайне — защита payload от гигантских выводов
+    private const int TimelineResultMaxChars = 30_000;
+
     public static IReadOnlyList<WorkflowAgentBlockDto> ParseAgentTimeline(string filePath)
     {
         var blocks = new List<WorkflowAgentBlockDto>();
+        // Позиция tool-блока по id — результат из следующей user-строки дописывается в него
+        var toolIndexById = new Dictionary<string, int>(StringComparer.Ordinal);
         bool isFirst = true;
         try
         {
@@ -253,7 +258,7 @@ public static class WorkflowAgentParser
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 if (isFirst) { isFirst = false; continue; }
-                try { ProcessTimelineLine(line, blocks); }
+                try { ProcessTimelineLine(line, blocks, toolIndexById); }
                 catch (Exception ex)
                 {
                     Log.LogDebug(ex, "Битая строка таймлайна в {Path}", filePath);
@@ -267,13 +272,24 @@ public static class WorkflowAgentParser
         return blocks;
     }
 
-    private static void ProcessTimelineLine(string jsonLine, List<WorkflowAgentBlockDto> blocks)
+    private static void ProcessTimelineLine(string jsonLine, List<WorkflowAgentBlockDto> blocks,
+        Dictionary<string, int> toolIndexById)
     {
         using var doc = JsonDocument.Parse(jsonLine);
         var root = doc.RootElement;
         if (!root.TryGetProperty("message", out var message)) return;
-        if (!message.TryGetProperty("role", out var role) || role.GetString() != "assistant") return;
+        if (!message.TryGetProperty("role", out var role)) return;
         if (!message.TryGetProperty("content", out var content)) return;
+
+        // user-строки несут результаты инструментов — дописываем в свои tool-блоки
+        if (role.GetString() == "user")
+        {
+            if (content.ValueKind != JsonValueKind.Array) return;
+            foreach (var block in content.EnumerateArray())
+                AttachToolResult(block, blocks, toolIndexById);
+            return;
+        }
+        if (role.GetString() != "assistant") return;
 
         if (content.ValueKind == JsonValueKind.String)
         {
@@ -304,19 +320,57 @@ public static class WorkflowAgentParser
                         && nameEl.GetString() is { } name && name.Length > 0)
                     {
                         // Агент со schema отдаёт итог вызовом StructuredOutput — полезное
-                        // содержимое в его input, показываем его текстом (json-блок),
-                        // а не голой строкой инструмента
+                        // содержимое в его input. Отдельный kind: фронт рендерит сворачиваемым
+                        // блоком (по умолчанию свёрнут), а не голой строкой инструмента
                         if (name == "StructuredOutput" && block.TryGetProperty("input", out var so)
                             && so.ValueKind == JsonValueKind.Object)
-                            blocks.Add(new WorkflowAgentBlockDto("text",
-                                "```json\n" + PrettyJson(so) + "\n```"));
-                        else
-                            blocks.Add(new WorkflowAgentBlockDto("tool_use",
-                                ToolName: name, ToolTarget: ExtractToolTarget(block)));
+                        {
+                            blocks.Add(new WorkflowAgentBlockDto("structured", PrettyJson(so)));
+                            break;
+                        }
+                        // Полный вызов: id + input — фронт рендерит тем же ToolUseView, что и чат
+                        var toolId = block.TryGetProperty("id", out var tid) ? tid.GetString() : null;
+                        object? input = block.TryGetProperty("input", out var inp)
+                            ? JsonSerializer.Deserialize<object>(inp.GetRawText()) : null;
+                        if (toolId is not null) toolIndexById[toolId] = blocks.Count;
+                        blocks.Add(new WorkflowAgentBlockDto("tool_use",
+                            ToolName: name, ToolId: toolId, ToolInput: input));
                     }
                     break;
             }
         }
+    }
+
+    // tool_result из user-строки → результат в свой tool-блок (матч по tool_use_id)
+    private static void AttachToolResult(JsonElement block, List<WorkflowAgentBlockDto> blocks,
+        Dictionary<string, int> toolIndexById)
+    {
+        if (!block.TryGetProperty("type", out var bt) || bt.GetString() != "tool_result") return;
+        if (!block.TryGetProperty("tool_use_id", out var tuid)
+            || tuid.GetString() is not { } toolUseId
+            || !toolIndexById.TryGetValue(toolUseId, out var idx)) return;
+
+        var isError = block.TryGetProperty("is_error", out var ie)
+            && ie.ValueKind == JsonValueKind.True;
+
+        var result = "";
+        if (block.TryGetProperty("content", out var c))
+        {
+            if (c.ValueKind == JsonValueKind.String)
+                result = c.GetString() ?? "";
+            else if (c.ValueKind == JsonValueKind.Array)
+            {
+                var sb = new System.Text.StringBuilder();
+                foreach (var cb in c.EnumerateArray())
+                    if (cb.TryGetProperty("text", out var tx))
+                        sb.AppendLine(tx.GetString());
+                result = sb.ToString().TrimEnd();
+            }
+        }
+        if (result.Length > TimelineResultMaxChars)
+            result = result[..TimelineResultMaxChars] + "\n…[вывод обрезан]";
+
+        blocks[idx] = blocks[idx] with { ToolResult = result, IsError = isError };
     }
 
     // Кириллица и спецсимволы без \uXXXX-эскейпов — блок показывается человеку
@@ -326,21 +380,6 @@ public static class WorkflowAgentParser
             WriteIndented = true,
             Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         });
-
-    // Короткая «цель» вызова инструмента для строки таймлайна — первый осмысленный ключ input
-    private static readonly string[] ToolTargetKeys =
-        ["description", "file_path", "path", "pattern", "command", "url", "query", "skill"];
-
-    private static string? ExtractToolTarget(JsonElement toolBlock)
-    {
-        if (!toolBlock.TryGetProperty("input", out var input) ||
-            input.ValueKind != JsonValueKind.Object) return null;
-        foreach (var key in ToolTargetKeys)
-            if (input.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
-                && v.GetString() is { } s && !string.IsNullOrWhiteSpace(s))
-                return Truncate(s.Trim(), 120);
-        return null;
-    }
 
     private static string ExtractText(string jsonLine)
     {

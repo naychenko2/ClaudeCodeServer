@@ -124,10 +124,13 @@ public record WorkflowAgentDto(string Id, string Prompt, string? Summary,
 public record WorkflowProgressMessage(string ToolUseId, IReadOnlyList<WorkflowAgentDto> Agents, bool IsDone)
     : ServerMessage("workflow_progress");
 
-// Блок таймлайна workflow-агента (полный поток из его транскрипта): text | thinking | tool_use.
+// Блок таймлайна workflow-агента (полный поток из его транскрипта):
+// text | thinking | tool_use | structured (итог StructuredOutput, Text = pretty-json).
 // Отдаётся лениво по REST при раскрытии карточки — в workflow_progress не входит (тяжёлый).
+// tool_use несёт полный input и результат — фронт рендерит тем же ToolUseView, что и чат.
 public record WorkflowAgentBlockDto(string Kind, string? Text = null,
-    string? ToolName = null, string? ToolTarget = null);
+    string? ToolName = null, string? ToolId = null, object? ToolInput = null,
+    string? ToolResult = null, bool? IsError = null);
 
 // Изменение задачи (created/updated/deleted) — шлётся в группу user_{userId},
 // чтобы все устройства пользователя обновили списки и календарь

@@ -174,8 +174,8 @@ public class WorkflowAgentParserTests : IDisposable
             UserLine("Промпт не должен попасть в таймлайн"),
             """{"message":{"role":"assistant","content":[{"type":"thinking","thinking":"размышляю"}]}}""",
             AssistantTextLine("Начинаю"),
-            ToolUseLine("Read", """{"file_path":"/a/b/target.cs"}"""),
-            """{"message":{"role":"user","content":[{"type":"tool_result","content":"не попадает"}]}}""",
+            """{"message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a/b/target.cs"}}]}}""",
+            """{"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"строки файла"}]}}""",
             AssistantTextLine("Готово", endTurn: true));
 
         var blocks = WorkflowAgentParser.ParseAgentTimeline(path);
@@ -187,9 +187,24 @@ public class WorkflowAgentParserTests : IDisposable
         blocks[1].Text.Should().Be("Начинаю");
         blocks[2].Kind.Should().Be("tool_use");
         blocks[2].ToolName.Should().Be("Read");
-        blocks[2].ToolTarget.Should().Be("/a/b/target.cs");
+        blocks[2].ToolId.Should().Be("t1");
+        blocks[2].ToolResult.Should().Be("строки файла");
+        blocks[2].IsError.Should().BeFalse();
         blocks[3].Kind.Should().Be("text");
         blocks[3].Text.Should().Be("Готово");
+    }
+
+    [Fact]
+    public void ParseAgentTimeline_ОшибкаИнструмента_IsErrorTrue()
+    {
+        var path = WriteAgentFile("tlerr",
+            UserLine("p"),
+            """{"message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"boom"}}]}}""",
+            """{"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":[{"type":"text","text":"команда упала"}]}]}}""");
+
+        var block = WorkflowAgentParser.ParseAgentTimeline(path).Should().ContainSingle().Which;
+        block.ToolResult.Should().Be("команда упала");
+        block.IsError.Should().BeTrue();
     }
 
     [Fact]
@@ -213,7 +228,7 @@ public class WorkflowAgentParserTests : IDisposable
     }
 
     [Fact]
-    public void ParseAgentTimeline_StructuredOutput_РазворачиваетсяВТекст()
+    public void ParseAgentTimeline_StructuredOutput_ОтдельныйСворачиваемыйБлок()
     {
         var path = WriteAgentFile("so",
             UserLine("p"),
@@ -222,8 +237,8 @@ public class WorkflowAgentParserTests : IDisposable
         var blocks = WorkflowAgentParser.ParseAgentTimeline(path);
 
         var block = blocks.Should().ContainSingle().Which;
-        block.Kind.Should().Be("text");
-        block.Text.Should().StartWith("```json").And.Contain("агент на связи");
+        block.Kind.Should().Be("structured");
+        block.Text.Should().Contain("агент на связи");
         block.ToolName.Should().BeNull();
     }
 

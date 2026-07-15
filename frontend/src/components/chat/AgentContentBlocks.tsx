@@ -51,6 +51,47 @@ export function AgentTextBlock({ text, accent }: { text: string; accent: string 
   );
 }
 
+// Структурированный итог агента (StructuredOutput при agent() со schema):
+// по умолчанию свёрнут — раскрывается кликом в json-блок с подсветкой
+export function AgentStructuredBlock({ json, accent }: { json: string; accent: string }) {
+  const [open, setOpen] = useState(false);
+  if (!json.trim()) return null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', padding: '2px 0' }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+          cursor: 'pointer', userSelect: 'none', padding: '2px 0', width: 'fit-content',
+        }}
+      >
+        <span style={{ fontFamily: FONT.mono, fontSize: 10, fontWeight: 700, color: accent, flexShrink: 0 }}>
+          {'{ }'}
+        </span>
+        <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>
+          Структурированный итог
+        </span>
+        <span style={{
+          color: C.textMuted, fontSize: 10, opacity: 0.7,
+          transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+          transition: 'transform 0.2s', display: 'inline-block',
+        }}>▾</span>
+      </div>
+      {open && (
+        <div style={{
+          marginTop: 4, borderLeft: `2px solid ${accent}`,
+          background: `${accent}08`, borderRadius: '0 8px 8px 0',
+          padding: '2px 10px', fontSize: 12.5,
+          maxHeight: 320, overflowY: 'auto',
+        }}>
+          <MarkdownContent text={'```json\n' + json + '\n```'} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AgentThinkingBlock({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   if (!text.trim()) return null;

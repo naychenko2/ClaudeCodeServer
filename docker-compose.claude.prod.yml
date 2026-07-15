@@ -47,3 +47,5 @@ services:
       - ${CLAUDE_CERTS_DIR:-C:/certs/naychenko}:/certs:ro
       # Источник «Что нового» — git-репозиторий продукта (только чтение)
       - ${CLAUDE_SOURCE_REPO:-C:/Sources/ClaudeCodeServer}:/product-repo:ro
+      # Локальный конфиг (секреты, подписки) — НЕ внутри образа, persistent через host
+      - ${CLAUDE_PROD_PROJECTS_DIR:-C:/ClaudeHome}/appsettings.Local.json:/app/appsettings.Local.json

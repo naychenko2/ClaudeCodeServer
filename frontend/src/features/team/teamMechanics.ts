@@ -4,15 +4,29 @@
 // промпт-обвязкой persona_ask; оркестрирует CLI, бэкенд не участвует.
 import type { LucideIcon } from 'lucide-react';
 import {
-  BadgeCheck, FlaskConical, GraduationCap, HelpCircle, MessagesSquare,
-  Rocket, Route, Scale,
+  BadgeCheck, Boxes, FlaskConical, GraduationCap, HelpCircle, MessagesSquare,
+  Rocket, Route, Scale, ScanSearch, Swords,
 } from 'lucide-react';
 
 export type TeamMechanicId =
   | 'discuss' | 'panel' | 'consensus' | 'interview'
-  | 'autopilot' | 'qa' | 'trace' | 'sci';
+  | 'autopilot' | 'implement' | 'qa' | 'review' | 'redteam' | 'trace' | 'sci';
 
 export type TeamMechanicGroup = 'Обсудить' | 'Спланировать' | 'Сделать' | 'Проверить' | 'Исследовать';
+
+// Оси ревью-консилиума и углы атаки красной команды (совпадают с каталогами
+// одноимённых workflow-скриптов review-consilium.js / red-team.js)
+export type ReviewLens = 'correctness' | 'security' | 'tests' | 'architecture' | 'performance';
+export type AttackAngle = 'edge-cases' | 'security' | 'wrong-assumptions' | 'load-scale' | 'failure-modes';
+
+export const REVIEW_LENSES: ReadonlyArray<[ReviewLens, string]> = [
+  ['correctness', 'Корректность'], ['security', 'Безопасность'], ['tests', 'Тесты'],
+  ['architecture', 'Архитектура'], ['performance', 'Производительность'],
+];
+export const ATTACK_ANGLES: ReadonlyArray<[AttackAngle, string]> = [
+  ['edge-cases', 'Краевые случаи'], ['security', 'Безопасность'],
+  ['wrong-assumptions', 'Неверные допущения'], ['load-scale', 'Нагрузка'], ['failure-modes', 'Отказы'],
+];
 
 // Участник для механик с персонами (совместим с PersonaLite из lib/personas)
 export interface TeamPersonaRef {
@@ -32,6 +46,11 @@ export interface TeamMechanicSettings {
   depth: 'quick' | 'standard' | 'deep'; // interview
   untilDone: boolean;               // autopilot: включить цикл «до готово» (work-loop)
   qaTarget: 'tests' | 'build' | 'lint' | 'typecheck'; // qa
+  reviewLenses: ReviewLens[];       // review: оси ревью
+  reviewVerify: boolean;            // review: adversarial-проверка находок
+  attackAngles: AttackAngle[];      // redteam: углы атаки
+  implWorktree: boolean;            // implement: параллельно в worktree (иначе последовательно)
+  implVerify: boolean;              // implement: финальная проверка тестами/сборкой
 }
 
 export const DEFAULT_TEAM_SETTINGS: TeamMechanicSettings = {
@@ -44,6 +63,11 @@ export const DEFAULT_TEAM_SETTINGS: TeamMechanicSettings = {
   depth: 'standard',
   untilDone: true,
   qaTarget: 'tests',
+  reviewLenses: ['correctness', 'security', 'tests'],
+  reviewVerify: true,
+  attackAngles: ['edge-cases', 'wrong-assumptions', 'failure-modes'],
+  implWorktree: false,
+  implVerify: true,
 };
 
 export interface TeamMechanic {
@@ -88,9 +112,24 @@ export const TEAM_MECHANICS: TeamMechanic[] = [
     requiredSkill: 'oh-my-claudecode:autopilot',
   },
   {
+    id: 'implement', group: 'Сделать', name: 'Командная реализация', icon: Boxes, cost: 3,
+    desc: 'Разбить и раздать исполнителям', placeholder: 'Что реализовать командой?…',
+    requiredSkill: 'team-implement',
+  },
+  {
     id: 'qa', group: 'Проверить', name: 'QA-цикл', icon: BadgeCheck, cost: 2,
     desc: 'Чинит до зелёной проверки', placeholder: 'Комментарий к прогону (необязательно)…',
     requiredSkill: 'oh-my-claudecode:ultraqa',
+  },
+  {
+    id: 'review', group: 'Проверить', name: 'Ревью-консилиум', icon: ScanSearch, cost: 2,
+    desc: 'Ревью с N линз + проверка находок', placeholder: 'Что ревьюим (пусто — текущий дифф)…',
+    requiredSkill: 'review-consilium',
+  },
+  {
+    id: 'redteam', group: 'Проверить', name: 'Красная команда', icon: Swords, cost: 2,
+    desc: 'Атака решения с разных углов', placeholder: 'Что проверить на прочность?…',
+    requiredSkill: 'red-team',
   },
   {
     id: 'trace', group: 'Исследовать', name: 'Трассировка', icon: Route, cost: 2,
@@ -166,6 +205,25 @@ export function buildTeamTurnText(
       return `/oh-my-claudecode:trace "${t}"`;
     case 'sci':
       return `/oh-my-claudecode:sciomc "${t}"`;
+    case 'review': {
+      // review-consilium.js парсит JSON-args сам; participants — handle персон по порядку осей
+      const args: Record<string, unknown> = { lenses: s.reviewLenses, verify: s.reviewVerify };
+      if (t) args.target = t;
+      if (s.participants.length > 0) args.participants = s.participants.map(p => p.handle);
+      return `/review-consilium ${JSON.stringify(args)}`;
+    }
+    case 'redteam': {
+      const args: Record<string, unknown> = { angles: s.attackAngles };
+      if (t) args.target = t;
+      if (s.participants.length > 0) args.participants = s.participants.map(p => p.handle);
+      return `/red-team ${JSON.stringify(args)}`;
+    }
+    case 'implement': {
+      // executors — handle персон-исполнителей (round-robin по под-задачам в team-implement.js)
+      const args: Record<string, unknown> = { task: t, worktree: s.implWorktree, verify: s.implVerify };
+      if (s.participants.length > 0) args.executors = s.participants.map(p => p.handle);
+      return `/team-implement ${JSON.stringify(args)}`;
+    }
   }
 }
 
@@ -179,6 +237,9 @@ const DETECT_PREFIXES: ReadonlyArray<[string, TeamMechanicId]> = [
   ['/oh-my-claudecode:ultraqa', 'qa'],
   ['/oh-my-claudecode:trace', 'trace'],
   ['/oh-my-claudecode:sciomc', 'sci'],
+  ['/review-consilium', 'review'],
+  ['/red-team', 'redteam'],
+  ['/team-implement', 'implement'],
   [DISCUSS_PREFIX, 'discuss'],
 ];
 
@@ -200,5 +261,11 @@ export function costEstimate(id: TeamMechanicId, s: TeamMechanicSettings): strin
     case 'qa': return 'до 5 циклов починки';
     case 'trace': return '3 гипотезы + опровержение';
     case 'sci': return 'параллельные агенты + синтез';
+    case 'review': {
+      const n = s.reviewLenses.length || 1;
+      return s.reviewVerify ? `${n} осей + проверка находок` : `${n} осей ревью`;
+    }
+    case 'redteam': return `${s.attackAngles.length || 1} углов атаки + синтез`;
+    case 'implement': return s.implWorktree ? 'параллельно в worktree + merge' : 'последовательная раздача';
   }
 }

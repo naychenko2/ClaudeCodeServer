@@ -336,10 +336,12 @@ export function Composer({
 
     // Командный ход: текст поля — тема, обвязка собирается buildTeamTurnText
     if (teamMech) {
-      // Валидация: тема обязательна для всех механик, кроме QA-цикла;
-      // дискуссии нужен хотя бы один участник (подсказка — в зоне настроек)
-      if (!t && teamMech !== 'qa') { setTeamOpen(true); return; }
-      if (teamMech === 'discuss' && teamSettings.participants.length === 0) { setTeamOpen(true); return; }
+      // Валидация: тема обязательна везде, кроме QA-цикла и ревью/красной команды
+      // (они работают по текущему диффу/контексту); дискуссии и командной реализации
+      // нужен хотя бы один участник (подсказка — в зоне настроек)
+      const topicOptional = teamMech === 'qa' || teamMech === 'review' || teamMech === 'redteam';
+      if (!t && !topicOptional) { setTeamOpen(true); return; }
+      if ((teamMech === 'discuss' || teamMech === 'implement') && teamSettings.participants.length === 0) { setTeamOpen(true); return; }
       // «Остановиться на плане» у автопилота = честный консенсус-план (ralplan):
       // у скилла autopilot нет флага «стоп на плане», а ralplan делает ровно это —
       // план через спор до одобрения критика, без исполнения
@@ -746,8 +748,10 @@ export function Composer({
     </button>
   );
 
-  // QA-цикл отправляется и без темы (комментарий необязателен)
-  const canSend = hasText || attachments.length > 0 || teamMech === 'qa';
+  // QA-цикл, ревью-консилиум и красная команда отправляются и без темы
+  // (работают по текущему диффу/контексту)
+  const canSend = hasText || attachments.length > 0
+    || teamMech === 'qa' || teamMech === 'review' || teamMech === 'redteam';
   // «Стоп» показываем, только когда чат активен и в поле ничего не введено.
   // Как только появился текст — кнопка становится «Отправить» (даже во время генерации).
   const sendButton = isGenerating && !canSend ? (

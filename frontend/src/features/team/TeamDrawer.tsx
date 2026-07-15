@@ -6,8 +6,9 @@ import { C, FONT, R, SHADOW } from '../../lib/design';
 import type { Persona } from '../../types';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
 import {
-  TEAM_MECHANICS, teamMechanic, costEstimate,
+  TEAM_MECHANICS, teamMechanic, costEstimate, REVIEW_LENSES, ATTACK_ANGLES,
   type TeamMechanic, type TeamMechanicId, type TeamMechanicSettings, type TeamPersonaRef,
+  type ReviewLens, type AttackAngle,
 } from './teamMechanics';
 
 export interface TeamDrawerProps {
@@ -83,6 +84,39 @@ function Chk({ checked, onChange, label }: { checked: boolean; onChange: (v: boo
   );
 }
 
+// Мультивыбор из набора (toggle-чипы) — оси ревью / углы атаки
+function MultiToggle<T extends string>({ options, values, onChange }: {
+  options: ReadonlyArray<readonly [T, string]>;
+  values: T[];
+  onChange: (v: T[]) => void;
+}) {
+  const toggle = (k: T) =>
+    onChange(values.includes(k) ? values.filter(x => x !== k) : [...values, k]);
+  return (
+    <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
+      {options.map(([k, label]) => {
+        const on = values.includes(k);
+        return (
+          <button
+            key={k}
+            type="button"
+            onClick={() => toggle(k)}
+            style={{
+              border: `1px solid ${on ? C.accent : C.border}`,
+              background: on ? C.accentLight : C.bgCard,
+              borderRadius: R.max, padding: '3px 10px', cursor: 'pointer',
+              fontSize: 11.5, fontWeight: 600, color: on ? C.textHeading : C.textSecondary,
+              fontFamily: FONT.sans,
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </span>
+  );
+}
+
 // Метка настройки
 function SLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -98,8 +132,12 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
   const allCandidates = candidates;
 
   const m = mech ? teamMechanic(mech) : null;
-  // Лимит участников: дискуссия — 2, панель экспертов — 4
-  const maxParticipants = mech === 'panel' ? 4 : 2;
+  // Лимит участников: ревью-консилиум — 5 (по осям), панель/красная команда/реализация — 4,
+  // дискуссия — 2
+  const maxParticipants =
+    mech === 'review' ? 5
+    : (mech === 'panel' || mech === 'redteam' || mech === 'implement') ? 4
+    : 2;
   const selectedIds = settings.participants.map(p => p.id);
 
   const toggleParticipant = (p: Persona) => {
@@ -240,6 +278,53 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
               onChange={v => onSettings({ ...settings, qaTarget: v })} />
           </span>,
         );
+        break;
+      case 'review':
+        parts.push(
+          <span key="l" style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+            <SLabel>Оси:</SLabel>
+            <MultiToggle options={REVIEW_LENSES} values={settings.reviewLenses}
+              onChange={(v: ReviewLens[]) => onSettings({ ...settings, reviewLenses: v })} />
+          </span>,
+          <span key="p" style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+            <SLabel>Персоны (до 5, по осям, опц.):</SLabel>
+            {personaChips}
+          </span>,
+          <Chk key="v" checked={settings.reviewVerify} label="Проверять находки на опровержение"
+            onChange={v => onSettings({ ...settings, reviewVerify: v })} />,
+        );
+        break;
+      case 'redteam':
+        parts.push(
+          <span key="a" style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+            <SLabel>Углы атаки:</SLabel>
+            <MultiToggle options={ATTACK_ANGLES} values={settings.attackAngles}
+              onChange={(v: AttackAngle[]) => onSettings({ ...settings, attackAngles: v })} />
+          </span>,
+          <span key="p" style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+            <SLabel>Персоны (до 4, по углам, опц.):</SLabel>
+            {personaChips}
+          </span>,
+        );
+        break;
+      case 'implement':
+        parts.push(
+          <span key="p" style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+            <SLabel>Исполнители (до 4):</SLabel>
+            {personaChips}
+          </span>,
+          <Chk key="w" checked={settings.implWorktree} label="Параллельно в worktree (иначе последовательно)"
+            onChange={v => onSettings({ ...settings, implWorktree: v })} />,
+          <Chk key="v" checked={settings.implVerify} label="Проверить тестами/сборкой"
+            onChange={v => onSettings({ ...settings, implVerify: v })} />,
+        );
+        if (settings.participants.length === 0) {
+          parts.push(
+            <span key="hint" style={{ fontSize: 11, color: C.warningText, fontFamily: FONT.sans }}>
+              Отметь хотя бы одного исполнителя — без этого реализацию не запустить.
+            </span>,
+          );
+        }
         break;
       case 'trace':
       case 'sci':

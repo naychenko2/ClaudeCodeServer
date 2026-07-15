@@ -792,6 +792,8 @@ export interface Persona {
   access?: PersonaAccess;
   // Свой список запрещённых инструментов (только при access === 'custom')
   disallowedTools?: string[] | null;
+  // Исполнитель в сабагентах: write-набор (файлы + Bash) в файловом сабагенте; только при full
+  subagentExecutor?: boolean;
   // Ключ шаблона пантеона OmO, из которого подключена персона (null — создана вручную)
   templateKey?: string | null;
   // Привязки к источникам знаний и правилам (фича persona-bindings); null — нет

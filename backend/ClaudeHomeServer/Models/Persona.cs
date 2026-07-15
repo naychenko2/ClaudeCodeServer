@@ -157,6 +157,10 @@ public class Persona
     public List<PersonaAutomationRule>? AutomationRules { get; set; }
     // Профиль доступа (P6): Full/ReadOnly/Custom (см. PersonaAccessPolicy)
     public PersonaAccess Access { get; set; } = PersonaAccess.Full;
+    // Исполнитель в сабагентах: write-набор (файлы + Bash) в файловом сабагенте персоны —
+    // роутер oh-my-claudecode сможет ставить её на исполнительские типы (executor, qa-tester…).
+    // Явный опт-ин; учитывается ТОЛЬКО при Access == Full (иначе нормализуется в false).
+    public bool SubagentExecutor { get; set; }
     // Свой список запрещённых инструментов — только при Access == Custom
     public List<string>? DisallowedTools { get; set; }
     // Первое приветственное сообщение при открытии чата (опционально)

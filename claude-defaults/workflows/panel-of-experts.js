@@ -1,7 +1,7 @@
 export const meta = {
   name: 'panel-of-experts',
   description: 'Многоагентная дискуссия: Генератор → Критик → Адвокат → Модератор (2–3 раунда, синтез)',
-  whenToUse: 'Глубокий разбор сложной развилки с разных сторон: генерация идей, жёсткая критика, защита, синтез взвешенного решения. Передавай args: { topic, brief, rounds }.',
+  whenToUse: 'Глубокий разбор сложной развилки с разных сторон: генерация идей, жёсткая критика, защита, синтез взвешенного решения. Передавай args: { topic, brief, rounds, participants }. participants — необязательный массив типов сабагентов (например handle персон-консультантов) для ролей по порядку: [Генератор, Критик, Адвокат, Модератор]; роли без участника играет стандартный агент.',
   phases: [
     { title: 'Раунд 1' },
     { title: 'Раунд 2' },
@@ -14,6 +14,15 @@ export const meta = {
 const topic = (args && args.topic) || 'Тема дискуссии не задана'
 const brief = (args && args.brief) || '(дополнительный контекст не передан)'
 const maxRounds = Math.max(1, Math.min(3, (args && args.rounds) || 3))
+
+// Участники-персоны (опционально): args.participants — типы сабагентов для ролей
+// [Генератор, Критик, Адвокат, Модератор] по порядку. Персона играет роль СВОИМ
+// характером (промпт роли дополняет её собственный системный промпт сабагента).
+const participants = Array.isArray(args && args.participants)
+  ? args.participants.map(p => (typeof p === 'string' ? p.trim() : '')).slice(0, 4)
+  : []
+const roleOpts = (i) => (participants[i] ? { agentType: participants[i] } : {})
+const roleTag = (i) => (participants[i] ? ` @${participants[i]}` : '')
 
 // ---- Схемы структурированного вывода ----
 const PROPOSER_SCHEMA = {
@@ -146,7 +155,7 @@ ${openQuestions}
 ${render()}
 
 Доработай идеи или предложи новые ИМЕННО по открытым вопросам — с учётом высказанной критики и защиты. Отвечай по-русски.`
-  const prop = await agent(proposerPrompt, { label: `Генератор · р${round}`, phase: ph, schema: PROPOSER_SCHEMA })
+  const prop = await agent(proposerPrompt, { label: `Генератор${roleTag(0)} · р${round}`, phase: ph, schema: PROPOSER_SCHEMA, ...roleOpts(0) })
   if (prop) transcript.push({ round, role: 'Генератор', content: fmtProposer(prop) })
 
   // 2. Критик
@@ -157,7 +166,7 @@ ${render()}
 Вся дискуссия:
 ${render()}
 
-Разбери последние предложения Генератора и покажи, почему они могут не сработать. Отвечай по-русски.`, { label: `Критик · р${round}`, phase: ph, schema: CRITIC_SCHEMA })
+Разбери последние предложения Генератора и покажи, почему они могут не сработать. Отвечай по-русски.`, { label: `Критик${roleTag(1)} · р${round}`, phase: ph, schema: CRITIC_SCHEMA, ...roleOpts(1) })
   if (crit) transcript.push({ round, role: 'Критик', content: fmtCritic(crit) })
 
   // 3. Адвокат
@@ -168,7 +177,7 @@ ${render()}
 Вся дискуссия:
 ${render()}
 
-Ответь на критику по пунктам и усиль идеи. Отвечай по-русски.`, { label: `Адвокат · р${round}`, phase: ph, schema: SUPPORTER_SCHEMA })
+Ответь на критику по пунктам и усиль идеи. Отвечай по-русски.`, { label: `Адвокат${roleTag(2)} · р${round}`, phase: ph, schema: SUPPORTER_SCHEMA, ...roleOpts(2) })
   if (supp) transcript.push({ round, role: 'Адвокат', content: fmtSupporter(supp) })
 
   // 4. Модератор (промежуточно)
@@ -179,7 +188,7 @@ ${render()}
 Вся дискуссия:
 ${render()}
 
-Дай ПРОМЕЖУТОЧНЫЙ синтез: какие идеи выдержали критику, что отбрасываем, какие спорные вопросы остаются нерешёнными. Если консенсус достигнут и спорных вопросов не осталось — верни ПУСТОЙ массив contestedPoints. Отвечай по-русски.`, { label: `Модератор · р${round}`, phase: ph, schema: JUDGE_INTERIM_SCHEMA })
+Дай ПРОМЕЖУТОЧНЫЙ синтез: какие идеи выдержали критику, что отбрасываем, какие спорные вопросы остаются нерешёнными. Если консенсус достигнут и спорных вопросов не осталось — верни ПУСТОЙ массив contestedPoints. Отвечай по-русски.`, { label: `Модератор${roleTag(3)} · р${round}`, phase: ph, schema: JUDGE_INTERIM_SCHEMA, ...roleOpts(3) })
   if (judge) {
     transcript.push({ round, role: 'Модератор (промежуточно)', content: fmtJudgeInterim(judge) })
     openQuestions = (judge.contestedPoints || []).map((q, i) => `${i + 1}. ${q}`).join('\n')
@@ -199,6 +208,6 @@ ${brief}
 Полная дискуссия:
 ${render()}
 
-Взвесь плюсы (от Адвоката) и минусы (от Критика), отбрось нерабочее и синтезируй финальную позицию: решение по каждой развилке, обоснование, ключевые компромиссы, конкретные рекомендации/шаги и остаточные риски. Будь конкретным и практичным. Отвечай по-русски.`, { label: 'Финальный синтез', phase: 'Финальный синтез', schema: JUDGE_FINAL_SCHEMA })
+Взвесь плюсы (от Адвоката) и минусы (от Критика), отбрось нерабочее и синтезируй финальную позицию: решение по каждой развилке, обоснование, ключевые компромиссы, конкретные рекомендации/шаги и остаточные риски. Будь конкретным и практичным. Отвечай по-русски.`, { label: `Финальный синтез${roleTag(3)}`, phase: 'Финальный синтез', schema: JUDGE_FINAL_SCHEMA, ...roleOpts(3) })
 
 return { topic, roundsRun: round, final, transcript }

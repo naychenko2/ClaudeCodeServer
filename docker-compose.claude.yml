@@ -89,10 +89,11 @@ services:
           if [ ! -f /home/app/.claude/.claude.json ]; then mv /home/app/.claude.json /home/app/.claude/.claude.json; else rm -f /home/app/.claude.json; fi
         fi
         ln -sf /home/app/.claude/.claude.json /home/app/.claude.json
-        # Дефолты CLI из образа → volume ~/.claude: cp -n не перезаписывает правки в volume,
-        # а новые экземпляры (свежий volume) получают workflow-скрипты автоматически
+        # Дефолты CLI из образа → volume ~/.claude: поставляемые скрипты перезаписываются
+        # (истина — в репо, обновления приходят с образом); пользовательские скрипты под
+        # ДРУГИМИ именами не трогаются
         mkdir -p /home/app/.claude/workflows
-        cp -n /app/claude-defaults/workflows/*.js /home/app/.claude/workflows/ 2>/dev/null || true
+        cp -f /app/claude-defaults/workflows/*.js /home/app/.claude/workflows/ 2>/dev/null || true
         exec dotnet ClaudeHomeServer.dll
 
 volumes:

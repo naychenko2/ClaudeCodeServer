@@ -734,7 +734,7 @@ export type PersonaAccess = 'full' | 'readOnly' | 'custom';
 // группировка/статус команды, роутинг памяти команды. none — не задана.
 export type PersonaSpecialty =
   | 'none' | 'analyst' | 'planner' | 'reviewer' | 'executor' | 'secretary'
-  | 'coordinator' | 'mentor' | 'designer' | 'consultant' | 'librarian';
+  | 'coordinator' | 'mentor' | 'designer' | 'consultant' | 'librarian' | 'tester';
 
 // Параметры кропа загруженного аватара: масштаб + смещение центра окна
 // от центра картинки (в пикселях исходника)

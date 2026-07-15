@@ -90,6 +90,14 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
         sb.Append(" Персона-консультант пользователя: вызывай, когда нужна её экспертиза или " +
                   "пользователь упоминает её @handle. Вопрос в prompt формулируй самодостаточно — " +
                   "она не видит текущий разговор.");
+        // Нотация oh-my-claudecode: по специальности оркестратор замещает персоной
+        // одноимённые советнические типы плагина (см. OmcPersonaRouting)
+        var omcTypes = Prompts.OmcPersonaRouting.AgentTypesFor(
+            Prompts.OmcPersonaRouting.EffectiveSpecialty(persona));
+        if (omcTypes.Length > 0)
+            sb.Append(" Замещает советнические типы субагентов: ")
+              .Append(string.Join(", ", omcTypes.Select(t => "oh-my-claudecode:" + t)))
+              .Append('.');
         var text = sb.ToString();
         return text.Length <= DescriptionMaxChars ? text : text[..DescriptionMaxChars].TrimEnd() + "…";
     }

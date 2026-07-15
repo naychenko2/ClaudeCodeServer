@@ -1154,6 +1154,16 @@ public class SessionManager
                 result += "\n\n" + OmoPrompts.WorkLoopTurn(loop.Promise);
         }
 
+        // Процессы oh-my-claudecode: советнические роли плагина замещаются
+        // персонами-сабагентами с подходящей специальностью (таблица соответствий)
+        if (OmcPersonaRouting.MentionsPluginCommand(text) && SessionOwnerId(entry.Info) is { } ownerId)
+        {
+            var (subagents, _) = SplitConsultants(ownerId, entry.Info,
+                ResolveOtherPersonas(ownerId, entry.Info.ProjectId, entry.Info));
+            if (OmcPersonaRouting.BuildHint(subagents) is { } routingHint)
+                result += "\n\n" + routingHint;
+        }
+
         return result;
     }
 

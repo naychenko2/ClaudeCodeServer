@@ -54,7 +54,7 @@ public enum PersonaAccess { Full, ReadOnly, Custom }
 public enum PersonaSpecialty
 {
     None, Analyst, Planner, Reviewer, Executor, Secretary,
-    Coordinator, Mentor, Designer, Consultant, Librarian
+    Coordinator, Mentor, Designer, Consultant, Librarian, Tester
 }
 
 // Состояние кропа загруженного аватара: масштаб и смещение центра окна

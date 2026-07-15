@@ -877,6 +877,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             <option value="designer">Дизайнер</option>
             <option value="consultant">Консультант</option>
             <option value="librarian">Библиотекарь</option>
+            <option value="tester">Тестировщик</option>
           </select>
         </Field>
       </div>

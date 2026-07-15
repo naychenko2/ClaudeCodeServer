@@ -11,15 +11,21 @@ export const meta = {
 }
 
 // ---- Вводные ----
-const topic = (args && args.topic) || 'Тема дискуссии не задана'
-const brief = (args && args.brief) || '(дополнительный контекст не передан)'
-const maxRounds = Math.max(1, Math.min(3, (args && args.rounds) || 3))
+// Модель нередко передаёт args СТРОКОЙ с JSON вместо объекта — тогда args.topic/participants
+// молча теряются (панель шла с «Тема дискуссии не задана» и без персон). Парсим терпимо.
+const a = (() => {
+  if (typeof args === 'string') { try { return JSON.parse(args) } catch { return {} } }
+  return (args && typeof args === 'object') ? args : {}
+})()
+const topic = a.topic || 'Тема дискуссии не задана'
+const brief = a.brief || '(дополнительный контекст не передан)'
+const maxRounds = Math.max(1, Math.min(3, a.rounds || 3))
 
-// Участники-персоны (опционально): args.participants — типы сабагентов для ролей
+// Участники-персоны (опционально): a.participants — типы сабагентов для ролей
 // [Генератор, Критик, Адвокат, Модератор] по порядку. Персона играет роль СВОИМ
 // характером (промпт роли дополняет её собственный системный промпт сабагента).
-const participants = Array.isArray(args && args.participants)
-  ? args.participants.map(p => (typeof p === 'string' ? p.trim() : '')).slice(0, 4)
+const participants = Array.isArray(a.participants)
+  ? a.participants.map(p => (typeof p === 'string' ? p.trim() : '')).slice(0, 4)
   : []
 const roleOpts = (i) => (participants[i] ? { agentType: participants[i] } : {})
 const roleTag = (i) => (participants[i] ? ` @${participants[i]}` : '')

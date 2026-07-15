@@ -63,7 +63,8 @@ COPY mcp/personas-server ./mcp/personas-server
 COPY mcp/workspace-server ./mcp/workspace-server
 COPY mcp/notifications-server ./mcp/notifications-server
 # Дефолтная конфигурация CLI, поставляемая с приложением (workflow-скрипты и т.п.):
-# entrypoint compose-файла сеет её в ~/.claude при старте (cp -n — правки в volume не трогаем)
+# entrypoint compose-файла копирует её в ~/.claude при КАЖДОМ старте с перезаписью (cp -f) —
+# источник истины репозиторий, ручные правки этих файлов в volume живут до рестарта
 COPY claude-defaults ./claude-defaults
 
 # Каталоги под volume (проекты, данные, креды claude)

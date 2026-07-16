@@ -262,7 +262,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       isWaiting: false,
       items: prev.items.map(item =>
         item.kind === 'permission_request' && item.requestId === requestId
-          ? { ...item, resolved: true } : item
+          ? { ...item, resolved: true, decision: 'allowed' as const } : item
       ),
     }));
     await joinSession(sessionId); // гарантируем группу перед ответом
@@ -276,7 +276,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       isWaiting: false,
       items: prev.items.map(item =>
         item.kind === 'permission_request' && item.requestId === requestId
-          ? { ...item, resolved: true } : item
+          ? { ...item, resolved: true, decision: 'denied' as const } : item
       ),
     }));
     await joinSession(sessionId); // гарантируем группу перед ответом
@@ -291,7 +291,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       isWaiting: false,
       items: prev.items.map(item =>
         item.kind === 'permission_request' && item.requestId === requestId
-          ? { ...item, resolved: true } : item
+          ? { ...item, resolved: true, decision: 'always' as const } : item
       ),
     }));
     await joinSession(sessionId); // гарантируем группу перед ответом

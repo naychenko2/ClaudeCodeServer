@@ -466,7 +466,8 @@ export type ChatItem =
   | { kind: 'text'; text: string; personaId?: string; parentToolUseId?: string }
   | { kind: 'thinking'; text: string; expanded: boolean; parentToolUseId?: string }
   | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean }
-  | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean }
+  // decision — вердикт пользователя (только живая лента: permission_request в history не персистится)
+  | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean; decision?: 'allowed' | 'denied' | 'always' }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean; answers?: Record<string, string | string[]> }
   | { kind: 'plan_review'; requestId: string; plan: string; resolved: boolean; approved?: boolean; feedback?: string }
   | { kind: 'file_changed'; path: string; added: number; removed: number }

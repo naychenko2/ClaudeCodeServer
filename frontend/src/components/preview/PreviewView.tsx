@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { RotateCcw, Square, Monitor, ExternalLink } from 'lucide-react'
-import { C } from '../../lib/design'
+import { C, FONT } from '../../lib/design'
 import { IconButton, Button } from '../ui'
 import type { ProjectService } from '../../types'
 
@@ -54,17 +54,28 @@ export function PreviewView({ service, projectId, onStop }: Props) {
         <iframe ref={iframeRef} src={previewUrl}
           style={{ flex: 1, border: 'none', background: '#fff' }}
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups" title="Live preview" />
+      ) : service.status === 'error' ? (
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10, padding: 20, overflow: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.danger, fontWeight: 600, fontSize: 14 }}>
+            <Monitor size={18} strokeWidth={1.8} />
+            Не удалось запустить сервис
+          </div>
+          <pre style={{
+            margin: 0, flex: '0 1 auto', overflow: 'auto',
+            fontFamily: FONT.mono, fontSize: 12, lineHeight: 1.5, color: C.textPrimary,
+            background: C.bgInset, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12,
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          }}>
+            {service.error || 'Ошибка запуска'}
+          </pre>
+        </div>
       ) : (
         <div style={{
           flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
           flexDirection: 'column', gap: 12, color: C.textMuted, fontSize: 14,
         }}>
           <Monitor size={32} strokeWidth={1.5} />
-          <span>
-            {service.status === 'starting' ? 'Запуск…'
-              : service.status === 'error' ? (service.error || 'Ошибка запуска')
-              : 'Сервис не запущен'}
-          </span>
+          <span>{service.status === 'starting' ? 'Запуск…' : 'Сервис не запущен'}</span>
         </div>
       )}
     </div>

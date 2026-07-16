@@ -22,6 +22,22 @@ internal sealed class DevServerInstance : IDisposable
     public string? Error { get; set; }
     public DateTime LastActivity { get; set; }
 
+    // Хвост вывода (stdout+stderr) — для диагностики, когда старт провалился
+    private readonly object _outLock = new();
+    private readonly Queue<string> _outputTail = new();
+    public void AppendOutput(string line)
+    {
+        lock (_outLock)
+        {
+            _outputTail.Enqueue(line);
+            while (_outputTail.Count > 40) _outputTail.Dequeue();
+        }
+    }
+    public string OutputTail()
+    {
+        lock (_outLock) return string.Join("\n", _outputTail);
+    }
+
     public DevServerInstance(string projectId, string serviceId, string name, Process process, string userId)
     {
         ProjectId = projectId;
@@ -151,32 +167,54 @@ public sealed class DevServerService
         // попутно детектим порт, если он не задан.
         _ = DrainStreams(process, instance);
 
-        if (fixedPort.HasValue)
-        {
-            instance.Port = fixedPort.Value;
-            instance.Status = "started";
-            _activePreview[projectId] = serviceId;
-            await BroadcastStatus(projectId, serviceId, "started", instance.Port);
-            return new DevServerStartResult(true, instance.Port, "started");
-        }
+        // Известный порт (из конфига/launchSettings) фиксируем, но «started» ставим ТОЛЬКО когда
+        // приложение реально слушает порт — иначе iframe грузится в мёртвый порт (502/пустая страница).
+        if (fixedPort.HasValue) instance.Port = fixedPort.Value;
 
-        // Ждём до 30 секунд появления порта в выводе.
+        // Ждём до 30 сек: порт известен (fixed или из stdout) И реально принимает соединения.
         for (int i = 0; i < 60; i++)
         {
-            await Task.Delay(500);
-            if (instance.Status == "started")
-                return new DevServerStartResult(true, instance.Port, "started");
             if (process.HasExited) break;
+            if (instance.Port != 0 && await IsPortListeningAsync(instance.Port))
+            {
+                instance.Status = "started";
+                _activePreview[projectId] = serviceId;
+                await BroadcastStatus(projectId, serviceId, "started", instance.Port);
+                return new DevServerStartResult(true, instance.Port, "started");
+            }
+            await Task.Delay(500);
         }
 
-        var exited = process.WaitForExit(2000);
-        var exitCode = exited ? process.ExitCode : -1;
+        // Не поднялся: честная ошибка с хвостом вывода процесса.
+        var exited = process.HasExited;
+        var exitCode = exited ? SafeExitCode(process) : -1;
+        var tail = instance.OutputTail();
+        var reason = exited ? $"Процесс завершился с кодом {exitCode}." : "Таймаут: сервис не начал слушать порт.";
         instance.Status = "error";
-        instance.Error = exited ? $"Процесс завершился с кодом {exitCode}" : "Таймаут: порт не обнаружен";
+        instance.Error = string.IsNullOrWhiteSpace(tail) ? reason : reason + "\n" + tail;
         _servers.TryRemove(key, out _);
         instance.Dispose();
         await BroadcastStatus(projectId, serviceId, "error", null, instance.Error);
         return new DevServerStartResult(false, null, "error", instance.Error);
+    }
+
+    private static int SafeExitCode(Process p)
+    {
+        try { return p.ExitCode; } catch { return -1; }
+    }
+
+    /// <summary>Проверить, принимает ли кто-то соединения на 127.0.0.1:port (готовность dev-сервера).</summary>
+    private static async Task<bool> IsPortListeningAsync(int port)
+    {
+        try
+        {
+            using var client = new TcpClient();
+            var connect = client.ConnectAsync(IPAddress.Loopback, port);
+            var ok = await Task.WhenAny(connect, Task.Delay(400)) == connect;
+            if (connect.IsFaulted) _ = connect.Exception; // погасить unobserved
+            return ok && connect.IsCompletedSuccessfully && client.Connected;
+        }
+        catch { return false; }
     }
 
     /// <summary>Остановить сервис.</summary>
@@ -269,15 +307,11 @@ public sealed class DevServerService
             while ((line = await reader.ReadLineAsync()) != null)
             {
                 instance.LastActivity = DateTime.UtcNow;
+                instance.AppendOutput(line);
+                // Порт из вывода нужен только если он не задан заранее; готовность проверит StartAsync.
                 if (instance.Port != 0) continue;
                 var m = PortRegex.Match(line);
-                if (m.Success)
-                {
-                    instance.Port = int.Parse(m.Groups[1].Value);
-                    instance.Status = "started";
-                    _activePreview[instance.ProjectId] = instance.ServiceId;
-                    _ = BroadcastStatus(instance.ProjectId, instance.ServiceId, "started", instance.Port);
-                }
+                if (m.Success) instance.Port = int.Parse(m.Groups[1].Value);
             }
         }
 

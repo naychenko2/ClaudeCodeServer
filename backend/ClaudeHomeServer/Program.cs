@@ -70,7 +70,9 @@ builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<TeamMemoryService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
 // Файловые сабагенты-персоны: генерация + синк .md-агентов
-builder.Services.AddSingleton<ClaudeSubscriptionPool>();
+// Пул подписок с восстановлением пометок исчерпания из снапшотов usage после рестарта
+builder.Services.AddSingleton(sp => new ClaudeSubscriptionPool(
+    sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<UsageService>()));
 builder.Services.AddSingleton<PersonaAgentFileGenerator>();
 builder.Services.AddSingleton<PersonaAgentFileSync>();
 builder.Services.AddSingleton<FalImageService>();

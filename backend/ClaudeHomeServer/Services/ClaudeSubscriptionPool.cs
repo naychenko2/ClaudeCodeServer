@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
@@ -11,11 +12,15 @@ public class ClaudeSubscriptionPool
     public const string Section = "ClaudeSubscriptions";
     public const string PrimaryKey = "claude";
 
+    // Без известного времени сброса помечаем на полчаса: пятичасовое окно всё равно
+    // не сбросится быстрее, а редкие пробные чаты сами продлят пометку при новом rejected.
+    private static readonly TimeSpan DefaultExhaustion = TimeSpan.FromMinutes(30);
+
     private readonly IReadOnlyList<ClaudeSubscriptionConfig> _subscriptions;
-    // exhaustedKey → resetsAt (UTC, null = пока не сбросится вручную / timeout 60с)
+    // exhaustedKey → resetsAt (UTC, null = пока не сбросится вручную / DefaultExhaustion)
     private readonly ConcurrentDictionary<string, DateTime?> _exhausted = new();
 
-    public ClaudeSubscriptionPool(IConfiguration config)
+    public ClaudeSubscriptionPool(IConfiguration config, UsageService? usage = null)
     {
         var list = new List<ClaudeSubscriptionConfig>();
         foreach (var child in config.GetSection(Section).GetChildren())
@@ -27,6 +32,28 @@ public class ClaudeSubscriptionPool
                 list.Add(cfg);
         }
         _subscriptions = list.AsReadOnly();
+
+        if (usage is not null)
+            RestoreFromSnapshots(usage);
+    }
+
+    // Пометки исчерпания живут in-memory и теряются при рестарте сервера — восстанавливаем
+    // из последних снапшотов usage: окно rejected (или выбрано без overage) со сбросом в будущем.
+    private void RestoreFromSnapshots(UsageService usage)
+    {
+        foreach (var (key, snapshots) in usage.GetAllBySubscription())
+        {
+            foreach (var last in snapshots.GroupBy(s => s.LimitType).Select(g => g.Last()))
+            {
+                if (last.Status != "rejected" && !(last.Utilization >= 1.0 && !last.IsUsingOverage))
+                    continue;
+                if (!DateTime.TryParse(last.ResetsAt, CultureInfo.InvariantCulture,
+                        DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var resetsAt))
+                    continue;
+                if (resetsAt > DateTime.UtcNow)
+                    MarkExhausted(key, resetsAt);
+            }
+        }
     }
 
     /// <summary>Все настроенные дополнительные подписки</summary>
@@ -58,12 +85,12 @@ public class ClaudeSubscriptionPool
     }
 
     /// <summary>Пометить подписку как исчерпанную.</summary>
-    /// resetsAt — время сброса лимита (из rate_limit_event); null — 60с по умолчанию.
+    /// resetsAt — время сброса лимита (из rate_limit_event); null — DefaultExhaustion.
     public void MarkExhausted(string key, DateTime? resetsAt = null)
     {
         if (resetsAt.HasValue && resetsAt.Value.Kind != DateTimeKind.Utc)
             resetsAt = resetsAt.Value.ToUniversalTime();
-        _exhausted[key] = resetsAt ?? DateTime.UtcNow.AddSeconds(60);
+        _exhausted[key] = resetsAt ?? DateTime.UtcNow.Add(DefaultExhaustion);
     }
 
     /// <summary>Подписка сейчас на лимите?</summary>

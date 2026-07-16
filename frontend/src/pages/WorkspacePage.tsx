@@ -14,6 +14,7 @@ import { C, FONT } from '../lib/design';
 import { useSidebarWidth } from '../lib/sidebarWidth';
 import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
+import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { BackButton, IconButton, Splitter } from '../components/ui';
@@ -511,6 +512,23 @@ const windowWidth = useWindowWidth();
     { value: 'tasks', label: 'Задачи', icon: LEFT_TAB_ICONS.tasks },
     { value: 'personas' as LeftTab, label: 'Команда', icon: LEFT_TAB_ICONS.personas },
     ...(projectForEdit.toolsEnabled ? [{ value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools }] : []),
+  ];
+
+  // Мобильный таббар проекта: primary — Чаты/Файлы/Задачи; Команда/Инструменты/Использование
+  // уезжают в «⋯» (как «⋯ Разделы» в верхней навигации HubHeader), чтобы пилюли не скроллились.
+  const PROJECT_PRIMARY_MOBILE: LeftTab[] = ['sessions', 'files', 'tasks'];
+  const projectHiddenTabs = leftTabOptions.filter(o => !PROJECT_PRIMARY_MOBILE.includes(o.value));
+  // Если активна спрятанная вкладка — показываем её 4-й пилюлей, чтобы подсветка была верной.
+  const mobileLeftTabOptions = projectHiddenTabs.some(o => o.value === leftTab)
+    ? [...leftTabOptions.filter(o => PROJECT_PRIMARY_MOBILE.includes(o.value)), leftTabOptions.find(o => o.value === leftTab)!]
+    : leftTabOptions.filter(o => PROJECT_PRIMARY_MOBILE.includes(o.value));
+  const projectOverflowItems: OverflowItem[] = [
+    ...projectHiddenTabs.map(o => ({ key: o.value, icon: o.icon, label: o.label, onClick: () => handleTabSwitch(o.value) })),
+    {
+      key: 'usage', label: 'Использование',
+      icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,
+      onClick: () => setShowUsage(true),
+    },
   ];
 
   // «Поговорить» из проектной вкладки «Команда»: сессия персоны создаётся в этом
@@ -1053,20 +1071,13 @@ const windowWidth = useWindowWidth();
             </BackButton>
             <PillSwitch<LeftTab>
               value={leftTab}
-              options={leftTabOptions}
+              options={mobileLeftTabOptions}
               onChange={handleTabSwitch}
               isMobile
               compact
             />
-            <IconButton
-              size="md"
-              onClick={() => setShowUsage(true)}
-              title="Использование (модели + fal.ai)"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
-              </svg>
-            </IconButton>
+            {/* Команда/Инструменты/Использование — в «⋯» (как «⋯ Разделы» в HubHeader) */}
+            <ToolbarOverflowMenu isMobile title="Ещё" items={projectOverflowItems} />
           </div>
         )}
         {/* Sidebar — ВСЕГДА в DOM: FileExplorer не теряет текущий путь при смене вида */}

@@ -16,6 +16,8 @@ interface Props {
   persona?: { id: string; name: string };
   projectId?: string;
   onSaved?: () => void;
+  // Предзаполненный промпт (кнопка-продолжение «создать навык по этому описанию»)
+  initialPrompt?: string;
 }
 
 // Приводит имя к безопасному слагу [a-z0-9-] — тот же контракт, что на бэке (SkillGenerationService.Slugify):
@@ -31,11 +33,11 @@ function buildSkillMarkdown(name: string, description: string, body: string): st
   return `---\nname: ${name}\ndescription: ${desc}\n---\n\n${body.trim()}\n`;
 }
 
-export function SkillGenerateDialog({ onClose, persona, projectId, onSaved }: Props) {
+export function SkillGenerateDialog({ onClose, persona, projectId, onSaved, initialPrompt }: Props) {
   const genKey = `skills-generate:${persona ? `persona:${persona.id}` : projectId ? `project:${projectId}` : 'global'}`;
   const job = useAiJob<GeneratedSkill>(genKey);
 
-  const [prompt, setPrompt] = useState('');
+  const [prompt, setPrompt] = useState(initialPrompt ?? '');
   const [phase, setPhase] = useState<'input' | 'preview'>('input');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');

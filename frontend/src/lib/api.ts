@@ -519,6 +519,11 @@ export const api = {
       request<{ candidates: PersonaBinding[] }>(`/personas/${encodeURIComponent(id)}/bindings/suggest`, {
         method: 'POST', timeoutMs: 150_000,
       }),
+    // Генерация привязок по свободному описанию пользователя: кандидаты, ничего не сохраняется
+    generateBindings: (id: string, prompt: string) =>
+      request<{ candidates: PersonaBinding[] }>(`/personas/${encodeURIComponent(id)}/bindings/generate`, {
+        method: 'POST', body: JSON.stringify({ prompt }), timeoutMs: 150_000,
+      }),
 
     // === Проактивность/автоматизации (правила «событие → действие») ===
     automation: (id: string) =>

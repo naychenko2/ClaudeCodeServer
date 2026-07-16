@@ -6,7 +6,7 @@ import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { bumpPersonas } from '../../lib/personas';
 import { showToast } from '../../lib/toast';
-import { Button, IconField, Menu, MenuItem, Toggle, WaitingIndicator } from '../../components/ui';
+import { Button, IconField, Menu, MenuItem, TextArea, Toggle, WaitingIndicator } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
 import { SkillSearchDialog } from '../../components/SkillSearchDialog';
@@ -54,9 +54,13 @@ interface AddPanelState {
 // Кандидаты AI-подбора с чекбоксами: привязки к существующим источникам +
 // навыки из реестра (их нужно установить и привязать). Статус/результат живут
 // в aiJobStore по ключу персоны — переживают уход со страницы.
+// fromPrompt/prompt — источник кандидатов: генерация по свободному описанию пользователя
+// (влияет на подписи блока + даёт кнопку-продолжение «создать новый навык по описанию»).
 interface SuggestResult {
   candidates: (PersonaBinding & { on: boolean })[];
   skills: (SkillSuggestion & { on: boolean })[];
+  fromPrompt?: boolean;
+  prompt?: string;
 }
 
 export function PersonaBindingsPanel({ persona, accent, isMobile }: {
@@ -104,7 +108,12 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   const suggestJob = useAiJob<SuggestResult>(suggestKey);
   const [adding, setAdding] = useState(false);
   const [showSkillSearch, setShowSkillSearch] = useState(false);
-  const [showSkillGenerate, setShowSkillGenerate] = useState(false);
+  // Диалог генерации нового навыка: null — закрыт, строка — предзаполненный промпт
+  const [skillGen, setSkillGen] = useState<string | null>(null);
+  // Инлайн-ввод описания для «✨ Создать привязку»: null — закрыт, строка — черновик
+  const [genPrompt, setGenPrompt] = useState<string | null>(null);
+  // Последний запуск был генерацией по описанию (для подписи прогресса и «Повторить»)
+  const genModeRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -287,6 +296,8 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   const runSuggest = () => {
     setPanel(null);
     setExpandedId(null);
+    setGenPrompt(null);
+    genModeRef.current = null;
     runAiJob<SuggestResult>(suggestKey, async () => {
       const [bindingsRes, skillsRes] = await Promise.allSettled([
         api.personas.suggestBindings(persona.id),
@@ -301,6 +312,35 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         throw new Error('Не удалось подобрать. Попробуйте ещё раз.');
       }
       return { candidates, skills };
+    });
+  };
+
+  // «✨ Создать привязку» — открыть инлайн-ввод свободного описания
+  const openGenerate = () => {
+    setPanel(null);
+    setExpandedId(null);
+    resetAiJob(suggestKey);
+    setGenPrompt('');
+  };
+
+  // Генерация привязок по описанию: LLM сам выбирает тип и цель из каталога; параллельно
+  // подбираются навыки реестра под тот же запрос. Результат — общий блок кандидатов.
+  const runGenerate = (prompt: string) => {
+    setGenPrompt(null);
+    genModeRef.current = prompt;
+    runAiJob<SuggestResult>(suggestKey, async () => {
+      const [bindingsRes, skillsRes] = await Promise.allSettled([
+        api.personas.generateBindings(persona.id, prompt),
+        api.skills.suggest({ query: prompt }),
+      ]);
+      const candidates = bindingsRes.status === 'fulfilled'
+        ? bindingsRes.value.candidates.map(c => ({ ...c, on: true })) : [];
+      const skills = skillsRes.status === 'fulfilled'
+        ? skillsRes.value.candidates.map(s => ({ ...s, on: true })) : [];
+      if (candidates.length === 0 && skills.length === 0 && bindingsRes.status === 'rejected') {
+        throw new Error('Не удалось создать привязку. Попробуйте ещё раз.');
+      }
+      return { candidates, skills, fromPrompt: true, prompt };
     });
   };
 
@@ -546,32 +586,66 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
           </div>
         )}
 
-        {/* Кнопки под списком (скрыты, пока открыта панель добавления или подбор) */}
-        {bindings !== null && !error && list.length > 0 && !panel && suggestJob.status === 'idle' && (
+        {/* Кнопки под списком (скрыты, пока открыта панель добавления/подбор/ввод описания) */}
+        {bindings !== null && !error && list.length > 0 && !panel && suggestJob.status === 'idle' && genPrompt === null && (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
             <AddBindingButton onClick={() => openAdd()} />
             <Button variant="ghostAccent" size="sm" onClick={runSuggest}>
               ✨ Подобрать автоматически
             </Button>
+            <Button variant="ghostAccent" size="sm" onClick={openGenerate}>
+              ✨ Создать привязку
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
               ⚡ Найти навык
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setShowSkillGenerate(true)}>
-              ✨ Создать навык
-            </Button>
           </div>
         )}
-        {bindings !== null && !error && list.length === 0 && !panel && suggestJob.status === 'idle' && (
+        {bindings !== null && !error && list.length === 0 && !panel && suggestJob.status === 'idle' && genPrompt === null && (
           <div style={{ display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
             <Button variant="ghostAccent" size="sm" onClick={runSuggest}>
               ✨ Подобрать автоматически
             </Button>
+            <Button variant="ghostAccent" size="sm" onClick={openGenerate}>
+              ✨ Создать привязку
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
               ⚡ Найти навык
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setShowSkillGenerate(true)}>
-              ✨ Создать навык
-            </Button>
+          </div>
+        )}
+
+        {/* Инлайн-ввод описания: LLM сам определит тип привязки и настроит её */}
+        {genPrompt !== null && (
+          <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 14, paddingTop: 18 }}>
+            <SectionLabel>Создать привязку по описанию</SectionLabel>
+            <div style={{ fontSize: 12.5, color: C.textSecondary, margin: '6px 0 10px', lineHeight: 1.5 }}>
+              Опишите словами, что нужно персоне — ИИ сам выберет тип привязки (проект, база знаний,
+              заметки, инструмент или навык) и настроит её. Например: «дай ей доступ к базе знаний
+              по маркетингу» или «пусть умеет искать в интернете».
+            </div>
+            <TextArea
+              value={genPrompt}
+              onChange={setGenPrompt}
+              autoFocus
+              autoGrow
+              minHeight={72}
+              maxHeight={220}
+              placeholder="Что нужно персоне…"
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && genPrompt.trim()) {
+                  e.preventDefault();
+                  runGenerate(genPrompt.trim());
+                }
+              }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+              <Button variant="ghost" size="sm" onClick={() => setGenPrompt(null)}>Отмена</Button>
+              <Button variant="primary" size="sm" disabled={!genPrompt.trim()}
+                onClick={() => runGenerate(genPrompt.trim())}>
+                ✨ Сгенерировать
+              </Button>
+            </div>
           </div>
         )}
 
@@ -583,10 +657,11 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
           />
         )}
 
-        {showSkillGenerate && (
+        {skillGen !== null && (
           <SkillGenerateDialog
             persona={{ id: persona.id, name: persona.name }}
-            onClose={() => setShowSkillGenerate(false)}
+            initialPrompt={skillGen || undefined}
+            onClose={() => setSkillGen(null)}
             onSaved={() => void load()}
           />
         )}
@@ -595,16 +670,30 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         {suggestJob.status !== 'idle' && (
           <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 14, paddingTop: 18 }}>
             {suggestJob.status === 'running' ? (
-              <WaitingIndicator hint="Подбираю источники и навыки под роль персоны — до минуты" />
+              <WaitingIndicator hint={genModeRef.current !== null
+                ? 'Создаю привязку по описанию — до минуты'
+                : 'Подбираю источники и навыки под роль персоны — до минуты'} />
             ) : suggestJob.status === 'error' ? (
               <div style={{ fontSize: 12.5, color: C.dangerText }}>
                 {suggestJob.error}{' '}
-                <button onClick={runSuggest} style={linkBtn}>Повторить</button>{' '}
+                <button
+                  onClick={() => genModeRef.current !== null ? runGenerate(genModeRef.current) : runSuggest()}
+                  style={linkBtn}
+                >Повторить</button>{' '}
                 <button onClick={() => resetAiJob(suggestKey)} style={{ ...linkBtn, color: C.textMuted }}>Закрыть</button>
               </div>
             ) : (suggestJob.result?.candidates ?? []).length === 0 && (suggestJob.result?.skills ?? []).length === 0 ? (
               <div style={{ fontSize: 12.5, color: C.textMuted }}>
-                Ничего подходящего не нашлось — попробуйте добавить привязку вручную.{' '}
+                {suggestJob.result?.fromPrompt
+                  ? 'Ничего подходящего среди доступных целей не нашлось.'
+                  : 'Ничего подходящего не нашлось — попробуйте добавить привязку вручную.'}{' '}
+                {suggestJob.result?.fromPrompt && suggestJob.result.prompt && (
+                  <>
+                    <button onClick={() => setSkillGen(suggestJob.result!.prompt!)} style={linkBtn}>
+                      ✨ Создать новый навык по этому описанию
+                    </button>{' '}
+                  </>
+                )}
                 <button onClick={() => resetAiJob(suggestKey)} style={linkBtn}>Закрыть</button>
               </div>
             ) : (
@@ -613,7 +702,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
                 {suggestJob.result!.candidates.length > 0 && (
                   <>
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
-                      <SectionLabel>Умения подобраны автоматически</SectionLabel>
+                      <SectionLabel>{suggestJob.result!.fromPrompt ? 'Привязки по вашему описанию' : 'Умения подобраны автоматически'}</SectionLabel>
                       <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
                         {suggestJob.result!.candidates.filter(c => c.on).length} из {suggestJob.result!.candidates.length}
                       </span>
@@ -684,9 +773,17 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
                   </>
                 )}
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12, color: C.textMuted }}>
-                  ✨ Предложено ИИ по роли и доступным источникам. Навыки из реестра будут установлены и привязаны. Ничего не сохранено, пока вы не подтвердите.
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12, color: C.textMuted, flexWrap: 'wrap' }}>
+                  ✨ {suggestJob.result!.fromPrompt ? 'Сгенерировано ИИ по вашему описанию' : 'Предложено ИИ по роли и доступным источникам'}. Навыки из реестра будут установлены и привязаны. Ничего не сохранено, пока вы не подтвердите.
                 </div>
+                {suggestJob.result!.fromPrompt && suggestJob.result!.prompt && (
+                  <div style={{ fontSize: 12, color: C.textMuted, marginTop: 8 }}>
+                    Нужен новый навык?{' '}
+                    <button onClick={() => setSkillGen(suggestJob.result!.prompt!)} style={linkBtn}>
+                      ✨ Создать по этому описанию
+                    </button>
+                  </div>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
                   <Button variant="ghost" size="sm" disabled={adding} onClick={() => resetAiJob(suggestKey)}>Отмена</Button>
                   <Button variant="primary" size="sm" loading={adding}

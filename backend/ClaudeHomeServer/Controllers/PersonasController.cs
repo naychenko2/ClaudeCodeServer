@@ -1406,6 +1406,28 @@ public class PersonasController : ControllerBase
         }
     }
 
+    // Генерация привязок под свободный запрос пользователя: тот же конвейер, что и подбор
+    // под роль, но главный ориентир — текст пользователя. Возвращает кандидатов, НЕ сохраняет.
+    [HttpPost("{id}/bindings/generate")]
+    public async Task<ActionResult> GenerateBindings(string id, [FromBody] GenerateBindingsRequest req)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(req.Prompt))
+            return BadRequest(new { error = "Опишите, какая привязка нужна персоне" });
+
+        try
+        {
+            var candidates = await SuggestBindingsAsync(persona, req.Prompt.Trim());
+            return Ok(new { candidates });
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "generate bindings для персоны {Persona}", id);
+            return StatusCode(502, new { error = $"Не удалось создать привязку: {ex.Message}" });
+        }
+    }
+
     // Разбор DTO привязки: строковые type/mode → enum'ы, path нормализуется в валидации
     private static (PersonaBinding? Binding, string? Error) ParseBinding(PersonaBindingRequest req)
     {
@@ -1442,9 +1464,13 @@ public class PersonasController : ControllerBase
 
     // Подбор кандидатов-привязок: каталог целей владельца + профиль персоны → one-shot LLM
     // (строгий JSON-массив, ретрай как в quick-create), невалидные кандидаты отбрасываются.
-    private async Task<List<PersonaBinding>> SuggestBindingsAsync(Persona persona)
+    // userPrompt задан — генерация под свободный запрос пользователя, иначе подбор под роль.
+    private async Task<List<PersonaBinding>> SuggestBindingsAsync(Persona persona, string? userPrompt = null)
     {
-        var prompt = BuildSuggestPrompt(persona);
+        // Полный каталог знаний (датасеты проектов/заметок + прочие доступные Dify-датасеты) —
+        // валидация всё равно принимает любой из KnowledgeTargetsAsync, каталог промпта не должен быть уже
+        var datasets = await _bindings.KnowledgeTargetsAsync(UserId);
+        var prompt = BuildSuggestPrompt(persona, datasets, userPrompt);
         var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
 
         List<SuggestRaw>? raws = null;
@@ -1474,11 +1500,16 @@ public class PersonasController : ControllerBase
         return result;
     }
 
-    private string BuildSuggestPrompt(Persona persona)
+    private string BuildSuggestPrompt(Persona persona,
+        IReadOnlyList<(string Id, string Label, string? ProjectId)> datasets, string? userPrompt = null)
     {
+        var hasUserPrompt = !string.IsNullOrWhiteSpace(userPrompt);
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Подбери AI-персоне источники знаний и правила («привязки») под её роль. " +
-                      "Выбирай ТОЛЬКО из каталога ниже (target — точный id из каталога).");
+        sb.AppendLine(hasUserPrompt
+            ? "Составь AI-персоне привязку(и) — источники знаний, навыки и инструменты — по запросу пользователя. " +
+              "Выбирай ТОЛЬКО из каталога ниже (target — точный id из каталога)."
+            : "Подбери AI-персоне источники знаний и правила («привязки») под её роль. " +
+              "Выбирай ТОЛЬКО из каталога ниже (target — точный id из каталога).");
         sb.AppendLine($"\nПерсона: {persona.Role ?? "без роли"} ({persona.Name}).");
         if (!string.IsNullOrWhiteSpace(persona.Description))
             sb.AppendLine($"Кто это: {persona.Description.Trim()}");
@@ -1492,14 +1523,17 @@ public class PersonasController : ControllerBase
             sb.AppendLine($"Характер: {character}");
         }
 
+        if (hasUserPrompt)
+            sb.AppendLine($"\nЗапрос пользователя (главный ориентир — построй привязку(и) под него): {userPrompt!.Trim()}");
+
         sb.AppendLine("\nКаталог целей:");
         var projects = _projects.GetByOwner(UserId);
         if (projects.Count > 0)
         {
-            sb.AppendLine("Проекты (type \"project\", target = id):");
+            sb.AppendLine("Проекты (type \"project\", target = id; конкретная папка проекта — " +
+                          "type \"projectPath\", target = id + обязательный path):");
             foreach (var p in projects.Take(20)) sb.AppendLine($"- {p.Id} — {p.Name}");
         }
-        var datasets = _bindings.KnownDatasets(UserId);
         if (datasets.Count > 0)
         {
             sb.AppendLine("Базы знаний (type \"knowledge\", target = id):");
@@ -1526,9 +1560,13 @@ public class PersonasController : ControllerBase
             sb.AppendLine($"- {kv.Key} — {kv.Value.Label}: {kv.Value.Hint}");
 
         sb.AppendLine("\nВерни ТОЛЬКО JSON-массив (без пояснений и markdown) из НЕ БОЛЕЕ 5 объектов:");
-        sb.AppendLine("[{\"type\":\"project|knowledge|notes|tool|skill\",\"target\":\"id из каталога\"," +
-                      "\"path\":\"папка (опционально)\",\"condition\":\"когда применять, 1-2 предложения по-русски\",\"mode\":\"auto\"}]");
-        sb.AppendLine("Бери только цели, реально полезные роли персоны; если подходящих нет — верни [].");
+        sb.AppendLine("[{\"type\":\"project|projectPath|knowledge|notes|tool|skill\",\"target\":\"id из каталога\"," +
+                      "\"path\":\"папка (опционально; для projectPath обязательна)\"," +
+                      "\"condition\":\"когда применять, 1-2 предложения по-русски\",\"mode\":\"auto\"}]");
+        sb.AppendLine(hasUserPrompt
+            ? "Построй привязку(и) под запрос пользователя, опираясь на каталог; " +
+              "если запрос не покрывается ни одной целью каталога — верни []."
+            : "Бери только цели, реально полезные роли персоны; если подходящих нет — верни [].");
         return sb.ToString();
     }
 
@@ -1938,6 +1976,9 @@ public record PersonaBindingRequest(string Type, string Target, string? Path = n
     string? Condition = null, string? Mode = null);
 
 public record PersonaBindingsSetRequest(List<PersonaBindingRequest>? Bindings);
+
+// Свободный запрос пользователя для генерации привязок (POST {id}/bindings/generate)
+public record GenerateBindingsRequest(string? Prompt);
 
 public record AiConditionRequest(string Type, string Target, string? Path = null);
 

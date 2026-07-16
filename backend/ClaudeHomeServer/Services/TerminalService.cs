@@ -153,6 +153,9 @@ public sealed class TerminalService : IDisposable
         {
             // Linux: пытаемся pty-bridge, фолбэк на bash с перенаправлением
             shell = "bash";
+            // bash идёт с --norc, его дефолтный промпт «bash-5.2$» не показывает cwd —
+            // передаём PS1 с текущей папкой, чтобы было видно, что мы в папке проекта
+            const string ps1 = @"\[\e[36m\]\w\[\e[0m\] \$ ";
             if (File.Exists(PtyBridgePath))
             {
                 usesPtyBridge = true;
@@ -168,6 +171,7 @@ public sealed class TerminalService : IDisposable
                     CreateNoWindow = true,
                 };
                 psi.EnvironmentVariables["TERM"] = "xterm-256color";
+                psi.EnvironmentVariables["PS1"] = ps1;
                 process = new Process { StartInfo = psi, EnableRaisingEvents = true };
                 process.Start();
             }
@@ -187,6 +191,7 @@ public sealed class TerminalService : IDisposable
                     CreateNoWindow = true,
                 };
                 psi.EnvironmentVariables["TERM"] = "xterm-256color";
+                psi.EnvironmentVariables["PS1"] = ps1;
                 process = new Process { StartInfo = psi, EnableRaisingEvents = true };
                 process.Start();
             }

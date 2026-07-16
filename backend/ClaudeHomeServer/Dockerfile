@@ -53,6 +53,10 @@ RUN npm install -g @anthropic-ai/claude-code
 # вызов скачивает пакет, и «шум» загрузки может исказить первый разбор вывода.
 RUN npm install -g skills
 
+# Консольные утилиты для веб-терминала (Midnight Commander и т.п.)
+RUN apt-get update && apt-get install -y --no-install-recommends mc \
+ && rm -rf /var/lib/apt/lists/*
+
 # Непривилегированный пользователь; HOME под volume ~/.claude
 RUN useradd -m -u 1001 app
 WORKDIR /app

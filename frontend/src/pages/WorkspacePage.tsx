@@ -30,8 +30,9 @@ import { ensurePersonasLoaded } from '../lib/personas';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
 import type { PersonaView } from '../features/personas/PersonaToolbar';
 import { TeamCommandCenter } from '../features/personas/TeamCommandCenter';
-import { TerminalPanel } from '../components/terminal/TerminalPanel';
-import { PreviewPanel } from '../components/preview/PreviewPanel';
+import { ToolsSidebar, type PreviewSession } from '../components/tools/ToolsSidebar';
+import { TerminalView } from '../components/terminal/TerminalView';
+import { PreviewView } from '../components/preview/PreviewView';
 
 interface Props {
   project: Project;
@@ -138,6 +139,9 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const [projectForEdit, setProjectForEdit] = useState(project);
   type ToolsTab = 'terminal' | 'preview';
   const [toolsTab, setToolsTab] = useState<ToolsTab>('terminal');
+  const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
+  const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
+  const [previewSessions, setPreviewSessions] = useState<PreviewSession[]>([]);
   const activeSessionRef = useRef<Session | null>(null);
   activeSessionRef.current = activeSession;
 
@@ -751,24 +755,26 @@ const windowWidth = useWindowWidth();
     }
   }, [project.id, knowledgeDocMap]);
 
-  const ToolsPane = ({ projectId }: { projectId: string }) => (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ flexShrink: 0, padding: '10px 12px', borderBottom: `1px solid ${C.border}` }}>
-        <PillSwitch<ToolsTab>
-          value={toolsTab}
-          options={[
-            { value: 'terminal' as ToolsTab, label: 'Терминал' },
-            { value: 'preview' as ToolsTab, label: 'Preview' },
-          ]}
-          onChange={setToolsTab}
-          fill
-        />
+  const ToolsPane = ({ projectId }: { projectId: string }) => {
+    const activePreview = previewSessions.find(p => p.id === activePreviewId);
+    return (
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        {toolsTab === 'terminal' && activeTerminalId ? (
+          <TerminalView terminalId={activeTerminalId} />
+        ) : toolsTab === 'preview' && activePreview ? (
+          <PreviewView
+            preview={activePreview}
+            projectId={projectId}
+            onStop={id => setPreviewSessions(prev => prev.filter(p => p.id !== id))}
+          />
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>
+            {toolsTab === 'terminal' ? 'Выберите или создайте терминал' : 'Запустите dev-сервер'}
+          </div>
+        )}
       </div>
-      {toolsTab === 'terminal'
-        ? <TerminalPanel projectId={projectId} />
-        : <PreviewPanel projectId={projectId} />}
-    </div>
-  );
+    );
+  };
 
   const Sidebar = (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel, flexShrink: 0, height: '100%' }}>
@@ -849,7 +855,10 @@ const windowWidth = useWindowWidth();
         ) : leftTab === 'personas' ? (
           <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
         ) : leftTab === 'tools' ? (
-          <ToolsPane projectId={project.id} />
+          <ToolsSidebar projectId={project.id} activeTab={toolsTab} onTabChange={setToolsTab}
+            activeTerminalId={activeTerminalId} onSelectTerminal={setActiveTerminalId}
+            activePreviewId={activePreviewId} onSelectPreview={setActivePreviewId}
+            previewSessions={previewSessions} onPreviewSessionsChange={setPreviewSessions} />
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'

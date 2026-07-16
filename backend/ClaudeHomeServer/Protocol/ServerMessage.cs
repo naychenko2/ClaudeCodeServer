@@ -105,11 +105,11 @@ public record ExitedMessage()
     : ServerMessage("exited");
 
 // Terminal PTY: вывод от сервера к клиенту (Data = фрагмент текста)
-public record TerminalOutputMessage(string Data, bool IsError = false)
+public record TerminalOutputMessage(string Data, bool IsError = false, string? TerminalId = null)
     : ServerMessage("terminal_output");
 
 // Terminal PTY: смена статуса (starting/running/stopped/error)
-public record TerminalStatusMessage(string Status, int? ExitCode = null)
+public record TerminalStatusMessage(string Status, int? ExitCode = null, string? TerminalId = null)
     : ServerMessage("terminal_status");
 
 // Preview dev-server: смена статуса

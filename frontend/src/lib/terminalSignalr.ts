@@ -9,9 +9,7 @@ function getToken(): string {
 function getConnection(): signalR.HubConnection {
   if (!connection) {
     connection = new signalR.HubConnectionBuilder()
-      .withUrl('/hubs/terminal', {
-        accessTokenFactory: getToken,
-      })
+      .withUrl('/hubs/terminal', { accessTokenFactory: getToken })
       .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
       .build()
   }
@@ -30,40 +28,63 @@ async function ensureConnected(): Promise<void> {
   }
 }
 
-export async function startTerminal(projectId: string, cols: number, rows: number): Promise<void> {
-  const conn = getConnection()
-  if (conn.state === signalR.HubConnectionState.Disconnected) {
-    await ensureConnected()
-  }
-  await conn.invoke('StartTerminal', projectId, cols, rows)
+export interface TerminalInfo {
+  id: string
+  projectId: string
+  name: string
+  status: string
+  shell: string | null
 }
 
-export async function stopTerminal(projectId: string): Promise<void> {
+export async function createTerminal(projectId: string, name?: string, cols = 80, rows = 24): Promise<TerminalInfo> {
+  const conn = getConnection()
+  if (conn.state === signalR.HubConnectionState.Disconnected) await ensureConnected()
+  return conn.invoke('CreateTerminal', projectId, cols, rows, name ?? null)
+}
+
+export async function connectTerminal(terminalId: string): Promise<TerminalInfo | null> {
+  const conn = getConnection()
+  if (conn.state === signalR.HubConnectionState.Disconnected) await ensureConnected()
+  return conn.invoke('ConnectTerminal', terminalId)
+}
+
+export async function listTerminals(projectId: string): Promise<TerminalInfo[]> {
+  const conn = getConnection()
+  if (conn.state === signalR.HubConnectionState.Disconnected) await ensureConnected()
+  return conn.invoke('ListTerminals', projectId)
+}
+
+export async function stopTerminal(terminalId: string): Promise<void> {
   const conn = getConnection()
   if (conn.state === signalR.HubConnectionState.Connected) {
-    try {
-      await conn.invoke('StopTerminal', projectId)
-    } catch { /* ignore */ }
+    await conn.invoke('StopTerminal', terminalId)
   }
 }
 
-export async function sendTerminalInput(projectId: string, data: string): Promise<void> {
+export async function sendTerminalInput(terminalId: string, data: string): Promise<void> {
   const conn = getConnection()
   if (conn.state === signalR.HubConnectionState.Connected) {
-    await conn.invoke('TerminalInput', projectId, data)
+    await conn.invoke('TerminalInput', terminalId, data)
   }
 }
 
-export async function resizeTerminal(projectId: string, cols: number, rows: number): Promise<void> {
+export async function resizeTerminal(terminalId: string, cols: number, rows: number): Promise<void> {
   const conn = getConnection()
   if (conn.state === signalR.HubConnectionState.Connected) {
-    await conn.invoke('TerminalResize', projectId, cols, rows)
+    await conn.invoke('TerminalResize', terminalId, cols, rows)
   }
 }
 
-type TerminalMessageHandler = (msg: { type: string; data?: string; isError?: boolean; status?: string; exitCode?: number }) => void
+type TerminalMsgHandler = (msg: {
+  type: string
+  data?: string
+  isError?: boolean
+  status?: string
+  exitCode?: number
+  terminalId?: string
+}) => void
 
-export function onTerminalMessage(handler: TerminalMessageHandler): () => void {
+export function onTerminalMessage(handler: TerminalMsgHandler): () => void {
   const conn = getConnection()
   conn.on('message', handler)
   return () => conn.off('message', handler)

@@ -18,55 +18,53 @@ public class TerminalHub : Hub
         _projects = projects;
     }
 
-    // DefaultMapInboundClaims = false → sub не ремапится
     private string? UserId => Context.User?.FindFirstValue(JwtRegisteredClaimNames.Sub);
-
     private bool OwnsProject(string projectId)
-    {
-        var ownerId = _projects.GetById(projectId)?.OwnerId;
-        return ownerId is not null && ownerId == UserId;
-    }
-
+        => _projects.GetById(projectId)?.OwnerId == UserId;
     private static HubException Denied() => new("Доступ запрещён");
 
-    /// <summary>Запустить терминал для проекта (или подключиться к существующему).</summary>
-    public async Task StartTerminal(string projectId, int cols = 80, int rows = 24)
+    /// <summary>Создать новый терминал в проекте.</summary>
+    public async Task<TerminalInfoDto> CreateTerminal(string projectId, int cols, int rows, string? name = null)
     {
         if (!OwnsProject(projectId)) throw Denied();
-        var userId = UserId!;
-        var connId = Context.ConnectionId;
-
-        await _terminal.StartAsync(projectId, userId, connId, cols, rows);
-        await Groups.AddToGroupAsync(Context.ConnectionId, "terminal_" + projectId);
+        return await _terminal.CreateAsync(projectId, UserId!, Context.ConnectionId, cols, rows, name);
     }
 
-    /// <summary>Остановить терминал проекта.</summary>
-    public async Task StopTerminal(string projectId)
+    /// <summary>Подключиться к существующему терминалу.</summary>
+    public async Task<TerminalInfoDto?> ConnectTerminal(string terminalId)
     {
-        if (!OwnsProject(projectId)) throw Denied();
-        await _terminal.StopAsync(projectId, UserId!);
-        await Groups.RemoveFromGroupAsync(Context.ConnectionId, "terminal_" + projectId);
+        return await _terminal.ConnectAsync(terminalId, UserId!, Context.ConnectionId);
     }
 
-    /// <summary>Отправить ввод в PTY терминала.</summary>
-    public async Task TerminalInput(string projectId, string data)
+    /// <summary>Список терминалов проекта.</summary>
+    public List<TerminalInfoDto> ListTerminals(string projectId)
     {
         if (!OwnsProject(projectId)) throw Denied();
-        await _terminal.WriteInputAsync(projectId, data);
+        return _terminal.ListByProject(projectId);
     }
 
-    /// <summary>Изменить размер терминала.</summary>
-    public Task TerminalResize(string projectId, int cols, int rows)
+    /// <summary>Остановить терминал.</summary>
+    public async Task StopTerminal(string terminalId)
     {
-        if (!OwnsProject(projectId)) throw Denied();
-        _terminal.Resize(projectId, cols, rows);
+        await _terminal.StopAsync(terminalId, UserId!);
+    }
+
+    /// <summary>Ввод в терминал.</summary>
+    public async Task TerminalInput(string terminalId, string data)
+    {
+        await _terminal.WriteInputAsync(terminalId, data);
+    }
+
+    /// <summary>Resize терминала.</summary>
+    public Task TerminalResize(string terminalId, int cols, int rows)
+    {
+        _terminal.Resize(terminalId, cols, rows);
         return Task.CompletedTask;
     }
 
     public override async Task OnDisconnectedAsync(Exception? ex)
     {
-        var connId = Context.ConnectionId;
-        await _terminal.RemoveViewerAsync(connId);
+        await _terminal.RemoveViewerAsync(Context.ConnectionId);
         await base.OnDisconnectedAsync(ex);
     }
 }

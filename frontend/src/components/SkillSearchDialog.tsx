@@ -6,6 +6,7 @@ import { api } from '../lib/api';
 import { Modal, Button, IconField, WaitingIndicator } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useAiJob, runAiJob } from '../lib/aiJobStore';
+import { SkillGenerateDialog } from './SkillGenerateDialog';
 
 // Контекст установки диалога определяет доступные действия:
 //  • persona     — «Установить персоне» (глобально + привязка Skill) и «✨ Подобрать под персону»;
@@ -43,6 +44,7 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
   );
   const [translatedQuery, setTranslatedQuery] = useState<string | null>(null);
   const [cardStates, setCardStates] = useState<Record<string, CardState>>({});
+  const [showGenerate, setShowGenerate] = useState(false);
 
   const canContextSuggest = !!persona || !!projectId;
   const suggesting = suggestJob.status === 'running';
@@ -156,6 +158,20 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
         </div>
       )}
 
+      {/* Нет подходящего в реестре — сгенерировать свой навык по описанию */}
+      <div style={{ fontSize: 12, color: C.textMuted, marginTop: -4 }}>
+        Нет подходящего?{' '}
+        <button
+          onClick={() => setShowGenerate(true)}
+          style={{
+            background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
+            fontSize: 12, fontFamily: FONT.sans, textDecoration: 'underline', padding: 0,
+          }}
+        >
+          ✨ Создать навык по промпту
+        </button>
+      </div>
+
       {(error || suggestError) && (
         <div style={{
           padding: '10px 12px', background: C.dangerBg, border: `1px solid ${C.dangerBorder}`,
@@ -204,6 +220,15 @@ export function SkillSearchDialog({ onClose, projectId, persona, onInstalled }: 
           />
         ))}
       </div>
+
+      {showGenerate && (
+        <SkillGenerateDialog
+          persona={persona}
+          projectId={projectId}
+          onClose={() => setShowGenerate(false)}
+          onSaved={() => { onInstalled?.(); setShowGenerate(false); }}
+        />
+      )}
     </Modal>
   );
 }

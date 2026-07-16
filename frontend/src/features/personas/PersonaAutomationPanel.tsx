@@ -22,7 +22,7 @@ import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { bumpPersonas } from '../../lib/personas';
 import { showToast } from '../../lib/toast';
-import { Button, Field, Menu, MenuItem, SegmentedControl, TextField, Toggle } from '../../components/ui';
+import { Button, Field, Menu, MenuItem, SegmentedControl, TextArea, TextField, Toggle } from '../../components/ui';
 import { SectionLabel } from '../tasks/bits';
 import { TRIGGER_META, ACTION_META, triggerDetails, rulesCounter } from './automationMeta';
 import { Stepper, Crumb } from './stepperUi';
@@ -38,12 +38,15 @@ interface AddState {
   draft: FormState;
 }
 
-// Кандидаты AI-подбора с чекбоксами (по образцу PersonaBindingsPanel.SuggestState)
+// Кандидаты AI-подбора/генерации с чекбоксами (по образцу PersonaBindingsPanel.SuggestState).
+// fromPrompt — источник кандидатов: true = генерация по промпту пользователя, false = подбор под роль
+// (влияет только на подписи блока).
 interface SuggestState {
   loading: boolean;
   candidates?: (PersonaAutomationRule & { on: boolean })[];
   error?: string;
   adding?: boolean;
+  fromPrompt?: boolean;
 }
 
 // Кандидат → DTO создания правила (поля 1:1 с PersonaAutomationRule — сервер уже
@@ -86,6 +89,9 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
 
   // AI-подбор правил — кандидаты с чекбоксами (по образцу привязок)
   const [suggest, setSuggest] = useState<SuggestState | null>(null);
+  // Генерация по свободному промпту — инлайн-поле ввода (null — закрыто, строка — черновик)
+  const [genPrompt, setGenPrompt] = useState<string | null>(null);
+  const [genBusy, setGenBusy] = useState(false);
 
   const setDraftField = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setDraft(prev => prev ? { ...prev, [key]: value } : prev);
@@ -99,6 +105,8 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
   function openEdit(rule: PersonaAutomationRule) {
     setMenuId(null);
     setAdding(null);
+    setSuggest(null);
+    setGenPrompt(null);
     setConfirmId(null);
     setExpandedId(rule.id);
     setDraft(initialForm(rule, projects));
@@ -148,6 +156,7 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
   function openAdd() {
     closeEdit();
     setSuggest(null);
+    setGenPrompt(null);
     setAdding({ step: 1, draft: initialForm(null, projects) });
   }
   async function commitAdd() {
@@ -167,6 +176,7 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
   async function runSuggest() {
     closeEdit();
     setAdding(null);
+    setGenPrompt(null);
     setSuggest({ loading: true });
     try {
       const { candidates } = await api.personas.suggestAutomation(persona.id);
@@ -174,6 +184,30 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
     } catch (e: any) {
       setSuggest({ loading: false, error: e?.message ?? 'Не удалось подобрать правила. Попробуйте ещё раз.' });
     }
+  }
+
+  // «✨ Создать по промпту» — открыть инлайн-поле ввода свободного запроса
+  function openGenerate() {
+    closeEdit();
+    setAdding(null);
+    setSuggest(null);
+    setGenPrompt('');
+  }
+
+  // Отправка промпта → генерация правила(правил); результат — те же карточки-кандидаты
+  async function runGenerate() {
+    const prompt = (genPrompt ?? '').trim();
+    if (!prompt) return;
+    setGenBusy(true);
+    setSuggest({ loading: true, fromPrompt: true });
+    try {
+      const { candidates } = await api.personas.generateAutomation(persona.id, prompt);
+      setGenPrompt(null);
+      setSuggest({ loading: false, fromPrompt: true, candidates: candidates.map(c => ({ ...c, on: true })) });
+    } catch (e: any) {
+      setSuggest({ loading: false, fromPrompt: true, error: e?.message ?? 'Не удалось создать правило. Попробуйте ещё раз.' });
+      setGenPrompt(null);
+    } finally { setGenBusy(false); }
   }
 
   function toggleCandidate(id: string) {
@@ -248,17 +282,52 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
         )}
 
         {/* Пустое состояние — внутри 680-контейнера, в духе привязок */}
-        {rules.length === 0 && !adding && !suggest && (
-          <EmptyState onCreate={openAdd} onSuggest={() => void runSuggest()} />
+        {rules.length === 0 && !adding && !suggest && genPrompt === null && (
+          <EmptyState onCreate={openAdd} onSuggest={() => void runSuggest()} onGenerate={openGenerate} />
         )}
 
-        {/* Кнопки под списком (скрыты, пока открыт степпер/подбор) */}
-        {rules.length > 0 && !adding && !suggest && (
+        {/* Кнопки под списком (скрыты, пока открыт степпер/подбор/ввод промпта) */}
+        {rules.length > 0 && !adding && !suggest && genPrompt === null && (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
             <AddRuleButton onClick={openAdd} accent={accent} />
             <Button variant="ghostAccent" size="sm" onClick={() => void runSuggest()}>
               ✨ Подобрать автоматически
             </Button>
+            <Button variant="ghostAccent" size="sm" onClick={openGenerate}>
+              ✨ Создать по промпту
+            </Button>
+          </div>
+        )}
+
+        {/* Инлайн-ввод свободного промпта → генерация правила(правил) */}
+        {genPrompt !== null && (
+          <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 14, paddingTop: 18 }}>
+            <SectionLabel>Создать правило по описанию</SectionLabel>
+            <div style={{ fontSize: 12.5, color: C.textSecondary, margin: '6px 0 10px', lineHeight: 1.5 }}>
+              Опишите словами, когда и что должна делать персона — например «каждое утро в 9:00
+              присылай мне сводку по задачам проекта».
+            </div>
+            <TextArea
+              value={genPrompt}
+              onChange={setGenPrompt}
+              autoFocus
+              autoGrow
+              minHeight={72}
+              maxHeight={220}
+              disabled={genBusy}
+              placeholder="Что должна отслеживать персона и как реагировать…"
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void runGenerate(); }
+              }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+              <Button variant="ghost" size="sm" disabled={genBusy} onClick={() => setGenPrompt(null)}>Отмена</Button>
+              <Button variant="primary" size="sm" loading={genBusy}
+                disabled={genBusy || !genPrompt.trim()}
+                onClick={() => void runGenerate()}>
+                ✨ Сгенерировать
+              </Button>
+            </div>
           </div>
         )}
 
@@ -282,24 +351,26 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
             {suggest.loading ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: C.textMuted }}>
                 <span style={pulseDot} />
-                Подбираю правила под роль персоны — до минуты
+                {suggest.fromPrompt ? 'Создаю правило по описанию — до минуты' : 'Подбираю правила под роль персоны — до минуты'}
                 <style>{'@keyframes cc-auto-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }'}</style>
               </div>
             ) : suggest.error ? (
               <div style={{ fontSize: 12.5, color: C.dangerText }}>
                 {suggest.error}{' '}
-                <button onClick={() => void runSuggest()} style={linkBtn}>Повторить</button>{' '}
+                <button onClick={() => suggest.fromPrompt ? openGenerate() : void runSuggest()} style={linkBtn}>Повторить</button>{' '}
                 <button onClick={() => setSuggest(null)} style={{ ...linkBtn, color: C.textMuted }}>Закрыть</button>
               </div>
             ) : (suggest.candidates ?? []).length === 0 ? (
               <div style={{ fontSize: 12.5, color: C.textMuted }}>
-                Ничего подходящего не нашлось — попробуйте создать правило вручную.{' '}
+                {suggest.fromPrompt
+                  ? 'Не получилось собрать правило по описанию — уточните запрос или создайте вручную.'
+                  : 'Ничего подходящего не нашлось — попробуйте создать правило вручную.'}{' '}
                 <button onClick={() => setSuggest(null)} style={linkBtn}>Закрыть</button>
               </div>
             ) : (
               <>
                 <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
-                  <SectionLabel>Правила подобраны автоматически</SectionLabel>
+                  <SectionLabel>{suggest.fromPrompt ? 'Правило создано по описанию' : 'Правила подобраны автоматически'}</SectionLabel>
                   <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
                     {suggest.candidates!.filter(c => c.on).length} из {suggest.candidates!.length}
                   </span>
@@ -331,7 +402,7 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
                   })}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12, color: C.textMuted }}>
-                  ✨ Предложено ИИ по роли персоны. Ничего не сохранено, пока вы не подтвердите.
+                  ✨ {suggest.fromPrompt ? 'Сгенерировано ИИ по вашему описанию' : 'Предложено ИИ по роли персоны'}. Ничего не сохранено, пока вы не подтвердите.
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
                   <Button variant="ghost" size="sm" disabled={suggest.adding} onClick={() => setSuggest(null)}>Отмена</Button>
@@ -636,7 +707,7 @@ function ToggleLabel({ checked, onChange }: { checked: boolean; onChange: (v: bo
 
 // ─── Empty-state ────────────────────────────────────────────────────────────────
 
-function EmptyState({ onCreate, onSuggest }: { onCreate: () => void; onSuggest: () => void }) {
+function EmptyState({ onCreate, onSuggest, onGenerate }: { onCreate: () => void; onSuggest: () => void; onGenerate: () => void }) {
   return (
     <div style={{
       marginTop: 14, border: `1.5px dashed ${C.dashed}`, borderRadius: R.xl,
@@ -661,6 +732,9 @@ function EmptyState({ onCreate, onSuggest }: { onCreate: () => void; onSuggest: 
         </button>
         <Button variant="ghostAccent" size="sm" onClick={onSuggest}>
           ✨ Подобрать автоматически
+        </Button>
+        <Button variant="ghostAccent" size="sm" onClick={onGenerate}>
+          ✨ Создать по промпту
         </Button>
       </div>
     </div>

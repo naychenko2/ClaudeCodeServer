@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
+import type { CSSProperties } from 'react';
 import { Search, Trash2 } from 'lucide-react';
 import type { AgentInfo, SkillInfo, SkillsData } from '../types';
 import { C, R, FONT } from '../lib/design';
 import { api } from '../lib/api';
 import { agentDotColor } from './AgentSelector';
 import { SkillSearchDialog } from './SkillSearchDialog';
+import { SkillGenerateDialog } from './SkillGenerateDialog';
 import { ConfirmDialog } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { showToast } from '../lib/toast';
@@ -13,11 +15,20 @@ interface Props {
   projectId: string;
 }
 
+// Кнопки в шапке панели навыков (Найти навык / Создать по промпту) — общий стиль
+const skillHeadBtn: CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6,
+  border: `1px solid ${C.border}`, background: C.bgWhite, color: C.textSecondary,
+  borderRadius: R.lg, padding: '6px 12px', fontSize: 12.5, fontWeight: 600,
+  cursor: 'pointer', fontFamily: FONT.sans, transition: 'border-color 0.15s, color 0.15s',
+};
+
 export function SkillsPanel({ projectId }: Props) {
   const [data, setData] = useState<SkillsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
+  const [showGenerate, setShowGenerate] = useState(false);
   // Подтверждение удаления навыка проекта — через ConfirmDialog вместо window.confirm
   const [pendingDelete, setPendingDelete] = useState<SkillInfo | null>(null);
 
@@ -40,23 +51,26 @@ export function SkillsPanel({ projectId }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Шапка с кнопкой поиска навыка */}
+      {/* Шапка с кнопками поиска и генерации навыка */}
       <div style={{
-        display: 'flex', justifyContent: 'flex-end', padding: '8px 12px 4px', flexShrink: 0,
+        display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '8px 12px 4px', flexShrink: 0,
       }}>
         <button
           onClick={() => setShowSearch(true)}
           onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
           onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textSecondary; }}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            border: `1px solid ${C.border}`, background: C.bgWhite, color: C.textSecondary,
-            borderRadius: R.lg, padding: '6px 12px', fontSize: 12.5, fontWeight: 600,
-            cursor: 'pointer', fontFamily: FONT.sans, transition: 'border-color 0.15s, color 0.15s',
-          }}
+          style={skillHeadBtn}
         >
           <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           Найти навык
+        </button>
+        <button
+          onClick={() => setShowGenerate(true)}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textSecondary; }}
+          style={skillHeadBtn}
+        >
+          ✨ Создать по промпту
         </button>
       </div>
 
@@ -65,6 +79,14 @@ export function SkillsPanel({ projectId }: Props) {
           projectId={projectId}
           onClose={() => setShowSearch(false)}
           onInstalled={() => void load()}
+        />
+      )}
+
+      {showGenerate && (
+        <SkillGenerateDialog
+          projectId={projectId}
+          onClose={() => setShowGenerate(false)}
+          onSaved={() => void load()}
         />
       )}
 

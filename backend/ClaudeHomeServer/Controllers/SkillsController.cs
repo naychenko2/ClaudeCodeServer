@@ -13,6 +13,7 @@ public class SkillsController(
     SkillsService skills,
     SkillsCliService cli,
     SkillSuggestService suggest,
+    SkillGenerationService generation,
     SkillTranslationService translation,
     PluginSkillLocalizer pluginLocalizer,
     PersonaManager personas,
@@ -130,6 +131,22 @@ public class SkillsController(
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
     }
 
+    // --- LLM-генерация нового навыка по свободному промпту ---
+
+    // Генерирует навык (SKILL.md) по описанию пользователя. НЕ сохраняет — возвращает кандидата
+    // для превью/правки; сохранение — обычным POST api/skills после подтверждения.
+    [HttpPost("api/skills/generate")]
+    public async Task<IActionResult> Generate([FromBody] GenerateSkillRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Prompt))
+            return BadRequest(new { error = "Опишите, что должен делать навык" });
+
+        var g = await generation.GenerateAsync(req.Prompt.Trim(), ct);
+        if (g is null)
+            return StatusCode(502, new { error = "Модель не вернула корректный навык — попробуйте ещё раз" });
+        return Ok(new { name = g.Name, description = g.Description, body = g.Body });
+    }
+
     // --- Установить навык персоне: глобальная установка + привязка (Skill) ---
 
     [HttpPost("api/personas/{id}/skills")]
@@ -190,6 +207,7 @@ public class SkillsController(
     public IActionResult SaveSkill(string skillName, [FromBody] SkillContentRequest req)
     {
         try { skills.SaveGlobalSkill(skillName, req.Content); return Ok(); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 
@@ -203,6 +221,7 @@ public class SkillsController(
             skills.SaveGlobalSkill(req.Name.Trim(), req.Content);
             return Ok(new { name = req.Name.Trim() });
         }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 
@@ -253,3 +272,4 @@ public record CreateSkillRequest(string Name, string Content);
 public record InstallSkillRequest(string Source, string Skill, string? Scope, string? ProjectId);
 public record InstallForPersonaRequest(string Source, string Skill);
 public record SuggestSkillsRequest(string? PersonaId, string? ProjectId, string? Query);
+public record GenerateSkillRequest(string Prompt);

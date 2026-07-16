@@ -10,6 +10,7 @@ import { Button, IconField, Menu, MenuItem, Toggle, WaitingIndicator } from '../
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
 import { SkillSearchDialog } from '../../components/SkillSearchDialog';
+import { SkillGenerateDialog } from '../../components/SkillGenerateDialog';
 import { PillSwitch } from '../../components/Toolbar';
 import { SectionLabel } from '../tasks/bits';
 import {
@@ -103,6 +104,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   const suggestJob = useAiJob<SuggestResult>(suggestKey);
   const [adding, setAdding] = useState(false);
   const [showSkillSearch, setShowSkillSearch] = useState(false);
+  const [showSkillGenerate, setShowSkillGenerate] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -554,6 +556,9 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
               ⚡ Найти навык
             </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowSkillGenerate(true)}>
+              ✨ Создать навык
+            </Button>
           </div>
         )}
         {bindings !== null && !error && list.length === 0 && !panel && suggestJob.status === 'idle' && (
@@ -564,6 +569,9 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
               ⚡ Найти навык
             </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowSkillGenerate(true)}>
+              ✨ Создать навык
+            </Button>
           </div>
         )}
 
@@ -572,6 +580,14 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             persona={{ id: persona.id, name: persona.name }}
             onClose={() => setShowSkillSearch(false)}
             onInstalled={() => void load()}
+          />
+        )}
+
+        {showSkillGenerate && (
+          <SkillGenerateDialog
+            persona={{ id: persona.id, name: persona.name }}
+            onClose={() => setShowSkillGenerate(false)}
+            onSaved={() => void load()}
           />
         )}
 

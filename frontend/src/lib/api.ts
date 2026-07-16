@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
@@ -548,6 +548,11 @@ export const api = {
       request<{ candidates: PersonaAutomationRule[] }>(`/personas/${encodeURIComponent(id)}/automation/suggest`, {
         method: 'POST', timeoutMs: 150_000,
       }),
+    // Генерация правил автоматизации по свободному промпту пользователя: кандидаты, ничего не сохраняется
+    generateAutomation: (id: string, prompt: string) =>
+      request<{ candidates: PersonaAutomationRule[] }>(`/personas/${encodeURIComponent(id)}/automation/generate`, {
+        method: 'POST', body: JSON.stringify({ prompt }), timeoutMs: 150_000,
+      }),
   },
 
   // Утренний бриф (флаг daily-briefing): собрать план дня в дневник
@@ -828,6 +833,10 @@ export const api = {
     suggest: (ctx: { personaId?: string; projectId?: string; query?: string }) =>
       request<{ candidates: SkillSuggestion[] }>('/skills/suggest',
         { method: 'POST', body: JSON.stringify(ctx), timeoutMs: 200_000 }),
+    // LLM-генерация нового навыка (SKILL.md) по свободному промпту: кандидат для превью, не сохраняется
+    generate: (prompt: string) =>
+      request<GeneratedSkill>('/skills/generate',
+        { method: 'POST', body: JSON.stringify({ prompt }), timeoutMs: 200_000 }),
     // Установить навык персоне: глобальная установка + привязка (Skill)
     installForPersona: (personaId: string, source: string, skill: string) =>
       request<{ installed: string; bound: boolean; warning?: string }>(`/personas/${personaId}/skills`, {

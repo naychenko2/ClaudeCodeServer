@@ -978,11 +978,34 @@ public class PersonasController : ControllerBase
         }
     }
 
+    // Генерация правил автоматизации под свободный запрос пользователя: тот же конвейер, что и
+    // подбор под роль, но главный ориентир — текст пользователя. Возвращает кандидатов, НЕ сохраняет.
+    [HttpPost("{id}/automation/generate")]
+    public async Task<ActionResult> GenerateAutomation(string id, [FromBody] GenerateAutomationRequest req)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(req.Prompt))
+            return BadRequest(new { error = "Опишите, что должна отслеживать персона" });
+
+        try
+        {
+            var candidates = await SuggestAutomationRulesAsync(persona, req.Prompt.Trim());
+            return Ok(new { candidates });
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "generate automation для персоны {Persona}", id);
+            return StatusCode(502, new { error = $"Не удалось создать правило: {ex.Message}" });
+        }
+    }
+
     // Подбор кандидатов-правил: каталог целей владельца + профиль персоны → one-shot LLM
     // (строгий JSON-массив, ретрай как в suggest bindings), невалидные кандидаты отбрасываются.
-    private async Task<List<PersonaAutomationRule>> SuggestAutomationRulesAsync(Persona persona)
+    // userPrompt задан — генерация под свободный запрос пользователя, иначе подбор под роль.
+    private async Task<List<PersonaAutomationRule>> SuggestAutomationRulesAsync(Persona persona, string? userPrompt = null)
     {
-        var prompt = BuildAutomationSuggestPrompt(persona);
+        var prompt = BuildAutomationSuggestPrompt(persona, userPrompt);
         var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
 
         List<SuggestRuleRaw>? raws = null;
@@ -1024,11 +1047,15 @@ public class PersonasController : ControllerBase
         return result;
     }
 
-    private string BuildAutomationSuggestPrompt(Persona persona)
+    private string BuildAutomationSuggestPrompt(Persona persona, string? userPrompt = null)
     {
+        var hasUserPrompt = !string.IsNullOrWhiteSpace(userPrompt);
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Подбери AI-персоне правила автоматизации («когда X — делай Y») под её роль. " +
-                      "Правило — событийный триггер + действие персоны при срабатывании.");
+        sb.AppendLine(hasUserPrompt
+            ? "Составь AI-персоне правило(а) автоматизации («когда X — делай Y») по запросу пользователя. " +
+              "Правило — событийный триггер + действие персоны при срабатывании."
+            : "Подбери AI-персоне правила автоматизации («когда X — делай Y») под её роль. " +
+              "Правило — событийный триггер + действие персоны при срабатывании.");
         sb.AppendLine($"\nПерсона: {persona.Role ?? "без роли"} ({persona.Name}).");
         if (!string.IsNullOrWhiteSpace(persona.Description))
             sb.AppendLine($"Кто это: {persona.Description.Trim()}");
@@ -1041,6 +1068,9 @@ public class PersonasController : ControllerBase
             if (character.Length > 800) character = character[..800] + "…";
             sb.AppendLine($"Характер: {character}");
         }
+
+        if (hasUserPrompt)
+            sb.AppendLine($"\nЗапрос пользователя (главный ориентир — построй правило(а) под него): {userPrompt!.Trim()}");
 
         var existingRules = persona.AutomationRules ?? [];
         if (existingRules.Count > 0)
@@ -1085,7 +1115,10 @@ public class PersonasController : ControllerBase
                       "\"triggerArgs\":{...по схеме своего типа...},\"conditionOnlyIf\":\"доп. условие реакции (опционально) или null\"," +
                       "\"actionWeight\":\"gate|work\",\"actionInstruction\":\"что делать персоне при срабатывании, 1-3 предложения по-русски\"," +
                       "\"rememberInHistory\":false}]");
-        sb.AppendLine("Бери только правила, реально полезные роли и доступным проектам/источникам; если подходящих нет — верни [].");
+        sb.AppendLine(hasUserPrompt
+            ? "Построй правило(а) под запрос пользователя, опираясь на доступные типы триггеров и цели; " +
+              "если запрос не укладывается ни в один триггер — верни []."
+            : "Бери только правила, реально полезные роли и доступным проектам/источникам; если подходящих нет — верни [].");
         return sb.ToString();
     }
 
@@ -1873,6 +1906,9 @@ public record AutomationRuleRequest(
     int? ActionExpiresAfterMinutes = -1);
 
 public record AutomationRulesSetRequest(List<AutomationRuleRequest>? Rules);
+
+// Свободный запрос пользователя для генерации правил автоматизации (POST {id}/automation/generate)
+public record GenerateAutomationRequest(string? Prompt);
 
 public record RememberRequest(string Type, string Text, List<string>? Tags = null,
     string? SourceSessionId = null, double? Salience = null);

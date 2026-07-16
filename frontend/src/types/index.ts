@@ -527,6 +527,13 @@ export interface SkillSuggestion {
   reason: string;
 }
 
+// Сгенерированный по промпту навык (превью до сохранения): слаг-имя, описание, тело SKILL.md.
+export interface GeneratedSkill {
+  name: string;
+  description: string;
+  body: string;
+}
+
 export interface AuthState {
   serverUrl: string;
   token: string;

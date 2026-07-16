@@ -4,6 +4,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Memory;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
@@ -171,11 +172,12 @@ public sealed class TeamMemoryAutolearnService : IHostedService
     internal sealed record TeamItem(TeamMemoryType Type, string Text, double Salience);
 
     // Парс ответа модели: объект {items:[...]}; fallback — legacy-массив [{type,text}]. Мусор → пусто.
+    // Извлечение JSON и маппинг записей — общая MemoryLlmParsing; специфичен только маппинг типа.
     internal static IReadOnlyList<TeamItem> Parse(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return [];
 
-        var objJson = ExtractBalanced(raw, '{', '}');
+        var objJson = MemoryLlmParsing.ExtractBalanced(raw, '{', '}');
         if (objJson is not null)
         {
             try
@@ -186,59 +188,29 @@ public sealed class TeamMemoryAutolearnService : IHostedService
             catch (JsonException) { /* не объект нового формата — пробуем legacy-массив */ }
         }
 
-        var arrJson = ExtractBalanced(raw, '[', ']');
+        var arrJson = MemoryLlmParsing.ExtractBalanced(raw, '[', ']');
         if (arrJson is null) return [];
         try
         {
-            var items = JsonSerializer.Deserialize<List<ItemRaw>>(arrJson, JsonOpts);
+            var items = JsonSerializer.Deserialize<List<MemoryLlmParsing.ItemRaw>>(arrJson, JsonOpts);
             return items is null ? [] : MapItems(items);
         }
         catch (JsonException) { return []; }
     }
 
-    private static IReadOnlyList<TeamItem> MapItems(List<ItemRaw> parsed)
-    {
-        var result = new List<TeamItem>();
-        foreach (var it in parsed)
-        {
-            var text = it.Text?.Trim();
-            if (string.IsNullOrWhiteSpace(text)) continue;
-            var type = it.Type?.Trim().ToLowerInvariant() switch
-            {
-                "decision" => TeamMemoryType.Decision,
-                "convention" => TeamMemoryType.Convention,
-                "glossary" => TeamMemoryType.Glossary,
-                _ => TeamMemoryType.Fact,
-            };
-            var salience = it.Salience is null ? 1.0 : Math.Clamp(it.Salience.Value, 0.05, 1.0);
-            result.Add(new TeamItem(type, text, salience));
-        }
-        return result.Take(8).ToList();
-    }
+    // Маппинг сырых записей в TeamItem — через общее ядро; специфичен только маппинг типа
+    private static IReadOnlyList<TeamItem> MapItems(List<MemoryLlmParsing.ItemRaw> parsed) =>
+        MemoryLlmParsing.MapItems(parsed, ParseType,
+            (type, text, salience) => new TeamItem(type, text, salience));
 
-    // Первый сбалансированный JSON-фрагмент между open/close (устойчиво к преамбуле/fence)
-    private static string? ExtractBalanced(string raw, char open, char close)
+    // Маппинг строки типа из ответа LLM в TeamMemoryType (неизвестное → fact)
+    private static TeamMemoryType ParseType(string? s) => s?.Trim().ToLowerInvariant() switch
     {
-        var start = raw.IndexOf(open);
-        if (start < 0) return null;
-        int depth = 0; bool inStr = false, esc = false;
-        for (var i = start; i < raw.Length; i++)
-        {
-            var c = raw[i];
-            if (inStr)
-            {
-                if (esc) esc = false;
-                else if (c == '\\') esc = true;
-                else if (c == '"') inStr = false;
-                continue;
-            }
-            if (c == '"') inStr = true;
-            else if (c == open) depth++;
-            else if (c == close && --depth == 0) return raw[start..(i + 1)];
-        }
-        return null;
-    }
+        "decision" => TeamMemoryType.Decision,
+        "convention" => TeamMemoryType.Convention,
+        "glossary" => TeamMemoryType.Glossary,
+        _ => TeamMemoryType.Fact,
+    };
 
-    private sealed record ItemRaw(string? Type, string? Text, double? Salience = null);
-    private sealed record ResponseRaw(List<ItemRaw>? Items);
+    private sealed record ResponseRaw(List<MemoryLlmParsing.ItemRaw>? Items);
 }

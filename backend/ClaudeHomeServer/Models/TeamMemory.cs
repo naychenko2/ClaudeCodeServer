@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services.Memory;
+
 namespace ClaudeHomeServer.Models;
 
 // Тип знания в командной памяти (③-3.4). ВАЖНО: порядок значений менять НЕЛЬЗЯ — legacy-записи
@@ -9,7 +11,7 @@ public enum TeamMemorySource { Manual, AutoTurn, AutoMeeting }
 
 // Запись общей памяти команды проекта (③-3.4): решение/договорённость/факт/термин, которую recall'ят
 // все персоны команды проекта наравне с личной памятью. Хранится в data/team-memory.json.
-public class TeamMemoryEntry
+public class TeamMemoryEntry : IMemoryEntry<TeamMemoryType>
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
     public string OwnerId { get; set; } = "";

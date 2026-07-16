@@ -1,9 +1,8 @@
-using System.Collections.Concurrent;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Memory;
 
 namespace ClaudeHomeServer.Services;
 
@@ -19,14 +18,9 @@ public sealed class PersonaMemoryService
     {
         public string? DatasetId { get; set; }
         public List<PersonaMemoryEntry> Entries { get; set; } = new();
-        public Dictionary<string, DocRef> Docs { get; set; } = new();
+        public Dictionary<string, MemoryDocRef> Docs { get; set; } = new();
         // Рабочий фокус (P3): одна ячейка «что я сейчас делаю», не запись памяти
         public PersonaWorkingFocus? Focus { get; set; }
-    }
-    private sealed class DocRef
-    {
-        public string DocId { get; set; } = "";
-        public string Hash { get; set; } = "";
     }
 
     private static readonly TimeSpan SyncDebounce = TimeSpan.FromSeconds(15);
@@ -51,7 +45,7 @@ public sealed class PersonaMemoryService
     private readonly Dictionary<string, MemState> _store;
     private readonly Lock _saveLock = new();
     private readonly SemaphoreSlim _syncLock = new(1, 1);
-    private readonly ConcurrentDictionary<string, Timer> _debounce = new();
+    private readonly MemoryDifyDebouncer _debounce = new(SyncDebounce);
 
     public PersonaMemoryService(KnowledgeService knowledge, PersonaManager personas, UserStore users,
         IConfiguration config, ILogger<PersonaMemoryService> logger,
@@ -284,7 +278,8 @@ public sealed class PersonaMemoryService
         }
         else
         {
-            relevance = FullTextRelevance(entriesSnapshot, query);
+            relevance = MemoryFulltext.Relevance(entriesSnapshot, query,
+                e => e.Id, e => e.Text, e => e.Tags);
         }
 
         var now = DateTime.UtcNow;
@@ -513,37 +508,12 @@ public sealed class PersonaMemoryService
         _ => "память",
     };
 
-    // Полнотекстовый fallback: доля слов запроса, встретившихся в записи (0..1)
-    private static Dictionary<string, double> FullTextRelevance(
-        IReadOnlyList<PersonaMemoryEntry> entries, string query)
-    {
-        var terms = query.ToLowerInvariant()
-            .Split(new[] { ' ', ',', '.', ';', ':', '!', '?', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries)
-            .Where(w => w.Length > 2).Distinct().ToArray();
-        var result = new Dictionary<string, double>();
-        if (terms.Length == 0)
-        {
-            // Пустой запрос — все записи равнозначно релевантны (свежесть решит)
-            foreach (var e in entries) result[e.Id] = 0.5;
-            return result;
-        }
-        foreach (var e in entries)
-        {
-            var hay = (e.Text + " " + string.Join(' ', e.Tags ?? [])).ToLowerInvariant();
-            var matched = terms.Count(t => hay.Contains(t));
-            if (matched > 0) result[e.Id] = (double)matched / terms.Length;
-        }
-        return result;
-    }
-
     // --- Синхронизация с Dify (дифф по хешам, дебаунс) ---
 
     private void QueueSync(string ownerId, string personaId)
     {
         if (!Available) return;
-        _debounce.AddOrUpdate(personaId,
-            _ => new Timer(_ => RunSyncSafe(ownerId, personaId), null, SyncDebounce, Timeout.InfiniteTimeSpan),
-            (_, timer) => { timer.Change(SyncDebounce, Timeout.InfiniteTimeSpan); return timer; });
+        _debounce.Schedule(personaId, () => RunSyncSafe(ownerId, personaId));
     }
 
     private void RunSyncSafe(string ownerId, string personaId) =>
@@ -572,37 +542,24 @@ public sealed class PersonaMemoryService
 
             // Снапшоты под локом — конкурентные Remember/Forget/Save не должны видеть полу-мутацию
             List<PersonaMemoryEntry> entries;
-            Dictionary<string, DocRef> docsSnapshot;
+            Dictionary<string, MemoryDocRef> docsSnapshot;
             lock (_saveLock)
             {
                 entries = state.Entries.ToList();
-                docsSnapshot = new Dictionary<string, DocRef>(state.Docs);
-            }
-            var alive = new HashSet<string>(entries.Select(e => e.Id));
-            var changed = 0;
-
-            foreach (var e in entries)
-            {
-                var hash = Hash($"{e.Type}\n{e.Text}\n{string.Join(',', e.Tags ?? [])}");
-                if (docsSnapshot.TryGetValue(e.Id, out var doc) && doc.Hash == hash) continue;
-
-                if (doc is not null)
-                    try { await _knowledge.DeleteDocumentAsync(state.DatasetId!, doc.DocId); }
-                    catch (Exception ex) { _logger.LogDebug(ex, "Удаление старой записи памяти {Entry}", e.Id); }
-
-                var info = await _knowledge.IndexFileByTextAsync(
-                    state.DatasetId!, $"{TypeLabel(e.Type)}-{e.Id}", e.Text, e.Tags);
-                lock (_saveLock) state.Docs[e.Id] = new DocRef { DocId = info.Id, Hash = hash };
-                changed++;
+                docsSnapshot = new Dictionary<string, MemoryDocRef>(state.Docs);
             }
 
-            foreach (var stale in docsSnapshot.Keys.Where(k => !alive.Contains(k)).ToList())
-            {
-                try { await _knowledge.DeleteDocumentAsync(state.DatasetId!, docsSnapshot[stale].DocId); }
-                catch (Exception ex) { _logger.LogDebug(ex, "Удаление документа исчезнувшей записи памяти"); }
-                lock (_saveLock) state.Docs.Remove(stale);
-                changed++;
-            }
+            // Дифф-синк — общее ядро MemoryDify; связка со стором (мутации Docs под _saveLock) тонкая
+            var items = entries
+                .Select(e => new MemorySyncItem(e.Id,
+                    $"{e.Type}\n{e.Text}\n{string.Join(',', e.Tags ?? [])}",
+                    $"{TypeLabel(e.Type)}-{e.Id}", e.Text, e.Tags))
+                .ToList();
+
+            var changed = await MemoryDify.DiffSyncAsync(_knowledge, state.DatasetId!, items, docsSnapshot,
+                (id, doc) => { lock (_saveLock) state.Docs[id] = doc; },
+                id => { lock (_saveLock) state.Docs.Remove(id); },
+                _logger);
 
             if (changed > 0) Save();
             return changed;
@@ -642,9 +599,6 @@ public sealed class PersonaMemoryService
             catch (Exception ex) { _logger?.LogWarning(ex, "Не удалось удалить Dify-датасет памяти персоны {PersonaId}", personaId); }
         }
     }
-
-    private static string Hash(string s) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)));
 }
 
 // Результат поиска по памяти персоны
@@ -655,6 +609,7 @@ public record PersonaMemoryHit(
 // в одну сводную (Ids → новая запись Text/Type/Salience); drop — удалить запись Id.
 public sealed record MemoryConsolidationOp(
     string Op, List<string>? Ids, string? Id, PersonaMemoryType? Type, string? Text, double? Salience)
+    : IMemoryConsolidationOp<PersonaMemoryType>
 {
     public bool IsMerge => string.Equals(Op, "merge", StringComparison.OrdinalIgnoreCase);
     public bool IsDrop => string.Equals(Op, "drop", StringComparison.OrdinalIgnoreCase);

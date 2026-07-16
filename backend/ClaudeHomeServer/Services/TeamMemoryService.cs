@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Memory;
 
 namespace ClaudeHomeServer.Services;
 
@@ -19,15 +19,10 @@ public class TeamMemoryService
     private sealed class KnowledgeState
     {
         public string? DatasetId { get; set; }
-        public Dictionary<string, DocRef> Docs { get; set; } = new();
+        public Dictionary<string, MemoryDocRef> Docs { get; set; } = new();
         // Проставляются в GetKnowledgeState для удобства (ключ и так их несёт) — в стор не пишем
         [JsonIgnore] public string OwnerId { get; set; } = "";
         [JsonIgnore] public string ProjectId { get; set; } = "";
-    }
-    private sealed class DocRef
-    {
-        public string DocId { get; set; } = "";
-        public string Hash { get; set; } = "";
     }
 
     private static readonly TimeSpan SyncDebounce = TimeSpan.FromSeconds(15);
@@ -51,7 +46,7 @@ public class TeamMemoryService
     private readonly Dictionary<string, KnowledgeState> _kStore;
     private readonly Lock _kLock = new();
     private readonly SemaphoreSlim _syncLock = new(1, 1);
-    private readonly ConcurrentDictionary<string, Timer> _debounce = new();
+    private readonly MemoryDifyDebouncer _debounce = new(SyncDebounce);
 
     // Параметры скоринга (взвешенная сумма) и потолок памяти
     private readonly MemoryScoringOptions _scoring;
@@ -267,7 +262,7 @@ public class TeamMemoryService
         var snapshot = Snapshot(ownerId, projectId);
         if (snapshot.Count == 0) return new TeamRecallResult(null, []);
 
-        var ranked = FullTextRank(snapshot, query, topK);
+        var ranked = MemoryFulltext.Rank(snapshot, query, topK, e => e.Text);
         if (ranked.Count == 0) return new TeamRecallResult(null, []);
         return new TeamRecallResult(FormatRecall(ranked), ranked);
     }
@@ -307,7 +302,7 @@ public class TeamMemoryService
             try { return await RankViaDifyAsync(state, snapshot, query, topK); }
             catch (Exception ex) { _log?.LogDebug(ex, "team-memory: семантический поиск {Project}", projectId); }
         }
-        return FullTextRank(snapshot, query, topK);
+        return MemoryFulltext.Rank(snapshot, query, topK, e => e.Text);
     }
 
     // Ранжирование через Dify: релевантность по чанкам → взвешенная сумма TeamMemoryScorer → topK
@@ -326,20 +321,6 @@ public class TeamMemoryService
         var now = DateTime.UtcNow;
         return snapshot
             .Select(e => (e, score: TeamMemoryScorer.Score(e, relevance.GetValueOrDefault(e.Id, 0.0), now, _scoring)))
-            .Where(x => x.score > 0)
-            .OrderByDescending(x => x.score)
-            .Take(topK)
-            .Select(x => x.e)
-            .ToList();
-    }
-
-    // Полнотекстовый ранкер: перекрытие слов запроса (устойчиво к отсутствию Dify)
-    private static List<TeamMemoryEntry> FullTextRank(IReadOnlyList<TeamMemoryEntry> snapshot, string query, int topK)
-    {
-        var q = Tokenize(query);
-        if (q.Length == 0) return [];
-        return snapshot
-            .Select(e => (e, score: Tokenize(e.Text).Count(t => q.Contains(t))))
             .Where(x => x.score > 0)
             .OrderByDescending(x => x.score)
             .Take(topK)
@@ -439,10 +420,7 @@ public class TeamMemoryService
     private void QueueSync(string ownerId, string projectId)
     {
         if (!Available) return;
-        var key = Key(ownerId, projectId);
-        _debounce.AddOrUpdate(key,
-            _ => new Timer(_ => RunSyncSafe(ownerId, projectId), null, SyncDebounce, Timeout.InfiniteTimeSpan),
-            (_, timer) => { timer.Change(SyncDebounce, Timeout.InfiniteTimeSpan); return timer; });
+        _debounce.Schedule(Key(ownerId, projectId), () => RunSyncSafe(ownerId, projectId));
     }
 
     private void RunSyncSafe(string ownerId, string projectId) =>
@@ -470,34 +448,20 @@ public class TeamMemoryService
 
             // Снапшоты под локами — конкурентные мутации не должны видеть полу-состояние
             var entries = Snapshot(ownerId, projectId);
-            Dictionary<string, DocRef> docsSnapshot;
-            lock (_kLock) docsSnapshot = new Dictionary<string, DocRef>(state.Docs);
+            Dictionary<string, MemoryDocRef> docsSnapshot;
+            lock (_kLock) docsSnapshot = new Dictionary<string, MemoryDocRef>(state.Docs);
 
-            var alive = new HashSet<string>(entries.Select(e => e.Id));
-            var changed = 0;
+            // Дифф-синк — общее ядро MemoryDify; связка со стором (мутации Docs под _kLock) тонкая
+            var items = entries
+                .Select(e => new MemorySyncItem(e.Id,
+                    $"{e.Type}\n{e.Text}\n{string.Join(',', e.Tags ?? [])}",
+                    $"{TypeLabel(e.Type)}-{e.Id}", e.Text, e.Tags))
+                .ToList();
 
-            foreach (var e in entries)
-            {
-                var hash = Hash($"{e.Type}\n{e.Text}\n{string.Join(',', e.Tags ?? [])}");
-                if (docsSnapshot.TryGetValue(e.Id, out var doc) && doc.Hash == hash) continue;
-
-                if (doc is not null)
-                    try { await _knowledge!.DeleteDocumentAsync(state.DatasetId!, doc.DocId); }
-                    catch (Exception ex) { _log?.LogDebug(ex, "team-memory: удаление старого документа {Entry}", e.Id); }
-
-                var info = await _knowledge!.IndexFileByTextAsync(
-                    state.DatasetId!, $"{TypeLabel(e.Type)}-{e.Id}", e.Text, e.Tags);
-                lock (_kLock) state.Docs[e.Id] = new DocRef { DocId = info.Id, Hash = hash };
-                changed++;
-            }
-
-            foreach (var stale in docsSnapshot.Keys.Where(k => !alive.Contains(k)).ToList())
-            {
-                try { await _knowledge!.DeleteDocumentAsync(state.DatasetId!, docsSnapshot[stale].DocId); }
-                catch (Exception ex) { _log?.LogDebug(ex, "team-memory: удаление документа исчезнувшей записи"); }
-                lock (_kLock) state.Docs.Remove(stale);
-                changed++;
-            }
+            var changed = await MemoryDify.DiffSyncAsync(_knowledge!, state.DatasetId!, items, docsSnapshot,
+                (id, doc) => { lock (_kLock) state.Docs[id] = doc; },
+                id => { lock (_kLock) state.Docs.Remove(id); },
+                _log);
 
             if (changed > 0) lock (_kLock) SaveKnowledge();
             return changed;
@@ -538,16 +502,6 @@ public class TeamMemoryService
 
     private static string Key(string ownerId, string projectId) => $"{ownerId}:{projectId}";
 
-    private static readonly HashSet<string> Stop = new(StringComparer.OrdinalIgnoreCase)
-    { "и", "в", "на", "с", "по", "для", "не", "что", "это", "как", "to", "the", "a", "of", "and", "for", "in" };
-
-    private static string[] Tokenize(string s) =>
-        s.ToLowerInvariant().Split([' ', ',', '.', ';', ':', '!', '?', '\n', '\r', '\t', '(', ')'],
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .Where(t => t.Length > 2 && !Stop.Contains(t))
-        .Distinct()
-        .ToArray();
-
     private void Load()
     {
         try
@@ -567,15 +521,13 @@ public class TeamMemoryService
 
     // Вызывается под _kLock
     private void SaveKnowledge() => JsonFileStore.Save(_knowledgeStorePath, _kStore, JsonOpts);
-
-    private static string Hash(string s) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)));
 }
 
 // Операция консолидации памяти команды (P4): merge — схлопнуть несколько записей одного типа
 // в одну сводную (Ids → новая запись Text/Type/Salience); drop — удалить запись Id.
 public sealed record TeamMemoryConsolidationOp(
     string Op, List<string>? Ids, string? Id, TeamMemoryType? Type, string? Text, double? Salience)
+    : IMemoryConsolidationOp<TeamMemoryType>
 {
     public bool IsMerge => string.Equals(Op, "merge", StringComparison.OrdinalIgnoreCase);
     public bool IsDrop => string.Equals(Op, "drop", StringComparison.OrdinalIgnoreCase);

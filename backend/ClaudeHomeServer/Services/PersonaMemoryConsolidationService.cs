@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
-using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Memory;
 
 namespace ClaudeHomeServer.Services;
 
@@ -17,10 +17,6 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
     // Как часто проверяем заявки (сама полная проходка — раз в ConsolidateIntervalHours)
     private static readonly TimeSpan PendingTick = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan LlmTimeout = TimeSpan.FromSeconds(120);
-    // Гейт: за один прогон LLM-merge может затронуть не больше этой доли записей
-    internal const double MaxAffectedShare = 0.30;
-
-    private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     private readonly PersonaMemoryService _memory;
     private readonly PersonaManager _personas;
@@ -158,98 +154,26 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
         return sb.ToString();
     }
 
-    // Парс ответа LLM: первый сбалансированный JSON-массив → операции; мусор → пусто (no-op)
-    internal static List<MemoryConsolidationOp> ParseOps(string raw)
+    // Парс ответа LLM: первый сбалансированный JSON-массив → операции; мусор → пусто (no-op).
+    // Логика — общая MemoryConsolidationCore; здесь только маппинг типов персоны и сборка concrete-op.
+    internal static List<MemoryConsolidationOp> ParseOps(string raw) =>
+        MemoryConsolidationCore.ParseOps<MemoryConsolidationOp, PersonaMemoryType>(
+            raw, ParseType,
+            (op, ids, id, type, text, salience) => new MemoryConsolidationOp(op, ids, id, type, text, salience));
+
+    // Маппинг строки типа из ответа LLM в PersonaMemoryType (неизвестное → null)
+    private static PersonaMemoryType? ParseType(string? s) => s?.Trim().ToLowerInvariant() switch
     {
-        var json = ExtractJsonArray(raw);
-        if (json is null) return [];
-        List<OpRaw>? parsed;
-        try { parsed = JsonSerializer.Deserialize<List<OpRaw>>(json, JsonOpts); }
-        catch (JsonException) { return []; }
-        if (parsed is null) return [];
+        "semantic" => PersonaMemoryType.Semantic,
+        "episodic" => PersonaMemoryType.Episodic,
+        "procedural" => PersonaMemoryType.Procedural,
+        _ => null,
+    };
 
-        var result = new List<MemoryConsolidationOp>();
-        foreach (var op in parsed)
-        {
-            if (op?.Op is null) continue;
-            PersonaMemoryType? type = op.Type?.Trim().ToLowerInvariant() switch
-            {
-                "semantic" => PersonaMemoryType.Semantic,
-                "episodic" => PersonaMemoryType.Episodic,
-                "procedural" => PersonaMemoryType.Procedural,
-                _ => null,
-            };
-            result.Add(new MemoryConsolidationOp(op.Op.Trim(), op.Ids, op.Id, type, op.Text, op.Salience));
-        }
-        return result;
-    }
-
-    // Детерминированные гейты поверх ответа LLM:
-    // - неизвестные id игнорируются (merge с <2 валидными источниками отбрасывается);
-    // - merge только внутри одного типа (и заявленный type должен совпадать с источниками);
-    // - одна запись участвует максимум в одной операции;
-    // - суммарно затронуто не больше MaxAffectedShare записей за прогон.
+    // Детерминированные гейты поверх ответа LLM (чужие id, один тип, cap 30%) — общая
+    // MemoryConsolidationCore; specifics персоны — только concrete-клон merge-операции.
     internal static List<MemoryConsolidationOp> FilterOps(
-        IReadOnlyList<MemoryConsolidationOp> ops, IReadOnlyList<PersonaMemoryEntry> entries)
-    {
-        var byId = entries.ToDictionary(e => e.Id);
-        var cap = (int)Math.Floor(entries.Count * MaxAffectedShare);
-        var affected = new HashSet<string>();
-        var result = new List<MemoryConsolidationOp>();
-
-        foreach (var op in ops)
-        {
-            if (op.IsMerge)
-            {
-                if (string.IsNullOrWhiteSpace(op.Text)) continue;
-                var ids = (op.Ids ?? [])
-                    .Distinct()
-                    .Where(id => byId.ContainsKey(id) && !affected.Contains(id))
-                    .ToList();
-                if (ids.Count < 2) continue;
-                // Только внутри одного типа
-                var types = ids.Select(id => byId[id].Type).Distinct().ToList();
-                if (types.Count != 1) continue;
-                if (op.Type is not null && op.Type != types[0]) continue;
-                if (affected.Count + ids.Count > cap) continue;
-                affected.UnionWith(ids);
-                result.Add(op with { Ids = ids, Type = types[0] });
-            }
-            else if (op.IsDrop)
-            {
-                if (op.Id is null || !byId.ContainsKey(op.Id) || affected.Contains(op.Id)) continue;
-                if (affected.Count + 1 > cap) continue;
-                affected.Add(op.Id);
-                result.Add(op);
-            }
-        }
-        return result;
-    }
-
-    // Первый сбалансированный JSON-массив из ответа модели (устойчиво к преамбуле/fence)
-    private static string? ExtractJsonArray(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return null;
-        var start = raw.IndexOf('[');
-        if (start < 0) return null;
-        int depth = 0; bool inStr = false, esc = false;
-        for (var i = start; i < raw.Length; i++)
-        {
-            var c = raw[i];
-            if (inStr)
-            {
-                if (esc) esc = false;
-                else if (c == '\\') esc = true;
-                else if (c == '"') inStr = false;
-                continue;
-            }
-            if (c == '"') inStr = true;
-            else if (c == '[') depth++;
-            else if (c == ']' && --depth == 0) return raw[start..(i + 1)];
-        }
-        return null;
-    }
-
-    private sealed record OpRaw(string? Op, List<string>? Ids, string? Id,
-        string? Type, string? Text, double? Salience);
+        IReadOnlyList<MemoryConsolidationOp> ops, IReadOnlyList<PersonaMemoryEntry> entries) =>
+        MemoryConsolidationCore.FilterOps<MemoryConsolidationOp, PersonaMemoryEntry, PersonaMemoryType>(
+            ops, entries, (op, ids, type) => op with { Ids = ids, Type = type });
 }

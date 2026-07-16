@@ -38,6 +38,28 @@ function RoleBadge({ role }: { role: 'admin' | 'user' }) {
   );
 }
 
+// Бейдж среды исполнения: показываем только песочницу (сервер — дефолт, без шума)
+function EnvBadge({ env }: { env?: 'local' | 'container' }) {
+  if (env !== 'container') return null;
+  return (
+    <span
+      title="Процессы пользователя (Claude, терминал, dev-серверы) работают в Docker-песочнице"
+      style={{
+        display: 'inline-block',
+        padding: '2px 8px',
+        borderRadius: R.sm,
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: '0.04em',
+        background: C.bgPanel,
+        color: C.textSecondary,
+      }}
+    >
+      📦 Песочница
+    </span>
+  );
+}
+
 // Аватар с инициалами
 function Avatar({ username }: { username: string }) {
   return (
@@ -160,7 +182,10 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
                           {new Date(user.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })}
                         </div>
                       </div>
-                      <RoleBadge role={user.role} />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+                        <RoleBadge role={user.role} />
+                        <EnvBadge env={user.executionEnvironment} />
+                      </div>
                     </div>
 
                     {/* Нижняя строка: кнопки действий — растянутые */}
@@ -215,6 +240,7 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
                     </div>
                   </div>
 
+                  <EnvBadge env={user.executionEnvironment} />
                   <RoleBadge role={user.role} />
 
                   <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
@@ -280,6 +306,7 @@ function AddUserDialog({ onClose, onCreated }: {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<'user' | 'admin'>('user');
+  const [env, setEnv] = useState<'local' | 'container'>('local');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -289,7 +316,9 @@ function AddUserDialog({ onClose, onCreated }: {
     setError('');
     setLoading(true);
     try {
-      const user = await api.users.create({ username: username.trim(), password, role });
+      const user = await api.users.create({
+        username: username.trim(), password, role, executionEnvironment: env,
+      });
       onCreated(user);
     } catch (e: any) {
       setError(e.message ?? 'Ошибка создания');
@@ -326,6 +355,24 @@ function AddUserDialog({ onClose, onCreated }: {
           ]}
           onChange={v => setRole(v as 'user' | 'admin')}
         />
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Среда исполнения
+        </span>
+        <SegmentedControl
+          value={env}
+          options={[
+            { value: 'local', label: 'Сервер' },
+            { value: 'container', label: '📦 Песочница' },
+          ]}
+          onChange={v => setEnv(v as 'local' | 'container')}
+        />
+        <span style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.5 }}>
+          {env === 'local'
+            ? 'Claude, терминал и dev-серверы работают на машине сервера с полным доступом.'
+            : 'Всё исполняется в изолированном Docker-контейнере: пользователь не видит файлы сервера. Сменить среду после появления чатов нельзя.'}
+        </span>
       </div>
     </Modal>
   );

@@ -49,9 +49,9 @@ export const api = {
 
   users: {
     list: () => request<UserProfile[]>('/users'),
-    create: (data: { username: string; password: string; role: string }) =>
+    create: (data: { username: string; password: string; role: string; executionEnvironment?: string }) =>
       request<UserProfile>('/users', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: { username?: string; role?: string }) =>
+    update: (id: string, data: { username?: string; role?: string; executionEnvironment?: string }) =>
       request<UserProfile>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/users/${id}`, { method: 'DELETE' }),
     resetPassword: (id: string, newPassword: string) =>

@@ -125,6 +125,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
     private readonly ClaudeSubscriptionPool? _subscriptionPool;
+    // Драйвер среды исполнения владельца (local / docker-песочница)
+    private readonly Execution.IProcessLauncher _launcher;
+    // Метка текущего хода — по ней драйвер песочницы добивает процесс внутри контейнера
+    private string? _currentTurnId;
 
     public ClaudeSession(Session info, LlmSessionContext context,
         string? mcpConfigPath = null, SkillsService? skills = null,
@@ -153,6 +157,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _workspaceMcp = context.WorkspaceMcp;
         _notificationsMcp = context.NotificationsMcp;
         _personaAgentsProvider = context.PersonaAgentsProvider;
+        _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
             ? [.. (disallowedTools ?? []), .. extra]
@@ -172,19 +177,19 @@ public class ClaudeSession : ILlmSessionAdapter
     // CLAUDE_CONFIG_DIR их не видит). null → базовый конфиг как есть.
     private string? BuildTurnMcpConfig(string? datasetId, PersonaAgentsContext? personaAgents = null)
     {
-        var tasksServerPath = _tasksMcp is not null ? TasksServerLocator.FindTasksServerPath() : null;
+        var tasksServerPath = _tasksMcp is not null ? MapMcpPath(TasksServerLocator.FindTasksServerPath()) : null;
         var hasTasks = tasksServerPath is not null;
-        var notesServerPath = _notesMcp is not null ? NotesServerLocator.FindNotesServerPath() : null;
+        var notesServerPath = _notesMcp is not null ? MapMcpPath(NotesServerLocator.FindNotesServerPath()) : null;
         var hasNotes = notesServerPath is not null;
         var hasConsultants = personaAgents is { MemoryServers.Count: > 0 };
         var memoryServerPath = _memoryMcp is not null || hasConsultants
-            ? MemoryServerLocator.FindMemoryServerPath() : null;
+            ? MapMcpPath(MemoryServerLocator.FindMemoryServerPath()) : null;
         var hasMemory = _memoryMcp is not null && memoryServerPath is not null;
-        var personasServerPath = _personasMcp is not null ? PersonasServerLocator.FindPersonasServerPath() : null;
+        var personasServerPath = _personasMcp is not null ? MapMcpPath(PersonasServerLocator.FindPersonasServerPath()) : null;
         var hasPersonas = personasServerPath is not null;
-        var workspaceServerPath = _workspaceMcp is not null ? WorkspaceServerLocator.FindWorkspaceServerPath() : null;
+        var workspaceServerPath = _workspaceMcp is not null ? MapMcpPath(WorkspaceServerLocator.FindWorkspaceServerPath()) : null;
         var hasWorkspace = workspaceServerPath is not null;
-        var notificationsServerPath = _notificationsMcp is not null ? NotificationsServerLocator.FindNotificationsServerPath() : null;
+        var notificationsServerPath = _notificationsMcp is not null ? MapMcpPath(NotificationsServerLocator.FindNotificationsServerPath()) : null;
         var hasNotifications = notificationsServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var userServers = LoadUserScopeMcpServers();
@@ -199,7 +204,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // одноимённые из базового конфига ниже их перекроют
             if (userServers is not null)
                 foreach (var (key, val) in userServers)
-                    if (val?.DeepClone() is { } clone)
+                    if (val?.DeepClone() is { } clone && AdaptServerForRuntime(key, clone))
                         servers[key] = clone;
 
             // Серверы из базового конфига (+ dataset id в env Dify)
@@ -211,7 +216,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     foreach (var (key, val) in baseServers)
                     {
                         var clone = val?.DeepClone();
-                        if (clone is null) continue;
+                        if (clone is null || !AdaptServerForRuntime(key, clone)) continue;
                         if (key == "dify" && hasDataset && clone["env"] is { } env)
                         {
                             env["DIFY_DEFAULT_DATASET_ID"] = datasetId;
@@ -378,7 +383,8 @@ public class ClaudeSession : ILlmSessionAdapter
 
             if (servers.Count == 0) return null;
             var combined = new System.Text.Json.Nodes.JsonObject { ["mcpServers"] = servers };
-            var tmpPath = Path.Combine(Path.GetTempPath(), $"claude-mcp-{Guid.NewGuid():N}.json");
+            // HostTempDir среды: для песочницы это bind-mount — процесс claude увидит файл
+            var tmpPath = Path.Combine(_launcher.HostTempDir, $"claude-mcp-{Guid.NewGuid():N}.json");
             File.WriteAllText(tmpPath, combined.ToJsonString());
             return tmpPath;
         }
@@ -388,6 +394,42 @@ public class ClaudeSession : ILlmSessionAdapter
             Console.Error.WriteLine($"[ClaudeSession] Не удалось собрать MCP-конфиг хода, используется базовый конфиг: {ex.Message}");
             return null;
         }
+    }
+
+    // Путь MCP-сервера в среде исполнения: локально — как есть, в песочнице — /app/mcp/...
+    // (образ несёт то же дерево). null — сервера нет в целевой среде (ход без него).
+    private string? MapMcpPath(string? hostPath)
+    {
+        if (hostPath is null) return null;
+        try { return _launcher.Paths.ToRuntime(hostPath); }
+        catch (InvalidOperationException)
+        {
+            Console.Error.WriteLine($"[ClaudeSession] MCP-сервер недоступен в песочнице: {hostPath}");
+            return null;
+        }
+    }
+
+    // Адаптация стороннего описания MCP-сервера (базовый конфиг / user-scope) к среде:
+    // локально — без изменений; в песочнице переписываем абсолютные Windows-пути в args
+    // на контейнерные. Непереводимый путь → сервер пропускается (false). POSIX-пути
+    // оставляем как есть: конфиги, писанные для контейнера (/app/...), в образе валидны.
+    private bool AdaptServerForRuntime(string key, System.Text.Json.Nodes.JsonNode node)
+    {
+        if (!_launcher.IsSandboxed) return true;
+        if (node["args"] is not System.Text.Json.Nodes.JsonArray argsArr) return true;
+        for (var i = 0; i < argsArr.Count; i++)
+        {
+            var val = argsArr[i]?.GetValue<string>();
+            // Только абсолютные хост-пути вида X:\... / X:/...
+            if (val is not { Length: > 2 } || !char.IsLetter(val[0]) || val[1] != ':') continue;
+            try { argsArr[i] = _launcher.Paths.ToRuntime(val); }
+            catch (InvalidOperationException)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] MCP-сервер «{key}» пропущен: путь {val} недоступен в песочнице");
+                return false;
+            }
+        }
+        return true;
     }
 
     // User-scope MCP-серверы (~/.claude.json, mcpServers) — только для сессий сторонних
@@ -674,8 +716,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
     public void Interrupt()
     {
-        try { _currentProcess?.Kill(entireProcessTree: true); }
-        catch { /* процесс уже завершился */ }
+        if (_currentProcess is { } proc) _launcher.Kill(proc, _currentTurnId);
         // Отменяем все ожидающие permission-диалоги: процесс убит, ответа не будет
         foreach (var tcs in _permissionWaiters.Values)
             tcs.TrySetCanceled();
@@ -741,13 +782,26 @@ public class ClaudeSession : ILlmSessionAdapter
         string? turnMcpPath = BuildTurnMcpConfig(currentDatasetId, personaAgents);
         var effectiveMcpConfig = turnMcpPath ?? _mcpConfigPath;
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
-            args.AddRange(["--mcp-config", effectiveMcpConfig]);
+        {
+            // Аргумент — путь В СРЕДЕ исполнения (temp хода лежит на bind-mount песочницы);
+            // файл базового конфига может оказаться вне неё — тогда ход идёт без MCP
+            try { args.AddRange(["--mcp-config", _launcher.Paths.ToRuntime(effectiveMcpConfig)]); }
+            catch (InvalidOperationException ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] MCP-конфиг недоступен в песочнице, ход без него: {ex.Message}");
+            }
+        }
 
         // Папки файловых сабагентов: CLI сканирует {dir}/.claude/agents при старте процесса —
         // правки персон применяются со следующего хода
         if (personaAgents is not null)
             foreach (var dir in personaAgents.AddDirs)
-                args.AddRange(["--add-dir", dir]);
+            {
+                // Резервные папки агентов не смонтированы в песочницу — пропускаем:
+                // агенты чата и так лежат в {chatRoot}/.claude/agents, консультанты доступны через persona_ask
+                try { args.AddRange(["--add-dir", _launcher.Paths.ToRuntime(dir)]); }
+                catch (InvalidOperationException) { }
+            }
 
         // pmem-серверы консультантов: сессионный allow, БЕЗ него вызов из фонового сабагента
         // упирается в permission-запрос, на который некому ответить (проверено вживую).
@@ -1025,33 +1079,20 @@ public class ClaudeSession : ILlmSessionAdapter
         // Задаём UTF-8 без BOM (BOM сломал бы первое сообщение в stdin).
         var utf8NoBom = new System.Text.UTF8Encoding(false);
 
-        var psi = new ProcessStartInfo
-        {
-            FileName = ClaudeCliLocator.FindClaudeExecutable(),
-            WorkingDirectory = _rootPath,
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = utf8NoBom,
-            StandardErrorEncoding = utf8NoBom,
-            StandardInputEncoding = utf8NoBom,
-            CreateNoWindow = true
-        };
-        // ArgumentList экранирует каждый аргумент корректно (важно для многострочного системного промпта)
-        foreach (var a in args) psi.ArgumentList.Add(a);
-
         // claude --print по умолчанию ждёт фоновые задачи (субагентов workflow) не дольше 600с,
         // затем принудительно завершается: «Background tasks still running after 600s; terminating».
         // Из-за этого длинные workflow обрывались на 10-й минуте, не доходя до конца. 0 = ждать без
         // ограничения по времени; нас страхует watchdog IdleTimeout (если claude замолчит дольше — прервём сами).
-        psi.Environment["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] = "0";
+        var env = new Dictionary<string, string>
+        {
+            ["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] = "0",
 
-        // Даём MCP-серверам больше времени на подключение при старте хода: с дефолтным
-        // таймаутом медленно стартующий node-сервер (personas и др.) не успевал
-        // зарегистрировать тулы, и первый же вызов падал «No such tool available»
-        // (модель ретраила, но карточка ошибки засоряла ленту).
-        psi.Environment["MCP_TIMEOUT"] = "30000";
+            // Даём MCP-серверам больше времени на подключение при старте хода: с дефолтным
+            // таймаутом медленно стартующий node-сервер (personas и др.) не успевал
+            // зарегистрировать тулы, и первый же вызов падал «No such tool available»
+            // (модель ретраила, но карточка ошибки засоряла ленту).
+            ["MCP_TIMEOUT"] = "30000",
+        };
 
         // Сторонний провайдер (DeepSeek/GLM): перенаправляем CLI на его Anthropic-совместимый
         // эндпоинт. Env считаются каждый ход — модель сессии могла смениться между ходами.
@@ -1059,7 +1100,7 @@ public class ClaudeSession : ILlmSessionAdapter
         if (cliEnv is not null)
         {
             foreach (var (k, v) in cliEnv)
-                psi.Environment[k] = v;
+                env[k] = v;
         }
         else if (_subscriptionPool?.HasExtra == true
             && Info.Provider != "claude"
@@ -1071,13 +1112,21 @@ public class ClaudeSession : ILlmSessionAdapter
                 var oauthEnv = _providers?.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, sub.ApiKey, Info.Model);
                 if (oauthEnv is not null)
                     foreach (var (k, v) in oauthEnv)
-                        psi.Environment[k] = v;
+                        env[k] = v;
             }
         }
 
-        var process = new Process { StartInfo = psi };
-
-        process.Start();
+        _currentTurnId = Guid.NewGuid().ToString("N")[..12];
+        // ArgumentList/Args экранирует каждый аргумент корректно (важно для многострочного системного промпта)
+        var process = _launcher.Start(new Execution.ProcessSpec
+        {
+            FileName = _launcher.ClaudeCliCommand,
+            Args = args,
+            WorkingDirectory = _rootPath,
+            Env = env,
+            StdioEncoding = utf8NoBom,
+            TurnId = _currentTurnId,
+        });
         _currentProcess = process;
 
         if (_currentProcess.HasExited)
@@ -1136,15 +1185,13 @@ public class ClaudeSession : ILlmSessionAdapter
                     if (_resultSeen)
                     {
                         // result уже отдан — процесс держат плагинные хуки/мосты, завершаем без ошибки
-                        try { process.Kill(entireProcessTree: true); }
-                        catch { /* процесс уже завершился */ }
+                        _launcher.Kill(process, _currentTurnId);
                         break;
                     }
                     // Сработал watchdog (не внешняя отмена сессии)
                     await _onMessage(new ErrorMessage(
                         $"Claude не отвечает более {IdleTimeout.TotalMinutes:0} мин — прерываем"));
-                    try { process.Kill(entireProcessTree: true); }
-                    catch { /* процесс уже завершился */ }
+                    _launcher.Kill(process, _currentTurnId);
                     break;
                 }
 
@@ -1160,8 +1207,7 @@ public class ClaudeSession : ILlmSessionAdapter
             CloseStdin(process);
             if (!process.HasExited)
             {
-                try { process.Kill(entireProcessTree: true); }
-                catch { /* процесс уже завершился */ }
+                _launcher.Kill(process, _currentTurnId);
                 // Ограниченное ожидание завершения — Kill() асинхронен на некоторых ОС
                 using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 try { await process.WaitForExitAsync(exitCts.Token); }
@@ -1608,11 +1654,7 @@ public class ClaudeSession : ILlmSessionAdapter
         if (_currentProcess != null && !_currentProcess.HasExited)
         {
             // Убиваем всё дерево: claude порождает node-процессы MCP-серверов
-            try { _currentProcess.Kill(entireProcessTree: true); }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[ClaudeSession] Kill при Dispose не удался: {ex.Message}");
-            }
+            _launcher.Kill(_currentProcess, _currentTurnId);
             using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try { await _currentProcess.WaitForExitAsync(exitCts.Token); }
             catch (OperationCanceledException) { } // 10 с истекло — идём дальше

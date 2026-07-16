@@ -21,7 +21,8 @@ public class TerminalServiceTests
         _svc = new TerminalService(
             new Mock<IHubContext<TerminalHub>>().Object,
             null!,
-            new Mock<ILogger<TerminalService>>().Object);
+            new Mock<ILogger<TerminalService>>().Object,
+            TestLauncherFactory.Instance);
     }
 
     [Fact]

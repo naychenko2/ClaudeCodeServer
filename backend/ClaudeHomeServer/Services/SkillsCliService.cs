@@ -22,7 +22,8 @@ public enum SkillScope { Project, Global }
 // проект/глобально (add --copy) и удаление (remove). Прямой доступ к API skills.sh недоступен
 // (401, только 12-часовой Vercel-OIDC) — поэтому идём через CLI. Вывод CLI — раскрашенный
 // текст, парсим после стриппинга ANSI.
-public partial class SkillsCliService(IConfiguration config, ILogger<SkillsCliService> log)
+public partial class SkillsCliService(IConfiguration config, ILogger<SkillsCliService> log,
+    Execution.ILauncherFactory launchers)
 {
     // Пакет npx (можно запинить версию в конфиге). Дефолт — latest.
     private string NpxPackage => config["Skills:NpxPackage"] is { Length: > 0 } p ? p : "skills@latest";
@@ -147,50 +148,47 @@ public partial class SkillsCliService(IConfiguration config, ILogger<SkillsCliSe
     private async Task<(int Code, string Stdout, string Stderr)> RunAsync(
         IReadOnlyList<string> skillArgs, string? workDir, CancellationToken ct)
     {
-        var utf8NoBom = new UTF8Encoding(false);
-        var psi = new ProcessStartInfo
-        {
-            WorkingDirectory = string.IsNullOrWhiteSpace(workDir)
-                ? EnsureOneShotDir()
-                : workDir,
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = utf8NoBom,
-            StandardErrorEncoding = utf8NoBom,
-            CreateNoWindow = true,
-        };
+        var launcher = launchers.Local; // среда владельца подключится этапом песочницы
+        var args = new List<string>();
+        string fileName;
 
-        // Префикс запуска: cmd /c npx <pkg> | npx <pkg> | прямая команда
+        // Префикс запуска: cmd /c npx <pkg> | npx <pkg> | прямая команда.
+        // Обвязка выбирается по ОС ЦЕЛЕВОЙ среды (в песочнице npx запускается напрямую)
         if (DirectCommand is { } direct)
         {
-            psi.FileName = OperatingSystem.IsWindows() ? "cmd.exe" : direct;
-            if (OperatingSystem.IsWindows()) { psi.ArgumentList.Add("/c"); psi.ArgumentList.Add(direct); }
+            fileName = launcher.TargetIsWindows ? "cmd.exe" : direct;
+            if (launcher.TargetIsWindows) { args.Add("/c"); args.Add(direct); }
         }
-        else if (OperatingSystem.IsWindows())
+        else if (launcher.TargetIsWindows)
         {
-            psi.FileName = "cmd.exe";
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add("npx");
-            psi.ArgumentList.Add("-y");
-            psi.ArgumentList.Add(NpxPackage);
+            fileName = "cmd.exe";
+            args.AddRange(["/c", "npx", "-y", NpxPackage]);
         }
         else
         {
-            psi.FileName = "npx";
-            psi.ArgumentList.Add("-y");
-            psi.ArgumentList.Add(NpxPackage);
+            fileName = "npx";
+            args.AddRange(["-y", NpxPackage]);
         }
 
-        foreach (var a in skillArgs) psi.ArgumentList.Add(a);
+        args.AddRange(skillArgs);
 
-        // Телеметрия off + неинтерактивный режим
-        psi.Environment["SKILLS_TELEMETRY_DISABLED"] = "1";
-        psi.Environment["CI"] = "1";
-
-        using var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Не удалось запустить npx skills");
+        var turnId = Guid.NewGuid().ToString("N")[..12];
+        using var process = launcher.Start(new Execution.ProcessSpec
+        {
+            FileName = fileName,
+            Args = args,
+            WorkingDirectory = string.IsNullOrWhiteSpace(workDir)
+                ? EnsureOneShotDir(launcher)
+                : workDir,
+            // Телеметрия off + неинтерактивный режим
+            Env = new Dictionary<string, string>
+            {
+                ["SKILLS_TELEMETRY_DISABLED"] = "1",
+                ["CI"] = "1",
+            },
+            StdioEncoding = new UTF8Encoding(false),
+            TurnId = turnId,
+        });
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(Timeout);
@@ -204,14 +202,14 @@ public partial class SkillsCliService(IConfiguration config, ILogger<SkillsCliSe
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested && !ct.IsCancellationRequested)
         {
-            try { process.Kill(entireProcessTree: true); } catch { }
+            launcher.Kill(process, turnId);
             throw new InvalidOperationException("npx skills не ответил за отведённое время");
         }
     }
 
-    private static string EnsureOneShotDir()
+    private static string EnsureOneShotDir(Execution.IProcessLauncher launcher)
     {
-        var dir = Path.Combine(Path.GetTempPath(), "skills-cli");
+        var dir = Path.Combine(launcher.HostTempDir, "skills-cli");
         Directory.CreateDirectory(dir);
         return dir;
     }

@@ -37,14 +37,17 @@ public sealed class PersonaAgentFileSync
     private readonly UserStore _users;
     private readonly AppSettingsService _appSettings;
     private readonly ILogger<PersonaAgentFileSync> _log;
+    // Корень песочницы для чатов container-пользователей; null — в тестах (все local)
+    private readonly Execution.SandboxManager? _sandbox;
     private readonly string _baseDir;
     private readonly ConcurrentDictionary<string, DateTime> _lastSync = new();
 
     public PersonaAgentFileSync(IConfiguration config, PersonaManager personas,
         ProjectManager projects, LlmProviderRegistry providers, PersonaBindingsService bindings,
         PersonaAgentFileGenerator generator, UserStore users, AppSettingsService appSettings,
-        ILogger<PersonaAgentFileSync> log)
+        ILogger<PersonaAgentFileSync> log, Execution.SandboxManager? sandbox = null)
     {
+        _sandbox = sandbox;
         _personas = personas;
         _projects = projects;
         _providers = providers;
@@ -177,16 +180,19 @@ public sealed class PersonaAgentFileSync
         yield return AgentFilePath(ownerId, SharedDirKey, persona.Handle);
     }
 
-    // {DefaultProjectsPath}/{username}/Chats — cwd для чатов без проекта
+    // Cwd для чатов без проекта: {база по среде владельца}/{username}/Chats —
+    // у container-пользователей база = корень песочницы (как SessionManager.ResolveChatRoot)
     private string? ChatRoot(string ownerId)
     {
         try
         {
-            var basePath = _appSettings.Get().DefaultProjectsPath;
+            var user = _users.GetById(ownerId);
+            if (user is null || string.IsNullOrWhiteSpace(user.Username)) return null;
+            var basePath = user.ExecutionEnvironment == Models.ExecutionEnvironments.Container
+                ? _sandbox?.Options.ProjectsRoot
+                : _appSettings.Get().DefaultProjectsPath;
             if (string.IsNullOrWhiteSpace(basePath)) return null;
-            var username = _users.GetById(ownerId)?.Username;
-            if (string.IsNullOrWhiteSpace(username)) return null;
-            return Path.Combine(basePath, username, "Chats");
+            return Path.Combine(basePath, user.Username, "Chats");
         }
         catch { return null; }
     }

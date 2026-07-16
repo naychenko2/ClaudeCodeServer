@@ -58,6 +58,10 @@ builder.Services.AddSignalR(o =>
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
 
 builder.Services.AddSingleton<UserStore>();
+// Драйверы среды исполнения процессов пользователей (local / docker-песочница)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.SandboxManager>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory,
+    ClaudeHomeServer.Services.Execution.LauncherFactory>();
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();

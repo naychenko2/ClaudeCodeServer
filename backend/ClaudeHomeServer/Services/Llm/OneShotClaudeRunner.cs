@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Text;
+using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -10,8 +10,10 @@ public interface IOneShotRunner
     // Модель ненастроенного провайдера тихо заменяется дефолтом claude
     string? NormalizeModel(string? model);
 
+    // ownerId — владелец вызова: его среда исполнения определяет, где запустится claude
+    // (локально или в песочнице). null — системный вызов, всегда локально.
     Task<string> RunAsync(string prompt, string? model = null,
-        TimeSpan? timeout = null, CancellationToken ct = default);
+        TimeSpan? timeout = null, CancellationToken ct = default, string? ownerId = null);
 }
 
 // Общий раннер одноразовых вызовов claude --print (без сессии): промпт через stdin,
@@ -19,7 +21,7 @@ public interface IOneShotRunner
 // (LlmProviderRegistry.BuildCliEnv). Рабочая папка — пустая temp (claude не получает
 // доступ к файлам). Используется генерациями задач и заметок; ChangelogService
 // исторически держит свою копию.
-public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders) : IOneShotRunner
+public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILauncherFactory launchers) : IOneShotRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
 
@@ -29,40 +31,37 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders) : IOne
         llmProviders.ResolveByModel(model) is { Enabled: false } ? null : model;
 
     public async Task<string> RunAsync(string prompt, string? model = null,
-        TimeSpan? timeout = null, CancellationToken ct = default)
+        TimeSpan? timeout = null, CancellationToken ct = default, string? ownerId = null)
     {
-        var workDir = Path.Combine(Path.GetTempPath(), "claude-oneshot");
+        var launcher = launchers.ForOwner(ownerId);
+        var workDir = Path.Combine(launcher.HostTempDir, "claude-oneshot");
         Directory.CreateDirectory(workDir);
 
-        var utf8NoBom = new UTF8Encoding(false);
-        var psi = new ProcessStartInfo
-        {
-            FileName = Claude.ClaudeCliLocator.FindClaudeExecutable(),
-            WorkingDirectory = workDir,
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = utf8NoBom,
-            StandardErrorEncoding = utf8NoBom,
-            StandardInputEncoding = utf8NoBom,
-            CreateNoWindow = true,
-        };
-        psi.ArgumentList.Add("--print");
-        psi.ArgumentList.Add("--output-format");
-        psi.ArgumentList.Add("text");
+        var args = new List<string> { "--print", "--output-format", "text" };
+        // One-shot — чистая генерация текста: инструменты жёстко выключены. Это контракт
+        // (пустая temp-cwd и раньше подразумевала «без файлов», но не мешала Read по
+        // абсолютному пути) и защита от инъекции в промпт — в т.ч. когда вызов сделан
+        // от имени изолированного пользователя, а процесс работает на хосте.
+        args.Add("--disallowedTools");
+        args.Add("Bash,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,WebFetch,WebSearch,Task,Agent,KillShell,BashOutput");
         if (!string.IsNullOrWhiteSpace(model))
         {
-            psi.ArgumentList.Add("--model");
-            psi.ArgumentList.Add(model);
+            args.Add("--model");
+            args.Add(model);
         }
 
-        if (llmProviders.BuildCliEnv(model) is { } env)
-            foreach (var (k, v) in env)
-                psi.Environment[k] = v;
+        var env = llmProviders.BuildCliEnv(model);
 
-        using var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Не удалось запустить claude");
+        var turnId = Guid.NewGuid().ToString("N")[..12];
+        using var process = launcher.Start(new ProcessSpec
+        {
+            FileName = launcher.ClaudeCliCommand,
+            Args = args,
+            WorkingDirectory = workDir,
+            Env = env,
+            StdioEncoding = new UTF8Encoding(false),
+            TurnId = turnId,
+        });
 
         // Чтение вывода запускаем ДО записи промпта — иначе на большом промпте
         // возможен deadlock на заполненных пайпах
@@ -95,7 +94,7 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders) : IOne
         }
         catch (OperationCanceledException)
         {
-            try { process.Kill(entireProcessTree: true); } catch { }
+            launcher.Kill(process, turnId);
             throw new InvalidOperationException("Claude не ответил за отведённое время");
         }
     }

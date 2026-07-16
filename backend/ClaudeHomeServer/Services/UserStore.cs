@@ -125,14 +125,15 @@ public class UserStore
             return _users.ToList();
     }
 
-    public User Add(string username, string password, string role)
+    public User Add(string username, string password, string role,
+        string executionEnvironment = ExecutionEnvironments.Local)
     {
         lock (_lock)
         {
             if (_users.Any(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException($"Пользователь '{username}' уже существует");
 
-            var user = new User { Username = username, Role = role };
+            var user = new User { Username = username, Role = role, ExecutionEnvironment = executionEnvironment };
             SetPasswordInternal(user, password);
             _users.Add(user);
             Save();
@@ -140,7 +141,7 @@ public class UserStore
         }
     }
 
-    public bool Update(string id, string? username, string? role)
+    public bool Update(string id, string? username, string? role, string? executionEnvironment = null)
     {
         lock (_lock)
         {
@@ -161,6 +162,10 @@ public class UserStore
                     throw new InvalidOperationException("Нельзя понизить роль единственного администратора");
                 user.Role = role;
             }
+
+            // Guard «нет чатов» — на вызывающей стороне (UsersController): стору сессии не видны
+            if (executionEnvironment is not null)
+                user.ExecutionEnvironment = executionEnvironment;
 
             Save();
             return true;

@@ -38,7 +38,13 @@ internal sealed class DevServerInstance : IDisposable
         lock (_outLock) return string.Join("\n", _outputTail);
     }
 
-    public DevServerInstance(string projectId, string serviceId, string name, Process process, string userId)
+    // Драйвер среды, запустивший процесс + метка хода: в песочнице убить процесс
+    // может только он (Kill docker-клиента не трогает процесс в контейнере)
+    private readonly Execution.IProcessLauncher _launcher;
+    private readonly string _turnId;
+
+    public DevServerInstance(string projectId, string serviceId, string name, Process process, string userId,
+        Execution.IProcessLauncher launcher, string turnId)
     {
         ProjectId = projectId;
         ServiceId = serviceId;
@@ -46,13 +52,15 @@ internal sealed class DevServerInstance : IDisposable
         Process = process;
         UserId = userId;
         LastActivity = DateTime.UtcNow;
+        _launcher = launcher;
+        _turnId = turnId;
     }
 
     public void Dispose()
     {
         if (!Process.HasExited)
         {
-            try { Process.Kill(entireProcessTree: true); } catch { /* best-effort */ }
+            _launcher.Kill(Process, _turnId);
             Process.WaitForExit(5000);
         }
         Process.Dispose();
@@ -74,16 +82,33 @@ public sealed class DevServerService
     private readonly ProjectManager _projects;
     private readonly IHubContext<SessionHub> _hub;
     private readonly ILogger<DevServerService> _log;
+    private readonly Execution.ILauncherFactory _launchers;
+    private readonly Execution.SandboxManager _sandbox;
 
     private static readonly Regex PortRegex = new(
         @"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d+)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public DevServerService(ProjectManager projects, IHubContext<SessionHub> hub, ILogger<DevServerService> log)
+    public DevServerService(ProjectManager projects, IHubContext<SessionHub> hub, ILogger<DevServerService> log,
+        Execution.ILauncherFactory launchers, Execution.SandboxManager sandbox)
     {
         _projects = projects;
         _hub = hub;
         _log = log;
+        _launchers = launchers;
+        _sandbox = sandbox;
+    }
+
+    // Порт из опубликованного пула песочницы, не занятый другим сервисом
+    // (порты проброшены на хост, preview-форвардер идёт на 127.0.0.1:{этот порт})
+    private int PickSandboxPort()
+    {
+        var used = _servers.Values.Where(s => s.Port > 0).Select(s => s.Port).ToHashSet();
+        var start = _sandbox.Options.PortRangeStart;
+        for (var p = start; p < start + _sandbox.Options.PortRangeSize; p++)
+            if (used.Add(p)) return p;
+        throw new InvalidOperationException(
+            "Исчерпан пул preview-портов песочницы — остановите неиспользуемые dev-серверы или увеличьте Sandbox:PortRangeSize");
     }
 
     private static string Key(string projectId, string serviceId) => projectId + ":" + serviceId;
@@ -123,35 +148,42 @@ public sealed class DevServerService
             return new DevServerStartResult(false, null, "error", "Недопустимый рабочий каталог");
         }
 
-        var psi = new ProcessStartInfo
-        {
-            FileName = command,
-            WorkingDirectory = workingDir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        var launcher = _launchers.ForOwner(project.OwnerId);
+        var envVars = new Dictionary<string, string>();
         if (env != null)
-            foreach (var (k, v) in env) psi.Environment[k] = v;
+            foreach (var (k, v) in env) envVars[k] = v;
 
         // autoPort без явного порта → берём свободный. Явный/авто-порт прокидываем в окружение
         // (PORT для Node-фреймворков, ASPNETCORE_URLS для .NET), чтобы сервис слушал именно его.
+        // В песочнице порт обязан быть из опубликованного пула (иначе он не проброшен на хост
+        // и preview-форвардер на 127.0.0.1 не достучится); случайный хостовый порт не подходит.
         int? fixedPort = port;
-        if (!fixedPort.HasValue && autoPort) fixedPort = GetFreePort();
+        if (launcher.IsSandboxed && (fixedPort is null || autoPort))
+            fixedPort = PickSandboxPort();
+        else if (!fixedPort.HasValue && autoPort) fixedPort = GetFreePort();
         if (fixedPort.HasValue)
         {
-            psi.Environment["PORT"] = fixedPort.Value.ToString();
-            if (!psi.Environment.ContainsKey("ASPNETCORE_URLS"))
-                psi.Environment["ASPNETCORE_URLS"] = $"http://localhost:{fixedPort.Value}";
+            envVars["PORT"] = fixedPort.Value.ToString();
+            // Наследованный ASPNETCORE_URLS процесса бэкенда не перебиваем (историческое поведение)
+            if (!envVars.ContainsKey("ASPNETCORE_URLS")
+                && Environment.GetEnvironmentVariable("ASPNETCORE_URLS") is null)
+                envVars["ASPNETCORE_URLS"] = $"http://localhost:{fixedPort.Value}";
         }
 
+        var turnId = Guid.NewGuid().ToString("N")[..12];
         Process process;
         try
         {
-            process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-            process.Start();
+            process = launcher.Start(new Execution.ProcessSpec
+            {
+                FileName = command,
+                Args = args,
+                WorkingDirectory = workingDir,
+                Env = envVars,
+                RedirectStdin = false,
+                EnableRaisingEvents = true,
+                TurnId = turnId,
+            });
         }
         catch (Exception ex)
         {
@@ -159,7 +191,7 @@ public sealed class DevServerService
             return new DevServerStartResult(false, null, "error", $"Не удалось запустить: {ex.Message}");
         }
 
-        var instance = new DevServerInstance(projectId, serviceId, name, process, userId);
+        var instance = new DevServerInstance(projectId, serviceId, name, process, userId, launcher, turnId);
         _servers[key] = instance;
         process.Exited += (_, _) => OnExited(key);
 

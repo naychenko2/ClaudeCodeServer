@@ -118,6 +118,9 @@ public class SessionManager
     private readonly PersonaPromptBuilder _promptBuilder;
     private readonly ClaudeSubscriptionPool _subscriptionPool;
     private readonly ILogger<SessionManager> _log;
+    // Драйверы среды исполнения владельцев (local / docker-песочница)
+    private readonly Execution.ILauncherFactory _launchers;
+    private readonly Execution.SandboxManager _sandbox;
 
     private readonly PersonaAgentFileSync? _agentSync;
 
@@ -132,10 +135,14 @@ public class SessionManager
         PersonaPromptBuilder promptBuilder,
         ClaudeSubscriptionPool subscriptionPool,
         ILogger<SessionManager> log,
+        Execution.ILauncherFactory launchers,
+        Execution.SandboxManager sandbox,
         // Опционально (в тестах не передаётся): синк файловых сабагентов-персон
         PersonaAgentFileSync? agentSync = null)
     {
         _agentSync = agentSync;
+        _launchers = launchers;
+        _sandbox = sandbox;
         _projects = projects;
         _hub = hub;
         _history = history;
@@ -172,10 +179,14 @@ public class SessionManager
 
     // --- MCP tasks-server ---
 
-    // Базовый URL API для MCP-сервера: конфиг → первый адрес Kestrel → дефолт.
+    // Базовый URL API для MCP-сервера: среда владельца (из песочницы Kestrel виден
+    // как host.docker.internal) → конфиг → первый адрес Kestrel → дефолт.
     // 0.0.0.0/[::] заменяем на localhost — MCP-сервер ходит с той же машины.
-    private string ResolveTasksApiUrl()
+    private string ResolveTasksApiUrl(string? ownerId = null)
     {
+        if (ownerId is not null && _launchers.ForOwner(ownerId).McpApiUrlOverride is { } sandboxUrl)
+            return sandboxUrl.TrimEnd('/');
+
         var fromConfig = _config["McpTasksApiUrl"];
         if (!string.IsNullOrWhiteSpace(fromConfig)) return fromConfig.TrimEnd('/');
 
@@ -203,7 +214,7 @@ public class SessionManager
             (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
-        return new TasksMcpContext(ResolveTasksApiUrl(), entry.Token, projectId);
+        return new TasksMcpContext(ResolveTasksApiUrl(ownerId), entry.Token, projectId);
     }
 
     // Контекст MCP-сервера заметок; null — только для чата без владельца
@@ -215,7 +226,7 @@ public class SessionManager
             (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
-        return new NotesMcpContext(ResolveTasksApiUrl(), entry.Token, projectId);
+        return new NotesMcpContext(ResolveTasksApiUrl(ownerId), entry.Token, projectId);
     }
 
     // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes).
@@ -227,7 +238,7 @@ public class SessionManager
             (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
-        return new MemoryMcpContext(ResolveTasksApiUrl(), entry.Token, personaId, projectId);
+        return new MemoryMcpContext(ResolveTasksApiUrl(ownerId), entry.Token, personaId, projectId);
     }
 
     // Контекст memory-server для проектной сессии БЕЗ персоны: только team_memory_* (③-3.4) —
@@ -422,12 +433,25 @@ public class SessionManager
     }
     private string ResolveChatRoot(string ownerId)
     {
-        var basePath = _appSettings.Get().DefaultProjectsPath;
-        if (string.IsNullOrWhiteSpace(basePath))
-            throw new InvalidOperationException("Не задана папка проектов по умолчанию");
-        var username = _users.GetById(ownerId)?.Username
+        var user = _users.GetById(ownerId)
             ?? throw new KeyNotFoundException($"Пользователь не найден: {ownerId}");
-        var path = Path.Combine(basePath, username, "Chats");
+        // Container-пользователи живут в отдельном корне (Sandbox:ProjectsRoot):
+        // только он монтируется в песочницу — данные local-пользователей туда не попадают
+        string basePath;
+        if (user.ExecutionEnvironment == Models.ExecutionEnvironments.Container)
+        {
+            basePath = _sandbox.Options.ProjectsRoot;
+            if (string.IsNullOrWhiteSpace(basePath))
+                throw new InvalidOperationException(
+                    "Песочница не настроена: задайте Sandbox:ProjectsRoot в appsettings.Local.json");
+        }
+        else
+        {
+            basePath = _appSettings.Get().DefaultProjectsPath;
+            if (string.IsNullOrWhiteSpace(basePath))
+                throw new InvalidOperationException("Не задана папка проектов по умолчанию");
+        }
+        var path = Path.Combine(basePath, user.Username, "Chats");
         Directory.CreateDirectory(path);
         return path;
     }
@@ -643,6 +667,11 @@ public class SessionManager
     private string? SessionOwner(Session s) =>
         s.ProjectId is not null ? _projects.GetById(s.ProjectId)?.OwnerId : s.OwnerId;
 
+    // Есть ли у пользователя хоть одна сессия/чат — среда исполнения меняется только «начисто»
+    // (корни проектов и профили сред различаются, resume привязан к путям старой среды)
+    public bool HasSessionsOwnedBy(string ownerId) =>
+        _sessions.Values.Any(e => SessionOwner(e.Info) == ownerId);
+
     // Персона-слой сессии (промпт характера + контекст памяти + auto-recall + сама персона
     // для гейтов возможностей). Строится одинаково при первом старте и при восстановлении процесса.
     // Промпт — замыкание: адаптер зовёт его на каждый ход, поэтому правки персоны
@@ -795,7 +824,7 @@ public class SessionManager
                     .Where(p => p.MemoryEnabled)
                     .Select(p => new ConsultantMemoryServer(
                         PersonaConsultantToolset.PmemServerKey(p.Handle),
-                        ResolveTasksApiUrl(), entry.Token, p.Id,
+                        ResolveTasksApiUrl(ownerId), entry.Token, p.Id,
                         p.Scope == PersonaScope.Project ? p.ProjectId : null))
                     .ToList();
                 var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList()!;
@@ -877,7 +906,7 @@ public class SessionManager
             (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
-        return new PersonasMcpContext(ResolveTasksApiUrl(), entry.Token, projectId, selfPersonaId,
+        return new PersonasMcpContext(ResolveTasksApiUrl(ownerId), entry.Token, projectId, selfPersonaId,
             mentionsHint, BindingsEnabled: true);
     }
 
@@ -925,7 +954,7 @@ public class SessionManager
             (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
-        return new WorkspaceMcpContext(ResolveTasksApiUrl(), entry.Token, projectId,
+        return new WorkspaceMcpContext(ResolveTasksApiUrl(ownerId), entry.Token, projectId,
             sections, allowedIds, selfSessionId);
     }
 
@@ -939,7 +968,7 @@ public class SessionManager
             (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old);
-        return new NotificationsMcpContext(ResolveTasksApiUrl(), entry.Token);
+        return new NotificationsMcpContext(ResolveTasksApiUrl(ownerId), entry.Token);
     }
 
     // Дополнительные запреты сессии персоны: профиль доступа (PersonaAccessPolicy — «пол»
@@ -1081,7 +1110,8 @@ public class SessionManager
             NotificationsMcp: BuildNotificationsContext(ownerId),
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
-            PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session)));
+            PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session),
+            Launcher: _launchers.ForOwner(ownerId)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -1304,7 +1334,8 @@ public class SessionManager
                 NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
-                PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info));
+                PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info),
+                Launcher: _launchers.ForOwner(entry.Info.OwnerId));
         }
         else
         {
@@ -1327,7 +1358,8 @@ public class SessionManager
                 NotificationsMcp: BuildNotificationsContext(project.OwnerId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
-                PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info));
+                PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info),
+                Launcher: _launchers.ForOwner(project.OwnerId));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

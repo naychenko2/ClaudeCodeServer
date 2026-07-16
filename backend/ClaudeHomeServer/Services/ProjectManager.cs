@@ -16,14 +16,34 @@ public class ProjectManager
     private readonly string _storePath;
     private readonly UserStore _users;
     private readonly AppSettingsService _appSettings;
+    // Песочница container-пользователей: их проекты живут только под Sandbox:ProjectsRoot.
+    // null — в тестах (все пользователи считаются local)
+    private readonly Execution.SandboxManager? _sandbox;
     private readonly Lock _saveLock = new();
 
-    public ProjectManager(IConfiguration config, UserStore users, AppSettingsService appSettings)
+    public ProjectManager(IConfiguration config, UserStore users, AppSettingsService appSettings,
+        Execution.SandboxManager? sandbox = null)
     {
         _users = users;
         _appSettings = appSettings;
+        _sandbox = sandbox;
         _storePath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         Load();
+    }
+
+    // Container-пользователь заперт в корне песочницы: путь вне него claude не увидит
+    // (в контейнер монтируется только Sandbox:ProjectsRoot), а FileService увидел бы хост —
+    // расхождение недопустимо
+    private void EnsureRootAllowed(string userId, string rootPath)
+    {
+        if (_sandbox is null) return;
+        if (_users.GetById(userId)?.ExecutionEnvironment != ExecutionEnvironments.Container) return;
+        var sandboxRoot = _sandbox.Options.ProjectsRoot;
+        if (string.IsNullOrWhiteSpace(sandboxRoot)
+            || !Path.GetFullPath(rootPath).StartsWith(
+                Path.GetFullPath(sandboxRoot), StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException(
+                "Проекты изолированного пользователя должны находиться внутри папки песочницы (Sandbox:ProjectsRoot)");
     }
 
     public IReadOnlyCollection<Project> GetAll() => _projects.Values.ToList();
@@ -40,12 +60,26 @@ public class ProjectManager
     {
         if (string.IsNullOrWhiteSpace(rootPath))
         {
-            var s = _appSettings.Get();
-            if (string.IsNullOrWhiteSpace(s.DefaultProjectsPath))
-                throw new ArgumentException("Укажите путь к папке или задайте папку по умолчанию в настройках");
-            rootPath = Path.Combine(s.DefaultProjectsPath, username, name);
+            // База по среде владельца: изолированные — в корне песочницы
+            string? basePath;
+            if (_sandbox is not null
+                && _users.GetById(userId)?.ExecutionEnvironment == ExecutionEnvironments.Container)
+            {
+                basePath = _sandbox.Options.ProjectsRoot;
+                if (string.IsNullOrWhiteSpace(basePath))
+                    throw new ArgumentException(
+                        "Песочница не настроена: задайте Sandbox:ProjectsRoot в appsettings.Local.json");
+            }
+            else
+            {
+                basePath = _appSettings.Get().DefaultProjectsPath;
+                if (string.IsNullOrWhiteSpace(basePath))
+                    throw new ArgumentException("Укажите путь к папке или задайте папку по умолчанию в настройках");
+            }
+            rootPath = Path.Combine(basePath, username, name);
             createDirectory = true;
         }
+        EnsureRootAllowed(userId, rootPath);
 
         if (createDirectory)
             Directory.CreateDirectory(rootPath);
@@ -76,6 +110,7 @@ public class ProjectManager
         {
             if (!Directory.Exists(rootPath))
                 throw new DirectoryNotFoundException($"Папка не найдена: {rootPath}");
+            if (project.OwnerId is { } ownerId) EnsureRootAllowed(ownerId, rootPath);
             project.RootPath = rootPath;
         }
         if (systemPrompt is not null) project.SystemPrompt = systemPrompt;

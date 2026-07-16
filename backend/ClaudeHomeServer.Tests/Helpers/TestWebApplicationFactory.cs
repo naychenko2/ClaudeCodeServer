@@ -50,7 +50,10 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
             {
                 ["DataPath"] = Path.Combine(TempDir, "projects.json"),
                 // высокий лимит, чтобы rate-limit не флакал обычные тесты login
-                ["Auth:LoginRateLimit"] = "1000"
+                ["Auth:LoginRateLimit"] = "1000",
+                // не опрашивать claude CLI при прогреве каталога моделей: каждый подъём
+                // приложения спавнил настоящий claude.exe с мелькающими окнами bash/cmd
+                ["ModelCatalog:QueryCli"] = "false"
             });
         });
 

@@ -915,7 +915,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             border: `1px solid ${C.border}`,
             background: C.bgCard, color: C.textSecondary, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: SHADOW.card, zIndex: 15,
+            boxShadow: SHADOW.card, zIndex: 15, transition: 'bottom 0.3s ease',
           }}
         >
           <ArrowDown size={22} strokeWidth={2.2} />

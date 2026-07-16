@@ -94,6 +94,17 @@ body {
 .composer-dot:nth-child(2) { animation-delay: 0.2s; }
 .composer-dot:nth-child(3) { animation-delay: 0.4s; }
 
+/* Регистрируем переменную позиции FAB как длину — тогда её смена (при разносе
+   композера грипом ⋮ высота меняется) анимируется, и «круг с AI-действиями» не прыгает.
+   Без @property изменение var() в calc() браузер не проигрывает через transition. */
+@property --cc-fab-bottom {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 20px;
+}
+:root { transition: --cc-fab-bottom 0.3s ease; }
+
+
 /* Поле ввода чата: прячем скроллбар (поле растёт до maxHeight, дальше скроллится
    касанием) — иначе на части браузеров виден серый трек; каретку красим в accent */
 .cc-composer-input {

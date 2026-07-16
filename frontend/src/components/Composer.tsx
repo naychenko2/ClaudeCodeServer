@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
-import { AlertTriangle, ArrowUp, Check, ChevronDown, Mic, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties } from 'react';
+import { AlertTriangle, ArrowUp, Check, ChevronDown, Mic, MoreVertical, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { SkillsDropdown } from './SkillsDropdown';
 import { MentionsDropdown } from './MentionsDropdown';
@@ -173,6 +173,28 @@ export function Composer({
   const [dragOver, setDragOver] = useState(false);
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
+  // Разнос композера в две позиции грипом ⋮ (собрано ↔ разнесено). На планшете облачко
+  // раскладки клавиатуры перекрывает нижний ряд контролов — в разнесённом виде поле ввода
+  // и «отправить» уезжают вверх, а второстепенные кнопки садятся полосой ниже. Позиция
+  // запоминается per-device.
+  const [expanded, setExpanded] = useState(() => {
+    try { return localStorage.getItem('cc_composer_split') === '1'; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('cc_composer_split', expanded ? '1' : '0'); } catch { /* noop */ }
+  }, [expanded]);
+  // Драг грипа ⋮: тянем — раскладка переключается под пальцем (live), «дотягивая» до
+  // нового размера. dragStartYRef — якорь текущего порога (сдвигается при переключении =
+  // гистерезис), dragMovedRef — был ли реальный сдвиг (чтобы погасить паразитный click).
+  const [dragging, setDragging] = useState(false);
+  const dragStartYRef = useRef<number | null>(null);
+  const dragMovedRef = useRef(false);
+  // FLIP-анимация при разносе: замеряем top textarea и высоту контейнера ДО смены раскладки,
+  // после — проигрываем разницу (translateY поля + height контейнера), чтобы переход был
+  // плавным в обе стороны (и раскрытие, и сборка), а не скачком.
+  const flipInputTopRef = useRef<number | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const flipContainerHRef = useRef<number | null>(null);
   // Autocomplete скиллов
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
   const [skillQuery, setSkillQuery] = useState('');
@@ -475,6 +497,109 @@ export function Composer({
     } catch { /* noop */ }
   };
 
+  // Снимок позиции поля и высоты контейнера перед сменой раскладки — для FLIP-анимации
+  const captureFlip = () => {
+    flipInputTopRef.current = textareaRef.current?.getBoundingClientRect().top ?? null;
+    flipContainerHRef.current = containerRef.current?.getBoundingClientRect().height ?? null;
+  };
+  // После смены expanded: проигрываем разницу позиций поля (translateY+fade) и высоты
+  // контейнера (height) как плавный переход — одинаково при раскрытии и сборке.
+  useLayoutEffect(() => {
+    const DUR = 0.3;
+    // Поле: плавный переезд по вертикали + лёгкий fade (прячет резкую смену ширины)
+    const el = textareaRef.current;
+    const prevTop = flipInputTopRef.current;
+    flipInputTopRef.current = null;
+    if (el && prevTop !== null) {
+      const dy = prevTop - el.getBoundingClientRect().top;
+      if (Math.abs(dy) >= 2) {
+        el.style.transition = 'none';
+        el.style.transform = `translateY(${dy}px)`;
+        el.style.opacity = '0.35';
+        void el.offsetHeight;
+        requestAnimationFrame(() => {
+          el.style.transition = `transform ${DUR}s ease, opacity ${DUR}s ease`;
+          el.style.transform = 'translateY(0)';
+          el.style.opacity = '1';
+        });
+      }
+    }
+    // Контейнер: плавное схлопывание/раскрытие высоты (overflow hidden прячет «лишнюю»
+    // строку, пока высота едет) — даёт плавную сборку, а не резкое исчезновение полосы
+    const c = containerRef.current;
+    const prevH = flipContainerHRef.current;
+    flipContainerHRef.current = null;
+    if (c && prevH !== null) {
+      const newH = c.getBoundingClientRect().height;
+      if (Math.abs(newH - prevH) >= 2) {
+        c.style.overflow = 'hidden';
+        c.style.height = `${prevH}px`;
+        void c.offsetHeight;
+        requestAnimationFrame(() => {
+          c.style.transition = `height ${DUR}s ease`;
+          c.style.height = `${newH}px`;
+        });
+        window.setTimeout(() => {
+          c.style.transition = '';
+          c.style.height = '';
+          c.style.overflow = '';
+        }, DUR * 1000 + 30);
+      }
+    }
+  }, [expanded]);
+
+  // --- Drag грипа ⋮: live-переключение композера в две позиции (собрано ↔ разнесено) ---
+  // Порог протягивания — раньше срабатывает, смена начинается почти сразу за движением.
+  const SNAP = 18;
+  // Ширина зоны справа от собеседника в собранном виде (для выравнивания его на нижней
+  // строке под правый край поля): разделитель 12 + mic 32 + send 34 + зазоры.
+  const micSendW = 86;
+  // Разнос доступен только на планшете/десктопе. В мобильной раскладке поле и так занимает
+  // отдельную строку во всю ширину (а собеседник уходит в левый блок к кнопкам) — разносить
+  // нечего. Само expanded не сбрасываем: при возврате к широкому экрану вид восстановится.
+  const splitActive = expanded && !isMobile;
+  const onGripPointerDown = (e: React.PointerEvent) => {
+    // preventDefault — чтобы не начиналось выделение текста/нативный drag на десктопе
+    e.preventDefault();
+    setModeMenuOpen(false); // страховка: меню режима не должно висеть во время смены раскладки
+    dragStartYRef.current = e.clientY;
+    dragMovedRef.current = false;
+    setDragging(true);
+  };
+  // Слушатели move/up вешаем на window: грип переезжает между строками при смене раскладки
+  // (его DOM-узел пересоздаётся), поэтому pointer capture на кнопке порвался бы посреди
+  // драга — а это и роняло финальный click на кнопку режима под пальцем («Авто»-попап).
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e: PointerEvent) => {
+      if (dragStartYRef.current === null) return;
+      const dy = e.clientY - dragStartYRef.current;
+      if (Math.abs(dy) > 4) dragMovedRef.current = true;
+      // Live-переключение под пальцем; после смены сдвигаем якорь (гистерезис против дребезга)
+      if (!expanded && dy < -SNAP) { captureFlip(); setExpanded(true); dragStartYRef.current = e.clientY; }
+      else if (expanded && dy > SNAP) { captureFlip(); setExpanded(false); dragStartYRef.current = e.clientY; }
+    };
+    const onUp = () => {
+      const moved = dragMovedRef.current;
+      dragStartYRef.current = null;
+      setDragging(false);
+      // Гасим один паразитный click по элементу под пальцем (иначе всплывает меню режима)
+      if (moved) {
+        const swallow = (ev: Event) => { ev.stopPropagation(); ev.preventDefault(); };
+        window.addEventListener('click', swallow, { capture: true, once: true });
+        window.setTimeout(() => window.removeEventListener('click', swallow, true), 350);
+      }
+    };
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [dragging, expanded]);
+
   // Стили контейнера — поле всегда активно (доступно для ввода и во время генерации)
   const containerStyle: React.CSSProperties = {
     position: 'relative',
@@ -717,6 +842,27 @@ export function Composer({
     touchAction: 'manipulation',
   };
 
+  // Грип ⋮ — тащим вертикально, чтобы разнести/собрать композер (снап в 2 позиции).
+  // touchAction:'none' обязателен: иначе тач-драг проскроллит страницу вместо перетаскивания.
+  const gripButton = (
+    <button
+      type="button"
+      onPointerDown={onGripPointerDown}
+      onContextMenu={(e) => e.preventDefault()}
+      title={expanded ? 'Собрать панель (потяни вниз)' : 'Приподнять поле ввода (потяни вверх)'}
+      aria-label="Перетащить панель ввода"
+      style={{
+        ...iconBtnGuard,
+        touchAction: 'none',
+        width: 24, height: 32, borderRadius: R.pill, border: 'none',
+        background: 'none', cursor: dragging ? 'grabbing' : 'grab', color: C.textMuted,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      }}
+    >
+      <MoreVertical size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+    </button>
+  );
+
   const micButton = hasSpeech ? (
     <button
       type="button"
@@ -877,7 +1023,7 @@ export function Composer({
             : undefined}
         />
       )}
-    <div style={containerStyle} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={() => setDragOver(false)}>
+    <div ref={containerRef} style={containerStyle} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={() => setDragOver(false)}>
       {/* Dropdown скиллов (показывается над полем ввода при /query) */}
       {showSkillsDropdown && skills.length > 0 && (
         <SkillsDropdown
@@ -961,10 +1107,43 @@ export function Composer({
         </div>
       )}
 
-      {isMobile ? (
+      {splitActive ? (
+        /* РАЗНЕСЕНО (только планшет/десктоп): поле ввода + «отправить» вверх,
+           полоса контролов снизу — уводит поле из-под облачка раскладки клавиатуры. */
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {/* Верхняя строка: грип, поле и «отправить» */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {gripButton}
+            {teamChip}
+            {inputArea}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
+            </div>
+          </div>
+          {/* Нижняя полоса контролов — порядок и gap как в собранной раскладке, плюс
+              спейсер шириной грипа: все кнопки встают ровно на свои прежние X.
+              Собеседник прижат вправо с резервом под зону mic/send верхней строки. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', minWidth: 0 }}>
+            <div style={{ width: 24, flexShrink: 0 }} aria-hidden />
+            {modeButton}
+            {attachButton}
+            {slashButton}
+            {discussButton}
+            {loopButton}
+            {loopBadge}
+            {companionSelector && (
+              <>
+                <div style={{ marginLeft: 'auto', flexShrink: 0 }}>{companionSelector}</div>
+                <div style={{ width: micSendW, flexShrink: 0 }} aria-hidden />
+              </>
+            )}
+          </div>
+        </div>
+      ) : isMobile ? (
         /* Мобильная раскладка: статус-пилюли + поле сверху; primary-контролы фиксированным
            рядом снизу. Цикл/скилл спрятаны в «⋯», собеседник и «Обсудить с командой» слиты —
-           row2 не наматывается в 2-3 строки, mic/send всегда на месте (гарантированные 2 строки). */
+           row2 не наматывается в 2-3 строки, mic/send всегда на месте (гарантированные 2 строки).
+           Грипа здесь нет: разнос на узком экране недоступен (вернётся при расширении). */
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>{teamChip}{loopBadge}{inputArea}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -984,8 +1163,9 @@ export function Composer({
           </div>
         </div>
       ) : (
-        /* Десктоп: всё в одну строку */
+        /* СОБРАНО (десктоп): всё в одну строку; грип первым */
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {gripButton}
           {modeButton}
           {attachButton}
           {slashButton}

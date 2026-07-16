@@ -16,6 +16,7 @@ import { useIsMobile } from '../../lib/breakpoints';
 import { PersonaList } from './PersonaList';
 import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './PersonaForm';
 import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
+import { PersonaEditFab } from './PersonaEditFab';
 import { PersonaPreview } from './PersonaPreview';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaBindingsPanel } from './PersonaBindingsPanel';
@@ -426,6 +427,11 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
       {/* Тонкая акцентная полоса персоны */}
       <div style={{ flex: 'none', height: 2, background: `${accent}55` }} />
       {content}
+
+      {/* Плавающая «Редактировать» на мобиле — вместо карандаша в тулбаре */}
+      {isMobile && view === 'preview' && !editing && (
+        <PersonaEditFab accent={accent} onClick={() => setEditing(true)} />
+      )}
 
       {confirmDiscard && (
         <ConfirmDialog

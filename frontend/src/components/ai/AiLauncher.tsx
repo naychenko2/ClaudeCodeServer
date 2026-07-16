@@ -257,6 +257,7 @@ const fabStyle: React.CSSProperties = {
   position: 'fixed', right: 20, bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
   width: 54, height: 54, borderRadius: '50%', border: 'none', cursor: 'pointer',
   background: C.accent, color: C.onAccent, boxShadow: SHADOW.fab,
+  // bottom едет плавно за счёт анимируемой @property --cc-fab-bottom (см. index.css)
   display: 'grid', placeItems: 'center', zIndex: Z.modal - 1, transition: 'transform .16s',
 };
 

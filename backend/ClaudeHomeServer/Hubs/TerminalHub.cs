@@ -58,12 +58,14 @@ public class TerminalHub : Hub
     /// <summary>Ввод в терминал.</summary>
     public async Task TerminalInput(string terminalId, string data)
     {
+        if (!_terminal.Owns(terminalId, UserId!)) throw Denied();
         await _terminal.WriteInputAsync(terminalId, data);
     }
 
     /// <summary>Resize терминала.</summary>
     public Task TerminalResize(string terminalId, int cols, int rows)
     {
+        if (!_terminal.Owns(terminalId, UserId!)) throw Denied();
         _terminal.Resize(terminalId, cols, rows);
         return Task.CompletedTask;
     }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, type ReactNode } from 'react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -14,6 +14,7 @@ import { C, FONT } from '../lib/design';
 import { useSidebarWidth } from '../lib/sidebarWidth';
 import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
+import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { BackButton, IconButton, Splitter } from '../components/ui';
@@ -97,7 +98,7 @@ function useViewportHeight() {
 // ремонтирует всё поддерево — xterm пересоздаётся, экран чернеет, ввод/вывод теряются.
 function ToolsPaneView({
   projectId, toolsTab, terminals, activeTerminalId, activeTerminalName, terminalBusy,
-  onTerminalActivity, previewServices, activePreviewId, onStopPreview,
+  onTerminalActivity, previewServices, activePreviewId, onStopPreview, onBack,
 }: {
   projectId: string
   toolsTab: 'terminal' | 'preview'
@@ -109,6 +110,7 @@ function ToolsPaneView({
   previewServices: ProjectService[]
   activePreviewId: string | null
   onStopPreview: (id: string) => void
+  onBack?: () => void
 }) {
   const activePreview = previewServices.find(s => s.id === activePreviewId);
   return (
@@ -120,6 +122,12 @@ function ToolsPaneView({
         borderBottom: `1px solid ${C.divider}`, background: C.bgMain,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+          {/* Мобилка: «назад» к сайдбару инструментов (двухуровневая навигация) */}
+          {onBack && (
+            <button onClick={onBack} title="К инструментам" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, marginLeft: -6, border: 'none', background: 'transparent', cursor: 'pointer', color: C.textSecondary, borderRadius: 8, flexShrink: 0 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+            </button>
+          )}
           {toolsTab === 'terminal' ? (
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textHeading}
               strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -314,12 +322,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     setPreviewServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'stopped', runningPort: null } : s));
   }, [project.id]);
 
-  const selectPreview = useCallback(async (serviceId: string) => {
-    setActivePreviewId(serviceId);
-    setToolsTab('preview');
-    try { await api.projects.previewActive(project.id, serviceId); } catch { /* ignore */ }
-  }, [project.id]);
-
   // Живой статус сервисов из broadcast preview_status (группа user_*)
   useEffect(() => {
     return onMessage(msg => {
@@ -498,7 +500,7 @@ const windowWidth = useWindowWidth();
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {isMobile && (
         <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: `1px solid ${C.border}`, background: C.bgPanel }}>
-          <IconButton size="md" variant="soft" onClick={() => window.history.back()} title="К списку задач">
+          <IconButton size="md" variant="soft" onClick={() => { handleProjectBoard(false); if (isMobile) setMobileView('sidebar'); }} title="К списку задач">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
           </IconButton>
           <span style={{ fontFamily: FONT.sans, fontWeight: 700, fontSize: 15, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -553,6 +555,60 @@ const windowWidth = useWindowWidth();
     { value: 'tasks', label: 'Задачи', icon: LEFT_TAB_ICONS.tasks },
     { value: 'personas' as LeftTab, label: 'Команда', icon: LEFT_TAB_ICONS.personas },
     ...(projectForEdit.toolsEnabled ? [{ value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools }] : []),
+  ];
+
+  // Мобильный таббар проекта: показываем столько вкладок, сколько влезает по ширине
+  // шапки, остальное + «Использование» — в «⋯» (как «⋯ Разделы» в HubHeader). Количество
+  // определяем динамически: скрытый эталон compact-пилюль (projectTabsProbeRef) мерим
+  // относительно шапки (projectTabsHeaderRef), резервируя место под кнопку проекта и «⋯».
+  const projectTabsHeaderRef = useRef<HTMLDivElement>(null);
+  const projectTabsProbeRef = useRef<HTMLDivElement>(null);
+  const projectTabsMoreRef = useRef<HTMLDivElement>(null);
+  const [projectVisibleCount, setProjectVisibleCount] = useState(leftTabOptions.length);
+
+  useLayoutEffect(() => {
+    if (!isMobile) return;
+    const header = projectTabsHeaderRef.current;
+    const probe = projectTabsProbeRef.current;
+    if (!header || !probe) return;
+    const compute = () => {
+      const pills = Array.from(probe.children) as HTMLElement[];
+      if (!pills.length) return;
+      const cs = getComputedStyle(header);
+      const avail = header.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const moreW = projectTabsMoreRef.current?.offsetWidth ?? 40;
+      // 64 — минимум под кнопку проекта (имя с эллипсисом), 14 — зазоры back|pills|⋯
+      const budget = avail - 64 - moreW - 14;
+      let used = 6; // внутренние отступы трека PillSwitch (padding 3×2)
+      let fit = 0;
+      for (let i = 0; i < pills.length; i++) {
+        const w = pills[i].offsetWidth + (i > 0 ? 3 : 0);
+        if (used + w <= budget) { used += w; fit++; } else break;
+      }
+      setProjectVisibleCount(Math.max(1, Math.min(pills.length, fit)));
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(header);
+    return () => ro.disconnect();
+  }, [isMobile, leftTabOptions.length, leftTab]);
+
+  // Видимые вкладки — первые projectVisibleCount; активную спрятанную подставляем
+  // последней, чтобы подсветка была верной. Остальные + «Использование» — в «⋯».
+  const activeLeftIdx = leftTabOptions.findIndex(o => o.value === leftTab);
+  const mobileLeftTabOptions = activeLeftIdx >= projectVisibleCount
+    ? [...leftTabOptions.slice(0, Math.max(0, projectVisibleCount - 1)), leftTabOptions[activeLeftIdx]]
+    : leftTabOptions.slice(0, projectVisibleCount);
+  const mobileVisibleValues = new Set(mobileLeftTabOptions.map(o => o.value));
+  const projectOverflowItems: OverflowItem[] = [
+    ...leftTabOptions
+      .filter(o => !mobileVisibleValues.has(o.value))
+      .map(o => ({ key: o.value, icon: o.icon, label: o.label, onClick: () => handleTabSwitch(o.value) })),
+    {
+      key: 'usage', label: 'Использование',
+      icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,
+      onClick: () => setShowUsage(true),
+    },
   ];
 
   // «Поговорить» из проектной вкладки «Команда»: сессия персоны создаётся в этом
@@ -861,6 +917,34 @@ const windowWidth = useWindowWidth();
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
+  // Тулбар-«назад»: ДЕТЕРМИНИРОВАННЫЙ подъём к списку текущей вкладки внутри проекта.
+  // НЕ history.back — при открытии приложения сразу на глубоком месте (восстановление/диплинк)
+  // история браузера пуста, и history.back() ничего не делает. Всегда ведём на уровень выше.
+  const backFromFile = () => {
+    setOpenFile(null);
+    setFileFullscreen(false);
+    if (isMobile) setMobileView('sidebar');
+    navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: selectedTaskId ?? null });
+  };
+  const backFromTask = () => {
+    setSelectedTaskId(null);
+    if (isMobile) setMobileView('sidebar');
+    navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
+  };
+  const backFromChat = () => {
+    if (isMobile) setMobileView('sidebar');
+    navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
+  };
+  // Инструменты (терминал/preview): выбор в сайдбаре → на мобиле уходим в контент;
+  // «назад» в шапке контента вернёт к сайдбару инструментов (двухуровневая навигация).
+  const handleSelectTerminal = (id: string | null) => { setActiveTerminalId(id); if (isMobile && id) setMobileView('chat'); };
+  const handleSelectPreview = (id: string | null) => {
+    setActivePreviewId(id);
+    setToolsTab('preview');
+    if (isMobile && id) setMobileView('chat');
+    if (id) void api.projects.previewActive(project.id, id).catch(() => {});
+  };
+
   const handleEnterFullscreen = () => setFileFullscreen(true);
 
   const handleSplitterMouseDown = (e: React.PointerEvent) => {
@@ -891,6 +975,12 @@ const windowWidth = useWindowWidth();
   const handleTabSwitch = (tab: LeftTab) => {
     setLeftTab(tab);
     if (isMobile) setMobileView('sidebar');
+    // Синхронизируем историю с активной вкладкой. Уходя с «Команды», убираем persona из
+    // записи — иначе «назад» (например из открытого файла) по устаревшей записи с
+    // persona:null восстановит командный центр вместо возврата к списку вкладки.
+    if (tab !== 'personas') {
+      navReplace({ screen: 'project', project, view: 'sidebar', file: openFile ?? null, task: null });
+    }
   };
 
   const handleAddToKnowledge = useCallback(async (relativePath: string) => {
@@ -1038,10 +1128,10 @@ const windowWidth = useWindowWidth();
           <ToolsSidebar projectId={project.id} activeTab={toolsTab} onTabChange={setToolsTab}
             terminals={terminals} onCreateTerminal={handleCreateTerminal}
             onStopTerminal={handleStopTerminal} onRenameTerminal={handleRenameTerminal}
-            activeTerminalId={activeTerminalId} onSelectTerminal={setActiveTerminalId}
+            activeTerminalId={activeTerminalId} onSelectTerminal={handleSelectTerminal}
             activePreviewId={activePreviewId} previewServices={previewServices}
             onRefreshServices={refreshServices} onStartService={startService}
-            onStopService={stopService} onSelectPreview={selectPreview}
+            onStopService={stopService} onSelectPreview={handleSelectPreview}
             terminalBusy={terminalBusy} />
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
@@ -1061,26 +1151,29 @@ const windowWidth = useWindowWidth();
         {/* Верхняя шапка — только в режиме списка (sidebar). В режиме чата своя
             самодостаточная шапка ChatHeaderBar с кнопкой «назад»; у файла — шапка FileViewer */}
         {!openFile && mobileView === 'sidebar' && (
-          <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.border}`, background: C.bgPanel, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <div ref={projectTabsHeaderRef} style={{ position: 'relative', padding: '10px 14px', borderBottom: `1px solid ${C.border}`, background: C.bgPanel, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+            {/* Скрытый эталон: compact-пилюли всех вкладок — по ним меряем, сколько влезает */}
+            <div ref={projectTabsProbeRef} aria-hidden style={{ position: 'absolute', visibility: 'hidden', pointerEvents: 'none', top: 0, left: 0, display: 'flex', gap: 3, whiteSpace: 'nowrap' }}>
+              {leftTabOptions.map((opt, i) => (
+                <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, boxSizing: 'border-box', minHeight: 40, padding: opt.value === leftTab ? '0 12px' : '0 11px', fontSize: 12, fontWeight: 600 }}>
+                  {opt.value === leftTab ? opt.label : opt.icon}
+                </span>
+              ))}
+            </div>
             <BackButton onClick={onGoToProjects} title={project.name} style={{ flex: 1, minHeight: 40 }}>
               <span style={{ fontWeight: 700, fontSize: 15, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</span>
             </BackButton>
             <PillSwitch<LeftTab>
               value={leftTab}
-              options={leftTabOptions}
+              options={mobileLeftTabOptions}
               onChange={handleTabSwitch}
               isMobile
-              autoCompact
+              compact
             />
-            <IconButton
-              size="md"
-              onClick={() => setShowUsage(true)}
-              title="Использование (модели + fal.ai)"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
-              </svg>
-            </IconButton>
+            {/* Не поместившиеся вкладки + «Использование» — в «⋯» (как «⋯ Разделы» в HubHeader) */}
+            <div ref={projectTabsMoreRef} style={{ flexShrink: 0, display: 'inline-flex' }}>
+              <ToolbarOverflowMenu isMobile title="Ещё" items={projectOverflowItems} />
+            </div>
           </div>
         )}
         {/* Sidebar — ВСЕГДА в DOM: FileExplorer не теряет текущий путь при смене вида */}
@@ -1093,7 +1186,14 @@ const windowWidth = useWindowWidth();
               : leftTab === 'personas'
               ? <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
               : leftTab === 'tools'
-              ? <ToolsPaneView {...toolsPaneProps} />
+              ? <ToolsSidebar projectId={project.id} activeTab={toolsTab} onTabChange={setToolsTab}
+                  terminals={terminals} onCreateTerminal={handleCreateTerminal}
+                  onStopTerminal={handleStopTerminal} onRenameTerminal={handleRenameTerminal}
+                  activeTerminalId={activeTerminalId} onSelectTerminal={handleSelectTerminal}
+                  activePreviewId={activePreviewId} previewServices={previewServices}
+                  onRefreshServices={refreshServices} onStartService={startService}
+                  onStopService={stopService} onSelectPreview={handleSelectPreview}
+                  terminalBusy={terminalBusy} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'
@@ -1108,26 +1208,26 @@ const windowWidth = useWindowWidth();
         {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {leftTab === 'tools'
-            ? <ToolsPaneView {...toolsPaneProps} />
+            ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
             : personasMode
             ? ((selectedPersonaId || personaCreating)
                 ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} initialView={pendingPersonaView} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />
                 : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />)
             : tasksMode
             ? (selectedTask
-                ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={() => window.history.back()} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
+                ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={backFromTask} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={backFromTask} />
                 : showProjectBoard
                 ? ProjectBoardArea
                 : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите задачу</div>)
             : activeSession
-            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={toggleArtifacts} />
+            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={toggleArtifacts} />
             : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите или создайте чат</div>
           }
         </div>
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={() => window.history.back()} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} />
           </div>
         )}
         {/* Панель «Артефакты сессии» — мобайл: drawer поверх чата */}
@@ -1276,7 +1376,7 @@ const windowWidth = useWindowWidth();
             {/* Открытая задача — карточка в основной зоне (как открытый файл), ✕ возвращает чат */}
             {!openFile && selectedTask && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} startInEdit={selectedTask.id === autoEditTaskId} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onClose={() => window.history.back()} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
+                <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} startInEdit={selectedTask.id === autoEditTaskId} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onClose={backFromTask} onDeleted={backFromTask} />
               </div>
             )}
 
@@ -1302,7 +1402,7 @@ const windowWidth = useWindowWidth();
                 <Splitter orientation="v" active={draggingSplitter === 'split'}
                   onMouseDown={e => { setDraggingSplitter('split'); handleSplitterMouseDown(e); }} />
                 <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
-                  <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} onToggleFullscreen={handleEnterFullscreen} onOpenSidebar={openSidebar} />
+                  <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={handleEnterFullscreen} onOpenSidebar={openSidebar} />
                 </div>
               </div>
             )}
@@ -1310,7 +1410,7 @@ const windowWidth = useWindowWidth();
             {/* Fullscreen: файл из дерева или планшет */}
             {openFile && (fileFullscreen || isTablet) && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} onOpenSidebar={openSidebar} />
+                <FileViewer project={project} filePath={openFile} onClose={backFromFile} onOpenSidebar={openSidebar} />
               </div>
             )}
           </>

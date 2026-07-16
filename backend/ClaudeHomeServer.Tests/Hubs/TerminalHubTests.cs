@@ -85,18 +85,16 @@ public class TerminalHubTests : IClassFixture<TestWebApplicationFactory>, IAsync
     public async Task CreateTerminal_OnNonexistentProject_Throws()
     {
         var conn = await ConnectTerminalAsync(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
-        var act = () => conn.InvokeAsync("CreateTerminal", "no-such-project-id", 80, 24);
+        var act = () => conn.InvokeAsync("CreateTerminal", "no-such-project-id", 80, 24, (string?)null);
         await act.Should().ThrowAsync<HubException>();
     }
 
     [Fact]
-    public async Task TerminalInput_OnNonexistentTerminal_DoesNotThrow()
+    public async Task TerminalInput_OnNonexistentTerminal_Throws()
     {
-        // Multi-terminal: ввод в несуществующий терминал — штатный no-op,
-        // соединение не должно падать (ср. TerminalServiceTests.WriteInputAsync_WithNoTerminal_DoesNotThrow)
         var conn = await ConnectTerminalAsync(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
         var act = () => conn.InvokeAsync("TerminalInput", "no-such-terminal", "ls\n");
-        await act.Should().NotThrowAsync();
+        await act.Should().ThrowAsync<HubException>();
     }
 
     [Fact]
@@ -105,7 +103,7 @@ public class TerminalHubTests : IClassFixture<TestWebApplicationFactory>, IAsync
         var projectId = await CreateProjectAsync();
         // Второй пользователь не владеет проектом
         var conn2 = await ConnectTerminalAsync(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        var act = () => conn2.InvokeAsync("CreateTerminal", projectId, 80, 24);
+        var act = () => conn2.InvokeAsync("CreateTerminal", projectId, 80, 24, (string?)null);
         await act.Should().ThrowAsync<HubException>();
     }
 }

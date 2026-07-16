@@ -97,7 +97,7 @@ function useViewportHeight() {
 // ремонтирует всё поддерево — xterm пересоздаётся, экран чернеет, ввод/вывод теряются.
 function ToolsPaneView({
   projectId, toolsTab, terminals, activeTerminalId, activeTerminalName, terminalBusy,
-  onTerminalActivity, previewSessions, activePreviewId, onStopPreview,
+  onTerminalActivity, previewSessions, activePreviewId, onStopPreview, onBack,
 }: {
   projectId: string
   toolsTab: 'terminal' | 'preview'
@@ -109,6 +109,7 @@ function ToolsPaneView({
   previewSessions: PreviewSession[]
   activePreviewId: string | null
   onStopPreview: (id: string) => void
+  onBack?: () => void
 }) {
   const activePreview = previewSessions.find(p => p.id === activePreviewId);
   return (
@@ -120,6 +121,12 @@ function ToolsPaneView({
         borderBottom: `1px solid ${C.divider}`, background: C.bgMain,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+          {/* Мобилка: «назад» к сайдбару инструментов (двухуровневая навигация) */}
+          {onBack && (
+            <button onClick={onBack} title="К инструментам" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, marginLeft: -6, border: 'none', background: 'transparent', cursor: 'pointer', color: C.textSecondary, borderRadius: 8, flexShrink: 0 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+            </button>
+          )}
           {toolsTab === 'terminal' ? (
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textHeading}
               strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -830,6 +837,10 @@ const windowWidth = useWindowWidth();
     if (isMobile) setMobileView('sidebar');
     navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
   };
+  // Инструменты (терминал/preview): выбор в сайдбаре → на мобиле уходим в контент;
+  // «назад» в шапке контента вернёт к сайдбару инструментов (двухуровневая навигация).
+  const handleSelectTerminal = (id: string | null) => { setActiveTerminalId(id); if (isMobile && id) setMobileView('chat'); };
+  const handleSelectPreview = (id: string | null) => { setActivePreviewId(id); if (isMobile && id) setMobileView('chat'); };
 
   const handleEnterFullscreen = () => setFileFullscreen(true);
 
@@ -1014,8 +1025,8 @@ const windowWidth = useWindowWidth();
           <ToolsSidebar projectId={project.id} activeTab={toolsTab} onTabChange={setToolsTab}
             terminals={terminals} onCreateTerminal={handleCreateTerminal}
             onStopTerminal={handleStopTerminal} onRenameTerminal={handleRenameTerminal}
-            activeTerminalId={activeTerminalId} onSelectTerminal={setActiveTerminalId}
-            activePreviewId={activePreviewId} onSelectPreview={setActivePreviewId}
+            activeTerminalId={activeTerminalId} onSelectTerminal={handleSelectTerminal}
+            activePreviewId={activePreviewId} onSelectPreview={handleSelectPreview}
             previewSessions={previewSessions} onPreviewSessionsChange={setPreviewSessions}
             terminalBusy={terminalBusy} />
         ) : (
@@ -1068,7 +1079,13 @@ const windowWidth = useWindowWidth();
               : leftTab === 'personas'
               ? <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
               : leftTab === 'tools'
-              ? <ToolsPaneView {...toolsPaneProps} />
+              ? <ToolsSidebar projectId={project.id} activeTab={toolsTab} onTabChange={setToolsTab}
+                  terminals={terminals} onCreateTerminal={handleCreateTerminal}
+                  onStopTerminal={handleStopTerminal} onRenameTerminal={handleRenameTerminal}
+                  activeTerminalId={activeTerminalId} onSelectTerminal={handleSelectTerminal}
+                  activePreviewId={activePreviewId} onSelectPreview={handleSelectPreview}
+                  previewSessions={previewSessions} onPreviewSessionsChange={setPreviewSessions}
+                  terminalBusy={terminalBusy} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'
@@ -1083,7 +1100,7 @@ const windowWidth = useWindowWidth();
         {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {leftTab === 'tools'
-            ? <ToolsPaneView {...toolsPaneProps} />
+            ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
             : personasMode
             ? ((selectedPersonaId || personaCreating)
                 ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} initialView={pendingPersonaView} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />

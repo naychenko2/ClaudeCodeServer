@@ -1,0 +1,4 @@
+# Скрипты, засеваемые в Linux-контейнер как есть: CRLF в них ломает вызов
+# workflow по имени (строгая валидация CLI «script contains control characters»)
+claude-defaults/workflows/*.js text eol=lf
+mcp/**/*.js text eol=lf

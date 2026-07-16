@@ -91,9 +91,12 @@ services:
         ln -sf /home/app/.claude/.claude.json /home/app/.claude.json
         # Дефолты CLI из образа → volume ~/.claude: поставляемые скрипты перезаписываются
         # (истина — в репо, обновления приходят с образом); пользовательские скрипты под
-        # ДРУГИМИ именами не трогаются
+        # ДРУГИМИ именами не трогаются. CRLF с Windows-чекаута вычищаем: \r в скрипте
+        # валит вызов workflow по имени («script contains control characters»)
         mkdir -p /home/app/.claude/workflows
-        cp -f /app/claude-defaults/workflows/*.js /home/app/.claude/workflows/ 2>/dev/null || true
+        for f in /app/claude-defaults/workflows/*.js; do
+          [ -f "$$f" ] && tr -d '\r' < "$$f" > "/home/app/.claude/workflows/$$(basename "$$f")"
+        done || true
         # Плагин oh-my-claudecode (marketplace «omc»): ставится один раз, состояние живёт
         # в volume claude-home. Best-effort: без сети старт сервера не валим.
         # Обновление — вручную: docker exec claude-server claude plugin update oh-my-claudecode

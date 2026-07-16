@@ -215,6 +215,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             Directory.CreateDirectory(Path.GetDirectoryName(safePath)!);
             await using (var fs = new FileStream(safePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
                 await file.CopyToAsync(fs);
+            // Запись мимо FileService.Write* — уведомляем подписчиков (синк знаний) явно
+            files.NotifyMutated(root, relativePath, FileMutationKind.Write);
             return Ok();
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -572,6 +574,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                     new { error = $"Файл больше {MaxSaveFromUrlBytes / (1024 * 1024)} МБ" });
             }
 
+            // Запись мимо FileService.Write* — уведомляем подписчиков (синк знаний) явно
+            files.NotifyMutated(root, req.Path, FileMutationKind.Write);
             return Ok(new { path = req.Path });
         }
         catch (KeyNotFoundException) { return NotFound(); }

@@ -74,7 +74,9 @@ builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<TeamMemoryService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
 // Файловые сабагенты-персоны: генерация + синк .md-агентов
-builder.Services.AddSingleton<ClaudeSubscriptionPool>();
+// Пул подписок с восстановлением пометок исчерпания из снапшотов usage после рестарта
+builder.Services.AddSingleton(sp => new ClaudeSubscriptionPool(
+    sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<UsageService>()));
 builder.Services.AddSingleton<PersonaAgentFileGenerator>();
 builder.Services.AddSingleton<PersonaAgentFileSync>();
 builder.Services.AddSingleton<FalImageService>();
@@ -163,6 +165,12 @@ builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
 builder.Services.Configure<DifyOptions>(builder.Configuration.GetSection(DifyOptions.Section));
 builder.Services.AddSingleton<KnowledgeService>();
+// Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
+// (мост заодно гарантирует инстанцирование синка — подписку на FileService.OnMutated)
+builder.Services.AddSingleton<ProjectKnowledgeSyncService>();
+builder.Services.AddHostedService<ProjectKnowledgeTurnSync>();
+// Каскадная уборка знаний при удалении пользователя (UsersController)
+builder.Services.AddSingleton<UserKnowledgeCascade>();
 
 // JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office)
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -232,6 +240,11 @@ try
         WorkflowAgentParser.AddAllowedRoot(dir);
         Console.WriteLine($"[WorkflowAgentParser] разрешён корень провайдера: {dir}");
     }
+    // Профили подписок (sub-*) и созданные после старта: разрешаем весь корень
+    // claude-profiles по шаблону {key}/projects — иначе WorkflowWatcher у таких
+    // сессий молча выключается («Детали недоступны» в блоке Workflow)
+    WorkflowAgentParser.ProfilesRoot = registry.ProfilesDir;
+    Console.WriteLine($"[WorkflowAgentParser] разрешён корень профилей: {registry.ProfilesDir}");
 }
 catch (Exception ex)
 {

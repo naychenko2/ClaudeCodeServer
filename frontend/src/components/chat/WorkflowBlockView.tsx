@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useRef } from 'react';
+import { memo, useState, useEffect, useRef, useContext } from 'react';
 import { Check } from 'lucide-react';
 import { api, type WorkflowAgentInfo, type WorkflowAgentBlock } from '../../lib/api';
 import { parseWorkflowMeta } from '../../lib/workflowMeta';
@@ -10,6 +10,7 @@ import { PersonaConsultCard, PersonaTaskView, findConsultedPersona, findPersonaB
 import { AgentTextBlock, AgentThinkingBlock, AgentStructuredBlock, NEUTRAL_AGENT_ACCENT } from './AgentContentBlocks';
 import { AGENT_COLORS } from '../AgentSelector';
 import { type ActivityEntry } from './timeline';
+import { ChatProjectContext } from './contexts';
 
 function parseTranscriptDir(result: string | undefined): string | null {
   if (!result) return null;
@@ -33,6 +34,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   // её карточкой-консультацией (как Task-вызовы персон в обычной ленте)
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const personas = usePersonas();
+  const project = useContext(ChatProjectContext);
 
   // Локальный фоллбэк — используется только для старых сессий без серверного ватчера
   const [localAgents, setLocalAgents] = useState<WorkflowAgentInfo[] | null>(null);
@@ -208,7 +210,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                   !(agentAnswer !== null && e.item.kind === 'text' && e.item.text.trim() === agentAnswer));
                 const toolCount = children.filter(e => e.item.kind === 'tool_use').length;
                 // Стрим-агент консультируется с персоной → её карточка с активностью внутри
-                if (findConsultedPersona(agent, personas)) {
+                if (findConsultedPersona(agent, personas, project?.id ?? null)) {
                   return (
                     <div key={agent.id} style={{ padding: '8px 14px', borderTop: idx > 0 ? `1px solid ${C.bgInset}` : undefined }}>
                       <PersonaTaskView item={agent} online activity={children.length > 0 ? children : undefined} onOpenFile={onOpenFile} badge={null} />
@@ -291,7 +293,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                     // Персона (agentType == handle) → её карточка; обычный агент — та же
                     // карточка с нейтральной серой шапкой «Агент» + роль вызова (agentType,
                     // если информативен — дефолтный workflow-subagent не показываем)
-                    const persona = findPersonaByAgentType(agent.agentType, personas);
+                    const persona = findPersonaByAgentType(agent.agentType, personas, project?.id ?? null);
                     const role = !persona && agent.agentType && agent.agentType !== 'workflow-subagent'
                       ? agent.agentType : undefined;
                     const accent = persona
@@ -310,7 +312,8 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                         >
                           {transcriptDir && (
                             <TranscriptAgentTimeline dir={transcriptDir} agentId={agent.id}
-                              accent={accent} running={agent.isDone !== true} onOpenFile={onOpenFile} />
+                              accent={accent} running={agent.isDone !== true}
+                              refreshKey={transcriptAgents} onOpenFile={onOpenFile} />
                           )}
                         </PersonaConsultCard>
                       </div>
@@ -334,16 +337,20 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
 
 // Ленивый таймлайн workflow-агента: полный поток (текст/thinking/инструменты) из его
 // транскрипта, подгружается по REST при раскрытии. Пока агент работает (running) —
-// рефетч раз в 5с; по завершении — финальный снапшот. Рендер — как в обычном чате:
-// текст — AgentTextBlock (MarkdownContent в расцветке персоны/нейтральной), thinking —
-// AgentThinkingBlock, инструмент — полноценный ToolUseView (input + раскрываемый результат).
-function TranscriptAgentTimeline({ dir, agentId, accent, running, edge = 'bottom', onOpenFile }: {
+// мгновенный рефетч на каждый SignalR-апдейт агентов (refreshKey) + страховочный
+// интервал 5с на случай молчания ватчера; по завершении — финальный снапшот.
+// Рендер — как в обычном чате: текст — AgentTextBlock (MarkdownContent в расцветке
+// персоны/нейтральной), thinking — AgentThinkingBlock, инструмент — полноценный
+// ToolUseView (input + раскрываемый результат).
+function TranscriptAgentTimeline({ dir, agentId, accent, running, edge = 'bottom', refreshKey, onOpenFile }: {
   dir: string;
   agentId: string;
   accent: string;
   running: boolean;
   // Сторона разделителя: bottom — слот карточки персоны, top — низ панели деталей агента
   edge?: 'top' | 'bottom';
+  // Смена значения (ссылка массива workflowAgents из workflow_progress) → немедленный рефетч
+  refreshKey?: unknown;
   onOpenFile?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -361,7 +368,7 @@ function TranscriptAgentTimeline({ dir, agentId, accent, running, edge = 'bottom
     if (!running) return () => { cancelled = true; };
     const t = setInterval(load, 5000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [open, running, dir, agentId]);
+  }, [open, running, dir, agentId, refreshKey]);
 
   return (
     <div style={edge === 'bottom' ? { borderBottom: `1px solid ${C.divider}` } : { borderTop: `1px solid ${C.borderLight}` }}>

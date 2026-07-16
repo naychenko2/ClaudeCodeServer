@@ -18,6 +18,9 @@ public sealed class WorkflowWatcher : IDisposable
     private Timer? _debounceTimer;
     private Timer? _timeoutTimer;
     private DateTime _lastChange = DateTime.UtcNow;
+    // Момент ближайшего запланированного тика (MaxValue — не взведён); под _gate
+    private DateTime _nextFire = DateTime.MaxValue;
+    private readonly object _gate = new();
     private volatile bool _disposed;
 
     // Ватчер задиспозился — можно убирать из списков
@@ -70,18 +73,28 @@ public sealed class WorkflowWatcher : IDisposable
         ScheduleDebounce(DebounceDelay);
     }
 
+    // Троттлинг, а не дебаунс: тик можно только ПРИБЛИЗИТЬ, но не отложить. Иначе
+    // непрерывно пишущий транскрипт агента переносил бы таймер бесконечно, и апдейты
+    // уходили бы только в паузах между «этапами» — лента переставала быть потоком.
     private void ScheduleDebounce(TimeSpan delay)
     {
         if (_disposed) return;
-        if (_debounceTimer is null)
-            _debounceTimer = new Timer(async _ => await SendUpdateAsync(), null, delay, Timeout.InfiniteTimeSpan);
-        else
-            _debounceTimer.Change(delay, Timeout.InfiniteTimeSpan);
+        lock (_gate)
+        {
+            var due = DateTime.UtcNow + delay;
+            if (_nextFire <= due) return; // уже взведён раньше — не переносим
+            _nextFire = due;
+            if (_debounceTimer is null)
+                _debounceTimer = new Timer(async _ => await SendUpdateAsync(), null, delay, Timeout.InfiniteTimeSpan);
+            else
+                _debounceTimer.Change(delay, Timeout.InfiniteTimeSpan);
+        }
     }
 
     private async Task SendUpdateAsync()
     {
         if (_disposed) return;
+        lock (_gate) _nextFire = DateTime.MaxValue; // тик отработал — можно взводить новый
         try
         {
             AttachFsWatcher();

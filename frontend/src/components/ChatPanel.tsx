@@ -621,8 +621,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем
   // в один контур (внешние линии сверху/снизу + разделители между соседями). Стопку не
   // рвут ни file_changed, ни размышления между действиями, ни невидимые элементы —
-  // после завершения хода весь блок (включая одиночное действие) сворачивается в
-  // строку «N действий». Группировка — O(n) с постройкой карт по всей ленте (useMemo).
+  // как только агент пошёл дальше (следующий видимый элемент после группы), весь блок
+  // (включая одиночное действие) сворачивается в строку «N действий».
+  // Группировка — O(n) с постройкой карт по всей ленте (useMemo).
   const renderedItems = useMemo(() => {
     // Последний task-вызов (lastTaskIdx) исключаем из блока действий, как и TodoWrite:
     // на его месте рисуется отдельная карточка чек-листа, ей не место внутри контура
@@ -734,11 +735,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         // Для agent-вызовов с детьми сразу рисуем детей inline под родителем — иначе при параллельных
         // агентах все их инструменты сливаются в один безымянный блок после шапки.
         const toolCount = slice.filter(([it]) => it.kind === 'tool_use').length;
-        let isGroupDone = false;
-        for (let k = i; k < items.length; k++) {
-          if (items[k].kind === 'user_message') break;
-          if (items[k].kind === 'result') { isGroupDone = true; break; }
-        }
+        // Группа завершена, как только после неё появился следующий видимый элемент
+        // (текст ассистента, запрос разрешения, result, error…) — конца хода не ждём.
+        // Хвостовые размышления не сигнал: они могут впитаться в группу при следующем
+        // действии, и группа мигала бы свернулась/раскрылась на каждом межшаговом thinking.
+        let after = i;
+        while (after < items.length && (isThought(items[after]) || isInvisible(items[after]) || isSuppressed(items[after]))) after++;
+        const isGroupDone = after < items.length;
         // Изменения файлов не теряются при сворачивании: в свёрнутой шапке — те же плашки
         // (дедуп по пути, +N/−N событий суммируются), при раскрытии они на своих местах
         const fileAgg = new Map<string, Extract<ChatItem, { kind: 'file_changed' }>>();
@@ -768,7 +771,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               // Консультация персоны-сабагента: активность рендерится СЕКЦИЕЙ ВНУТРИ
               // карточки (PersonaTaskView), внешняя плашка «N действий» не нужна
               const isPersonaTask = it.kind === 'tool_use' && inlineChildren.length > 0
-                && !!findConsultedPersona(it, getPersonasSnapshot());
+                && !!findConsultedPersona(it, getPersonasSnapshot(), project?.id ?? null);
               return (
                 <Fragment key={itemKey(it, idx)}>
                   <div style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>

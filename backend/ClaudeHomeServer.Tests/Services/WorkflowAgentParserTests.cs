@@ -30,6 +30,12 @@ public class WorkflowAgentParserTests : IDisposable
     private static string UserLine(string prompt) =>
         """{"message":{"role":"user","content":"<P>"}}""".Replace("<P>", prompt);
 
+    // То же с меткой времени старта (для проверки хронологии ParseDirectory)
+    private static string UserLineAt(string prompt, string timestamp) =>
+        """{"timestamp":"<TS>","message":{"role":"user","content":"<P>"}}"""
+            .Replace("<TS>", timestamp)
+            .Replace("<P>", prompt);
+
     // Ответ ассистента текстом (становится summary)
     private static string AssistantTextLine(string text, bool endTurn = false) =>
         """{"message":{"role":"assistant","stop_reason":<S>,"content":[{"type":"text","text":"<T>"}]}}"""
@@ -79,6 +85,23 @@ public class WorkflowAgentParserTests : IDisposable
         var a2 = agents.Single(a => a.Id == "a2");
         a2.IsDone.Should().BeFalse();
         a2.Summary.Should().Be("Работаю");
+    }
+
+    [Fact]
+    public void ParseDirectory_ПорядокАгентов_ПоTimestampПервойСтроки()
+    {
+        // Алфавитный порядок имён файлов (a2 < b1) противоречит хронологии запуска —
+        // выигрывает timestamp первой строки транскрипта
+        WriteAgentFile("a2",
+            UserLineAt("Второй", "2026-07-16T10:05:00.000Z"),
+            AssistantTextLine("работаю"));
+        WriteAgentFile("b1",
+            UserLineAt("Первый", "2026-07-16T10:00:00.000Z"),
+            AssistantTextLine("работаю"));
+
+        var agents = WorkflowAgentParser.ParseDirectory(_dir);
+
+        agents.Select(a => a.Id).Should().ContainInOrder("b1", "a2");
     }
 
     [Fact]
@@ -256,5 +279,37 @@ public class WorkflowAgentParserTests : IDisposable
     {
         WorkflowAgentParser.IsPathAllowed(_dir).Should().BeFalse();
         WorkflowAgentParser.IsPathAllowed(Path.GetTempPath()).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsPathAllowed_ПрофильПодProfilesRoot_РазрешёнТолькоProjects()
+    {
+        var prev = WorkflowAgentParser.ProfilesRoot;
+        try
+        {
+            WorkflowAgentParser.ProfilesRoot = _dir;
+            // Транскрипты любого профиля (в т.ч. подписки sub-*, созданной после старта)
+            var wf = Path.Combine(_dir, "sub-my-second", "projects", "-p-x-", "sid", "subagents", "workflows", "wf_1");
+            WorkflowAgentParser.IsPathAllowed(wf).Should().BeTrue();
+            // Но не остальное содержимое профиля (креденшалы и т.п.)
+            WorkflowAgentParser.IsPathAllowed(Path.Combine(_dir, "sub-my-second", ".credentials.json"))
+                .Should().BeFalse();
+            // И не сам корень с одним сегментом
+            WorkflowAgentParser.IsPathAllowed(Path.Combine(_dir, "projects")).Should().BeFalse();
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = prev; }
+    }
+
+    [Fact]
+    public void IsPathAllowed_ProfilesRoot_TraversalНеПроходит()
+    {
+        var prev = WorkflowAgentParser.ProfilesRoot;
+        try
+        {
+            WorkflowAgentParser.ProfilesRoot = Path.Combine(_dir, "profiles");
+            var sneaky = Path.Combine(_dir, "profiles", "key", "..", "..", "secret", "projects", "x");
+            WorkflowAgentParser.IsPathAllowed(sneaky).Should().BeFalse();
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = prev; }
     }
 }

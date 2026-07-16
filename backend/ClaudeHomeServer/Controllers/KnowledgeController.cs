@@ -14,7 +14,8 @@ public class KnowledgeController(
     ProjectManager projects,
     KnowledgeService knowledge,
     FileService files,
-    WorkspaceKnowledgeStore workspaceStore) : ControllerBase
+    WorkspaceKnowledgeStore workspaceStore,
+    ProjectKnowledgeSyncService sync) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
     private string Username => User.FindFirstValue(System.Security.Claims.ClaimTypes.Name) ?? UserId;
@@ -35,6 +36,9 @@ public class KnowledgeController(
         var wk = workspaceStore.GetByPath(p.RootPath);
         if (string.IsNullOrEmpty(wk?.DifyDatasetId))
             return Ok(new { datasetId = (string?)null, documents = Array.Empty<object>(), total = 0 });
+
+        // Сверка при открытии панели БЗ: подхватить правки, сделанные пока сервер/ватчеры не смотрели
+        sync.QueueSync(p.RootPath);
 
         try
         {
@@ -92,25 +96,11 @@ public class KnowledgeController(
 
         try
         {
-            var datasetId = await knowledge.EnsureDatasetAsync(p, Username);
-            // Сохраняем относительный путь как имя документа, чтобы можно было переиндексировать из панели БЗ
-            var docName = req.RelativePath.Replace('\\', '/');
-            // Передаём существующие теги из workspace store в Dify как doc_metadata
+            // Идемпотентная индексация через синк-сервис: имя документа = относительный путь,
+            // повторный вызов обновляет документ (не плодит дубль), файл попадает под отслеживание
+            var (datasetId, doc) = await sync.IndexPathAsync(p, Username, req.RelativePath);
             var wk = workspaceStore.GetByPath(p.RootPath);
-            var existingTags = wk?.DocumentTags?.TryGetValue(docName, out var t) == true ? t : null;
-
-            DifyDocumentInfo doc;
-            if (KnowledgeService.IsTextIndexable(req.RelativePath))
-            {
-                var content = files.ReadFile(p.RootPath, req.RelativePath);
-                doc = await knowledge.IndexFileByTextAsync(datasetId, docName, content, existingTags);
-            }
-            else
-            {
-                var bytes = files.ReadFileBytes(p.RootPath, req.RelativePath);
-                doc = await knowledge.IndexFileByBytesAsync(datasetId, docName, bytes, existingTags);
-            }
-
+            var docName = req.RelativePath.Replace('\\', '/');
             var docTags = wk?.DocumentTags?.TryGetValue(docName, out var dt) == true ? dt : new List<string>();
             return Ok(new { datasetId, document = new { id = doc.Id, name = doc.Name, indexingStatus = doc.IndexingStatus, tags = docTags } });
         }
@@ -197,30 +187,17 @@ public class KnowledgeController(
         if (indexable.Count == 0)
             return Ok(new { indexed = 0, skipped = 0, documents = Array.Empty<object>() });
 
-        var datasetId = await knowledge.EnsureDatasetAsync(p, Username);
-        var wk = workspaceStore.GetByPath(p.RootPath);
-
         var indexed = new List<object>();
         int skipped = 0;
 
         foreach (var file in indexable)
         {
-            var docName = file.Path;
-            var existingTags = wk?.DocumentTags?.TryGetValue(docName, out var t) == true ? t : null;
             try
             {
-                DifyDocumentInfo doc;
-                if (KnowledgeService.IsTextIndexable(file.Path))
-                {
-                    var content = files.ReadFile(p.RootPath, file.Path);
-                    doc = await knowledge.IndexFileByTextAsync(datasetId, docName, content, existingTags);
-                }
-                else
-                {
-                    var bytes = files.ReadFileBytes(p.RootPath, file.Path);
-                    doc = await knowledge.IndexFileByBytesAsync(datasetId, docName, bytes, existingTags);
-                }
-                var docTags = wk?.DocumentTags?.TryGetValue(docName, out var dt) == true ? dt : new List<string>();
+                // Идемпотентная индексация: повторный прогон папки обновляет документы, не плодит дубли
+                var (_, doc) = await sync.IndexPathAsync(p, Username, file.Path);
+                var wk = workspaceStore.GetByPath(p.RootPath);
+                var docTags = wk?.DocumentTags?.TryGetValue(file.Path, out var dt) == true ? dt : new List<string>();
                 indexed.Add(new { id = doc.Id, name = doc.Name, indexingStatus = doc.IndexingStatus, tags = docTags });
             }
             catch
@@ -245,6 +222,8 @@ public class KnowledgeController(
         try
         {
             await knowledge.DeleteDocumentAsync(wk.DifyDatasetId, documentId);
+            // Снять файл с отслеживания — иначе синк пересоздаст документ по живому файлу
+            sync.ForgetDocument(p.RootPath, documentId);
             return NoContent();
         }
         catch (HttpRequestException ex) { return StatusCode(502, new { error = ex.Message }); }

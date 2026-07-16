@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useContext, useEffect, useMemo, useState } from 'react';
 import { Bot } from 'lucide-react';
 import type { ChatItem, Persona } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
@@ -10,6 +10,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView, toolWord } from './ToolUseView';
 import { AgentTextBlock, AgentThinkingBlock, NEUTRAL_AGENT_ACCENT } from './AgentContentBlocks';
 import { itemKey, type ActivityEntry } from './timeline';
+import { ChatProjectContext } from './contexts';
 
 type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
@@ -22,21 +23,26 @@ export function isAgentToolUse(name: string): boolean {
 
 // Персона по типу сабагента (handle): общий резолв и для Task-вызовов чата
 // (subagent_type), и для агентов Workflow (agentType из meta.json)
-export function findPersonaByAgentType(agentType: string | undefined, personas: Persona[]): Persona | null {
-  const handle = agentType?.trim();
+// projectId — контекст чата: handle уникален только в контексте (глобальные + персоны
+// одного проекта), тёзки из ЧУЖИХ проектов не матчатся (зеркало PersonaManager.GetByHandle).
+// Страховка на случай остаточных дублей: проектная приоритетнее глобальной.
+export function findPersonaByAgentType(agentType: string | undefined, personas: Persona[], projectId: string | null): Persona | null {
+  const handle = agentType?.trim().toLowerCase();
   if (!handle) return null;
-  return personas.find(p => p.handle?.toLowerCase() === handle.toLowerCase()) ?? null;
+  const inContext = personas.filter(p => p.handle?.toLowerCase() === handle
+    && (p.scope === 'global' || (p.scope === 'project' && p.projectId === projectId)));
+  return inContext.find(p => p.scope === 'project') ?? inContext[0] ?? null;
 }
 
 // Персона, с которой консультируется этот Task-вызов (по input.subagent_type == handle);
 // null — обычный сабагент (Explore/general-purpose/кастомный). Используется и здесь
 // (фолбэк на ToolUseView), и в ChatPanel (передать вложенную активность внутрь карточки).
-export function findConsultedPersona(item: ToolUseItem, personas: Persona[]): Persona | null {
+export function findConsultedPersona(item: ToolUseItem, personas: Persona[], projectId: string | null): Persona | null {
   if (!isAgentToolUse(item.name)) return null;
   const inp = (item.input ?? {}) as { subagent_type?: unknown; agentType?: unknown };
   const handle = typeof inp.subagent_type === 'string' ? inp.subagent_type
     : typeof inp.agentType === 'string' ? inp.agentType : '';
-  return findPersonaByAgentType(handle, personas);
+  return findPersonaByAgentType(handle, personas, projectId);
 }
 
 // Ответ длиннее порога сворачиваем, чтобы карточка не раздувала ленту (как PersonaAskView)
@@ -237,9 +243,10 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
   // В чатах без персоны стор мог быть ещё не загружен — подтягиваем список
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const personas = usePersonas();
+  const project = useContext(ChatProjectContext);
 
   const inp = (item.input ?? {}) as { prompt?: unknown; description?: unknown };
-  const persona = findConsultedPersona(item, personas) ?? undefined;
+  const persona = findConsultedPersona(item, personas, project?.id ?? null) ?? undefined;
 
   const question = typeof inp.prompt === 'string' ? inp.prompt : '';
   const summary = typeof inp.description === 'string' ? inp.description : '';

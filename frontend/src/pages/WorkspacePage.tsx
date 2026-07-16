@@ -405,19 +405,27 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     setAttachedFiles(prev => prev.includes(path) ? prev : [...prev, path]);
   }, []);
 
-  useEffect(() => {
+  // Ключуем по ПОЛНОМУ пути (doc.name = относительный путь файла): basename давал коллизии
+  // одноимённых файлов в разных папках
+  const loadKnowledgeStatus = useCallback(() => {
     api.knowledge.getStatus(project.id).then(s => {
       const names = new Set<string>();
       const docMap = new Map<string, string>();
       for (const d of s.documents) {
-        const fname = d.name.split('/').pop() ?? d.name;
-        names.add(fname);
-        docMap.set(fname, d.id);
+        names.add(d.name);
+        docMap.set(d.name, d.id);
       }
       setIndexedFileNames(names);
       setKnowledgeDocMap(docMap);
     }).catch(() => {});
   }, [project.id]);
+
+  useEffect(() => { loadKnowledgeStatus(); }, [loadKnowledgeStatus]);
+
+  // Синк знаний на бэке (правка/удаление/перенос файла) шлёт knowledge_changed — обновляем пометки
+  useEffect(() => onMessage(msg => {
+    if (msg.type === 'knowledge_changed') loadKnowledgeStatus();
+  }), [loadKnowledgeStatus]);
 
   useEffect(() => {
     api.skills.list(project.id).then(setSkillsData).catch(() => {});
@@ -987,9 +995,8 @@ const windowWidth = useWindowWidth();
     setIndexingFiles(prev => new Set([...prev, relativePath]));
     try {
       const result = await api.knowledge.indexFile(project.id, relativePath);
-      const fileName = relativePath.split('/').pop() ?? relativePath;
-      setIndexedFileNames(prev => new Set([...prev, fileName]));
-      setKnowledgeDocMap(prev => new Map(prev).set(fileName, result.document.id));
+      setIndexedFileNames(prev => new Set([...prev, result.document.name]));
+      setKnowledgeDocMap(prev => new Map(prev).set(result.document.name, result.document.id));
     } catch {
       // KnowledgePanel сразу показывает актуальный статус
     } finally {
@@ -1003,18 +1010,14 @@ const windowWidth = useWindowWidth();
       const result = await api.knowledge.indexFolder(project.id, relativePath);
       setIndexedFileNames(prev => {
         const next = new Set(prev);
-        for (const doc of result.documents) {
-          const fname = (doc as { name: string }).name.split('/').pop() ?? (doc as { name: string }).name;
-          next.add(fname);
-        }
+        for (const doc of result.documents) next.add((doc as { name: string }).name);
         return next;
       });
       setKnowledgeDocMap(prev => {
         const next = new Map(prev);
         for (const doc of result.documents) {
           const d = doc as { id: string; name: string };
-          const fname = d.name.split('/').pop() ?? d.name;
-          next.set(fname, d.id);
+          next.set(d.name, d.id);
         }
         return next;
       });
@@ -1026,13 +1029,12 @@ const windowWidth = useWindowWidth();
   }, [project.id]);
 
   const handleRemoveFromKnowledge = useCallback(async (relativePath: string) => {
-    const fileName = relativePath.split('/').pop() ?? relativePath;
-    const docId = knowledgeDocMap.get(fileName);
+    const docId = knowledgeDocMap.get(relativePath);
     if (!docId) return;
     try {
       await api.knowledge.deleteDocument(project.id, docId);
-      setIndexedFileNames(prev => { const n = new Set(prev); n.delete(fileName); return n; });
-      setKnowledgeDocMap(prev => { const n = new Map(prev); n.delete(fileName); return n; });
+      setIndexedFileNames(prev => { const n = new Set(prev); n.delete(relativePath); return n; });
+      setKnowledgeDocMap(prev => { const n = new Map(prev); n.delete(relativePath); return n; });
     } catch {
       // игнорируем
     }

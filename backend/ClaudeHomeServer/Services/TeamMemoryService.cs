@@ -525,6 +525,35 @@ public class TeamMemoryService
         }
     }
 
+    // Best-effort переименование Dify-датасета памяти команды при переименовании проекта
+    // (имя «{username}:team:{projectName}» иначе стухает; работа по id не ломается)
+    public async Task RenameProjectDatasetAsync(string ownerId, string projectId, string username, string newProjectName)
+    {
+        string? datasetId;
+        lock (_kLock) datasetId = _kStore.GetValueOrDefault(Key(ownerId, projectId))?.DatasetId;
+        if (string.IsNullOrEmpty(datasetId) || _knowledge?.IsConfigured != true) return;
+        await _knowledge.RenameDatasetAsync(datasetId, $"{username}:team:{newProjectName}");
+    }
+
+    // Уборка локальных сторов памяти команды всех проектов владельца — каскад удаления
+    // пользователя. Dify-датасеты удаляет вызывающий общим проходом по префиксу имени.
+    public void DeleteOwnerTeamMemory(string ownerId)
+    {
+        var prefix = ownerId + ":";
+        lock (_kLock)
+        {
+            var keys = _kStore.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList();
+            foreach (var k in keys) _kStore.Remove(k);
+            if (keys.Count > 0) SaveKnowledge();
+        }
+        lock (_saveLock)
+        {
+            var keys = _store.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList();
+            foreach (var k in keys) _store.TryRemove(k, out _);
+            if (keys.Count > 0) Save();
+        }
+    }
+
     // --- Синхронизация с Dify (дифф по хешам, дебаунс) ---
 
     private void QueueSync(string ownerId, string projectId)

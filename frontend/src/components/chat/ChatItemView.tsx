@@ -1,5 +1,5 @@
 import { memo, useState, useContext, useEffect } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X } from 'lucide-react';
 import type { ChatItem, Persona } from '../../types';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
@@ -81,6 +81,126 @@ function TodoPlanView({ todos }: { todos: TodoItem[] }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// Карточка запроса разрешения. Пока решения нет — акцентная карточка с кнопками;
+// после решения сворачивается в компактную строку с вердиктом, содержимое
+// (команда/путь) раскрывается по клику.
+function PermissionRequestView({ item, online, onAllow, onDeny, onAllowAlways }: {
+  item: Extract<ChatItem, { kind: 'permission_request' }>;
+  online: boolean;
+  onAllow: (requestId: string) => void;
+  onDeny: (requestId: string) => void;
+  onAllowAlways: (requestId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const project = useContext(ChatProjectContext);
+  const asstName = useAssistantName();
+
+  // Что именно собирается выполнить Claude — команда/путь/аргументы
+  const detail = (() => {
+    const inp = item.toolInput as Record<string, unknown> | null;
+    if (!inp) return '';
+    if (typeof inp.command === 'string') return stripRoot(inp.command, project?.rootPath);
+    if (typeof inp.file_path === 'string') return relPath(inp.file_path, project?.rootPath);
+    if (typeof inp.path === 'string') return relPath(inp.path, project?.rootPath);
+    try { const s = JSON.stringify(inp, null, 2); return s === '{}' ? '' : s; } catch { return ''; }
+  })();
+  // Консольная команда (Bash/shell) → тёмный «терминал»; прочее (путь файла и т.п.) → светлая панель
+  const pn = item.toolName.toLowerCase();
+  const isConsoleReq = pn.startsWith('bash') || pn.includes('shell');
+  const detailBlock = (
+    <div style={{
+      background: isConsoleReq ? C.termBg : C.outputBg,
+      border: isConsoleReq ? 'none' : `1px solid ${C.outputBorder}`,
+      borderRadius: 7, padding: '8px 11px',
+      color: isConsoleReq ? C.termText : C.textPrimary, fontFamily: FONT.mono,
+      fontSize: 12, lineHeight: 1.5,
+      whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto',
+    }}>
+      {detail || item.toolName}
+    </div>
+  );
+
+  if (item.resolved) {
+    const denied = item.decision === 'denied';
+    const verdict = item.decision === 'allowed' ? 'разрешено'
+      : item.decision === 'always' ? 'разрешено всегда'
+      : denied ? 'отклонено' : 'решение принято';
+    return (
+      <div style={{ border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite }}>
+        <div
+          onClick={() => setOpen(o => !o)}
+          style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 12px', cursor: 'pointer', userSelect: 'none' as const }}
+        >
+          {denied
+            ? <X size={13} color={C.danger} strokeWidth={2.5} style={{ flexShrink: 0 }} />
+            : <Check size={13} color={item.decision ? C.success : C.textMuted} strokeWidth={2.5} style={{ flexShrink: 0 }} />}
+          <span style={{ flex: 1, fontSize: 12, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            Разрешение: <span style={{ fontWeight: 600, color: C.textPrimary }}>{item.toolName}</span>
+            {' — '}{verdict}
+          </span>
+          <span style={{
+            display: 'inline-block', fontSize: 10, color: C.textMuted, flexShrink: 0,
+            transform: open ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s',
+          }}>▾</span>
+        </div>
+        {open && <div style={{ padding: '0 12px 10px' }}>{detailBlock}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      border: `1px solid ${C.accentMuted}`, borderLeft: `3px solid ${C.accent}`,
+      borderRadius: 12, padding: '13px 14px', background: C.accentLight,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: C.textHeading }}>
+        Запрос разрешения
+      </div>
+      <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 10 }}>
+        {asstName} хочет выполнить <span style={{ fontWeight: 600 }}>{item.toolName}</span>:
+      </div>
+      <div style={{ marginBottom: 12 }}>{detailBlock}</div>
+      {online ? (
+        <>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={() => onAllow(item.requestId)}
+              style={{
+                flex: 1, background: C.accent, color: C.onAccent,
+                borderRadius: 9, padding: 9, border: 'none',
+                cursor: 'pointer', fontSize: 13, fontWeight: 600,
+              }}
+            >
+              Разрешить
+            </button>
+            <button
+              onClick={() => onDeny(item.requestId)}
+              style={{
+                flex: 1, background: C.bgWhite, border: `1px solid ${C.border}`,
+                color: C.textSecondary, borderRadius: 9, padding: 9,
+                cursor: 'pointer', fontSize: 13,
+              }}
+            >
+              Отклонить
+            </button>
+          </div>
+          <button
+            onClick={() => onAllowAlways(item.requestId)}
+            style={{
+              marginTop: 8, width: '100%', background: 'none', border: 'none',
+              cursor: 'pointer', fontSize: 12, color: C.accent, padding: '4px 0',
+            }}
+          >
+            Всегда разрешать «{item.toolName}» в этом чате
+          </button>
+        </>
+      ) : (
+        <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
+      )}
     </div>
   );
 }
@@ -515,82 +635,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
     case 'plan_review':
       return <PlanReviewView item={item} online={online} onRespond={onRespondPlan} version={planVersion} showBadge={planShowBadge} showSwitch={planShowSwitch} onSwitchMode={onSwitchMode} />;
 
-    case 'permission_request': {
-      // Что именно собирается выполнить Claude — команда/путь/аргументы
-      const detail = (() => {
-        const inp = item.toolInput as Record<string, unknown> | null;
-        if (!inp) return '';
-        if (typeof inp.command === 'string') return stripRoot(inp.command, project?.rootPath);
-        if (typeof inp.file_path === 'string') return relPath(inp.file_path, project?.rootPath);
-        if (typeof inp.path === 'string') return relPath(inp.path, project?.rootPath);
-        try { const s = JSON.stringify(inp, null, 2); return s === '{}' ? '' : s; } catch { return ''; }
-      })();
-      // Консольная команда (Bash/shell) → тёмный «терминал»; прочее (путь файла и т.п.) → светлая панель
-      const pn = item.toolName.toLowerCase();
-      const isConsoleReq = pn.startsWith('bash') || pn.includes('shell');
-      return (
-        <div style={{
-          border: `1px solid ${C.accentMuted}`, borderLeft: `3px solid ${C.accent}`,
-          borderRadius: 12, padding: '13px 14px', background: C.accentLight,
-        }}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: C.textHeading }}>
-            Запрос разрешения
-          </div>
-          <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 10 }}>
-            {asstName} хочет выполнить <span style={{ fontWeight: 600 }}>{item.toolName}</span>:
-          </div>
-          <div style={{
-            background: isConsoleReq ? C.termBg : C.outputBg,
-            border: isConsoleReq ? 'none' : `1px solid ${C.outputBorder}`,
-            borderRadius: 7, padding: '8px 11px',
-            color: isConsoleReq ? C.termText : C.textPrimary, fontFamily: FONT.mono,
-            fontSize: 12, marginBottom: 12, lineHeight: 1.5,
-            whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto',
-          }}>
-            {detail || item.toolName}
-          </div>
-          {item.resolved ? (
-            <div style={{ fontSize: 12, color: C.textMuted }}>Решение принято</div>
-          ) : online ? (
-            <>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  onClick={() => onAllowPermission(item.requestId)}
-                  style={{
-                    flex: 1, background: C.accent, color: C.onAccent,
-                    borderRadius: 9, padding: 9, border: 'none',
-                    cursor: 'pointer', fontSize: 13, fontWeight: 600,
-                  }}
-                >
-                  Разрешить
-                </button>
-                <button
-                  onClick={() => onDenyPermission(item.requestId)}
-                  style={{
-                    flex: 1, background: C.bgWhite, border: `1px solid ${C.border}`,
-                    color: C.textSecondary, borderRadius: 9, padding: 9,
-                    cursor: 'pointer', fontSize: 13,
-                  }}
-                >
-                  Отклонить
-                </button>
-              </div>
-              <button
-                onClick={() => onAllowAlways(item.requestId)}
-                style={{
-                  marginTop: 8, width: '100%', background: 'none', border: 'none',
-                  cursor: 'pointer', fontSize: 12, color: C.accent, padding: '4px 0',
-                }}
-              >
-                Всегда разрешать «{item.toolName}» в этом чате
-              </button>
-            </>
-          ) : (
-            <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
-          )}
-        </div>
-      );
-    }
+    case 'permission_request':
+      return <PermissionRequestView item={item} online={online}
+        onAllow={onAllowPermission} onDeny={onDenyPermission} onAllowAlways={onAllowAlways} />;
 
     case 'file_changed': {
       const fileName = relPath(item.path, project?.rootPath);

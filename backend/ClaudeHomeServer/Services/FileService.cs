@@ -2,8 +2,24 @@
 
 public record FileEntry(string Name, string Path, bool IsDirectory, long? Size, DateTime Modified, bool IsModified, string? Synced = null, bool IsNew = false);
 
+// Вид мутации файла через файловый сервис — для подписчиков OnMutated
+public enum FileMutationKind { Write, Create, Delete, Rename }
+
 public class FileService
 {
+    // Мутации через файловый API (UI, OnlyOffice, upload; правки Claude идут мимо — их ловят
+    // ватчеры). Подписчик — ProjectKnowledgeSyncService (синк базы знаний).
+    // Аргументы: root, относительный путь, вид, новый путь (только для Rename).
+    public event Action<string, string, FileMutationKind, string?>? OnMutated;
+
+    // Уведомление подписчиков; сбой подписчика не должен ронять файловую операцию.
+    // internal — дёргают и точки записи мимо FileService (Upload/SaveFromUrl в FilesController).
+    internal void NotifyMutated(string root, string rel, FileMutationKind kind, string? newRel = null)
+    {
+        try { OnMutated?.Invoke(root, rel, kind, newRel); }
+        catch { /* синк знаний best-effort */ }
+    }
+
     // Папки, которые не обходим при рекурсивном Tree (тяжёлые/нерелевантные для офлайна).
     // internal — переиспользуется FileWatcherService для фильтрации событий ФС.
     internal static readonly HashSet<string> TreeExcludes = new(StringComparer.OrdinalIgnoreCase)
@@ -214,6 +230,7 @@ public class FileService
     {
         var path = SafeJoin(rootPath, relativePath);
         File.WriteAllText(path, content);
+        NotifyMutated(rootPath, relativePath, FileMutationKind.Write);
     }
 
     public void WriteFileBytes(string rootPath, string relativePath, byte[] content)
@@ -221,6 +238,7 @@ public class FileService
         var path = SafeJoin(rootPath, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, content);
+        NotifyMutated(rootPath, relativePath, FileMutationKind.Write);
     }
 
     public void CreateFile(string rootPath, string relativePath)
@@ -228,6 +246,7 @@ public class FileService
         var path = SafeJoin(rootPath, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, "");
+        NotifyMutated(rootPath, relativePath, FileMutationKind.Create);
     }
 
     public void CreateDirectory(string rootPath, string relativePath)
@@ -242,6 +261,7 @@ public class FileService
         if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
         else if (File.Exists(path)) File.Delete(path);
         else throw new FileNotFoundException();
+        NotifyMutated(rootPath, relativePath, FileMutationKind.Delete);
     }
 
     public void Rename(string rootPath, string oldRelative, string newRelative)
@@ -250,6 +270,7 @@ public class FileService
         var dst = SafeJoin(rootPath, newRelative);
         if (Directory.Exists(src)) Directory.Move(src, dst);
         else File.Move(src, dst);
+        NotifyMutated(rootPath, oldRelative, FileMutationKind.Rename, newRelative);
     }
 
     public string? GetDiff(string rootPath, string relativePath)
@@ -347,6 +368,8 @@ public class FileService
                 try { proc.Kill(entireProcessTree: true); } catch { }
                 return false;
             }
+            // Откат меняет содержимое файла — подписчики (синк знаний) должны узнать
+            if (proc.ExitCode == 0) NotifyMutated(rootPath, relativePath, FileMutationKind.Write);
             return proc.ExitCode == 0;
         }
         catch { return false; }

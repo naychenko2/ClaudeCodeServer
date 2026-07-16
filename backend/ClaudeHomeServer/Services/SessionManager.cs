@@ -1680,8 +1680,9 @@ public class SessionManager
                 case RateLimitMessage m:
                     _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider);
                     // Исчерпание лимита подписки → помечаем exhausted в пуле, чтобы новые чаты
-                    // пошли на другую подписку (если utilization >= 1.0 или статус exhausted)
-                    if (entry is not null && (m.Utilization >= 1.0 || m.Status == "exhausted"))
+                    // пошли на другую подписку. "rejected" — CLI отклонил ход; utilization >= 1.0
+                    // без overage — окно выбрано (с overage ходы ещё проходят).
+                    if (entry is not null && (m.Status == "rejected" || (m.Utilization >= 1.0 && !m.IsUsingOverage)))
                     {
                         var resetsAt = m.ResetsAt is not null && DateTime.TryParse(m.ResetsAt, out var dt)
                             ? (DateTime?)dt.ToUniversalTime() : null;

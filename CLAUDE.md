@@ -212,6 +212,25 @@ WorkingDirectory = `project.RootPath`
   NewKnowledgeBaseDialog (видимость личная/публичная), AddDocumentDialog (текст/файл); стор
   [lib/knowledge.ts](frontend/src/lib/knowledge.ts) (realtime `knowledge_changed`). Без `Dify:ApiKey` —
   `GET /api/knowledge` → `{configured:false, items:[]}`, раздел показывает empty-state.
+- **Синхронизация «файл проекта ↔ документ БЗ»** —
+  [ProjectKnowledgeSyncService.cs](backend/ClaudeHomeServer/Services/ProjectKnowledgeSyncService.cs):
+  карта `WorkspaceKnowledge.Docs` (relativePath → {DocId, Hash}), дифф по хешам с дебаунсом 15с —
+  правка → переиндексация (delete+create с восстановлением тегов), удаление файла → удаление
+  документа, перенос/переименование (файла и папки) → миграция ключей, перенос мимо API —
+  детект по хешу среди хинтов ватчеров; индексация идемпотентна (повтор = обновление, дубли
+  bootstrap'ом схлопываются). Триггеры: `FileService.OnMutated` (UI/API/OnlyOffice/upload),
+  `FileWatcherService`, события хода Claude (`ProjectKnowledgeTurnSync`), сверка в GetStatus.
+  Lifecycle-каскады: удаление проекта → датасет+wkStore (учёт шаринга RootPath) + notes-синк +
+  проектные персоны; смена RootPath → `WorkspaceKnowledgeStore.Move`; rename проекта/handle
+  персоны → best-effort `RenameDatasetAsync` (PATCH); удаление пользователя →
+  [UserKnowledgeCascade.cs](backend/ClaudeHomeServer/Services/UserKnowledgeCascade.cs) (персоны +
+  сторы + все датасеты `{username}:*`).
+- **Неймспейс контура** (`Dify:Namespace`, дефолт пусто): Dev и Prod на одном Dify не пересекаются —
+  непустой неймспейс (напр. `dev`) прозрачно префиксует имена датасетов (`dev:{user}:…`) и
+  ограничивает листинг своим контуром; реализовано целиком внутри KnowledgeService, потребители
+  работают с логическими именами. Прод без префикса скрывает чужие контуры через
+  `Dify:ForeignNamespaces` (напр. `["dev"]`). Воркспейсы Dify через dataset-API недоступны
+  (console-only, в CE урезаны) — поэтому изоляция именами.
 
 ## Персоны
 

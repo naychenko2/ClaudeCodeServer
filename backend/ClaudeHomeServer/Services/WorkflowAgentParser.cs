@@ -19,6 +19,11 @@ public static class WorkflowAgentParser
     // (GLM/DeepSeek: /data/claude-profiles/{key}/projects/). Регистрируются из Program.cs.
     private static readonly List<string> _extraRoots = new();
 
+    // Корень всех изолированных профилей CLI (data/claude-profiles). Любой
+    // {ProfilesRoot}/{key}/projects/** разрешён — покрывает и подписки (sub-*), и профили,
+    // созданные после старта сервера, которые в _extraRoots не попали.
+    public static string? ProfilesRoot { get; set; }
+
     public static void AddAllowedRoot(string root)
     {
         var full = Path.GetFullPath(root);
@@ -28,25 +33,69 @@ public static class WorkflowAgentParser
 
     public static bool IsPathAllowed(string path) =>
         path.StartsWith(DefaultRoot, StringComparison.OrdinalIgnoreCase) ||
-        _extraRoots.Any(r => path.StartsWith(r, StringComparison.OrdinalIgnoreCase));
+        _extraRoots.Any(r => path.StartsWith(r, StringComparison.OrdinalIgnoreCase)) ||
+        IsUnderProfilesProjects(path);
+
+    // Путь вида {ProfilesRoot}/{key}/projects/… — ровно один сегмент профиля,
+    // затем обязательный projects (не даём читать credentials и прочее из профиля)
+    private static bool IsUnderProfilesProjects(string path)
+    {
+        if (string.IsNullOrEmpty(ProfilesRoot)) return false;
+        string full, root;
+        try { full = Path.GetFullPath(path); root = Path.GetFullPath(ProfilesRoot); }
+        catch { return false; }
+        if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+            !full.StartsWith(root + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var parts = Path.GetRelativePath(root, full)
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return parts.Length >= 2 && parts[1].Equals("projects", StringComparison.OrdinalIgnoreCase);
+    }
 
     // Все корни транскриптов (родной + профили провайдеров) — для поиска папки
     // сабагентов сессии (SubagentStreamWatcher)
     public static IReadOnlyList<string> AllowedRoots => [DefaultRoot, .. _extraRoots];
 
-    // Читает все agent-*.jsonl из wfPath и возвращает список агентов.
+    // Читает все agent-*.jsonl из wfPath и возвращает список агентов в хронологии запуска.
     public static IReadOnlyList<WorkflowAgentDto> ParseDirectory(string wfPath)
     {
         if (!Directory.Exists(wfPath)) return [];
         // journal.jsonl — источник истины: агент done если есть {"type":"result","agentId":"..."}
         var doneAgents = ReadDoneAgentsFromJournal(wfPath);
         var agents = new List<WorkflowAgentDto>();
-        foreach (var file in Directory.GetFiles(wfPath, "agent-*.jsonl").OrderBy(f => f))
+        // Хронология по timestamp первой строки транскрипта: id в имени файла произвольный,
+        // алфавитный порядок перемешивал карточки агентов между волнами
+        foreach (var file in Directory.GetFiles(wfPath, "agent-*.jsonl")
+                     .OrderBy(ReadStartTime).ThenBy(f => f, StringComparer.Ordinal))
         {
             var parsed = ParseAgentFile(file, doneAgents);
             if (parsed is not null) agents.Add(parsed);
         }
         return agents;
+    }
+
+    // Момент запуска агента — timestamp первой строки его транскрипта (промпт пишется
+    // сразу при старте); фолбэк — время создания файла
+    private static DateTime ReadStartTime(string file)
+    {
+        try
+        {
+            if (File.ReadLines(file).FirstOrDefault(l => !string.IsNullOrWhiteSpace(l)) is { } first)
+            {
+                using var doc = JsonDocument.Parse(first);
+                if (doc.RootElement.TryGetProperty("timestamp", out var ts)
+                    && ts.ValueKind == JsonValueKind.String
+                    && DateTime.TryParse(ts.GetString(), null,
+                        System.Globalization.DateTimeStyles.RoundtripKind, out var started))
+                    return started;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.LogDebug(ex, "Не удалось прочитать время старта агента: {Path}", file);
+        }
+        try { return File.GetCreationTimeUtc(file); }
+        catch (Exception) { return DateTime.MaxValue; }
     }
 
     // Читает journal.jsonl и возвращает множество agentId с типом "result"

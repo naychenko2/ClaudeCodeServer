@@ -1,10 +1,12 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useContext, useEffect, useState } from 'react';
 import type { ChatItem } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
 import { MarkdownContent } from './MarkdownContent';
+import { findPersonaByAgentType } from './PersonaTaskView';
+import { ChatProjectContext } from './contexts';
 
 // Вызов persona_ask (mcp__personas__persona_ask) — сравнение по суффиксу, без регистра
 export function isPersonaAsk(name: string): boolean {
@@ -42,12 +44,14 @@ export const PersonaAskView = memo(function PersonaAskView({ item }: { item: Ext
   // В чатах без персоны стор мог быть ещё не загружен — подтягиваем список
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const personas = usePersonas();
+  const project = useContext(ChatProjectContext);
 
   const inp = (item.input ?? {}) as { handle?: unknown; question?: unknown };
   const handle = String(inp.handle ?? '').replace(/^@+/, '').trim();
   const question = typeof inp.question === 'string' ? inp.question : '';
 
-  const persona = personas.find(p => p.handle?.toLowerCase() === handle.toLowerCase());
+  // Контекстный резолв: handle уникален лишь в границах проекта — тёзку из чужого не берём
+  const persona = findPersonaByAgentType(handle, personas, project?.id ?? null);
   const accent = persona ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? NEUTRAL_ACCENT) : NEUTRAL_ACCENT;
   const title = persona ? personaLabel(persona) : handle || 'Персона';
 

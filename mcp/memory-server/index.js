@@ -4,9 +4,9 @@
 // Окружение (задаёт ClaudeSession при запуске claude для персонной сессии):
 //   MEMORY_API_URL     — базовый URL бэкенда (http://127.0.0.1:5000)
 //   MEMORY_API_TOKEN   — сервисный JWT владельца сессии
-//   MEMORY_PERSONA_ID  — id персоны, чья память доступна в этой сессии
-//   MEMORY_PROJECT_ID  — id проекта персоны (③-3.4); пусто — персона глобальная,
-//                        инструменты team_memory_* не регистрируются
+//   MEMORY_PERSONA_ID  — id персоны, чья личная память доступна (personal memory_*); пусто —
+//                        обычный проектный чат без персоны: personal-инструменты не регистрируются
+//   MEMORY_PROJECT_ID  — id проекта (③-3.4) для team_memory_*; пусто — памяти команды нет
 //
 // Память типизирована: semantic (устойчивые факты/предпочтения), episodic (что произошло
 // в прошлых разговорах), procedural (выученные приёмы/правила поведения). Изоляция —
@@ -205,9 +205,15 @@ rl.on('line', async line => {
           serverInfo: { name: 'memory', version: '1.0.0' },
         });
         break;
-      case 'tools/list':
-        reply(id, { tools: PROJECT_ID ? [...TOOLS, ...TEAM_TOOLS] : TOOLS });
+      case 'tools/list': {
+        // personal memory_* — только при заданной персоне; team_memory_* — при заданном проекте.
+        // Обычный проектный чат без персоны получает лишь командные инструменты.
+        const tools = [];
+        if (PERSONA_ID) tools.push(...TOOLS);
+        if (PROJECT_ID) tools.push(...TEAM_TOOLS);
+        reply(id, { tools });
         break;
+      }
       case 'tools/call': {
         try {
           reply(id, await callTool(params.name, params.arguments ?? {}));

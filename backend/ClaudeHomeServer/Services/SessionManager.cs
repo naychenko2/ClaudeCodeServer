@@ -230,6 +230,14 @@ public class SessionManager
         return new MemoryMcpContext(ResolveTasksApiUrl(), entry.Token, personaId, projectId);
     }
 
+    // Контекст memory-server для проектной сессии БЕЗ персоны: только team_memory_* (③-3.4) —
+    // память проекта доступна из ЛЮБОГО чата проекта, не только персонного (personaId пуст →
+    // personal-инструменты memory_* не регистрируются, см. mcp/memory-server/index.js).
+    private MemoryMcpContext? BuildTeamMemoryContext(string? ownerId, string? projectId) =>
+        ownerId is not null && !string.IsNullOrEmpty(projectId)
+            ? BuildMemoryContext(ownerId, "", projectId)
+            : null;
+
     // Auto-recall долгой памяти персоны: по тексту хода возвращает markdown-блок релевантных
     // записей (взвешенная сумма PersonaMemoryScorer) + рабочий фокус первым блоком, а вдобавок —
     // айтемы манифеста (что реально подтянулось) для «использовано сейчас» (F3).
@@ -1066,7 +1074,7 @@ public class SessionManager
             NotesMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes") ? BuildNotesContext(ownerId, session.ProjectId) : null,
             RecallProvider: BuildRecallProvider(ownerId),
             PersonaPromptProvider: persona.Prompt,
-            MemoryMcp: persona.Memory,
+            MemoryMcp: persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId),
             PersonaRecallProvider: persona.Recall,
             ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona),
             PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session),
@@ -1312,7 +1320,7 @@ public class SessionManager
                 NotesMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
                 RecallProvider: BuildRecallProvider(project.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
-                MemoryMcp: persona.Memory,
+                MemoryMcp: persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id),
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona),
                 PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info),

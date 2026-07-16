@@ -49,6 +49,25 @@ public class WorkspaceKnowledgeStore
         Persist();
     }
 
+    // Миграция записи при смене RootPath проекта: датасет/документы переезжают под новый ключ
+    // (иначе запись сиротеет, а EnsureDatasetAsync создаёт дубль-датасет для нового пути).
+    // Если под новым путём уже есть запись с датасетом — не затираем её, старую оставляем.
+    public bool Move(string oldRootPath, string newRootPath)
+    {
+        var oldKey = NormalizePath(oldRootPath);
+        var newKey = NormalizePath(newRootPath);
+        if (oldKey == newKey) return false;
+        if (!_store.TryGetValue(oldKey, out var wk)) return false;
+        if (_store.TryGetValue(newKey, out var existing) && !string.IsNullOrEmpty(existing.DifyDatasetId))
+            return false;
+        _store.TryRemove(oldKey, out _);
+        wk.RootPath = newRootPath;
+        wk.UpdatedAt = DateTime.UtcNow;
+        _store[newKey] = wk;
+        Persist();
+        return true;
+    }
+
     // Однократная миграция: переносит DifyDatasetId/DocumentTags из старых Project-записей
     public void MigrateFromProjects(IEnumerable<Project> projects)
     {

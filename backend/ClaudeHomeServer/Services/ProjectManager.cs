@@ -100,6 +100,16 @@ public class ProjectManager
         return project;
     }
 
+    // Все проекты, чей RootPath указывает на ту же папку (датасет знаний общий per-RootPath):
+    // каскад удаления и события синка знаний должны учитывать соседей по папке
+    public IReadOnlyList<Project> GetByRootPath(string rootPath)
+    {
+        var key = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        return _projects.Values
+            .Where(p => WorkspaceKnowledgeStore.NormalizePath(p.RootPath) == key)
+            .ToList();
+    }
+
     // Отвязывает все проекты от удаляемой группы (вызывается при удалении группы)
     public void ClearGroup(string groupId)
     {

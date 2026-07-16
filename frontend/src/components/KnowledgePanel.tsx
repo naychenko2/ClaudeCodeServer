@@ -3,6 +3,7 @@ import { BookOpen, Database, Folder, Info, RotateCcw, Search, Tag, Trash2, X } f
 import type { Project } from '../types';
 import type { DifyDocument } from '../lib/api';
 import { api } from '../lib/api';
+import { onMessage } from '../lib/signalr';
 import { C, R, SHADOW, FONT, TB } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
@@ -431,11 +432,8 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
 
   useEffect(() => {
     if (!onDocumentsChanged || !status) return;
-    const names = new Set(status.documents.map(d => {
-      const parts = d.name.split('/');
-      return parts[parts.length - 1];
-    }));
-    onDocumentsChanged(names);
+    // Полные пути (doc.name = относительный путь): basename давал коллизии одноимённых файлов
+    onDocumentsChanged(new Set(status.documents.map(d => d.name)));
   }, [status, onDocumentsChanged]);
 
   const hasIndexing = status?.documents.some(d => !TERMINAL_STATUSES.includes(d.indexingStatus)) ?? false;
@@ -444,6 +442,11 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
     const id = setInterval(() => loadStatus(true), 3000);
     return () => clearInterval(id);
   }, [hasIndexing, loadStatus]);
+
+  // Синк знаний на бэке (правка/удаление/перенос файла) шлёт knowledge_changed — обновляем состав
+  useEffect(() => onMessage(msg => {
+    if (msg.type === 'knowledge_changed') loadStatus(true);
+  }), [loadStatus]);
 
   const handleDeleteDocument = async (docId: string) => {
     setDeletingId(docId);

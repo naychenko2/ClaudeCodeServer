@@ -29,15 +29,18 @@ public class FileWatcherService : IDisposable
     private readonly ConcurrentDictionary<string, HashSet<string>> _byConnection = new(); // connId -> projectIds
     private readonly ProjectManager _projects;
     private readonly IHubContext<SessionHub> _hub;
+    private readonly ProjectKnowledgeSyncService _knowledgeSync;
     private readonly Lock _lock = new();
     // Polling вместо FileSystemWatcher — для bind-mount ФС без inotify (9p/virtiofs в Docker Desktop).
     private readonly bool _usePolling;
     private readonly int _pollIntervalMs;
 
-    public FileWatcherService(ProjectManager projects, IHubContext<SessionHub> hub, IConfiguration config)
+    public FileWatcherService(ProjectManager projects, IHubContext<SessionHub> hub,
+        ProjectKnowledgeSyncService knowledgeSync, IConfiguration config)
     {
         _projects = projects;
         _hub = hub;
+        _knowledgeSync = knowledgeSync;
         _usePolling = config.GetValue("FileWatcher:UsePolling", false);
         _pollIntervalMs = config.GetValue("FileWatcher:PollIntervalMs", 2000);
     }
@@ -221,6 +224,8 @@ public class FileWatcherService : IDisposable
         }
         _ = _hub.Clients.Group("project_" + projectId)
             .SendAsync("filesChanged", new { projectId, paths });
+        // Правки Claude/внешние идут мимо файлового API — синк знаний узнаёт о них отсюда
+        _knowledgeSync.QueueSync(entry.Root, paths);
     }
 
     private void RecreateWatcher(string projectId, Entry entry)

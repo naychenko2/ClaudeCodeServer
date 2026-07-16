@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, IHubContext<SessionHub> hub) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, IHubContext<SessionHub> hub) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -135,13 +135,35 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 
     [HttpPut("{id}")]
-    public IActionResult Update(string id, [FromBody] UpdateProjectRequest req)
+    public async Task<IActionResult> Update(string id, [FromBody] UpdateProjectRequest req)
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
+        // Update мутирует объект проекта на месте — старые значения снимаем до вызова
+        var oldName = p.Name;
+        var oldRoot = p.RootPath;
         try
         {
             var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles, req.PermissionRules, req.GroupId, req.ToolsEnabled);
+
+            // Смена папки проекта: перенести запись знаний под новый ключ — иначе запись сиротеет,
+            // для нового пути создаётся дубль-датасет, а mcp dify молча теряет dataset_id
+            if (WorkspaceKnowledgeStore.NormalizePath(oldRoot) != WorkspaceKnowledgeStore.NormalizePath(updated.RootPath))
+                wkStore.Move(oldRoot, updated.RootPath);
+
+            // Переименование проекта: best-effort освежить имена Dify-датасетов
+            // ({user}:{project} и {user}:team:{project}); сбой не ломает работу по id
+            if (!string.Equals(oldName, updated.Name, StringComparison.Ordinal))
+            {
+                var username = User.FindFirstValue(ClaimTypes.Name) ?? UserId;
+                var datasetId = wkStore.GetByPath(updated.RootPath)?.DifyDatasetId;
+                if (!string.IsNullOrEmpty(datasetId))
+                    try { await knowledge.RenameDatasetAsync(datasetId, $"{username}:{updated.Name}"); }
+                    catch { /* стухшее имя не критично */ }
+                try { await teamMemory.RenameProjectDatasetAsync(UserId, id, username, updated.Name); }
+                catch { /* стухшее имя не критично */ }
+            }
+
             return Ok(WithCount(updated));
         }
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
@@ -167,6 +189,41 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // Память команды проекта: локальные сторы + Dify-датасет (best-effort — уборка не должна ронять удаление)
         try { await teamMemory.DeleteProjectTeamMemoryAsync(UserId, id); }
         catch { /* удаление проекта не зависит от уборки памяти команды */ }
+
+        // База знаний проекта: Dify-датасет + запись WorkspaceKnowledge. Датасет общий для
+        // проектов в одной папке — чистим, только если RootPath больше никем не используется
+        if (projects.GetByRootPath(p.RootPath).Count == 0)
+        {
+            var wk = wkStore.GetByPath(p.RootPath);
+            if (wk is not null)
+            {
+                if (!string.IsNullOrEmpty(wk.DifyDatasetId))
+                {
+                    try { await knowledge.DeleteDatasetAsync(wk.DifyDatasetId); }
+                    catch { /* датасет мог быть удалён в Dify — снимаем только запись */ }
+                    await hub.Clients.Group("user_" + UserId)
+                        .SendAsync("message", new KnowledgeChangedMessage("deleted", wk.DifyDatasetId));
+                }
+                wkStore.Delete(p.RootPath);
+            }
+        }
+
+        // Заметки notes/ проекта выпали из alive-set — вычистить их из «{user}:notes» сразу,
+        // не дожидаясь следующей несвязанной правки заметок
+        notesKb.QueueSync(UserId);
+
+        // Проектные персоны осиротели вместе с проектом — каскад: память (стор + Dify-датасет),
+        // сама персона (файлы сабагента снимет OnPersonaDeleted), событие фронту
+        foreach (var persona in personas.GetByOwner(UserId)
+                     .Where(x => x.Scope == PersonaScope.Project && x.ProjectId == id).ToList())
+        {
+            try { await personaMemory.DeletePersonaAsync(persona.Id); }
+            catch { /* память персоны — best-effort */ }
+            personas.Delete(persona.Id, UserId);
+            await hub.Clients.Group("user_" + UserId)
+                .SendAsync("message", new PersonasChangedMessage("deleted", persona.Id));
+        }
+
         return NoContent();
     }
 }

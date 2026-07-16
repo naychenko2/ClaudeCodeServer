@@ -1032,7 +1032,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               fontSize: 13,
               fontWeight: entry.isDirectory ? 700 : 500,
               color: notesRoot ? C.accent
-                : (!entry.isDirectory && indexedFileNames?.has(entry.name))
+                : (!entry.isDirectory && indexedFileNames?.has(entry.path))
                 ? C.successText
                 : C.textHeading,
               ...(isMobile
@@ -1109,7 +1109,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 <circle className="kb-spin" cx="12" cy="12" r="9" strokeDasharray="40 20" />
               </svg>
             </span>
-          ) : indexedFileNames?.has(entry.name) ? (
+          ) : indexedFileNames?.has(entry.path) ? (
             !isMobile && !alwaysShowIcons && hoveredPath === entry.path && onRemoveFromKnowledge ? (
               <IconButton
                 size="xs"
@@ -1633,8 +1633,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 </div>
                 {entry.isDirectory && inNotesVault(entry.path) && menuItem(<MI_NotePlus />, 'Новая заметка', () => { setContextMenu(null); setNoteDialog({ folder: noteFolderOf(entry.path) }); })}
                 {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
-                {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
-                {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.name) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
+                {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.path) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
+                {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.path) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
                 {entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
                 {entry.isDirectory && !inNotesVault(entry.path) && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
                 {canToggleOffline && menuItem(<MI_Cloud />, offlineLabel, doToggleOffline)}
@@ -1669,8 +1669,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           >
             {entry.isDirectory && inNotesVault(entry.path) && menuItem(<MI_NotePlus />, 'Новая заметка', () => { setContextMenu(null); setNoteDialog({ folder: noteFolderOf(entry.path) }); })}
             {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
-            {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.name) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
-            {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.name) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
+            {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.path) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
+            {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.path) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
             {entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
             {entry.isDirectory && !inNotesVault(entry.path) && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
             {canToggleOffline && menuItem(<MI_Cloud />, sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн', doToggleOffline)}

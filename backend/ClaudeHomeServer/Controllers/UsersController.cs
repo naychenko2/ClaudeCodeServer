@@ -11,7 +11,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Route("api/users")]
 [Authorize(Roles = "admin")]
-public class UsersController(UserStore users) : ControllerBase
+public class UsersController(UserStore users, UserKnowledgeCascade knowledgeCascade,
+    ILogger<UsersController> logger) : ControllerBase
 {
     private static readonly Regex UsernameRegex = new(@"^[a-zA-Z0-9_-]+$", RegexOptions.Compiled);
 
@@ -71,24 +72,31 @@ public class UsersController(UserStore users) : ControllerBase
     }
 
     [HttpDelete("{id}")]
-    public IActionResult Delete(string id)
+    public async Task<IActionResult> Delete(string id)
     {
         // Нельзя удалить самого себя
         var currentUserId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
         if (id == currentUserId)
             return BadRequest(new { error = "Нельзя удалить собственную учётную запись" });
 
+        var user = users.GetById(id);
         try
         {
             if (!users.Delete(id))
                 return NotFound();
-
-            return NoContent();
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
+
+        // Каскад знаний: датасеты «{username}:…», локальные сторы, персоны. Без него всё это
+        // сиротеет, а новый пользователь с тем же именем увидел бы чужие базы как свои.
+        if (user is not null)
+            try { await knowledgeCascade.CleanupAsync(user.Id, user.Username); }
+            catch (Exception ex) { logger.LogWarning(ex, "Каскад знаний при удалении пользователя {User}", id); }
+
+        return NoContent();
     }
 
     [HttpPut("{id}/password")]

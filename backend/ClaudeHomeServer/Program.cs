@@ -161,6 +161,12 @@ builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
 builder.Services.Configure<DifyOptions>(builder.Configuration.GetSection(DifyOptions.Section));
 builder.Services.AddSingleton<KnowledgeService>();
+// Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
+// (мост заодно гарантирует инстанцирование синка — подписку на FileService.OnMutated)
+builder.Services.AddSingleton<ProjectKnowledgeSyncService>();
+builder.Services.AddHostedService<ProjectKnowledgeTurnSync>();
+// Каскадная уборка знаний при удалении пользователя (UsersController)
+builder.Services.AddSingleton<UserKnowledgeCascade>();
 
 // JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office)
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

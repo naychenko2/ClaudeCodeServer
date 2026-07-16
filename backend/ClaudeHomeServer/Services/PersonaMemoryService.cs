@@ -82,6 +82,20 @@ public sealed class PersonaMemoryService
         _dedupBoost = ReadDouble(config, "Persona:DedupSalienceBoost", 0.1);
         _conflictThreshold = ReadDouble(config, "Memory:ConflictThreshold", 0.6);
         _store = JsonFileStore.Load<Dictionary<string, MemState>>(_storePath, JsonOpts) ?? new();
+        // Смена handle: best-effort освежить имя Dify-датасета «{user}:persona:{handle}»
+        _personas.OnPersonaHandleChanged += (persona, oldHandle) => { _ = RenameDatasetSafeAsync(persona); };
+    }
+
+    // Переименование датасета памяти под новый handle; сбой — лог (retrieve работает по id,
+    // стухшее имя функциональность не ломает)
+    private async Task RenameDatasetSafeAsync(Persona persona)
+    {
+        string? datasetId;
+        lock (_saveLock) datasetId = _store.GetValueOrDefault(persona.Id)?.DatasetId;
+        if (string.IsNullOrEmpty(datasetId) || !Available) return;
+        var username = _users.GetById(persona.OwnerId)?.Username ?? persona.OwnerId;
+        try { await _knowledge.RenameDatasetAsync(datasetId, $"{username}:persona:{persona.Handle}"); }
+        catch (Exception ex) { _logger.LogDebug(ex, "Переименование датасета памяти персоны {Persona}", persona.Id); }
     }
 
     private static double ReadDouble(IConfiguration config, string key, double fallback) =>

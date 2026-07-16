@@ -170,6 +170,16 @@ public sealed class NotesKnowledgeService
         return hits;
     }
 
+    // Уборка локальной записи индекса заметок пользователя — каскад удаления пользователя.
+    // Dify-датасет удаляет вызывающий (общий проход по префиксу имени датасета).
+    public void DeleteUser(string userId)
+    {
+        lock (_saveLock)
+        {
+            if (_store.Remove(userId)) JsonFileStore.Save(_storePath, _store);
+        }
+    }
+
     private Entry GetEntry(string userId)
     {
         lock (_saveLock)

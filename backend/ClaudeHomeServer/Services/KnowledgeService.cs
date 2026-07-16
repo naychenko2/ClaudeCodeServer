@@ -156,6 +156,25 @@ public class KnowledgeService
     public bool IsConfigured =>
         !string.IsNullOrEmpty(_cfg.ApiUrl) && !string.IsNullOrEmpty(_cfg.ApiKey);
 
+    // --- Неймспейс контура (Dev/Prod на одном Dify, см. DifyOptions.Namespace) ---
+    // Полное имя в Dify = "{Namespace}:{логическое имя}". Префикс добавляется при создании/
+    // переименовании и срезается при листинге ТОЛЬКО здесь — потребители (классификация
+    // по {username}:, каскады, привязки) работают с логическими именами и не меняются.
+    private string NsPrefix => string.IsNullOrEmpty(_cfg.Namespace) ? "" : _cfg.Namespace + ":";
+
+    private string WithNs(string name) => NsPrefix + name;
+
+    private string StripNs(string fullName) =>
+        NsPrefix.Length > 0 && fullName.StartsWith(NsPrefix, StringComparison.Ordinal)
+            ? fullName[NsPrefix.Length..] : fullName;
+
+    // Датасет принадлежит нашему контуру: со своим префиксом — только он; без своего
+    // (прод) — всё, кроме имён с явно чужими неймспейсами из конфига
+    private bool InOwnNamespace(string fullName) =>
+        NsPrefix.Length > 0
+            ? fullName.StartsWith(NsPrefix, StringComparison.Ordinal)
+            : (_cfg.ForeignNamespaces ?? []).All(f => !fullName.StartsWith(f + ":", StringComparison.Ordinal));
+
     // Создание датасета по имени, без привязки к проекту (для заметок пользователя).
     // permission: "only_me" (личный) | "all_team_members" (публичный, общий на workspace);
     // description — необязательное описание (Dify хранит сам). Существующие вызовы
@@ -166,7 +185,7 @@ public class KnowledgeService
             throw new InvalidOperationException("Dify не настроен: задайте Dify:ApiUrl и Dify:ApiKey в конфигурации");
         var payload = new Dictionary<string, object?>
         {
-            ["name"] = name,
+            ["name"] = WithNs(name),
             ["indexing_technique"] = _cfg.IndexingTechnique,
             ["permission"] = permission,
         };
@@ -287,7 +306,7 @@ public class KnowledgeService
             var client = CreateClient();
             var resp = await client.PostAsJsonAsync("datasets", new
             {
-                name = $"{username}:{project.Name}",
+                name = WithNs($"{username}:{project.Name}"),
                 indexing_technique = _cfg.IndexingTechnique,
                 permission = "only_me",
             });
@@ -448,7 +467,10 @@ public class KnowledgeService
             if (!p.HasMore || p.Data.Count == 0) break;
             page++;
         }
-        return all;
+        // Только датасеты своего контура, имена — без префикса неймспейса
+        return all.Where(d => InOwnNamespace(d.Name))
+            .Select(d => d with { Name = StripNs(d.Name) })
+            .ToList();
     }
 
     // Возвращает ВСЕ документы датасета, обходя пагинацию Dify (одна страница ограничена).
@@ -496,5 +518,16 @@ public class KnowledgeService
         var resp = await client.DeleteAsync($"datasets/{datasetId}");
         if (resp.StatusCode != System.Net.HttpStatusCode.NoContent)
             resp.EnsureSuccessStatusCode();
+    }
+
+    // Переименование датасета (PATCH /datasets/{id}) — держит имя в Dify актуальным при
+    // переименовании проекта/handle персоны. Best-effort: вызывающий ловит исключение и
+    // логирует (старые версии Dify без PATCH оставят стухшее имя, работа по id не ломается).
+    public async Task RenameDatasetAsync(string datasetId, string newName)
+    {
+        if (!IsConfigured) return;
+        var client = CreateClient();
+        var resp = await client.PatchAsJsonAsync($"datasets/{datasetId}", new { name = WithNs(newName) });
+        resp.EnsureSuccessStatusCode();
     }
 }

@@ -21,6 +21,9 @@ public class TeamMemoryService
     private readonly Lock _saveLock = new();
     private readonly ILogger<TeamMemoryService>? _log;
 
+    // Прибавка важности при повторе факта: дедуп-on-write усиливает существующую запись, а не плодит дубль
+    private const double DedupBoost = 0.1;
+
     public TeamMemoryService(IConfiguration config, ILogger<TeamMemoryService>? log = null)
     {
         _log = log;
@@ -33,21 +36,44 @@ public class TeamMemoryService
     public IReadOnlyList<TeamMemoryEntry> List(string ownerId, string projectId) =>
         Get(ownerId, projectId);
 
-    public TeamMemoryEntry Add(string ownerId, string projectId, string text)
+    // Добавить запись командной памяти. Дедуп-on-write (внутри _saveLock): одинаковый текст того же
+    // типа не плодим — усиливаем существующую (важность + более полный текст), чтобы авто-захват
+    // не засорял общий стор. Старый вызов Add(owner, project, text) остаётся валидным (дефолты).
+    public TeamMemoryEntry Add(string ownerId, string projectId, string text,
+        TeamMemoryType type = TeamMemoryType.Fact,
+        TeamMemorySource source = TeamMemorySource.Manual,
+        string? sourceSessionId = null, double? salience = null)
     {
-        var entry = new TeamMemoryEntry
-        {
-            OwnerId = ownerId,
-            ProjectId = projectId,
-            Text = text.Trim(),
-        };
+        var trimmed = text.Trim();
         lock (_saveLock)
         {
             var list = Get(ownerId, projectId);
+            var dup = list.FirstOrDefault(e => e.Type == type
+                && string.Equals(e.Text, trimmed, StringComparison.OrdinalIgnoreCase));
+            if (dup is not null)
+            {
+                var baseSal = salience is null
+                    ? dup.Salience
+                    : Math.Max(dup.Salience, Math.Clamp(salience.Value, 0.05, 1.0));
+                dup.Salience = Math.Clamp(baseSal + DedupBoost, 0.05, 1.0);
+                if (trimmed.Length > dup.Text.Length) dup.Text = trimmed;   // более информативная формулировка
+                Save();
+                return dup;
+            }
+            var entry = new TeamMemoryEntry
+            {
+                OwnerId = ownerId,
+                ProjectId = projectId,
+                Text = trimmed,
+                Type = type,
+                Source = source,
+                SourceSessionId = sourceSessionId,
+                Salience = salience is null ? 1.0 : Math.Clamp(salience.Value, 0.05, 1.0),
+            };
             list.Add(entry);
             Save();
+            return entry;
         }
-        return entry;
     }
 
     // Отредактировать текст записи вручную (UI-редактирование)

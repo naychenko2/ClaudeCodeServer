@@ -4,6 +4,8 @@ import { ensureAgentsLoaded, useAgentBoard } from '../../lib/agentBoard';
 import { AgentCard } from './AgentCard';
 import { C, FONT, R } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
+import { api } from '../../lib/api';
+import type { Project } from '../../types';
 
 // Конфигурация колонок
 const COLUMNS = [
@@ -13,26 +15,39 @@ const COLUMNS = [
   { key: 'done' as const, label: 'Готово', desc: 'Завершённые', color: C.success },
 ];
 
-// Временные окна для колонки «Готово»
-type TimeWindow = 'today' | '3days' | 'week' | 'all';
+// Временные окна
+// 3days = вчера~завтра (дефолт), today = сегодня, week = ±3 дня, all = всё
+type TimeWindow = '3days' | 'today' | 'week' | 'all';
 const TIME_WINDOWS: { key: TimeWindow; label: string }[] = [
   { key: '3days', label: '3 дня' },
   { key: 'today', label: 'Сегодня' },
   { key: 'week', label: 'Неделя' },
-  { key: 'all', label: 'Всё' },
+  { key: 'all', label: 'Всё время' },
 ];
 
+// Границы дня в UTC (начало/конец дня относительно текущего времени)
+function dayStart(offset: number): number {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+function dayEnd(offset: number): number {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
+}
+
 function inTimeWindow(startedAt: string | undefined, window: TimeWindow): boolean {
-  if (!startedAt) return false;
+  if (!startedAt) return window === 'all' ? true : false;
   if (window === 'all') return true;
   const t = new Date(startedAt).getTime();
-  const now = Date.now();
-  const msDay = 86400000;
   switch (window) {
-    case 'today': return t > now - msDay;    // последние 24ч
-    case '3days': return t > now - msDay && t < now + msDay;  // вчера~завтра
-    case 'week': return t > now - 3 * msDay && t < now + 3 * msDay;  // ±3 дня
-    default: return true;
+    case 'today':    return t >= dayStart(0) && t <= dayEnd(0);
+    case '3days':    return t >= dayStart(-1) && t <= dayEnd(1);   // вчера 00:00 ~ завтра 23:59
+    case 'week':     return t >= dayStart(-6) && t <= dayEnd(0);   // последние 7 дней
+    default:         return true;
   }
 }
 
@@ -41,55 +56,69 @@ export function AgentKanban() {
   const isMobile = useIsMobile();
   const [timeWindow, setTimeWindow] = useState<TimeWindow>('3days');
   const [personaFilter, setPersonaFilter] = useState<string>('all');
+  const [projectFilter, setProjectFilter] = useState<string>('all');
+  const [projects, setProjects] = useState<Project[]>([]);
 
   useEffect(() => {
     void ensureAgentsLoaded();
     void ensurePersonasLoaded();
+    api.projects.list().then(setProjects).catch(() => {});
   }, []);
 
   // Список уникальных персон среди всех карточек
   const personas = usePersonas();
   const personaOptions = useMemo(() => {
-    const seen = new Map<string, string>(); // id → label
+    const seen = new Set<string>();
     for (const item of items) {
-      if (item.personaId && !seen.has(item.personaId)) {
-        // label будет найден через PersonaAvatar
-        seen.set(item.personaId, item.personaId);
-      }
+      if (item.personaId) seen.add(item.personaId);
     }
-    if (!seen.size) return [];
-    // Claude без perconaId не отдельная персона
-    return Array.from(seen.keys());
+    return Array.from(seen);
   }, [items]);
 
-  // Фильтрация: активные колонки (queue/working/waiting) — всегда,
-  // done — только в пределах временного окна
+  // Список уникальных проектов среди всех карточек
+  const projectOptions = useMemo(() => {
+    const seen = new Set<string>();
+    for (const item of items) {
+      if (item.projectId) seen.add(item.projectId);
+    }
+    return Array.from(seen);
+  }, [items]);
+
+  // Проекты с именем — маппинг
+  const projectMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of projects) m.set(p.id, p.name);
+    return m;
+  }, [projects]);
+
+  // Временной фильтр — ко всем колонкам (не только к done)
   const filtered = useMemo(() => {
     return items.filter(item => {
-      // Фильтр по персоне
       if (personaFilter !== 'all' && item.personaId !== personaFilter) return false;
-      // Временной фильтр — только для done
-      if (item.column === 'done') return inTimeWindow(item.startedAt, timeWindow);
-      return true;
+      if (projectFilter !== 'all' && item.projectId !== projectFilter) return false;
+      // Активные (working/waiting) — всегда видны независимо от окна
+      if (item.column === 'working' || item.column === 'waiting') return true;
+      // queue и done — по временному окну
+      return inTimeWindow(item.startedAt ?? item.sessionId, timeWindow);
     });
-  }, [items, timeWindow, personaFilter]);
+  }, [items, timeWindow, personaFilter, projectFilter]);
 
-  const hasActive = filtered.some(i => i.column === 'working' || i.column === 'waiting');
   const hasItems = filtered.length > 0;
 
-  // Чип-фильтр времени
-  const timeFilterChip = (key: TimeWindow, label: string) => (
+  // Чип-фильтр в стиле календаря (CalendarPage.filterChip)
+  const filterChip = (key: string, label: string, active: boolean, onClick: () => void) => (
     <button
       key={key}
-      onClick={() => setTimeWindow(key)}
+      onClick={onClick}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
-        padding: '5px 12px', cursor: 'pointer',
-        border: `1px solid ${timeWindow === key ? C.accent : C.border}`,
+        display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
+        padding: '6px 13px', cursor: 'pointer',
+        border: `1px solid ${active ? C.accent : C.border}`,
         borderRadius: 999,
-        background: timeWindow === key ? C.accentLight : 'transparent',
-        fontFamily: FONT.sans, fontSize: 12, fontWeight: timeWindow === key ? 700 : 500,
+        background: active ? C.accentLight : C.bgWhite,
+        fontFamily: FONT.sans, fontSize: 12.5, fontWeight: active ? 700 : 500,
         color: C.textPrimary, whiteSpace: 'nowrap',
+        transition: 'border-color 0.12s, background 0.12s',
       }}
     >
       {label}
@@ -98,61 +127,55 @@ export function AgentKanban() {
 
   return (
     <div>
-      {/* Фильтры */}
-      {hasActive && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-          {/* Временное окно для «Готово» */}
+      {/* Фильтры — всегда видны */}
+      <div style={{ marginBottom: 16 }}>
+        <div className="cc-hide-scrollbar" style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          overflowX: 'auto', paddingBottom: 2, flexWrap: 'wrap',
+        }}>
           <span style={{
             fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,
-            textTransform: 'uppercase', letterSpacing: '0.07em',
+            textTransform: 'uppercase', letterSpacing: '0.07em', flexShrink: 0,
           }}>
-            Готовые
+            Период
           </span>
-          {TIME_WINDOWS.map(w => timeFilterChip(w.key, w.label))}
+          {TIME_WINDOWS.map(w =>
+            filterChip(w.key, w.label, timeWindow === w.key, () => setTimeWindow(w.key))
+          )}
 
           {personaOptions.length > 0 && (
             <>
               <span style={{
                 fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,
-                textTransform: 'uppercase', letterSpacing: '0.07em', marginLeft: 6,
+                textTransform: 'uppercase', letterSpacing: '0.07em', flexShrink: 0, marginLeft: 8,
               }}>
                 Агент
               </span>
-              <button
-                onClick={() => setPersonaFilter('all')}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
-                  padding: '5px 12px', cursor: 'pointer',
-                  border: `1px solid ${personaFilter === 'all' ? C.accent : C.border}`,
-                  borderRadius: 999,
-                  background: personaFilter === 'all' ? C.accentLight : 'transparent',
-                  fontFamily: FONT.sans, fontSize: 12, fontWeight: personaFilter === 'all' ? 700 : 500,
-                  color: C.textPrimary, whiteSpace: 'nowrap',
-                }}
-              >
-                Все
-              </button>
-              {personaOptions.map(pid => (
-                <button
-                  key={pid}
-                  onClick={() => setPersonaFilter(pid)}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
-                    padding: '5px 12px', cursor: 'pointer',
-                    border: `1px solid ${personaFilter === pid ? C.accent : C.border}`,
-                    borderRadius: 999,
-                    background: personaFilter === pid ? C.accentLight : 'transparent',
-                    fontFamily: FONT.sans, fontSize: 12, fontWeight: personaFilter === pid ? 700 : 500,
-                    color: C.textPrimary, whiteSpace: 'nowrap',
-                  }}
-                >
-                  {personas.find(p => p.id === pid)?.name ?? pid.slice(0, 7)}
-                </button>
-              ))}
+              {filterChip('all', 'Все', personaFilter === 'all', () => setPersonaFilter('all'))}
+              {personaOptions.map(pid =>
+                filterChip(pid, personas.find(p => p.id === pid)?.name ?? pid.slice(0, 7),
+                  personaFilter === pid, () => setPersonaFilter(pid))
+              )}
+            </>
+          )}
+
+          {projectOptions.length > 0 && (
+            <>
+              <span style={{
+                fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,
+                textTransform: 'uppercase', letterSpacing: '0.07em', flexShrink: 0, marginLeft: 8,
+              }}>
+                Проект
+              </span>
+              {filterChip('all', 'Все', projectFilter === 'all', () => setProjectFilter('all'))}
+              {projectOptions.map(pid =>
+                filterChip(pid, projectMap.get(pid) ?? pid.slice(0, 7),
+                  projectFilter === pid, () => setProjectFilter(pid))
+              )}
             </>
           )}
         </div>
-      )}
+      </div>
 
       {/* Доска */}
       {!hasItems ? (
@@ -162,7 +185,7 @@ export function AgentKanban() {
           </div>
           <div style={{ fontFamily: FONT.sans, fontSize: 12.5, color: C.textMuted, lineHeight: 1.5 }}>
             {timeWindow !== 'all'
-              ? 'За последние 3 дня ничего не завершено'
+              ? 'За выбранный период ничего нет'
               : 'Задачи с исполнителем Claude или персоной появятся здесь'}
           </div>
         </div>
@@ -180,7 +203,6 @@ export function AgentKanban() {
                 minWidth: isMobile ? 'auto' : 260,
                 display: 'flex', flexDirection: 'column', gap: 8,
               }}>
-                {/* Заголовок колонки */}
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 8, padding: '0 4px 8px',
                   borderBottom: `2px solid ${col.color}33`,
@@ -199,7 +221,6 @@ export function AgentKanban() {
                   </span>
                 </div>
 
-                {/* Карточки */}
                 <div style={{
                   display: 'flex', flexDirection: 'column', gap: 8,
                   minHeight: 80,

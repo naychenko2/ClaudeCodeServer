@@ -348,68 +348,70 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
                 </button>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: SP.md, alignItems: 'center' }}>
-              {/* Search */}
-              <div style={{ position: 'relative', width: 200 }}>
-                <Search size={14} style={{
-                  position: 'absolute', left: 10, top: '50%',
-                  transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none',
-                }} />
-                <input
-                  placeholder="Поиск..."
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  style={{
-                    width: '100%', height: 34,
-                    padding: '0 12px 0 32px',
-                    border: `1px solid ${C.border}`,
-                    borderRadius: R.md,
-                    background: C.bgCard,
-                    fontFamily: FONT.sans,
-                    fontSize: FS.sm,
-                    color: C.textPrimary,
-                    outline: 'none',
-                  }}
-                />
+            {mode === 'notifications' && (
+              <div style={{ display: 'flex', gap: SP.md, alignItems: 'center' }}>
+                {/* Search */}
+                <div style={{ position: 'relative', width: 200 }}>
+                  <Search size={14} style={{
+                    position: 'absolute', left: 10, top: '50%',
+                    transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none',
+                  }} />
+                  <input
+                    placeholder="Поиск..."
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    style={{
+                      width: '100%', height: 34,
+                      padding: '0 12px 0 32px',
+                      border: `1px solid ${C.border}`,
+                      borderRadius: R.md,
+                      background: C.bgCard,
+                      fontFamily: FONT.sans,
+                      fontSize: FS.sm,
+                      color: C.textPrimary,
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+                {totalUnread > 0 && (
+                  <button
+                    style={{
+                      padding: '7px 16px', borderRadius: R.md,
+                      border: `1px solid ${C.border}`,
+                      background: C.bgCard, color: C.textSecondary,
+                      fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 500,
+                      cursor: 'pointer', whiteSpace: 'nowrap',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                    }}
+                    onClick={() => markAllRead().then(rerender)}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textSecondary; }}
+                  >
+                    <CheckCheck size={14} /> Прочитать всё
+                  </button>
+                )}
+                {notifs.some(n => n.isRead) && (
+                  <button
+                    style={{
+                      padding: '7px 16px', borderRadius: R.md,
+                      border: `1px solid ${C.border}`,
+                      background: C.bgCard, color: C.textMuted,
+                      fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 500,
+                      cursor: 'pointer', whiteSpace: 'nowrap',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                    }}
+                    onClick={() => {
+                      if (window.confirm('Удалить все прочитанные уведомления?'))
+                        deleteReadAll().then(rerender);
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = C.danger; e.currentTarget.style.color = C.danger; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textMuted; }}
+                  >
+                    <Trash2 size={14} /> Очистить прочитанные
+                  </button>
+                )}
               </div>
-              {totalUnread > 0 && (
-                <button
-                  style={{
-                    padding: '7px 16px', borderRadius: R.md,
-                    border: `1px solid ${C.border}`,
-                    background: C.bgCard, color: C.textSecondary,
-                    fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 500,
-                    cursor: 'pointer', whiteSpace: 'nowrap',
-                    display: 'flex', alignItems: 'center', gap: 6,
-                  }}
-                  onClick={() => markAllRead().then(rerender)}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textSecondary; }}
-                >
-                  <CheckCheck size={14} /> Прочитать всё
-                </button>
-              )}
-              {notifs.some(n => n.isRead) && (
-                <button
-                  style={{
-                    padding: '7px 16px', borderRadius: R.md,
-                    border: `1px solid ${C.border}`,
-                    background: C.bgCard, color: C.textMuted,
-                    fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 500,
-                    cursor: 'pointer', whiteSpace: 'nowrap',
-                    display: 'flex', alignItems: 'center', gap: 6,
-                  }}
-                  onClick={() => {
-                    if (window.confirm('Удалить все прочитанные уведомления?'))
-                      deleteReadAll().then(rerender);
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = C.danger; e.currentTarget.style.color = C.danger; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textMuted; }}
-                >
-                  <Trash2 size={14} /> Очистить прочитанные
-                </button>
-              )}
-            </div>
+            )}
           </div>
 
           {mode === 'dispatcher' ? (

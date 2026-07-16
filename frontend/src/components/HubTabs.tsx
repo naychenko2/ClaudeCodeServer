@@ -29,7 +29,6 @@ export function HubTabs({ value, onChange, mobile }: {
     { value: 'calendar' as HubTab, label: 'Календарь' },
     { value: 'notes' as HubTab, label: 'Заметки' },
     { value: 'personas' as HubTab, label: 'Персоны' },
-    { value: 'agent-kanban' as HubTab, label: 'Диспетчер' },
   ]
     // 5 разделов в компакт-таббаре (compact-режим: неактивные иконками, подпись только у активного).
     // «Знания» убраны из хаба — вызов живёт в меню аватара («Настройка знаний»); сам экран доступен

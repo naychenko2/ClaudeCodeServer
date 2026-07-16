@@ -539,7 +539,7 @@ export default function App() {
     }
     // Диплинк на раздел без глубокой цели — просто переключаемся на него
     if (target) {
-      switchHubTab(target.screen === 'project' ? 'projects' : target.screen === 'agent-kanban' ? 'notifications' : target.screen)
+      switchHubTab(target.screen === 'project' ? 'projects' : target.screen)
       return
     }
     // Не диплинк (абсолютный внешний URL) — полная загрузка, как раньше

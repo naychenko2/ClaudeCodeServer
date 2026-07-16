@@ -998,12 +998,23 @@ export interface PersonaMemoryHit {
   createdAt: string;
 }
 
+// Тип записи командной памяти: решение / договорённость(конвенция) / факт / термин
+export type TeamMemoryType = 'fact' | 'decision' | 'convention' | 'glossary';
+
+// Источник записи командной памяти: вручную / автоизвлечение из хода / из совещания
+export type TeamMemorySource = 'manual' | 'autoTurn' | 'autoMeeting';
+
 // Запись общей памяти команды проекта (③-3.4) — recall'ят все персоны команды
 export interface TeamMemoryEntry {
   id: string;
   ownerId: string;
   projectId: string;
   text: string;
+  type: TeamMemoryType;
+  tags?: string[];
+  salience: number;
+  source: TeamMemorySource;
+  sourceSessionId?: string;
   createdAt: string;
 }
 

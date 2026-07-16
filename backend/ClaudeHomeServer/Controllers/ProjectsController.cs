@@ -84,7 +84,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
-        var entry = teamMemory.Add(UserId, id, req.Text);
+        var entry = teamMemory.Add(UserId, id, req.Text, req.Type ?? TeamMemoryType.Fact);
         await BroadcastTeamMemory("added", id, entry.Id);
         return Ok(entry);
     }
@@ -161,4 +161,4 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null);
 public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, List<PermissionRule>? PermissionRules = null, string? GroupId = null);
 public record UpdateBoardColumnsRequest(List<BoardColumn>? Columns);
-public record TeamMemoryRequest(string Text);
+public record TeamMemoryRequest(string Text, TeamMemoryType? Type = null);

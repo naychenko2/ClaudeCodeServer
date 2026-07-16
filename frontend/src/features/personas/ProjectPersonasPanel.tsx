@@ -10,6 +10,7 @@ import { ConfirmDialog } from '../../components/ui';
 import { PersonaList } from './PersonaList';
 import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './PersonaForm';
 import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
+import { PersonaEditFab } from './PersonaEditFab';
 import { PersonaPreview } from './PersonaPreview';
 import { PersonaMemoryPanel } from './PersonaMemoryPanel';
 import { PersonaBindingsPanel } from './PersonaBindingsPanel';
@@ -237,6 +238,10 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
           )
         ) : null}
       </div>
+      {/* Плавающая «Редактировать» на мобиле — вместо карандаша в тулбаре */}
+      {isMobile && persona && view === 'preview' && !editing && (
+        <PersonaEditFab accent={accent} onClick={() => setEditing(true)} />
+      )}
       {deleteTarget && (
         <ConfirmDialog
           title="Удалить персону?"

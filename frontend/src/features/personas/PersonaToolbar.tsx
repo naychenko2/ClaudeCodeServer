@@ -146,27 +146,32 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
         </>
       ) : (
         <>
-          {/* Редактировать + ⋯-меню — всегда видно до вкладок, чтобы не прыгало при переключении */}
-          <button onClick={onEdit} title="Редактировать"
-            style={{ ...tbBtnGhost, display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            {!isMobile && 'Редактировать'}
-          </button>
-          <div style={{ position: 'relative', flexShrink: 0 }}>
-            <IconButton onClick={() => setMenuOpen(o => !o)} title="Ещё" size={isMobile ? 'lg' : 'md'}>
-              <EllipsisVertical size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            </IconButton>
-            {menuOpen && (
-              <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={180}>
-                <MenuItem
-                  danger
-                  icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
-                  label="Удалить персону"
-                  onClick={() => { setMenuOpen(false); onDelete(); }}
-                />
-              </Menu>
-            )}
-          </div>
+          {/* Редактировать + ⋯-меню (Удалить) — только десктоп. На мобиле «Редактировать»
+              вынесена в плавающую кнопку PersonaEditFab, «Удалить» — в «Опасную зону» формы. */}
+          {!isMobile && (
+            <>
+              <button onClick={onEdit} title="Редактировать"
+                style={{ ...tbBtnGhost, display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                Редактировать
+              </button>
+              <div style={{ position: 'relative', flexShrink: 0 }}>
+                <IconButton onClick={() => setMenuOpen(o => !o)} title="Ещё" size="md">
+                  <EllipsisVertical size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                </IconButton>
+                {menuOpen && (
+                  <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={180}>
+                    <MenuItem
+                      danger
+                      icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
+                      label="Удалить персону"
+                      onClick={() => { setMenuOpen(false); onDelete(); }}
+                    />
+                  </Menu>
+                )}
+              </div>
+            </>
+          )}
 
           {/* Сегмент Профиль | [Умения] | Память | Задачи (на мобиле — компактный, иконки) */}
           <PillSwitch<PersonaView>

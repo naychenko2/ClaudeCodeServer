@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Pencil } from 'lucide-react';
+import { Pencil, Trash2 } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project } from '../../types';
 import { api } from '../../lib/api';
@@ -1087,6 +1087,20 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     </div>
   );
 
+  // === Опасная зона (только мобилка) — «Удалить» перенесён из тулбара в конец формы:
+  // на мобиле в тулбаре нет ⋯-меню, удаление живёт здесь, отдельной секцией.
+  const dangerSection = isMobile && isEdit && onDelete && persona ? (
+    <div style={section}>
+      <SectionLabel style={{ marginBottom: 6 }}>Опасная зона</SectionLabel>
+      <div style={{ fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.5, marginBottom: 14 }}>
+        Удаление необратимо: пропадут характер, память и настройки персоны. Уже созданные разговоры в чатах останутся.
+      </div>
+      <button type="button" onClick={() => onDelete(persona)} style={dangerBtn}>
+        <Trash2 size={16} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} /> Удалить персону
+      </button>
+    </div>
+  ) : null;
+
   return (
     <div style={{ height: '100%', overflowY: 'auto', background: C.bgMain }}>
       <div style={{
@@ -1099,6 +1113,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         {behaviorSection}
         {toolsSection}
         {memorySection}
+        {dangerSection}
         {error && (
           <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error}</div>
         )}
@@ -1208,6 +1223,15 @@ function timeAgo(iso: string): string {
 const openMemoryBtn: React.CSSProperties = {
   background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
   fontSize: 13, fontWeight: 600, fontFamily: FONT.sans, padding: 0,
+};
+
+// Кнопка «Удалить персону» в «Опасной зоне» формы (мобилка) — аутлайн-danger,
+// full-width; не солидная красная, чтобы не спорить с «Сохранить» в тулбаре.
+const dangerBtn: React.CSSProperties = {
+  width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+  padding: '11px 18px', borderRadius: R.xl, border: `1px solid ${C.dangerBorder}`,
+  background: C.dangerBg, color: C.dangerText, fontSize: 14, fontWeight: 600,
+  fontFamily: FONT.sans, cursor: 'pointer',
 };
 
 const selectStyle: React.CSSProperties = {

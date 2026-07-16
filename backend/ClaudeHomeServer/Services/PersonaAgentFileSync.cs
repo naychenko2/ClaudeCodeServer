@@ -220,8 +220,15 @@ public sealed class PersonaAgentFileSync
     private string OwnerDir(string ownerId, string dirKey) =>
         Path.Combine(_baseDir, ownerId, dirKey);
 
-    private string Generate(Persona persona) =>
-        _generator.Generate(persona, _bindings.EffectiveToolEnabled(persona.OwnerId ?? "", persona, "web"));
+    private string Generate(Persona persona)
+    {
+        var ownerId = persona.OwnerId ?? "";
+        return _generator.Generate(persona, new PersonaAgentFileContext(
+            _bindings.EffectiveToolEnabled(ownerId, persona, "web"),
+            _bindings.EffectiveToolEnabled(ownerId, persona, "tasks"),
+            _bindings.EffectiveToolEnabled(ownerId, persona, "notes"),
+            _bindings.BuildSubagentIndex(ownerId, persona)));
+    }
 
     public static bool IsReserved(string handle) =>
         ReservedAgentNames.Contains(handle, StringComparer.OrdinalIgnoreCase);

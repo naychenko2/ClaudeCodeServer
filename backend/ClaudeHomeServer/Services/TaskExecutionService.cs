@@ -77,9 +77,9 @@ public class TaskExecutionService
         // (без «tasks»): исполнитель обязан управлять задачей через mcp__tasks__*.
         var session = task.ProjectId is not null
             ? await _sessions.CreateAsync(task.ProjectId, ClaudeMode.AcceptEdits, name: name, model: model,
-                personaId: persona?.Id, taskExecution: true, taskId: task.Id)
+                effort: persona?.Effort, personaId: persona?.Id, taskExecution: true, taskId: task.Id)
             : await _sessions.CreateChatAsync(task.OwnerId, ClaudeMode.AcceptEdits, name: name, model: model,
-                personaId: persona?.Id, taskExecution: true, taskId: task.Id);
+                effort: persona?.Effort, personaId: persona?.Id, taskExecution: true, taskId: task.Id);
         if (task.ExecutionExpiresAfterMinutes is { } ttl) _sessions.SetExpiry(session.Id, ttl);
 
         var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow)

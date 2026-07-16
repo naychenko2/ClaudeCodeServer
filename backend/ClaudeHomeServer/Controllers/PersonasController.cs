@@ -1699,6 +1699,21 @@ public class PersonasController : ControllerBase
         return Ok(hits);
     }
 
+    // Recall-блок памяти (рабочий фокус + скоринг relevance × recency × type × salience +
+    // командная память проектной персоны) — тот же BuildRecallAsync, что подмешивается в
+    // системный промпт персонной сессии. Дёргается memory_recall из MCP memory-server:
+    // файловый сабагент получает память того же качества, что собеседник чата.
+    [HttpGet("{id}/memory/recall")]
+    public async Task<ActionResult> MemoryRecall(string id, [FromQuery] string q, [FromQuery] int topK = 5)
+    {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(q)) return BadRequest("Пустой запрос");
+        var minScore = double.TryParse(_config["Persona:RecallMinScore"],
+            System.Globalization.CultureInfo.InvariantCulture, out var ms) ? ms : 0.30;
+        var recall = await _memory.BuildRecallAsync(UserId, id, q, Math.Clamp(topK, 1, 20), minScore);
+        return Ok(new { text = recall?.Text });
+    }
+
     // Запомнить (явный write-path); salience — важность 0..1 (опционально)
     [HttpPost("{id}/memory")]
     public async Task<ActionResult<PersonaMemoryEntry>> Remember(string id, [FromBody] RememberRequest req)

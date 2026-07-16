@@ -65,6 +65,21 @@ const TOOLS = [
     },
   },
   {
+    name: 'memory_recall',
+    description: 'Собрать готовый блок памяти по теме: твой рабочий фокус («что я сейчас делаю») + ' +
+      'самые релевантные записи долгой памяти (скоринг: релевантность × свежесть × тип × важность) + ' +
+      'общая память команды проекта. Вызывай ПЕРВЫМ действием, когда начинаешь работать над вопросом, — ' +
+      'это тот же авто-recall, что получает персона в своих чатах.',
+    inputSchema: {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query: { type: 'string', description: 'Суть вопроса/задачи, над которой работаешь' },
+        topK: { type: 'integer', minimum: 1, maximum: 20, description: 'Сколько записей (по умолчанию 5)' },
+      },
+    },
+  },
+  {
     name: 'memory_search',
     description: 'Поиск по своей долгой памяти по смыслу: возвращает релевантные записи со score ' +
       '(учитывает свежесть и тип). Используй, когда нужно вспомнить, что известно по теме.',
@@ -188,6 +203,18 @@ async function callTool(name, args) {
       if (Array.isArray(args.tags) && args.tags.length) body.tags = args.tags;
       if (typeof args.salience === 'number') body.salience = args.salience;
       return json(await api(base, { method: 'POST', body: JSON.stringify(body) }));
+    }
+
+    case 'memory_recall': {
+      const params = new URLSearchParams({ q: String(args.query ?? '') });
+      if (args.topK) params.set('topK', String(args.topK));
+      const r = await api(`${base}/recall?${params}`);
+      return {
+        content: [{
+          type: 'text',
+          text: r?.text ?? 'Память пуста или по этой теме ничего релевантного не нашлось.',
+        }],
+      };
     }
 
     case 'memory_search': {

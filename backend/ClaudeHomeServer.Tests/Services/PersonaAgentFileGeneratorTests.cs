@@ -15,6 +15,10 @@ public class PersonaAgentFileGeneratorTests
         return new PersonaAgentFileGenerator(new PersonaPromptBuilder(new LlmProviderRegistry(config)));
     }
 
+    // Контекст генерации: дефолт — web выключен, tasks/notes включены, без привязок
+    private static PersonaAgentFileContext Ctx(bool web = false, bool tasks = true,
+        bool notes = true, string? bindings = null) => new(web, tasks, notes, bindings);
+
     private static Persona MakePersona(string? model = null, bool memory = true,
         string? color = "purple", string? effort = null) => new()
     {
@@ -32,7 +36,7 @@ public class PersonaAgentFileGeneratorTests
     [Fact]
     public void Frontmatter_СодержитОбязательныеПоля()
     {
-        var text = MakeGenerator().Generate(MakePersona(), webAllowed: false);
+        var text = MakeGenerator().Generate(MakePersona(), Ctx());
 
         text.Should().StartWith("---");
         text.Should().Contain("name: gefest");
@@ -47,27 +51,27 @@ public class PersonaAgentFileGeneratorTests
     {
         // Файл виден чатам всех провайдеров: пин чужой модели делает сабагента
         // незапускаемым — сабагент всегда бежит на модели сессии
-        MakeGenerator().Generate(MakePersona(), webAllowed: false)
+        MakeGenerator().Generate(MakePersona(), Ctx())
             .Should().NotContain("\nmodel:");
-        MakeGenerator().Generate(MakePersona(model: "opus"), webAllowed: false)
+        MakeGenerator().Generate(MakePersona(model: "opus"), Ctx())
             .Should().NotContain("\nmodel:");
     }
 
     [Fact]
     public void Effort_ТолькоПриЯвном()
     {
-        MakeGenerator().Generate(MakePersona(), webAllowed: false)
+        MakeGenerator().Generate(MakePersona(), Ctx())
             .Should().NotContain("\neffort:");
-        MakeGenerator().Generate(MakePersona(effort: "high"), webAllowed: false)
+        MakeGenerator().Generate(MakePersona(effort: "high"), Ctx())
             .Should().Contain("effort: high");
     }
 
     [Fact]
     public void McpServers_ТолькоПриПамяти()
     {
-        MakeGenerator().Generate(MakePersona(memory: false), webAllowed: false)
+        MakeGenerator().Generate(MakePersona(memory: false), Ctx())
             .Should().NotContain("mcpServers");
-        MakeGenerator().Generate(MakePersona(), webAllowed: false)
+        MakeGenerator().Generate(MakePersona(), Ctx())
             .Should().Contain("mcpServers: [pmem_gefest]");
     }
 
@@ -75,10 +79,10 @@ public class PersonaAgentFileGeneratorTests
     public void Цвет_МапитсяВДопустимыеCli()
     {
         // brown нет в палитре CLI — ближний orange
-        MakeGenerator().Generate(MakePersona(color: "brown"), webAllowed: false)
+        MakeGenerator().Generate(MakePersona(color: "brown"), Ctx())
             .Should().Contain("color: orange");
         // неизвестный цвет — поле опускается
-        MakeGenerator().Generate(MakePersona(color: "magenta"), webAllowed: false)
+        MakeGenerator().Generate(MakePersona(color: "magenta"), Ctx())
             .Should().NotContain("\ncolor:");
     }
 
@@ -88,7 +92,7 @@ public class PersonaAgentFileGeneratorTests
         var persona = MakePersona();
         persona.Description = "Стро\"ка с кавычками\nи переносом";
 
-        var text = MakeGenerator().Generate(persona, webAllowed: false);
+        var text = MakeGenerator().Generate(persona, Ctx());
 
         var descLine = text.Split('\n').First(l => l.StartsWith("description:"));
         descLine.Should().Contain("\\\"").And.NotContain("Стро\"ка с кавычками\nи");
@@ -97,7 +101,7 @@ public class PersonaAgentFileGeneratorTests
     [Fact]
     public void Тело_СодержитХарактерРамкуИПамять()
     {
-        var text = MakeGenerator().Generate(MakePersona(), webAllowed: false);
+        var text = MakeGenerator().Generate(MakePersona(), Ctx());
         var body = text[(text.IndexOf("---", 3, StringComparison.Ordinal) + 3)..];
 
         body.Should().Contain("Ты — Мастер по имени Гефест");        // идентичность из PersonaPromptBuilder
@@ -112,7 +116,51 @@ public class PersonaAgentFileGeneratorTests
     [Fact]
     public void БезПамяти_НетСекцииПамяти()
     {
-        var text = MakeGenerator().Generate(MakePersona(memory: false), webAllowed: false);
+        var text = MakeGenerator().Generate(MakePersona(memory: false), Ctx());
         text.Should().NotContain("## Твоя память").And.NotContain("pmem_gefest");
+    }
+
+    [Fact]
+    public void Память_НачинаетсяСRecall()
+    {
+        var text = MakeGenerator().Generate(MakePersona(), Ctx());
+        text.Should().Contain("mcp__pmem_gefest__memory_recall");
+        text.Should().Contain("tools:").And.Match(t => t.Contains("memory_recall"));
+    }
+
+    [Fact]
+    public void ГейтыTasksNotes_РежутИнструменты()
+    {
+        var text = MakeGenerator().Generate(MakePersona(), Ctx(tasks: false, notes: false));
+        text.Should().NotContain("mcp__tasks__").And.NotContain("mcp__notes__");
+
+        var full = MakeGenerator().Generate(MakePersona(), Ctx());
+        full.Should().Contain("mcp__tasks__tasks_list").And.Contain("mcp__notes__notes_read");
+    }
+
+    [Fact]
+    public void БлокПривязок_ПопадаетВТело()
+    {
+        var block = "## Привязанные знания и правила\n- [проект] Когда: вопросы по коду → mcp__wsp__files_read";
+        var text = MakeGenerator().Generate(MakePersona(), Ctx(bindings: block));
+        text.Should().Contain("## Привязанные знания и правила")
+            .And.Contain("Когда: вопросы по коду");
+
+        MakeGenerator().Generate(MakePersona(), Ctx())
+            .Should().NotContain("## Привязанные знания и правила");
+    }
+
+    [Fact]
+    public void Дисциплина_НейтральнаяДляСабагента()
+    {
+        // Дисциплина не зависит от модели персоны: файл общий для всех провайдеров
+        var claude = MakeGenerator().Generate(MakePersona(model: "opus"), Ctx());
+        var deepseek = MakeGenerator().Generate(MakePersona(model: "deepseek-chat"), Ctx());
+
+        var claudeBody = claude[claude.IndexOf("## Ты — консультант", StringComparison.Ordinal)..];
+        var deepseekBody = deepseek[deepseek.IndexOf("## Ты — консультант", StringComparison.Ordinal)..];
+        claudeBody.Should().Be(deepseekBody);
+        claude.Should().Contain("## Границы");   // NeverRules из универсального набора
+        claude.Should().Contain("## Прагматизм"); // LeastChange
     }
 }

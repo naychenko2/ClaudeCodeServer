@@ -10,8 +10,9 @@ public interface IOneShotRunner
     // Модель ненастроенного провайдера тихо заменяется дефолтом claude
     string? NormalizeModel(string? model);
 
+    // effort — усилие рассуждения (--effort), для моделей с его поддержкой
     Task<string> RunAsync(string prompt, string? model = null,
-        TimeSpan? timeout = null, CancellationToken ct = default);
+        TimeSpan? timeout = null, CancellationToken ct = default, string? effort = null);
 }
 
 // Общий раннер одноразовых вызовов claude --print (без сессии): промпт через stdin,
@@ -29,7 +30,7 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders) : IOne
         llmProviders.ResolveByModel(model) is { Enabled: false } ? null : model;
 
     public async Task<string> RunAsync(string prompt, string? model = null,
-        TimeSpan? timeout = null, CancellationToken ct = default)
+        TimeSpan? timeout = null, CancellationToken ct = default, string? effort = null)
     {
         var workDir = Path.Combine(Path.GetTempPath(), "claude-oneshot");
         Directory.CreateDirectory(workDir);
@@ -55,6 +56,11 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders) : IOne
         {
             psi.ArgumentList.Add("--model");
             psi.ArgumentList.Add(model);
+        }
+        if (!string.IsNullOrWhiteSpace(effort))
+        {
+            psi.ArgumentList.Add("--effort");
+            psi.ArgumentList.Add(effort);
         }
 
         if (llmProviders.BuildCliEnv(model) is { } env)

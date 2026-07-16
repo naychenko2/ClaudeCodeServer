@@ -3,6 +3,13 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
+// Срез эффективных возможностей персоны для генерации файла сабагента: гейты
+// tasks/notes/web (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools)
+// + статический индекс привязок (BuildSubagentIndex). Собирает PersonaAgentFileSync —
+// генератор остаётся чистой функцией контента.
+public sealed record PersonaAgentFileContext(bool WebAllowed, bool TasksAllowed,
+    bool NotesAllowed, string? BindingsBlock);
+
 // Генерация текста файлового сабагента Claude Code (.claude/agents/{handle}.md) из персоны.
 // Чистая функция контента (без ФС) — файлами управляет PersonaAgentFileSync. Frontmatter —
 // по фактической схеме CLI (name/description/tools/model/effort/color/mcpServers/maxTurns);
@@ -28,9 +35,10 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
         ["brown"] = "orange",
     };
 
-    public string Generate(Persona persona, bool webAllowed)
+    public string Generate(Persona persona, PersonaAgentFileContext context)
     {
-        var tools = PersonaConsultantToolset.Build(persona, webAllowed);
+        var tools = PersonaConsultantToolset.Build(persona, context.WebAllowed,
+            context.TasksAllowed, context.NotesAllowed);
         var pmemKey = PersonaConsultantToolset.PmemServerKey(persona.Handle);
 
         var sb = new StringBuilder();
@@ -51,8 +59,10 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
         sb.AppendLine("---");
         sb.AppendLine();
 
-        // Характер персоны — тем же сборщиком, что у собеседника чата и persona_ask
-        sb.AppendLine(promptBuilder.Build(persona, persona.Model, greeted: false));
+        // Характер персоны — тот же сборщик, что у собеседника чата и persona_ask, но
+        // с провайдер-нейтральной дисциплиной: сабагент бежит на модели сессии, которая
+        // на этапе генерации файла неизвестна
+        sb.AppendLine(promptBuilder.BuildForSubagent(persona));
 
         // Консультационная рамка (по образцу PersonaAskService: персона не видит исходный разговор)
         sb.AppendLine();
@@ -62,11 +72,20 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
                       "не здоровайся и не представляйся. Твой финальный ответ вернётся тому, кто спросил, — " +
                       "сделай его самодостаточным.");
 
+        // Привязанные знания и правила — статический индекс (BuildSubagentIndex)
+        if (!string.IsNullOrWhiteSpace(context.BindingsBlock))
+        {
+            sb.AppendLine();
+            sb.AppendLine(context.BindingsBlock.Trim());
+        }
+
         if (persona.MemoryEnabled)
         {
             sb.AppendLine();
             sb.AppendLine("## Твоя память");
-            sb.AppendLine($"Перед ответом поищи релевантное в своей долгой памяти (mcp__{pmemKey}__memory_search); " +
+            sb.AppendLine($"Начни работу с mcp__{pmemKey}__memory_recall (query = суть вопроса) — он вернёт " +
+                          "твой рабочий фокус и самое релевантное из долгой памяти с учётом свежести и важности; " +
+                          $"точечно ищи через mcp__{pmemKey}__memory_search; " +
                           $"важные новые факты сохраняй через mcp__{pmemKey}__memory_remember. " +
                           "Если вызов вернул «No such tool available» — сервер памяти ещё подключается: " +
                           "подожди мгновение и повтори тот же вызов. Если инструменты памяти недоступны — " +

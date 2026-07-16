@@ -748,8 +748,9 @@ public class SessionManager
 
     // Разделение персон по способу консультации: с файлом сабагента — через встроенный
     // Task; остальные (зарезервированный handle, за капом файлов) — через persona_ask.
-    // Провайдер модели персоны роли НЕ играет: файлы сабагентов генерируются без пина
-    // модели (бегут на модели сессии), иначе кросс-провайдерная персона незапускаема.
+    // Провайдер модели персоны роли НЕ играет: файлы сабагентов пинят максимум алиас-тир
+    // Claude (opus/sonnet/haiku, см. PersonaAgentFileSync.ModelAliasFor) — он резолвится
+    // у любого провайдера, кросс-провайдерная персона остаётся запускаемой.
     private (List<Persona> Subagents, List<Persona> ViaAsk) SplitConsultants(
         string ownerId, Session session, List<Persona> personas)
     {

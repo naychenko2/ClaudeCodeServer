@@ -15,9 +15,10 @@ public class PersonaAgentFileGeneratorTests
         return new PersonaAgentFileGenerator(new PersonaPromptBuilder(new LlmProviderRegistry(config)));
     }
 
-    // Контекст генерации: дефолт — web выключен, tasks/notes включены, без привязок
+    // Контекст генерации: дефолт — web выключен, tasks/notes включены, без привязок и пина
     private static PersonaAgentFileContext Ctx(bool web = false, bool tasks = true,
-        bool notes = true, string? bindings = null) => new(web, tasks, notes, bindings);
+        bool notes = true, string? bindings = null, string? alias = null) =>
+        new(web, tasks, notes, bindings, alias);
 
     private static Persona MakePersona(string? model = null, bool memory = true,
         string? color = "purple", string? effort = null) => new()
@@ -47,14 +48,38 @@ public class PersonaAgentFileGeneratorTests
     }
 
     [Fact]
-    public void Model_НеПинитсяДажеПриЯвной()
+    public void Model_ПинитсяТолькоАлиасТиромИзКонтекста()
     {
-        // Файл виден чатам всех провайдеров: пин чужой модели делает сабагента
-        // незапускаемым — сабагент всегда бежит на модели сессии
-        MakeGenerator().Generate(MakePersona(), Ctx())
-            .Should().NotContain("\nmodel:");
+        // Конкретный ID не пинится никогда (сабагент бежит на модели сессии);
+        // из контекста приходит максимум алиас-тир (PersonaAgentFileSync.ModelAliasFor)
         MakeGenerator().Generate(MakePersona(model: "opus"), Ctx())
             .Should().NotContain("\nmodel:");
+        MakeGenerator().Generate(MakePersona(model: "opus"), Ctx(alias: "opus"))
+            .Should().Contain("\nmodel: opus");
+    }
+
+    [Fact]
+    public void ModelAliasFor_ТолькоТирClaudeМоделей()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:DisplayName"] = "DeepSeek",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic",
+            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+            ["LlmProviders:deepseek:Models:1:Id"] = "deepseek-sonnet-x",
+        }).Build();
+        var providers = new LlmProviderRegistry(config);
+
+        PersonaAgentFileSync.ModelAliasFor(providers, "opus").Should().Be("opus");
+        PersonaAgentFileSync.ModelAliasFor(providers, "claude-sonnet-5").Should().Be("sonnet");
+        PersonaAgentFileSync.ModelAliasFor(providers, "claude-haiku-4-5-20251001").Should().Be("haiku");
+        PersonaAgentFileSync.ModelAliasFor(providers, null).Should().BeNull();
+        // Незнакомый тир Claude — не рискуем несуществующим алиасом
+        PersonaAgentFileSync.ModelAliasFor(providers, "claude-fable-5").Should().BeNull();
+        PersonaAgentFileSync.ModelAliasFor(providers, "deepseek-chat").Should().BeNull();
+        // Сторонняя модель с «sonnet» в имени — гейт по провайдеру, а не по подстроке
+        PersonaAgentFileSync.ModelAliasFor(providers, "deepseek-sonnet-x").Should().BeNull();
     }
 
     [Fact]

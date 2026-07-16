@@ -5,10 +5,10 @@ namespace ClaudeHomeServer.Services;
 
 // Срез эффективных возможностей персоны для генерации файла сабагента: гейты
 // tasks/notes/web (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools)
-// + статический индекс привязок (BuildSubagentIndex). Собирает PersonaAgentFileSync —
-// генератор остаётся чистой функцией контента.
+// + статический индекс привязок (BuildSubagentIndex) + алиас-тир модели для пина
+// (ModelAliasFor). Собирает PersonaAgentFileSync — генератор остаётся чистой функцией.
 public sealed record PersonaAgentFileContext(bool WebAllowed, bool TasksAllowed,
-    bool NotesAllowed, string? BindingsBlock);
+    bool NotesAllowed, string? BindingsBlock, string? ModelAlias = null);
 
 // Генерация текста файлового сабагента Claude Code (.claude/agents/{handle}.md) из персоны.
 // Чистая функция контента (без ФС) — файлами управляет PersonaAgentFileSync. Frontmatter —
@@ -46,9 +46,12 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
         sb.AppendLine($"name: {persona.Handle}");
         sb.AppendLine($"description: {YamlQuote(BuildDescription(persona))}");
         sb.AppendLine($"tools: {string.Join(", ", tools)}");
-        // model НЕ пинится: файл виден чатам всех провайдеров (cwd проекта/Chats), а пин
-        // чужой модели делает сабагента незапускаемым (Claude-чат не запустит deepseek-модель).
-        // Сабагент бежит на модели сессии; личность даёт промпт + инструменты + память.
+        // model: пинится максимум АЛИАС-ТИР (opus/sonnet/haiku) — он резолвится у любого
+        // провайдера: Claude-чат даёт настоящий тир, у сторонних env-маппинг BuildCliEnv
+        // схлопывает алиас в модель сессии (haiku — в SmallModel). Конкретный ID не пинится:
+        // файл виден чатам всех провайдеров, чужой ID делает сабагента незапускаемым.
+        if (!string.IsNullOrWhiteSpace(context.ModelAlias))
+            sb.AppendLine($"model: {context.ModelAlias.Trim()}");
         if (!string.IsNullOrWhiteSpace(persona.Effort))
             sb.AppendLine($"effort: {persona.Effort.Trim()}");
         if (MapColor(persona.Avatar?.Color) is { } color)

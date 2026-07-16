@@ -227,7 +227,24 @@ public sealed class PersonaAgentFileSync
             _bindings.EffectiveToolEnabled(ownerId, persona, "web"),
             _bindings.EffectiveToolEnabled(ownerId, persona, "tasks"),
             _bindings.EffectiveToolEnabled(ownerId, persona, "notes"),
-            _bindings.BuildSubagentIndex(ownerId, persona)));
+            _bindings.BuildSubagentIndex(ownerId, persona),
+            ModelAliasFor(_providers, persona.Model)));
+    }
+
+    // Алиас-тир модели персоны для пина в frontmatter сабагента. Пинится только тир
+    // Claude-модели (opus/sonnet/haiku): алиас безопасен у всех провайдеров — Claude-чат
+    // резолвит его в настоящий тир, сторонние маппят env-переменными BuildCliEnv в модель
+    // сессии. ID сторонних провайдеров и незнакомые Claude-ID не пинятся (null — без пина).
+    internal static string? ModelAliasFor(LlmProviderRegistry providers, string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return null;
+        if (!string.Equals(providers.ProviderKey(model), "claude", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var m = model.ToLowerInvariant();
+        if (m.Contains("opus")) return "opus";
+        if (m.Contains("sonnet")) return "sonnet";
+        if (m.Contains("haiku")) return "haiku";
+        return null;
     }
 
     public static bool IsReserved(string handle) =>

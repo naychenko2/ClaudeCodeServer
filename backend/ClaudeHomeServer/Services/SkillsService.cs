@@ -228,7 +228,13 @@ public class SkillsService
 
     public void SaveGlobalSkill(string skillName, string fileContent)
     {
-        var dir = Path.Combine(GlobalSkillsDir, skillName);
+        var name = (skillName ?? "").Trim();
+        // Защита от path traversal: имя навыка — только имя папки, без разделителей/"..".
+        // Иначе Path.Combine с "../.." записал бы SKILL.md вне ~/.claude/skills.
+        // (Path.GetFileName("..") == ".." — сам по себе разделителя не ловит, отсекаем явно.)
+        if (string.IsNullOrEmpty(name) || name is "." or ".." || Path.GetFileName(name) != name)
+            throw new ArgumentException("Недопустимое имя навыка", nameof(skillName));
+        var dir = Path.Combine(GlobalSkillsDir, name);
         Directory.CreateDirectory(dir);
         File.WriteAllText(Path.Combine(dir, "SKILL.md"), fileContent);
     }

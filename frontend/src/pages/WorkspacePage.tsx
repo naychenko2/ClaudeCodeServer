@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, type ReactNode } from 'react';
 import type { Project, Session, SkillsData, AuthState, Task } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -514,16 +514,53 @@ const windowWidth = useWindowWidth();
     ...(projectForEdit.toolsEnabled ? [{ value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools }] : []),
   ];
 
-  // Мобильный таббар проекта: primary — Чаты/Файлы/Задачи/Команда (4 помещаются);
-  // Инструменты и «Использование» уезжают в «⋯» (как «⋯ Разделы» в HubHeader).
-  const PROJECT_PRIMARY_MOBILE: LeftTab[] = ['sessions', 'files', 'tasks', 'personas'];
-  const projectHiddenTabs = leftTabOptions.filter(o => !PROJECT_PRIMARY_MOBILE.includes(o.value));
-  // Если активна спрятанная вкладка — показываем её 4-й пилюлей, чтобы подсветка была верной.
-  const mobileLeftTabOptions = projectHiddenTabs.some(o => o.value === leftTab)
-    ? [...leftTabOptions.filter(o => PROJECT_PRIMARY_MOBILE.includes(o.value)), leftTabOptions.find(o => o.value === leftTab)!]
-    : leftTabOptions.filter(o => PROJECT_PRIMARY_MOBILE.includes(o.value));
+  // Мобильный таббар проекта: показываем столько вкладок, сколько влезает по ширине
+  // шапки, остальное + «Использование» — в «⋯» (как «⋯ Разделы» в HubHeader). Количество
+  // определяем динамически: скрытый эталон compact-пилюль (projectTabsProbeRef) мерим
+  // относительно шапки (projectTabsHeaderRef), резервируя место под кнопку проекта и «⋯».
+  const projectTabsHeaderRef = useRef<HTMLDivElement>(null);
+  const projectTabsProbeRef = useRef<HTMLDivElement>(null);
+  const projectTabsMoreRef = useRef<HTMLDivElement>(null);
+  const [projectVisibleCount, setProjectVisibleCount] = useState(leftTabOptions.length);
+
+  useLayoutEffect(() => {
+    if (!isMobile) return;
+    const header = projectTabsHeaderRef.current;
+    const probe = projectTabsProbeRef.current;
+    if (!header || !probe) return;
+    const compute = () => {
+      const pills = Array.from(probe.children) as HTMLElement[];
+      if (!pills.length) return;
+      const cs = getComputedStyle(header);
+      const avail = header.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const moreW = projectTabsMoreRef.current?.offsetWidth ?? 40;
+      // 64 — минимум под кнопку проекта (имя с эллипсисом), 14 — зазоры back|pills|⋯
+      const budget = avail - 64 - moreW - 14;
+      let used = 6; // внутренние отступы трека PillSwitch (padding 3×2)
+      let fit = 0;
+      for (let i = 0; i < pills.length; i++) {
+        const w = pills[i].offsetWidth + (i > 0 ? 3 : 0);
+        if (used + w <= budget) { used += w; fit++; } else break;
+      }
+      setProjectVisibleCount(Math.max(1, Math.min(pills.length, fit)));
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(header);
+    return () => ro.disconnect();
+  }, [isMobile, leftTabOptions.length, leftTab]);
+
+  // Видимые вкладки — первые projectVisibleCount; активную спрятанную подставляем
+  // последней, чтобы подсветка была верной. Остальные + «Использование» — в «⋯».
+  const activeLeftIdx = leftTabOptions.findIndex(o => o.value === leftTab);
+  const mobileLeftTabOptions = activeLeftIdx >= projectVisibleCount
+    ? [...leftTabOptions.slice(0, Math.max(0, projectVisibleCount - 1)), leftTabOptions[activeLeftIdx]]
+    : leftTabOptions.slice(0, projectVisibleCount);
+  const mobileVisibleValues = new Set(mobileLeftTabOptions.map(o => o.value));
   const projectOverflowItems: OverflowItem[] = [
-    ...projectHiddenTabs.map(o => ({ key: o.value, icon: o.icon, label: o.label, onClick: () => handleTabSwitch(o.value) })),
+    ...leftTabOptions
+      .filter(o => !mobileVisibleValues.has(o.value))
+      .map(o => ({ key: o.value, icon: o.icon, label: o.label, onClick: () => handleTabSwitch(o.value) })),
     {
       key: 'usage', label: 'Использование',
       icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,
@@ -1065,7 +1102,15 @@ const windowWidth = useWindowWidth();
         {/* Верхняя шапка — только в режиме списка (sidebar). В режиме чата своя
             самодостаточная шапка ChatHeaderBar с кнопкой «назад»; у файла — шапка FileViewer */}
         {!openFile && mobileView === 'sidebar' && (
-          <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.border}`, background: C.bgPanel, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <div ref={projectTabsHeaderRef} style={{ position: 'relative', padding: '10px 14px', borderBottom: `1px solid ${C.border}`, background: C.bgPanel, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+            {/* Скрытый эталон: compact-пилюли всех вкладок — по ним меряем, сколько влезает */}
+            <div ref={projectTabsProbeRef} aria-hidden style={{ position: 'absolute', visibility: 'hidden', pointerEvents: 'none', top: 0, left: 0, display: 'flex', gap: 3, whiteSpace: 'nowrap' }}>
+              {leftTabOptions.map((opt, i) => (
+                <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, boxSizing: 'border-box', minHeight: 40, padding: opt.value === leftTab ? '0 12px' : '0 11px', fontSize: 12, fontWeight: 600 }}>
+                  {opt.value === leftTab ? opt.label : opt.icon}
+                </span>
+              ))}
+            </div>
             <BackButton onClick={onGoToProjects} title={project.name} style={{ flex: 1, minHeight: 40 }}>
               <span style={{ fontWeight: 700, fontSize: 15, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</span>
             </BackButton>
@@ -1076,8 +1121,10 @@ const windowWidth = useWindowWidth();
               isMobile
               compact
             />
-            {/* Команда/Инструменты/Использование — в «⋯» (как «⋯ Разделы» в HubHeader) */}
-            <ToolbarOverflowMenu isMobile title="Ещё" items={projectOverflowItems} />
+            {/* Не поместившиеся вкладки + «Использование» — в «⋯» (как «⋯ Разделы» в HubHeader) */}
+            <div ref={projectTabsMoreRef} style={{ flexShrink: 0, display: 'inline-flex' }}>
+              <ToolbarOverflowMenu isMobile title="Ещё" items={projectOverflowItems} />
+            </div>
           </div>
         )}
         {/* Sidebar — ВСЕГДА в DOM: FileExplorer не теряет текущий путь при смене вида */}

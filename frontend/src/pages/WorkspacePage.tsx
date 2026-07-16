@@ -449,7 +449,7 @@ const windowWidth = useWindowWidth();
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {isMobile && (
         <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: `1px solid ${C.border}`, background: C.bgPanel }}>
-          <IconButton size="md" variant="soft" onClick={() => window.history.back()} title="К списку задач">
+          <IconButton size="md" variant="soft" onClick={() => { handleProjectBoard(false); if (isMobile) setMobileView('sidebar'); }} title="К списку задач">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
           </IconButton>
           <span style={{ fontFamily: FONT.sans, fontWeight: 700, fontSize: 15, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -812,6 +812,25 @@ const windowWidth = useWindowWidth();
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
+  // Тулбар-«назад»: ДЕТЕРМИНИРОВАННЫЙ подъём к списку текущей вкладки внутри проекта.
+  // НЕ history.back — при открытии приложения сразу на глубоком месте (восстановление/диплинк)
+  // история браузера пуста, и history.back() ничего не делает. Всегда ведём на уровень выше.
+  const backFromFile = () => {
+    setOpenFile(null);
+    setFileFullscreen(false);
+    if (isMobile) setMobileView('sidebar');
+    navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: selectedTaskId ?? null });
+  };
+  const backFromTask = () => {
+    setSelectedTaskId(null);
+    if (isMobile) setMobileView('sidebar');
+    navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
+  };
+  const backFromChat = () => {
+    if (isMobile) setMobileView('sidebar');
+    navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
+  };
+
   const handleEnterFullscreen = () => setFileFullscreen(true);
 
   const handleSplitterMouseDown = (e: React.PointerEvent) => {
@@ -1026,7 +1045,7 @@ const windowWidth = useWindowWidth();
               options={leftTabOptions}
               onChange={handleTabSwitch}
               isMobile
-              autoCompact
+              compact
             />
             <IconButton
               size="md"
@@ -1071,19 +1090,19 @@ const windowWidth = useWindowWidth();
                 : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />)
             : tasksMode
             ? (selectedTask
-                ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={() => window.history.back()} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
+                ? <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} isMobile startInEdit={selectedTask.id === autoEditTaskId} onBack={backFromTask} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onDeleted={backFromTask} />
                 : showProjectBoard
                 ? ProjectBoardArea
                 : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите задачу</div>)
             : activeSession
-            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={() => window.history.back()} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={toggleArtifacts} />
+            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={toggleArtifacts} />
             : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите или создайте чат</div>
           }
         </div>
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={() => window.history.back()} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} />
           </div>
         )}
         {/* Панель «Артефакты сессии» — мобайл: drawer поверх чата */}
@@ -1232,7 +1251,7 @@ const windowWidth = useWindowWidth();
             {/* Открытая задача — карточка в основной зоне (как открытый файл), ✕ возвращает чат */}
             {!openFile && selectedTask && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} startInEdit={selectedTask.id === autoEditTaskId} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onClose={() => window.history.back()} onDeleted={() => { setSelectedTaskId(null); window.history.back(); }} />
+                <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} startInEdit={selectedTask.id === autoEditTaskId} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onClose={backFromTask} onDeleted={backFromTask} />
               </div>
             )}
 
@@ -1258,7 +1277,7 @@ const windowWidth = useWindowWidth();
                 <Splitter orientation="v" active={draggingSplitter === 'split'}
                   onMouseDown={e => { setDraggingSplitter('split'); handleSplitterMouseDown(e); }} />
                 <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
-                  <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} onToggleFullscreen={handleEnterFullscreen} onOpenSidebar={openSidebar} />
+                  <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={handleEnterFullscreen} onOpenSidebar={openSidebar} />
                 </div>
               </div>
             )}
@@ -1266,7 +1285,7 @@ const windowWidth = useWindowWidth();
             {/* Fullscreen: файл из дерева или планшет */}
             {openFile && (fileFullscreen || isTablet) && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                <FileViewer project={project} filePath={openFile} onClose={() => window.history.back()} onOpenSidebar={openSidebar} />
+                <FileViewer project={project} filePath={openFile} onClose={backFromFile} onOpenSidebar={openSidebar} />
               </div>
             )}
           </>

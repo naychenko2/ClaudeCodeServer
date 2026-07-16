@@ -1380,7 +1380,7 @@ const windowWidth = useWindowWidth();
               </div>
             )}
 
-            // Нет открытого файла и задачи — доска задач проекта, иначе чат, иначе инструменты
+            {/* Нет открытого файла и задачи — доска задач проекта, иначе чат, иначе инструменты */}
             {!openFile && !selectedTask && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 {showProjectBoard

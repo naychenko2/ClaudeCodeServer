@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
-import { Book, Calendar, Folder, MessageCircle, Share2, Users, Columns } from 'lucide-react';
+import { Book, Calendar, Folder, MessageCircle, Share2, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
 
-export type HubTab = 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'agent-kanban';
+export type HubTab = 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
 
 // Иконки разделов для мобильного компакт-режима (lucide-react, Feather-стиль).
 const TAB_ICONS: Record<HubTab, ReactNode> = {
@@ -13,7 +13,6 @@ const TAB_ICONS: Record<HubTab, ReactNode> = {
   personas: <Users size={18} strokeWidth={2} />,
   knowledge: <Book size={18} strokeWidth={2} />,
   notifications: <MessageCircle size={18} strokeWidth={2} />,
-  'agent-kanban': <Columns size={18} strokeWidth={2} />,
 };
 
 // Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки | Персоны» — на общем PillSwitch.

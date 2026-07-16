@@ -18,6 +18,7 @@ export interface Project {
   difyDatasetId?: string;
   systemPrompt?: string;
   showHiddenFiles?: boolean;
+  toolsEnabled?: boolean;        // вкладка «Инструменты» (терминал + preview)
   permissionRules?: PermissionRule[];
   boardColumns?: BoardColumn[];   // кастомные колонки Kanban-доски; отсутствует = дефолтные 3
   builtInSystemPrompt?: string;

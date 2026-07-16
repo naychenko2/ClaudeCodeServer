@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Bell, CheckCheck, Search, Trash2 } from 'lucide-react';
+import { Bell, CheckCheck, Search, Trash2, Columns } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
 import { HubHeader } from '../../components/HubHeader';
 import type { HubTab } from '../../components/HubTabs';
@@ -16,6 +16,7 @@ import {
   deleteNotification,
   deleteReadAll,
 } from '../../lib/notifications';
+import { AgentKanban } from '../agent-kanban/AgentKanban';
 
 // Токены design.ts (CSS-переменные) — хардкод-hex ломал тёмную тему
 const KIND_META: Record<NotificationKind, { icon: string; color: string; bg: string }> = {
@@ -255,6 +256,8 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
   onLogout: () => void;
   onHubTab: (t: HubTab) => void;
 }) {
+  // Режим: 'notifications' (по умолчанию) или 'dispatcher'
+  const [mode, setMode] = useState<'notifications' | 'dispatcher'>('notifications');
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [, forceUpdate] = useState(0);
@@ -296,30 +299,53 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
         flex: 1, overflow: 'auto', padding: '24px 16px',
         display: 'flex', justifyContent: 'center',
       }}>
-        <div style={{ width: '100%', maxWidth: 680 }}>
+        <div style={{ width: '100%', maxWidth: mode === 'notifications' ? 680 : 1180 }}>
 
           {/* Page header */}
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             marginBottom: 24, flexWrap: 'wrap', gap: 12,
           }}>
-            <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
               <div style={{
                 fontFamily: FONT.serif, fontSize: FS.h2, fontWeight: 700,
                 color: C.textHeading, letterSpacing: '-0.3px',
               }}>
-                Уведомления
-                <span style={{
-                  fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 400,
-                  color: C.textMuted, marginLeft: SP.md,
-                }}>
-                  {notifs.length} всего · {totalUnread} непрочитанных
-                </span>
+                {mode === 'notifications' ? 'Уведомления' : 'Диспетчер'}
               </div>
+              {/* PillSwitch: Уведомления / Диспетчер */}
               <div style={{
-                fontSize: FS.sm, color: C.textMuted, marginTop: 2,
+                display: 'inline-flex', border: `1px solid ${C.border}`,
+                borderRadius: R.md, overflow: 'hidden',
               }}>
-                Напоминания, ответы агентов, системные события
+                <button
+                  onClick={() => setMode('notifications')}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    padding: '5px 12px', cursor: 'pointer',
+                    border: 'none',
+                    background: mode === 'notifications' ? C.accent : 'transparent',
+                    color: mode === 'notifications' ? C.onAccent : C.textSecondary,
+                    fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
+                  }}
+                >
+                  <Bell size={14} />
+                  Уведомления
+                </button>
+                <button
+                  onClick={() => setMode('dispatcher')}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    padding: '5px 12px', cursor: 'pointer',
+                    border: 'none',
+                    background: mode === 'dispatcher' ? C.accent : 'transparent',
+                    color: mode === 'dispatcher' ? C.onAccent : C.textSecondary,
+                    fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
+                  }}
+                >
+                  <Columns size={14} />
+                  Диспетчер
+                </button>
               </div>
             </div>
             <div style={{ display: 'flex', gap: SP.md, alignItems: 'center' }}>
@@ -386,83 +412,89 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
             </div>
           </div>
 
-          {/* Filter chips */}
-          <div style={{ display: 'flex', gap: SP.sm, marginBottom: SP.xl, flexWrap: 'wrap' }}>
-            {FILTERS.map(f => (
-              <button
-                key={f.key}
-                style={{
-                  padding: '5px 14px', borderRadius: 999,
-                  fontSize: FS.sm, fontWeight: 500,
-                  color: filter === f.key ? C.onAccent : C.textSecondary,
-                  background: filter === f.key ? C.accent : 'transparent',
-                  border: `1px solid ${filter === f.key ? C.accent : C.border}`,
-                  cursor: 'pointer', fontFamily: FONT.sans,
-                  whiteSpace: 'nowrap',
-                }}
-                onClick={() => setFilter(f.key)}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Notification list */}
-          {Object.keys(groups).length === 0 ? (
-            <div style={{
-              display: 'flex', flexDirection: 'column',
-              alignItems: 'center', justifyContent: 'center',
-              padding: '64px 16px', textAlign: 'center',
-            }}>
-              <div style={{
-                width: 96, height: 96, borderRadius: '50%',
-                background: C.bgPanel,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 40, color: C.textMuted, marginBottom: 24,
-              }}>
-                <Bell size={40} />
-              </div>
-              <div style={{
-                fontSize: FS.lg, fontWeight: 600,
-                color: C.textHeading, marginBottom: SP.sm,
-              }}>
-                Всё чисто
-              </div>
-              <div style={{
-                fontSize: FS.sm, color: C.textMuted,
-                maxWidth: 320, lineHeight: 1.6,
-              }}>
-                {search
-                  ? 'Нет уведомлений по вашему запросу'
-                  : 'Нет уведомлений по выбранному фильтру'}
-              </div>
-            </div>
+          {mode === 'dispatcher' ? (
+            <AgentKanban />
           ) : (
-            Object.entries(groups).map(([gk, gnotifs]) => (
-              <div key={gk} style={{ marginBottom: SP.xl }}>
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: SP.lg,
-                  marginBottom: SP.lg,
-                  fontSize: FS.sm, fontWeight: 600,
-                  color: C.textMuted, textTransform: 'uppercase',
-                  letterSpacing: '0.6px',
-                }}>
-                  {gk}
-                  <div style={{
-                    flex: 1, height: 1, background: C.borderLight,
-                  }} />
-                </div>
-                {gnotifs.map(n => (
-                  <div key={n.id} style={{ marginBottom: SP.lg }}>
-                    <NotificationCard
-                      item={n}
-                      onRead={async (id) => { await markRead(id); rerender(); }}
-                      onDelete={async (id) => { await deleteNotification(id); rerender(); }}
-                    />
-                  </div>
+            <>
+              {/* Filter chips */}
+              <div style={{ display: 'flex', gap: SP.sm, marginBottom: SP.xl, flexWrap: 'wrap' }}>
+                {FILTERS.map(f => (
+                  <button
+                    key={f.key}
+                    style={{
+                      padding: '5px 14px', borderRadius: 999,
+                      fontSize: FS.sm, fontWeight: 500,
+                      color: filter === f.key ? C.onAccent : C.textSecondary,
+                      background: filter === f.key ? C.accent : 'transparent',
+                      border: `1px solid ${filter === f.key ? C.accent : C.border}`,
+                      cursor: 'pointer', fontFamily: FONT.sans,
+                      whiteSpace: 'nowrap',
+                    }}
+                    onClick={() => setFilter(f.key)}
+                  >
+                    {f.label}
+                  </button>
                 ))}
               </div>
-            ))
+
+              {/* Notification list */}
+              {Object.keys(groups).length === 0 ? (
+                <div style={{
+                  display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center',
+                  padding: '64px 16px', textAlign: 'center',
+                }}>
+                  <div style={{
+                    width: 96, height: 96, borderRadius: '50%',
+                    background: C.bgPanel,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 40, color: C.textMuted, marginBottom: 24,
+                  }}>
+                    <Bell size={40} />
+                  </div>
+                  <div style={{
+                    fontSize: FS.lg, fontWeight: 600,
+                    color: C.textHeading, marginBottom: SP.sm,
+                  }}>
+                    Всё чисто
+                  </div>
+                  <div style={{
+                    fontSize: FS.sm, color: C.textMuted,
+                    maxWidth: 320, lineHeight: 1.6,
+                  }}>
+                    {search
+                      ? 'Нет уведомлений по вашему запросу'
+                      : 'Нет уведомлений по выбранному фильтру'}
+                  </div>
+                </div>
+              ) : (
+                Object.entries(groups).map(([gk, gnotifs]) => (
+                  <div key={gk} style={{ marginBottom: SP.xl }}>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: SP.lg,
+                      marginBottom: SP.lg,
+                      fontSize: FS.sm, fontWeight: 600,
+                      color: C.textMuted, textTransform: 'uppercase',
+                      letterSpacing: '0.6px',
+                    }}>
+                      {gk}
+                      <div style={{
+                        flex: 1, height: 1, background: C.borderLight,
+                      }} />
+                    </div>
+                    {gnotifs.map(n => (
+                      <div key={n.id} style={{ marginBottom: SP.lg }}>
+                        <NotificationCard
+                          item={n}
+                          onRead={async (id) => { await markRead(id); rerender(); }}
+                          onDelete={async (id) => { await deleteNotification(id); rerender(); }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ))
+              )}
+            </>
           )}
 
         </div>

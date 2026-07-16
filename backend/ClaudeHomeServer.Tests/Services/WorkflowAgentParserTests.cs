@@ -280,4 +280,36 @@ public class WorkflowAgentParserTests : IDisposable
         WorkflowAgentParser.IsPathAllowed(_dir).Should().BeFalse();
         WorkflowAgentParser.IsPathAllowed(Path.GetTempPath()).Should().BeFalse();
     }
+
+    [Fact]
+    public void IsPathAllowed_ПрофильПодProfilesRoot_РазрешёнТолькоProjects()
+    {
+        var prev = WorkflowAgentParser.ProfilesRoot;
+        try
+        {
+            WorkflowAgentParser.ProfilesRoot = _dir;
+            // Транскрипты любого профиля (в т.ч. подписки sub-*, созданной после старта)
+            var wf = Path.Combine(_dir, "sub-my-second", "projects", "-p-x-", "sid", "subagents", "workflows", "wf_1");
+            WorkflowAgentParser.IsPathAllowed(wf).Should().BeTrue();
+            // Но не остальное содержимое профиля (креденшалы и т.п.)
+            WorkflowAgentParser.IsPathAllowed(Path.Combine(_dir, "sub-my-second", ".credentials.json"))
+                .Should().BeFalse();
+            // И не сам корень с одним сегментом
+            WorkflowAgentParser.IsPathAllowed(Path.Combine(_dir, "projects")).Should().BeFalse();
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = prev; }
+    }
+
+    [Fact]
+    public void IsPathAllowed_ProfilesRoot_TraversalНеПроходит()
+    {
+        var prev = WorkflowAgentParser.ProfilesRoot;
+        try
+        {
+            WorkflowAgentParser.ProfilesRoot = Path.Combine(_dir, "profiles");
+            var sneaky = Path.Combine(_dir, "profiles", "key", "..", "..", "secret", "projects", "x");
+            WorkflowAgentParser.IsPathAllowed(sneaky).Should().BeFalse();
+        }
+        finally { WorkflowAgentParser.ProfilesRoot = prev; }
+    }
 }

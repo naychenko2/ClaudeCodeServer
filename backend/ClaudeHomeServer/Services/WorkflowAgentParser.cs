@@ -19,6 +19,11 @@ public static class WorkflowAgentParser
     // (GLM/DeepSeek: /data/claude-profiles/{key}/projects/). Регистрируются из Program.cs.
     private static readonly List<string> _extraRoots = new();
 
+    // Корень всех изолированных профилей CLI (data/claude-profiles). Любой
+    // {ProfilesRoot}/{key}/projects/** разрешён — покрывает и подписки (sub-*), и профили,
+    // созданные после старта сервера, которые в _extraRoots не попали.
+    public static string? ProfilesRoot { get; set; }
+
     public static void AddAllowedRoot(string root)
     {
         var full = Path.GetFullPath(root);
@@ -28,7 +33,24 @@ public static class WorkflowAgentParser
 
     public static bool IsPathAllowed(string path) =>
         path.StartsWith(DefaultRoot, StringComparison.OrdinalIgnoreCase) ||
-        _extraRoots.Any(r => path.StartsWith(r, StringComparison.OrdinalIgnoreCase));
+        _extraRoots.Any(r => path.StartsWith(r, StringComparison.OrdinalIgnoreCase)) ||
+        IsUnderProfilesProjects(path);
+
+    // Путь вида {ProfilesRoot}/{key}/projects/… — ровно один сегмент профиля,
+    // затем обязательный projects (не даём читать credentials и прочее из профиля)
+    private static bool IsUnderProfilesProjects(string path)
+    {
+        if (string.IsNullOrEmpty(ProfilesRoot)) return false;
+        string full, root;
+        try { full = Path.GetFullPath(path); root = Path.GetFullPath(ProfilesRoot); }
+        catch { return false; }
+        if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+            !full.StartsWith(root + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var parts = Path.GetRelativePath(root, full)
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return parts.Length >= 2 && parts[1].Equals("projects", StringComparison.OrdinalIgnoreCase);
+    }
 
     // Все корни транскриптов (родной + профили провайдеров) — для поиска папки
     // сабагентов сессии (SubagentStreamWatcher)

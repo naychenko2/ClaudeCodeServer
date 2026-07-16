@@ -230,6 +230,11 @@ try
         WorkflowAgentParser.AddAllowedRoot(dir);
         Console.WriteLine($"[WorkflowAgentParser] разрешён корень провайдера: {dir}");
     }
+    // Профили подписок (sub-*) и созданные после старта: разрешаем весь корень
+    // claude-profiles по шаблону {key}/projects — иначе WorkflowWatcher у таких
+    // сессий молча выключается («Детали недоступны» в блоке Workflow)
+    WorkflowAgentParser.ProfilesRoot = registry.ProfilesDir;
+    Console.WriteLine($"[WorkflowAgentParser] разрешён корень профилей: {registry.ProfilesDir}");
 }
 catch (Exception ex)
 {

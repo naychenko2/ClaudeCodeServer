@@ -339,7 +339,7 @@ public sealed class PersonaMemoryService
         {
             try
             {
-                var teamRecall = _teamMemory.BuildRecallBlock(ownerId, persona.ProjectId!, query);
+                var teamRecall = await _teamMemory.BuildRecallBlockAsync(ownerId, persona.ProjectId!, query);
                 teamBlock = teamRecall.Text;
                 teamHits = teamRecall.Used;
             }

@@ -78,6 +78,9 @@ builder.Services.AddSingleton<FalImageService>();
 builder.Services.AddSingleton<PersonaMemoryConsolidationService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PersonaMemoryConsolidationService>());
 builder.Services.AddHostedService<PersonaMemoryAutolearnService>();
+// Консолидация памяти команды проекта — singleton + hosted: team-autolearn ставит заявки RequestConsolidation
+builder.Services.AddSingleton<TeamMemoryConsolidationService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<TeamMemoryConsolidationService>());
 builder.Services.AddHostedService<TeamMemoryAutolearnService>();
 // Разовый backfill дефолтных привязок существующим проектным персонам (файлы/заметки/знания)
 builder.Services.AddHostedService<PersonaProjectBindingsMigration>();

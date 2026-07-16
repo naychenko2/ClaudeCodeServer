@@ -23,6 +23,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
     private readonly SessionManager _sessions;
     private readonly ProjectManager _projects;
     private readonly TeamMemoryService _memory;
+    private readonly TeamMemoryConsolidationService _consolidation;
     private readonly Llm.OneShotClaudeRunner _runner;
     private readonly FeatureFlagService _flags;
     private readonly IConfiguration _config;
@@ -35,13 +36,15 @@ public sealed class TeamMemoryAutolearnService : IHostedService
     private readonly ConcurrentDictionary<string, int> _lastLen = new();
 
     public TeamMemoryAutolearnService(SessionManager sessions, ProjectManager projects,
-        TeamMemoryService memory, Llm.OneShotClaudeRunner runner, FeatureFlagService flags,
+        TeamMemoryService memory, TeamMemoryConsolidationService consolidation,
+        Llm.OneShotClaudeRunner runner, FeatureFlagService flags,
         IConfiguration config, ILogger<TeamMemoryAutolearnService> log, IHubContext<SessionHub> hub,
         ProjectEventLogService? events = null)
     {
         _sessions = sessions;
         _projects = projects;
         _memory = memory;
+        _consolidation = consolidation;
         _runner = runner;
         _flags = flags;
         _config = config;
@@ -107,14 +110,24 @@ public sealed class TeamMemoryAutolearnService : IHostedService
             string? lastId = null;
             foreach (var item in items)
             {
-                // Дедуп-on-write внутри Add: повтор усилит существующую запись, а не создаст дубль
-                var entry = _memory.Add(ownerId, projectId, item.Text, item.Type, source, sessionId, item.Salience);
+                // Семантический write-path: близкий по смыслу факт усилит существующую запись,
+                // а не создаст дубль (при Dify); без Dify — точный дедуп внутри Add
+                var entry = await _memory.AddAsync(ownerId, projectId, item.Text, item.Type, source, sessionId, item.Salience);
                 lastId = entry.Id;
             }
 
             _log.LogInformation(
                 "team-autolearn: проект {Project}, сессия {Session} — {Count} записей командной памяти",
                 projectId, sessionId, items.Count);
+
+            // Потолок памяти команды: механическое вытеснение хвоста сверх TeamMemory:MaxEntries —
+            // сразу, чтобы стор не рос неограниченно при одном лишь autolearn
+            _memory.EnforceCap(ownerId, projectId);
+
+            // LLM-merge (умная уборка дублей) — заявка «пора», если записей больше софт-порога
+            var softLimit = int.TryParse(_config["TeamMemory:SoftLimit"], out var soft) && soft > 0 ? soft : 150;
+            if (_memory.List(ownerId, projectId).Count > softLimit)
+                _consolidation.RequestConsolidation(ownerId, projectId);
 
             // Realtime: командный центр слушает team_memory_changed
             await _hub.Clients.Group("user_" + ownerId)

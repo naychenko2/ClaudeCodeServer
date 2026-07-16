@@ -109,7 +109,28 @@ const TEAM_TOOLS = [
     inputSchema: {
       type: 'object',
       required: ['text'],
-      properties: { text: { type: 'string', description: 'Общий факт/договорённость проекта (кратко)' } },
+      properties: {
+        text: { type: 'string', description: 'Общий факт/договорённость проекта (кратко)' },
+        type: {
+          type: 'string', enum: ['decision', 'convention', 'fact', 'glossary'],
+          description: 'Тип знания: decision — принятое решение/выбор; convention — договорённость/правило ' +
+            'проекта; fact — устойчивый факт (стек, адреса, структура); glossary — термин и его значение. ' +
+            'По умолчанию fact.',
+        },
+      },
+    },
+  },
+  {
+    name: 'team_memory_search',
+    description: 'Поиск по общей памяти команды проекта по смыслу: релевантные записи проекта ' +
+      '(решения/договорённости/факты/термины). Используй, чтобы вспомнить, что команда уже знает по теме.',
+    inputSchema: {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query: { type: 'string', description: 'Смысловой запрос' },
+        topK: { type: 'integer', minimum: 1, maximum: 20, description: 'Сколько записей (по умолчанию 8)' },
+      },
     },
   },
   {
@@ -158,8 +179,17 @@ async function callTool(name, args) {
       await api(`${base}/${encodeURIComponent(args.id)}`, { method: 'DELETE' });
       return { content: [{ type: 'text', text: `Запись ${args.id} удалена из памяти.` }] };
 
-    case 'team_memory_remember':
-      return json(await api(teamBase, { method: 'POST', body: JSON.stringify({ text: args.text }) }));
+    case 'team_memory_remember': {
+      const body = { text: args.text };
+      if (typeof args.type === 'string') body.type = args.type;
+      return json(await api(teamBase, { method: 'POST', body: JSON.stringify(body) }));
+    }
+
+    case 'team_memory_search': {
+      const params = new URLSearchParams({ q: String(args.query ?? '') });
+      if (args.topK) params.set('topK', String(args.topK));
+      return json(await api(`${teamBase}/search?${params}`));
+    }
 
     case 'team_memory_list':
       return json(await api(teamBase));

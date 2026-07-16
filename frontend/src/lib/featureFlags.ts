@@ -12,6 +12,7 @@ import { useSyncExternalStore } from 'react';
 // (стор, useFeature, модалка «Экспериментальные функции») оставлена для будущих флагов.
 export const FLAGS = {
   workspaceDestructive: 'workspace-destructive',
+  teamMemoryAutolearn: 'team-memory-autolearn',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

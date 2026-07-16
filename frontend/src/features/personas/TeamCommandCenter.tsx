@@ -5,7 +5,7 @@ import {
   MoreHorizontal, Settings, Wand2, EllipsisVertical,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
-import type { Persona, Project, Session, Task, TeamMemoryEntry, TeamMemberDraft } from '../../types';
+import type { Persona, Project, Session, Task, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft } from '../../types';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { showToast } from '../../lib/toast';
@@ -99,9 +99,9 @@ export function TeamCommandCenter({
   }, [events]);
 
   const personaById = (id: string) => team.find(p => p.id === id);
-  const addMem = async (text: string) => {
+  const addMem = async (text: string, type: TeamMemoryType) => {
     try {
-      const entry = await api.projects.addTeamMemory(project.id, text);
+      const entry = await api.projects.addTeamMemory(project.id, text, type);
       setMem(prev => [entry, ...(prev ?? [])]);
     } catch { showToast('Память команды', 'Не удалось сохранить запись.'); }
   };

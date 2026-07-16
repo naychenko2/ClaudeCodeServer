@@ -1,9 +1,8 @@
-using System.Collections.Concurrent;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Memory;
 
 namespace ClaudeHomeServer.Services;
 
@@ -19,14 +18,9 @@ public sealed class PersonaMemoryService
     {
         public string? DatasetId { get; set; }
         public List<PersonaMemoryEntry> Entries { get; set; } = new();
-        public Dictionary<string, DocRef> Docs { get; set; } = new();
+        public Dictionary<string, MemoryDocRef> Docs { get; set; } = new();
         // Рабочий фокус (P3): одна ячейка «что я сейчас делаю», не запись памяти
         public PersonaWorkingFocus? Focus { get; set; }
-    }
-    private sealed class DocRef
-    {
-        public string DocId { get; set; } = "";
-        public string Hash { get; set; } = "";
     }
 
     private static readonly TimeSpan SyncDebounce = TimeSpan.FromSeconds(15);
@@ -39,28 +33,35 @@ public sealed class PersonaMemoryService
     private readonly PersonaManager _personas;
     private readonly UserStore _users;
     private readonly TeamMemoryService? _teamMemory;
+    // LLM-резолвер записи памяти (разрешение противоречий на авто-пути); null в юнит-тестах
+    private readonly Memory.MemoryWriteResolver? _resolver;
     private readonly ILogger<PersonaMemoryService> _logger;
     private readonly string _storePath;
     private readonly MemoryScoringOptions _scoring;
+    // Параметры гибридного retrieval (слияние semantic+keyword) — Memory:Fusion:*
+    private readonly MemoryFusionOptions _fusion;
     // Потолки памяти (не гейтятся флагом консолидации — жёсткая защита от разрастания)
     private readonly int _maxEntries;
     private readonly int _maxEpisodic;
     // Семантический дедуп на входе: порог близости и прирост важности при повторе (P1)
     private readonly double _dedupThreshold;
     private readonly double _dedupBoost;
+    // Порог зоны конфликта: кандидаты в [ConflictThreshold, DedupThreshold) идут в LLM-резолвер (Memory #2)
+    private readonly double _conflictThreshold;
     private readonly Dictionary<string, MemState> _store;
     private readonly Lock _saveLock = new();
     private readonly SemaphoreSlim _syncLock = new(1, 1);
-    private readonly ConcurrentDictionary<string, Timer> _debounce = new();
+    private readonly MemoryDifyDebouncer _debounce = new(SyncDebounce);
 
     public PersonaMemoryService(KnowledgeService knowledge, PersonaManager personas, UserStore users,
         IConfiguration config, ILogger<PersonaMemoryService> logger,
-        TeamMemoryService? teamMemory = null)
+        TeamMemoryService? teamMemory = null, Memory.MemoryWriteResolver? resolver = null)
     {
         _knowledge = knowledge;
         _personas = personas;
         _users = users;
         _teamMemory = teamMemory;
+        _resolver = resolver;
         _logger = logger;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
@@ -74,15 +75,29 @@ public sealed class PersonaMemoryService
             ReadDouble(config, "Persona:Score:TypeWeight", d.TypeWeight),
             ReadDouble(config, "Persona:Score:RecencyHalfLifeDays", d.RecencyHalfLifeDays),
             ReadDouble(config, "Persona:Score:MinRelevance", d.MinRelevance));
+        _fusion = ReadFusion(config);
         _maxEntries = int.TryParse(config["Persona:MemoryMaxEntries"], out var me) && me > 0 ? me : 150;
         _maxEpisodic = int.TryParse(config["Persona:MemoryMaxEpisodic"], out var mep) && mep > 0 ? mep : 40;
         _dedupThreshold = ReadDouble(config, "Persona:DedupThreshold", 0.85);
         _dedupBoost = ReadDouble(config, "Persona:DedupSalienceBoost", 0.1);
+        _conflictThreshold = ReadDouble(config, "Memory:ConflictThreshold", 0.6);
         _store = JsonFileStore.Load<Dictionary<string, MemState>>(_storePath, JsonOpts) ?? new();
     }
 
     private static double ReadDouble(IConfiguration config, string key, double fallback) =>
         double.TryParse(config[key], System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
+
+    // Параметры гибридного retrieval из конфига Memory:Fusion:* (общие для персоны и команды)
+    private static MemoryFusionOptions ReadFusion(IConfiguration config)
+    {
+        var d = MemoryFusionOptions.Default;
+        return new MemoryFusionOptions(
+            SemanticWeight: ReadDouble(config, "Memory:Fusion:SemanticWeight", d.SemanticWeight),
+            KeywordWeight: ReadDouble(config, "Memory:Fusion:KeywordWeight", d.KeywordWeight),
+            Method: string.Equals(config["Memory:Fusion:Method"], "rrf", StringComparison.OrdinalIgnoreCase)
+                ? MemoryFusionMethod.Rrf : MemoryFusionMethod.WeightedSum,
+            RrfK: ReadDouble(config, "Memory:Fusion:RrfK", d.RrfK));
+    }
 
     public bool Available => _knowledge.IsConfigured;
 
@@ -174,6 +189,92 @@ public sealed class PersonaMemoryService
                 return e;
         }
         return null;
+    }
+
+    // Авто-путь с разрешением ПРОТИВОРЕЧИЙ (Memory #2, Mem0 ADD/UPDATE/DELETE/NOOP). Дубль
+    // (≥DedupThreshold) — как RememberAsync (reinforcement). Иначе близкие кандидаты в зоне конфликта
+    // [ConflictThreshold, DedupThreshold) отдаются LLM-резолверу: UPDATE дополняет существующий,
+    // DELETE вытесняет устаревший + добавляет новый, ADD кладёт рядом, NOOP отбрасывает. Гейтится
+    // Enabled+Available; без резолвера/датасета/кандидатов — обычный RememberAsync. Ошибки → ADD.
+    public async Task<PersonaMemoryEntry?> RememberWithResolutionAsync(string ownerId, string personaId,
+        PersonaMemoryType type, string text, List<string>? tags, string? sourceSessionId,
+        double? salience = null, bool pending = false)
+    {
+        // Резолвер выключен / Dify недоступен → обычный семантический write-path (простой дедуп)
+        if (_resolver is not { Enabled: true } || !Available)
+            return await RememberAsync(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+
+        var persona = _personas.Get(personaId, ownerId);
+        if (persona is null || string.IsNullOrWhiteSpace(text)) return null;
+        var trimmed = text.Trim();
+
+        var state = GetState(personaId);
+        if (string.IsNullOrEmpty(state.DatasetId))   // датасета ещё нет — сопоставлять не с чем
+            return await RememberAsync(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+
+        try
+        {
+            var (dup, candidates) = await FindDuplicateAndCandidatesAsync(state, type, trimmed);
+            if (dup is not null)   // явный дубль — усиливаем, резолвер не нужен
+            {
+                Reinforce(personaId, dup.Id, trimmed, salience);
+                QueueSync(ownerId, personaId);
+                return dup;
+            }
+            if (candidates.Count == 0)   // нет соседей в зоне конфликта — обычное добавление
+                return Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+
+            var decision = await _resolver.ResolveAsync(trimmed, TypeLabel(type), candidates);
+            switch (decision.Op)
+            {
+                case Memory.MemoryWriteOp.Noop:
+                    return null;   // дубль/незначимо — ничего не добавляем
+                case Memory.MemoryWriteOp.Update when !string.IsNullOrEmpty(decision.TargetId):
+                    // Новый уточняет существующий → заменяем текст target на объединённую формулировку
+                    return Update(ownerId, personaId, decision.TargetId, decision.MergedText!)
+                        ?? Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+                case Memory.MemoryWriteOp.Delete when !string.IsNullOrEmpty(decision.TargetId):
+                    // Новый делает существующий устаревшим → удаляем target, добавляем новый
+                    Forget(ownerId, personaId, decision.TargetId);
+                    return Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+                default:   // Add и невалидные Update/Delete
+                    return Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Разрешение записи памяти персоны {Persona}", personaId);
+            return Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+        }
+    }
+
+    // Найти дубль (≥DedupThreshold) и близких кандидатов зоны конфликта [ConflictThreshold, DedupThreshold)
+    // ТОГО ЖЕ типа (Dify retrieve). Дубль (наивысший скор) возвращается сразу с пустым списком кандидатов.
+    private async Task<(PersonaMemoryEntry? Dup, List<Memory.MemoryWriteCandidate> Candidates)>
+        FindDuplicateAndCandidatesAsync(MemState state, PersonaMemoryType type, string text)
+    {
+        var candidates = new List<Memory.MemoryWriteCandidate>();
+        var chunks = await _knowledge.RetrieveAsync(state.DatasetId!, text, 8);
+        if (chunks.Count == 0) return (null, candidates);
+
+        Dictionary<string, string> byDocId;
+        List<PersonaMemoryEntry> entries;
+        lock (_saveLock)
+        {
+            byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+            entries = state.Entries.ToList();
+        }
+        var byId = entries.ToDictionary(e => e.Id);
+
+        foreach (var ch in chunks.OrderByDescending(c => c.Score))
+        {
+            if (ch.Score < _conflictThreshold) break;   // дальше только менее близкие — не интересны
+            if (!byDocId.TryGetValue(ch.DocumentId, out var entryId)) continue;
+            if (!byId.TryGetValue(entryId, out var e) || e.Type != type) continue;
+            if (ch.Score >= _dedupThreshold) return (e, candidates);   // явный дубль
+            candidates.Add(new Memory.MemoryWriteCandidate(e.Id, e.Text));
+        }
+        return (null, candidates);
     }
 
     // Reinforcement при повторе факта: усилить важность, освежить обращение, взять более
@@ -275,16 +376,25 @@ public sealed class PersonaMemoryService
         Dictionary<string, double> relevance;
         if (Available && !string.IsNullOrEmpty(state.DatasetId))
         {
+            // Гибридный retrieval: semantic (Dify) + keyword (полнотекст) сливаются в единый relevance.
+            // Keyword добирает точные термины/идентификаторы, которые вектор пропускает (③-#3).
             var byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
             var chunks = await _knowledge.RetrieveAsync(state.DatasetId!, query, Math.Max(topK, 12));
-            relevance = new();
+            var semantic = new Dictionary<string, double>();
             foreach (var ch in chunks)
                 if (byDocId.TryGetValue(ch.DocumentId, out var entryId))
-                    relevance[entryId] = Math.Max(relevance.GetValueOrDefault(entryId), ch.Score);
+                    semantic[entryId] = Math.Max(semantic.GetValueOrDefault(entryId), ch.Score);
+            // Keyword-сигнал считаем по всему скоупу (а не только по кандидатам Dify): дёшево
+            // (in-memory подстроки по ≤150 записям) и позволяет всплыть точному совпадению, которое
+            // в топ-чанки Dify не попало вовсе.
+            var keyword = MemoryFulltext.Relevance(entriesSnapshot, query,
+                e => e.Id, e => e.Text, e => e.Tags);
+            relevance = MemoryRetrievalFusion.Fuse(semantic, keyword, _fusion);
         }
         else
         {
-            relevance = FullTextRelevance(entriesSnapshot, query);
+            relevance = MemoryFulltext.Relevance(entriesSnapshot, query,
+                e => e.Id, e => e.Text, e => e.Tags);
         }
 
         var now = DateTime.UtcNow;
@@ -339,7 +449,7 @@ public sealed class PersonaMemoryService
         {
             try
             {
-                var teamRecall = _teamMemory.BuildRecallBlock(ownerId, persona.ProjectId!, query);
+                var teamRecall = await _teamMemory.BuildRecallBlockAsync(ownerId, persona.ProjectId!, query);
                 teamBlock = teamRecall.Text;
                 teamHits = teamRecall.Used;
             }
@@ -513,37 +623,12 @@ public sealed class PersonaMemoryService
         _ => "память",
     };
 
-    // Полнотекстовый fallback: доля слов запроса, встретившихся в записи (0..1)
-    private static Dictionary<string, double> FullTextRelevance(
-        IReadOnlyList<PersonaMemoryEntry> entries, string query)
-    {
-        var terms = query.ToLowerInvariant()
-            .Split(new[] { ' ', ',', '.', ';', ':', '!', '?', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries)
-            .Where(w => w.Length > 2).Distinct().ToArray();
-        var result = new Dictionary<string, double>();
-        if (terms.Length == 0)
-        {
-            // Пустой запрос — все записи равнозначно релевантны (свежесть решит)
-            foreach (var e in entries) result[e.Id] = 0.5;
-            return result;
-        }
-        foreach (var e in entries)
-        {
-            var hay = (e.Text + " " + string.Join(' ', e.Tags ?? [])).ToLowerInvariant();
-            var matched = terms.Count(t => hay.Contains(t));
-            if (matched > 0) result[e.Id] = (double)matched / terms.Length;
-        }
-        return result;
-    }
-
     // --- Синхронизация с Dify (дифф по хешам, дебаунс) ---
 
     private void QueueSync(string ownerId, string personaId)
     {
         if (!Available) return;
-        _debounce.AddOrUpdate(personaId,
-            _ => new Timer(_ => RunSyncSafe(ownerId, personaId), null, SyncDebounce, Timeout.InfiniteTimeSpan),
-            (_, timer) => { timer.Change(SyncDebounce, Timeout.InfiniteTimeSpan); return timer; });
+        _debounce.Schedule(personaId, () => RunSyncSafe(ownerId, personaId));
     }
 
     private void RunSyncSafe(string ownerId, string personaId) =>
@@ -572,37 +657,24 @@ public sealed class PersonaMemoryService
 
             // Снапшоты под локом — конкурентные Remember/Forget/Save не должны видеть полу-мутацию
             List<PersonaMemoryEntry> entries;
-            Dictionary<string, DocRef> docsSnapshot;
+            Dictionary<string, MemoryDocRef> docsSnapshot;
             lock (_saveLock)
             {
                 entries = state.Entries.ToList();
-                docsSnapshot = new Dictionary<string, DocRef>(state.Docs);
-            }
-            var alive = new HashSet<string>(entries.Select(e => e.Id));
-            var changed = 0;
-
-            foreach (var e in entries)
-            {
-                var hash = Hash($"{e.Type}\n{e.Text}\n{string.Join(',', e.Tags ?? [])}");
-                if (docsSnapshot.TryGetValue(e.Id, out var doc) && doc.Hash == hash) continue;
-
-                if (doc is not null)
-                    try { await _knowledge.DeleteDocumentAsync(state.DatasetId!, doc.DocId); }
-                    catch (Exception ex) { _logger.LogDebug(ex, "Удаление старой записи памяти {Entry}", e.Id); }
-
-                var info = await _knowledge.IndexFileByTextAsync(
-                    state.DatasetId!, $"{TypeLabel(e.Type)}-{e.Id}", e.Text, e.Tags);
-                lock (_saveLock) state.Docs[e.Id] = new DocRef { DocId = info.Id, Hash = hash };
-                changed++;
+                docsSnapshot = new Dictionary<string, MemoryDocRef>(state.Docs);
             }
 
-            foreach (var stale in docsSnapshot.Keys.Where(k => !alive.Contains(k)).ToList())
-            {
-                try { await _knowledge.DeleteDocumentAsync(state.DatasetId!, docsSnapshot[stale].DocId); }
-                catch (Exception ex) { _logger.LogDebug(ex, "Удаление документа исчезнувшей записи памяти"); }
-                lock (_saveLock) state.Docs.Remove(stale);
-                changed++;
-            }
+            // Дифф-синк — общее ядро MemoryDify; связка со стором (мутации Docs под _saveLock) тонкая
+            var items = entries
+                .Select(e => new MemorySyncItem(e.Id,
+                    $"{e.Type}\n{e.Text}\n{string.Join(',', e.Tags ?? [])}",
+                    $"{TypeLabel(e.Type)}-{e.Id}", e.Text, e.Tags))
+                .ToList();
+
+            var changed = await MemoryDify.DiffSyncAsync(_knowledge, state.DatasetId!, items, docsSnapshot,
+                (id, doc) => { lock (_saveLock) state.Docs[id] = doc; },
+                id => { lock (_saveLock) state.Docs.Remove(id); },
+                _logger);
 
             if (changed > 0) Save();
             return changed;
@@ -642,9 +714,6 @@ public sealed class PersonaMemoryService
             catch (Exception ex) { _logger?.LogWarning(ex, "Не удалось удалить Dify-датасет памяти персоны {PersonaId}", personaId); }
         }
     }
-
-    private static string Hash(string s) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)));
 }
 
 // Результат поиска по памяти персоны
@@ -655,6 +724,7 @@ public record PersonaMemoryHit(
 // в одну сводную (Ids → новая запись Text/Type/Salience); drop — удалить запись Id.
 public sealed record MemoryConsolidationOp(
     string Op, List<string>? Ids, string? Id, PersonaMemoryType? Type, string? Text, double? Salience)
+    : IMemoryConsolidationOp<PersonaMemoryType>
 {
     public bool IsMerge => string.Equals(Op, "merge", StringComparison.OrdinalIgnoreCase);
     public bool IsDrop => string.Equals(Op, "drop", StringComparison.OrdinalIgnoreCase);

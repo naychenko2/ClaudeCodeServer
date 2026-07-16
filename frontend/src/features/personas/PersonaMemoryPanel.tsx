@@ -1,43 +1,39 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, Pencil, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronLeft } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaMemoryEntry, PersonaMemoryType, ServerMessage } from '../../types';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { showToast } from '../../lib/toast';
 import { personaLabel } from '../../lib/personas';
-import { useInlineEdit } from '../../lib/useInlineEdit';
-import { TextArea } from '../../components/ui';
 import { PersonaAvatar } from './PersonaAvatar';
+import { MemoryPanel } from '../memory/MemoryPanel';
+import type { MemoryEntryView, MemoryTypeMeta } from '../memory/memoryTypes';
 
-// Панель долгой памяти персоны (этап 3). Показывает записи, сгруппированные по
-// типу, позволяет вручную добавить факт и удалить запись. Реагирует на realtime
-// personas_changed(action='memory') для текущей персоны — перечитывает записи.
+// Панель долгой памяти персоны — тонкий адаптер над общей MemoryPanel (features/memory):
+// фетч/realtime/мутации остаются здесь (персональные REST-эндпоинты), рендер списка/
+// фильтров/добавления — в общем компоненте, единый вид с памятью команды проекта.
 
-// Метаданные категорий памяти: заголовок группы + цвет-подсветка из палитры.
-const TYPE_META: Record<PersonaMemoryType, { title: string; hint: string; color: string; softBg: string }> = {
+// Метаданные типов памяти персоны: заголовок + цвет-подсветка из палитры.
+const TYPE_META: Record<PersonaMemoryType, MemoryTypeMeta> = {
   semantic:   { title: 'Факты',    hint: 'устойчивые сведения', color: C.accent,  softBg: C.accentSoft },
   episodic:   { title: 'Эпизоды',  hint: 'что было в разговорах', color: C.info,    softBg: C.infoBg },
   procedural: { title: 'Приёмы',   hint: 'привычные способы',    color: C.success, softBg: C.successBg },
 };
-
-// Порядок вывода групп
 const TYPE_ORDER: PersonaMemoryType[] = ['semantic', 'episodic', 'procedural'];
 
-// Короткая относительная дата: «только что», «5 мин», «3 ч», «2 дн», иначе — число/месяц
-function shortAgo(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return '';
-  const diffMs = Date.now() - t;
-  const min = Math.floor(diffMs / 60000);
-  if (min < 1) return 'только что';
-  if (min < 60) return `${min} мин`;
-  const h = Math.floor(min / 60);
-  if (h < 24) return `${h} ч`;
-  const d = Math.floor(h / 24);
-  if (d < 7) return `${d} дн`;
-  return new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '');
+// Ручной ввод из UI никогда не передаёт sourceSessionId — значит его наличие надёжно
+// означает «пришло из autolearn» (даже после подтверждения pending гасится в false, но
+// sourceSessionId не теряется).
+function toView(e: PersonaMemoryEntry): MemoryEntryView<PersonaMemoryType> {
+  return {
+    id: e.id, type: e.type, text: e.text, tags: e.tags, salience: e.salience,
+    createdAt: e.createdAt,
+    origin: e.sourceSessionId ? 'auto' : 'manual',
+    originDetail: e.sourceSessionId ? 'из хода' : undefined,
+    pending: e.pending,
+  };
 }
 
 export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
@@ -51,12 +47,6 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
   const [entries, setEntries] = useState<PersonaMemoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-
-  // Форма ручного добавления
-  const [addType, setAddType] = useState<PersonaMemoryType>('semantic');
-  const [addText, setAddText] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [removingId, setRemovingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -89,39 +79,41 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
     return off;
   }, [persona.id]);
 
-  const groups = useMemo(() => {
-    const by: Record<PersonaMemoryType, PersonaMemoryEntry[]> = { semantic: [], episodic: [], procedural: [] };
-    for (const e of entries) (by[e.type] ??= []).push(e);
-    // Внутри группы — свежие сверху
-    for (const k of TYPE_ORDER) by[k].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-    return by;
-  }, [entries]);
-
-  const submit = async () => {
-    const text = addText.trim();
-    if (!text || saving) return;
-    setSaving(true);
+  const add = async (type: PersonaMemoryType, text: string) => {
     try {
-      const created = await api.personas.remember(persona.id, { type: addType, text });
+      const created = await api.personas.remember(persona.id, { type, text });
       // Оптимистично добавляем (realtime продублирует перезагрузкой)
       setEntries(prev => [created, ...prev.filter(e => e.id !== created.id)]);
-      setAddText('');
     } catch {
       showToast('Память', 'Не удалось сохранить запись.');
-    } finally {
-      setSaving(false);
+    }
+  };
+
+  const edit = async (entryId: string, text: string) => {
+    try {
+      const updated = await api.personas.updateMemory(persona.id, entryId, text);
+      setEntries(prev => prev.map(e => e.id === entryId ? updated : e));
+    } catch {
+      showToast('Память', 'Не удалось сохранить изменения.');
     }
   };
 
   const remove = async (entryId: string) => {
-    setRemovingId(entryId);
     try {
       await api.personas.forget(persona.id, entryId);
       setEntries(prev => prev.filter(e => e.id !== entryId));
     } catch {
       showToast('Память', 'Не удалось удалить запись.');
-    } finally {
-      setRemovingId(null);
+    }
+  };
+
+  // Подтвердить предложенную autolearn запись (③-3.2): снимает pending → попадает в recall
+  const confirm = async (entryId: string) => {
+    try {
+      await api.personas.confirmMemory(persona.id, entryId);
+      setEntries(prev => prev.map(e => e.id === entryId ? { ...e, pending: false } : e));
+    } catch {
+      showToast('Память', 'Не удалось подтвердить запись.');
     }
   };
 
@@ -134,28 +126,6 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
       showToast('Память', 'Не удалось создать заметку.');
     }
   };
-
-  // Подтвердить предложенную autolearn запись (③-3.2): снимает pending → попадает в recall
-  const confirmEntry = async (entryId: string) => {
-    try {
-      await api.personas.confirmMemory(persona.id, entryId);
-      setEntries(prev => prev.map(e => e.id === entryId ? { ...e, pending: false } : e));
-    } catch {
-      showToast('Память', 'Не удалось подтвердить запись.');
-    }
-  };
-
-  // Редактирование текста записи вручную
-  const edit = useInlineEdit(async (entryId, text) => {
-    try {
-      const updated = await api.personas.updateMemory(persona.id, entryId, text);
-      setEntries(prev => prev.map(e => e.id === entryId ? updated : e));
-    } catch {
-      showToast('Память', 'Не удалось сохранить изменения.');
-    }
-  });
-
-  const isEmpty = !loading && !error && entries.length === 0;
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgMain, overflow: 'hidden' }}>
@@ -182,207 +152,25 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
         </div>
       )}
 
-      {/* Список записей */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? '12px 12px 4px' : '16px 20px 8px' }}>
-        {loading && (
-          <div style={{ padding: 40, textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>
-        )}
-        {error && !loading && (
-          <div style={{ padding: 40, textAlign: 'center', color: C.dangerText, fontSize: 13 }}>
-            Не удалось загрузить память.{' '}
-            <button onClick={() => { setLoading(true); void load(); }} style={linkBtn}>Повторить</button>
-          </div>
-        )}
-        {isEmpty && (
-          <div style={{ padding: '48px 20px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-            <div style={{ fontSize: 30, opacity: 0.5 }}>🧠</div>
-            <div style={{ fontFamily: FONT.serif, fontSize: 17, color: C.textHeading }}>Память пуста</div>
-            <div style={{ fontSize: 13, color: C.textSecondary, maxWidth: 320, lineHeight: 1.5 }}>
-              Персона пока ничего не запомнил. Память пополняется во время разговоров.
-            </div>
-          </div>
-        )}
-        {!loading && !error && entries.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 720, margin: '0 auto' }}>
-            {TYPE_ORDER.filter(t => groups[t].length > 0).map(t => {
-              const meta = TYPE_META[t];
-              return (
-                <div key={t}>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8, padding: '0 2px' }}>
-                    <span style={{ width: 8, height: 8, borderRadius: R.full, background: meta.color, flex: 'none' }} />
-                    <span style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 700, color: C.textHeading, letterSpacing: '0.01em' }}>
-                      {meta.title}
-                    </span>
-                    <span style={{ fontSize: 11.5, color: C.textMuted }}>{groups[t].length}</span>
-                    <span style={{ fontSize: 11.5, color: C.textMuted, fontStyle: 'italic', marginLeft: 'auto' }}>{meta.hint}</span>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {groups[t].map(e => (
-                      <MemoryCard
-                        key={e.id} entry={e} color={meta.color}
-                        onRemove={() => remove(e.id)} removing={removingId === e.id}
-                        onToNote={() => toNote(e.id)} onConfirm={e.pending ? () => confirmEntry(e.id) : undefined}
-                        editing={edit.editingId === e.id} editText={edit.text} onEditTextChange={edit.setText}
-                        onStartEdit={() => edit.start(e.id, e.text)} onSaveEdit={() => void edit.save()}
-                        onCancelEdit={edit.cancel} savingEdit={edit.saving}
-                      />
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? '12px 12px 24px' : '16px 20px 32px' }}>
+        <MemoryPanel<PersonaMemoryType>
+          entries={loading ? null : entries.map(toView)}
+          error={error}
+          onRetry={() => { setLoading(true); void load(); }}
+          typeMeta={TYPE_META}
+          typeOrder={TYPE_ORDER}
+          addHint="Персона будет считать это устойчивым фактом и опираться на него в разговоре."
+          addPlaceholder="Добавить факт, который персона должна помнить…"
+          onAdd={add}
+          onEdit={edit}
+          onRemove={remove}
+          onConfirm={confirm}
+          onToNote={toNote}
+          emptyIcon="🧠"
+          emptyTitle="Память пуста"
+          emptyHint="Персона пока ничего не запомнил. Память пополняется во время разговоров."
+        />
       </div>
-
-      {/* Форма ручного добавления */}
-      <div style={{
-        flex: 'none', borderTop: `1px solid ${C.border}`, background: C.bgPanel,
-        padding: isMobile ? '10px 12px' : '12px 20px',
-      }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', maxWidth: 720, margin: '0 auto', flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
-          <select
-            value={addType}
-            onChange={e => setAddType(e.target.value as PersonaMemoryType)}
-            style={selectStyle}
-            aria-label="Тип записи"
-          >
-            {TYPE_ORDER.map(t => <option key={t} value={t}>{TYPE_META[t].title}</option>)}
-          </select>
-          <input
-            value={addText}
-            onChange={e => setAddText(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
-            placeholder="Добавить факт, который персона должна помнить…"
-            style={{ ...inputStyle, flex: 1, minWidth: isMobile ? '100%' : 180 }}
-          />
-          <button
-            onClick={() => void submit()}
-            disabled={saving || !addText.trim()}
-            style={{ ...primaryBtn, opacity: saving || !addText.trim() ? 0.55 : 1, cursor: saving || !addText.trim() ? 'default' : 'pointer' }}
-          >
-            {saving ? 'Сохраняю…' : 'Запомнить'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Карточка одной записи памяти
-function MemoryCard({
-  entry, color, onRemove, removing, onToNote, onConfirm,
-  editing, editText, onEditTextChange, onStartEdit, onSaveEdit, onCancelEdit, savingEdit,
-}: {
-  entry: PersonaMemoryEntry;
-  color: string;
-  onRemove: () => void;
-  removing: boolean;
-  onToNote?: () => void;
-  onConfirm?: () => void;   // подтвердить предложенную (pending) запись (③-3.2)
-  editing: boolean;
-  editText: string;
-  onEditTextChange: (v: string) => void;
-  onStartEdit: () => void;
-  onSaveEdit: () => void;
-  onCancelEdit: () => void;
-  savingEdit: boolean;
-}) {
-  return (
-    <div style={{
-      position: 'relative', background: C.bgWhite, border: `1px solid ${C.border}`,
-      borderLeft: `3px solid ${color}`, borderRadius: R.xl, padding: '10px 12px',
-      opacity: removing ? 0.5 : 1,
-    }}>
-      {editing ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <TextArea
-            value={editText}
-            onChange={onEditTextChange}
-            autoGrow
-            autoFocus
-            minHeight={44}
-            style={{ fontSize: 13.5 }}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSaveEdit(); }
-              else if (e.key === 'Escape') { e.preventDefault(); onCancelEdit(); }
-            }}
-          />
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button onClick={onCancelEdit} disabled={savingEdit} style={editGhostBtn}>Отмена</button>
-            <button onClick={onSaveEdit} disabled={savingEdit || !editText.trim()} style={{ ...editSaveBtn, opacity: savingEdit || !editText.trim() ? 0.55 : 1 }}>
-              {savingEdit ? 'Сохраняю…' : 'Сохранить'}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {entry.pending && (
-              <span style={{ display: 'inline-block', fontSize: 10.5, fontWeight: 600, color: C.accent, background: C.accentSoft, borderRadius: R.sm, padding: '1px 7px', marginBottom: 6 }}>предложено</span>
-            )}
-            <div style={{ fontSize: 13.5, color: C.textPrimary, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {entry.text}
-            </div>
-            {(entry.tags && entry.tags.length > 0) && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 7 }}>
-                {entry.tags.map(tag => (
-                  <span key={tag} style={{
-                    fontSize: 11, color: C.textSecondary, background: C.bgInset,
-                    border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '1px 7px',
-                  }}>#{tag}</span>
-                ))}
-              </div>
-            )}
-            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>{shortAgo(entry.createdAt)}</div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
-            {onConfirm && (
-              <button
-                onClick={onConfirm}
-                aria-label="Подтвердить"
-                title="Подтвердить — запомнить"
-                style={{ ...forgetBtn, color: C.success }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              </button>
-            )}
-            <button
-              onClick={onStartEdit}
-              aria-label="Редактировать"
-              title="Редактировать"
-              style={forgetBtn}
-            >
-              <Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            </button>
-            {onToNote && (
-              <button
-                onClick={onToNote}
-                aria-label="Превратить в заметку"
-                title="Превратить в заметку"
-                style={forgetBtn}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="9" y1="13" x2="15" y2="13" />
-                </svg>
-              </button>
-            )}
-            <button
-              onClick={onRemove}
-              disabled={removing}
-              aria-label="Забыть"
-              title="Забыть"
-              style={forgetBtn}
-            >
-              <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -397,33 +185,4 @@ function plural(n: number): string {
 const iconBtn: React.CSSProperties = {
   width: 32, height: 32, borderRadius: R.md, border: 'none', background: 'transparent',
   color: C.textSecondary, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-};
-const forgetBtn: React.CSSProperties = {
-  width: 26, height: 26, borderRadius: R.md, border: 'none', background: 'transparent',
-  color: C.textMuted, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-};
-const selectStyle: React.CSSProperties = {
-  background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
-  padding: '0 10px', fontSize: 13, fontFamily: FONT.sans, color: C.textHeading, cursor: 'pointer', height: 38, flex: 'none',
-};
-const inputStyle: React.CSSProperties = {
-  background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
-  padding: '0 12px', fontSize: 14, fontFamily: FONT.sans, color: C.textHeading, height: 38, outline: 'none',
-};
-const primaryBtn: React.CSSProperties = {
-  background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.xl,
-  padding: '0 16px', height: 38, fontSize: 13, fontWeight: 600, fontFamily: FONT.sans, flex: 'none',
-  boxShadow: SHADOW.button, whiteSpace: 'nowrap',
-};
-const linkBtn: React.CSSProperties = {
-  background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
-  fontSize: 13, fontFamily: FONT.sans, textDecoration: 'underline', padding: 0,
-};
-const editGhostBtn: React.CSSProperties = {
-  background: 'transparent', border: `1px solid ${C.border}`, borderRadius: R.md,
-  padding: '5px 12px', fontSize: 12.5, fontFamily: FONT.sans, color: C.textSecondary, cursor: 'pointer',
-};
-const editSaveBtn: React.CSSProperties = {
-  background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.md,
-  padding: '5px 12px', fontSize: 12.5, fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer',
 };

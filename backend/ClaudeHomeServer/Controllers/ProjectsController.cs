@@ -84,7 +84,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
-        var entry = teamMemory.Add(UserId, id, req.Text);
+        var entry = teamMemory.Add(UserId, id, req.Text, req.Type ?? TeamMemoryType.Fact);
         await BroadcastTeamMemory("added", id, entry.Id);
         return Ok(entry);
     }
@@ -109,6 +109,16 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         if (!teamMemory.Remove(UserId, id, entryId)) return NotFound();
         await BroadcastTeamMemory("removed", id, entryId);
         return NoContent();
+    }
+
+    // Поиск по памяти команды: семантический (при Dify) либо полнотекстовый. Дёргается MCP team_memory_search.
+    [HttpGet("{id}/team-memory/search")]
+    public async Task<IActionResult> SearchTeamMemory(string id, [FromQuery] string q, [FromQuery] int topK = 8)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (string.IsNullOrWhiteSpace(q)) return Ok(Array.Empty<TeamMemoryEntry>());
+        return Ok(await teamMemory.SearchAsync(UserId, id, q.Trim(), Math.Clamp(topK, 1, 20)));
     }
 
     [HttpPost]
@@ -148,12 +158,15 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 
     [HttpDelete("{id}")]
-    public IActionResult Delete(string id)
+    public async Task<IActionResult> Delete(string id)
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
         projects.Delete(id);
         tasks.DeleteByProject(id);
+        // Память команды проекта: локальные сторы + Dify-датасет (best-effort — уборка не должна ронять удаление)
+        try { await teamMemory.DeleteProjectTeamMemoryAsync(UserId, id); }
+        catch { /* удаление проекта не зависит от уборки памяти команды */ }
         return NoContent();
     }
 }
@@ -161,4 +174,4 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null);
 public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, bool? ToolsEnabled = null, List<PermissionRule>? PermissionRules = null, string? GroupId = null);
 public record UpdateBoardColumnsRequest(List<BoardColumn>? Columns);
-public record TeamMemoryRequest(string Text);
+public record TeamMemoryRequest(string Text, TeamMemoryType? Type = null);

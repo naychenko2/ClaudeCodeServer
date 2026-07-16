@@ -899,25 +899,42 @@ public class ClaudeSession : ILlmSessionAdapter
                     : basePrompt + "\n\n" + workspaceHint;
             }
 
-            // Подсказка про долгую память — только когда memory-server подключён (персонная сессия)
+            // Подсказка про долгую память. Персонная сессия — личная (memory_*) + командная (team_*);
+            // обычный проектный чат без персоны — только память КОМАНДЫ проекта (team_memory_*).
             if (_memoryMcp is not null)
             {
-                var memoryHint =
-                    "У тебя есть долгая память между разговорами — управляй ей через MCP-инструменты mcp__memory__* " +
-                    "(memory_remember, memory_search, memory_list, memory_forget). Типы: semantic — устойчивые факты и " +
-                    "предпочтения пользователя; episodic — что было/обсуждалось в прошлых разговорах; procedural — выученные " +
-                    "приёмы и правила. Когда узнаёшь что-то важное о пользователе или договариваешься о чём-то на будущее — " +
-                    "запоминай это (memory_remember). Когда нужно вспомнить контекст — ищи в памяти (memory_search).";
-                if (!string.IsNullOrEmpty(_memoryMcp.ProjectId))
-                    memoryHint +=
-                        " Кроме личной памяти у тебя есть память КОМАНДЫ проекта — общие факты и договорённости, " +
-                        "которые видят и могут править ВСЕ персоны команды (не только ты): mcp__memory__team_memory_remember " +
-                        "(добавить общий факт), team_memory_list (посмотреть, что уже знает команда), team_memory_forget " +
-                        "(удалить устаревшее). Пиши туда то, что относится к проекту в целом и полезно другим персонам " +
-                        "команды — а не то, что касается лично тебя (это остаётся в memory_remember).";
-                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                    ? memoryHint
-                    : basePrompt + "\n\n" + memoryHint;
+                var hasPersonal = !string.IsNullOrEmpty(_memoryMcp.PersonaId);
+                var hasTeam = !string.IsNullOrEmpty(_memoryMcp.ProjectId);
+                string? memoryHint = hasPersonal
+                    ? "У тебя есть долгая память между разговорами — управляй ей через MCP-инструменты mcp__memory__* " +
+                      "(memory_remember, memory_search, memory_list, memory_rethink, memory_forget). Типы: semantic — устойчивые факты и " +
+                      "предпочтения пользователя; episodic — что было/обсуждалось в прошлых разговорах; procedural — выученные " +
+                      "приёмы и правила. Когда узнаёшь что-то важное о пользователе или договариваешься о чём-то на будущее — " +
+                      "запоминай это (memory_remember). Когда нужно вспомнить контекст — ищи в памяти (memory_search). Записи можно " +
+                      "не только добавлять и забывать: если факт изменился — не плоди дубль, а УТОЧНИ существующую запись по id " +
+                      "через memory_rethink (перезапись текста)."
+                    : null;
+                if (hasTeam)
+                {
+                    var teamHint = hasPersonal
+                        ? " Кроме личной памяти у тебя есть память КОМАНДЫ проекта — общие факты и договорённости, " +
+                          "которые видят и могут править ВСЕ персоны команды (не только ты): "
+                        : "У тебя есть общая память КОМАНДЫ проекта — факты, решения и договорённости, которые видят и " +
+                          "используют все, кто работает в этом проекте: ";
+                    teamHint +=
+                        "mcp__memory__team_memory_remember (добавить общий факт/решение проекта), team_memory_list " +
+                        "(посмотреть, что уже знает команда), team_memory_update (уточнить/переписать запись по id, " +
+                        "когда общий факт изменился — вместо дубля), team_memory_forget (удалить устаревшее). Пиши туда то, что " +
+                        "относится к проекту в целом" +
+                        (hasPersonal
+                            ? " и полезно другим персонам команды — а не то, что касается лично тебя (это остаётся в memory_remember)."
+                            : " и полезно в дальнейшей работе над ним. Если пользователь просит «запомнить для команды/проекта» — используй team_memory_remember.");
+                    memoryHint = memoryHint is null ? teamHint : memoryHint + teamHint;
+                }
+                if (memoryHint is not null)
+                    basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                        ? memoryHint
+                        : basePrompt + "\n\n" + memoryHint;
             }
 
             // Подсказка про @упоминания (список «@handle — Роль (Имя)» + persona_ask) —

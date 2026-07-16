@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Services.Memory;
 
 namespace ClaudeHomeServer.Models;
 
@@ -198,7 +199,7 @@ public class PersonaWorkingFocus
 
 // Запись долгой памяти персоны. Хранится в data/persona-memory-{personaId}.json;
 // семантическая часть дублируется в Dify-датасет для векторного retrieve.
-public class PersonaMemoryEntry
+public class PersonaMemoryEntry : IMemoryEntry<PersonaMemoryType>
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
     public string PersonaId { get; set; } = "";

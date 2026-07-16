@@ -4,9 +4,9 @@
 // Окружение (задаёт ClaudeSession при запуске claude для персонной сессии):
 //   MEMORY_API_URL     — базовый URL бэкенда (http://127.0.0.1:5000)
 //   MEMORY_API_TOKEN   — сервисный JWT владельца сессии
-//   MEMORY_PERSONA_ID  — id персоны, чья память доступна в этой сессии
-//   MEMORY_PROJECT_ID  — id проекта персоны (③-3.4); пусто — персона глобальная,
-//                        инструменты team_memory_* не регистрируются
+//   MEMORY_PERSONA_ID  — id персоны, чья личная память доступна (personal memory_*); пусто —
+//                        обычный проектный чат без персоны: personal-инструменты не регистрируются
+//   MEMORY_PROJECT_ID  — id проекта (③-3.4) для team_memory_*; пусто — памяти команды нет
 //
 // Память типизирована: semantic (устойчивые факты/предпочтения), episodic (что произошло
 // в прошлых разговорах), procedural (выученные приёмы/правила поведения). Изоляция —
@@ -96,6 +96,20 @@ const TOOLS = [
       properties: { id: { type: 'string', description: 'ID записи памяти' } },
     },
   },
+  {
+    name: 'memory_rethink',
+    description: 'Переписать (уточнить) существующую запись памяти по id: заменяет её текст на новую ' +
+      'формулировку. Используй, когда факт изменился или ты хочешь сформулировать его точнее — ' +
+      'вместо того чтобы плодить дубль через memory_remember. id узнаёшь через memory_list/memory_search.',
+    inputSchema: {
+      type: 'object',
+      required: ['id', 'text'],
+      properties: {
+        id: { type: 'string', description: 'ID переписываемой записи памяти' },
+        text: { type: 'string', description: 'Новый текст записи (заменит прежний)' },
+      },
+    },
+  },
 ];
 
 // team_memory_* — только у проектных персон (PROJECT_ID задан). Память команды не типизирована
@@ -109,7 +123,28 @@ const TEAM_TOOLS = [
     inputSchema: {
       type: 'object',
       required: ['text'],
-      properties: { text: { type: 'string', description: 'Общий факт/договорённость проекта (кратко)' } },
+      properties: {
+        text: { type: 'string', description: 'Общий факт/договорённость проекта (кратко)' },
+        type: {
+          type: 'string', enum: ['decision', 'convention', 'fact', 'glossary'],
+          description: 'Тип знания: decision — принятое решение/выбор; convention — договорённость/правило ' +
+            'проекта; fact — устойчивый факт (стек, адреса, структура); glossary — термин и его значение. ' +
+            'По умолчанию fact.',
+        },
+      },
+    },
+  },
+  {
+    name: 'team_memory_search',
+    description: 'Поиск по общей памяти команды проекта по смыслу: релевантные записи проекта ' +
+      '(решения/договорённости/факты/термины). Используй, чтобы вспомнить, что команда уже знает по теме.',
+    inputSchema: {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query: { type: 'string', description: 'Смысловой запрос' },
+        topK: { type: 'integer', minimum: 1, maximum: 20, description: 'Сколько записей (по умолчанию 8)' },
+      },
     },
   },
   {
@@ -124,6 +159,20 @@ const TEAM_TOOLS = [
       type: 'object',
       required: ['id'],
       properties: { id: { type: 'string', description: 'ID записи командной памяти' } },
+    },
+  },
+  {
+    name: 'team_memory_update',
+    description: 'Переписать (уточнить) запись общей памяти команды проекта по id: заменяет её текст. ' +
+      'Используй, когда общий факт/договорённость изменились — вместо дубля через team_memory_remember. ' +
+      'id узнаёшь через team_memory_list/team_memory_search.',
+    inputSchema: {
+      type: 'object',
+      required: ['id', 'text'],
+      properties: {
+        id: { type: 'string', description: 'ID переписываемой записи командной памяти' },
+        text: { type: 'string', description: 'Новый текст записи (заменит прежний)' },
+      },
     },
   },
 ];
@@ -158,8 +207,23 @@ async function callTool(name, args) {
       await api(`${base}/${encodeURIComponent(args.id)}`, { method: 'DELETE' });
       return { content: [{ type: 'text', text: `Запись ${args.id} удалена из памяти.` }] };
 
-    case 'team_memory_remember':
-      return json(await api(teamBase, { method: 'POST', body: JSON.stringify({ text: args.text }) }));
+    case 'memory_rethink':
+      return json(await api(`${base}/${encodeURIComponent(args.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ text: args.text }),
+      }));
+
+    case 'team_memory_remember': {
+      const body = { text: args.text };
+      if (typeof args.type === 'string') body.type = args.type;
+      return json(await api(teamBase, { method: 'POST', body: JSON.stringify(body) }));
+    }
+
+    case 'team_memory_search': {
+      const params = new URLSearchParams({ q: String(args.query ?? '') });
+      if (args.topK) params.set('topK', String(args.topK));
+      return json(await api(`${teamBase}/search?${params}`));
+    }
 
     case 'team_memory_list':
       return json(await api(teamBase));
@@ -167,6 +231,12 @@ async function callTool(name, args) {
     case 'team_memory_forget':
       await api(`${teamBase}/${encodeURIComponent(args.id)}`, { method: 'DELETE' });
       return { content: [{ type: 'text', text: `Запись ${args.id} удалена из памяти команды.` }] };
+
+    case 'team_memory_update':
+      return json(await api(`${teamBase}/${encodeURIComponent(args.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ text: args.text }),
+      }));
 
     default:
       throw new Error(`Неизвестный инструмент: ${name}`);
@@ -205,9 +275,15 @@ rl.on('line', async line => {
           serverInfo: { name: 'memory', version: '1.0.0' },
         });
         break;
-      case 'tools/list':
-        reply(id, { tools: PROJECT_ID ? [...TOOLS, ...TEAM_TOOLS] : TOOLS });
+      case 'tools/list': {
+        // personal memory_* — только при заданной персоне; team_memory_* — при заданном проекте.
+        // Обычный проектный чат без персоны получает лишь командные инструменты.
+        const tools = [];
+        if (PERSONA_ID) tools.push(...TOOLS);
+        if (PROJECT_ID) tools.push(...TEAM_TOOLS);
+        reply(id, { tools });
         break;
+      }
       case 'tools/call': {
         try {
           reply(id, await callTool(params.name, params.arguments ?? {}));

@@ -249,8 +249,10 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
         var owner = OwnerOf(name, Username, others);
         if (owner is null) return true;                                                  // глобальная
         if (!owner.Equals(Username, StringComparison.OrdinalIgnoreCase)) return false;   // чужая
-        // Своя, но память персоны — внутренняя (управляется удалением персоны), не показываем.
-        return !name[(Username.Length + 1)..].StartsWith("persona:", StringComparison.Ordinal);
+        // Своя, но память персоны/команды — внутренняя (управляется своим разделом), не показываем.
+        var rest = name[(Username.Length + 1)..];
+        return !rest.StartsWith("persona:", StringComparison.Ordinal)
+            && !rest.StartsWith("team:", StringComparison.Ordinal);
     }
 
     // Удалять здесь можно самостоятельные ({user}:kb:…) и публичные (без префикса);
@@ -262,6 +264,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
         if (owner is null) return IsAdmin;                                              // глобальная — только админ
         if (!owner.Equals(Username, StringComparison.OrdinalIgnoreCase)) return false;  // чужая (не видна)
         var rest = name[(Username.Length + 1)..];                                       // после "{user}:"
+        if (rest.StartsWith("team:", StringComparison.Ordinal)) return false;           // память команды — внутренняя
         return rest.StartsWith("kb:", StringComparison.Ordinal);                        // самостоятельная
     }
 
@@ -283,6 +286,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
             var rest = name[(Username.Length + 1)..];
             if (rest == "notes") { type = "Заметки"; title = "Заметки"; deletable = false; }
             else if (rest.StartsWith("persona:", StringComparison.Ordinal)) return null; // память персоны — внутренняя, скрыта
+            else if (rest.StartsWith("team:", StringComparison.Ordinal)) return null;     // память команды — внутренняя, скрыта
             else if (rest.StartsWith("kb:", StringComparison.Ordinal)) { type = "Самостоятельная"; title = rest["kb:".Length..]; deletable = true; }
             else { type = "Проект"; title = rest; deletable = false; } // {username}:{projectName}
             visibility = "personal";

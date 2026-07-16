@@ -24,6 +24,9 @@ public static class FeatureFlagKeys
     // Секция destructive workspace-server: безвозвратное удаление файлов и чатов (files_delete/chats_delete).
     // Предохранитель от необратимого удаления агентом.
     public const string WorkspaceDestructive = "workspace-destructive";
+
+    // Авто-накопление общей памяти команды проекта из ходов/групповых чатов/совещаний (Волна 1).
+    public const string TeamMemoryAutolearn = "team-memory-autolearn";
 }
 
 /// <summary>
@@ -45,6 +48,13 @@ public static class FeatureFlagCatalog
             Description: "Claude может БЕЗВОЗВРАТНО удалять файлы проектов и чаты через инструменты рабочего пространства (files_delete, chats_delete) — только по явной просьбе. Персоне дополнительно нужна возможность «Удаление (опасно)».",
             Default: false,
             Stage: "dev"),
+
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.TeamMemoryAutolearn,
+            Title: "Авто-память команды",
+            Description: "Claude сам вычленяет решения, договорённости и факты о проекте из рабочих ходов, групповых чатов и совещаний и складывает их в общую память команды (её recall'ят все персоны проекта). Записи помечены источником, ручные не затрагиваются.",
+            Default: false,
+            Stage: "beta"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

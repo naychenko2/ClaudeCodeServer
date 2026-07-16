@@ -78,6 +78,10 @@ builder.Services.AddSingleton<FalImageService>();
 builder.Services.AddSingleton<PersonaMemoryConsolidationService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PersonaMemoryConsolidationService>());
 builder.Services.AddHostedService<PersonaMemoryAutolearnService>();
+// Консолидация памяти команды проекта — singleton + hosted: team-autolearn ставит заявки RequestConsolidation
+builder.Services.AddSingleton<TeamMemoryConsolidationService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<TeamMemoryConsolidationService>());
+builder.Services.AddHostedService<TeamMemoryAutolearnService>();
 // Разовый backfill дефолтных привязок существующим проектным персонам (файлы/заметки/знания)
 builder.Services.AddHostedService<PersonaProjectBindingsMigration>();
 builder.Services.AddSingleton<TaskManager>();
@@ -92,6 +96,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>
 // Интерфейс one-shot раннера → тот же singleton (мокируется в тестах)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IOneShotRunner>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>());
+// Общий LLM-резолвер записи памяти (Mem0 ADD/UPDATE/DELETE/NOOP) — авто-путь обоих слоёв памяти
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Memory.MemoryWriteResolver>();
 // One-shot ответы персон от их лица (persona_ask из MCP персон)
 builder.Services.AddSingleton<PersonaAskService>();
 builder.Services.AddSingleton<ChangelogService>();

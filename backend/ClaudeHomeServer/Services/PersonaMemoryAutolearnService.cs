@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Memory;
 
 namespace ClaudeHomeServer.Services;
 
@@ -81,9 +82,10 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
             var saved = 0;
             foreach (var item in result.Items)
             {
-                // Семантический write-path: близкий факт усилит существующую запись, а не создаст дубль.
+                // Авто-путь с разрешением противоречий (Memory #2): дубль усилит существующую запись,
+                // конфликт с существующим фактом → LLM-резолвер (UPDATE/DELETE), иначе ADD/NOOP.
                 // Новые факты — pending (предложены), попадают в recall только после подтверждения (③-3.2)
-                if (await _memory.RememberAsync(persona.OwnerId, persona.Id, item.Type, item.Text,
+                if (await _memory.RememberWithResolutionAsync(persona.OwnerId, persona.Id, item.Type, item.Text,
                         null, sessionId, item.Salience, pending: true) is not null)
                     saved++;
             }
@@ -160,14 +162,15 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
     internal sealed record AutolearnResult(IReadOnlyList<AutolearnItem> Items, AutolearnFocus? Focus);
 
     // Парс ответа модели: новый формат — объект {items, focus}; fallback — legacy-массив
-    // [{type, text}] (старые модели/промпты). Мусор → пустой результат.
+    // [{type, text}] (старые модели/промпты). Мусор → пустой результат. Извлечение JSON и маппинг
+    // записей — общая MemoryLlmParsing; персона-специфичен только разбор рабочего фокуса.
     internal static AutolearnResult Parse(string raw)
     {
         var empty = new AutolearnResult([], null);
         if (string.IsNullOrWhiteSpace(raw)) return empty;
 
         // Новый формат: первый сбалансированный JSON-объект с полем items
-        var objJson = ExtractBalanced(raw, '{', '}');
+        var objJson = MemoryLlmParsing.ExtractBalanced(raw, '{', '}');
         if (objJson is not null)
         {
             ResponseRaw? parsed = null;
@@ -181,33 +184,26 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
         }
 
         // Legacy-fallback: JSON-массив [{type, text}]
-        var arrJson = ExtractBalanced(raw, '[', ']');
+        var arrJson = MemoryLlmParsing.ExtractBalanced(raw, '[', ']');
         if (arrJson is null) return empty;
-        List<ItemRaw>? items;
-        try { items = JsonSerializer.Deserialize<List<ItemRaw>>(arrJson, JsonOpts); }
+        List<MemoryLlmParsing.ItemRaw>? items;
+        try { items = JsonSerializer.Deserialize<List<MemoryLlmParsing.ItemRaw>>(arrJson, JsonOpts); }
         catch (JsonException) { return empty; }
         return items is null ? empty : new AutolearnResult(MapItems(items), null);
     }
 
-    private static IReadOnlyList<AutolearnItem> MapItems(List<ItemRaw> parsed)
+    // Маппинг сырых записей в AutolearnItem — через общее ядро; специфичен только маппинг типа
+    private static IReadOnlyList<AutolearnItem> MapItems(List<MemoryLlmParsing.ItemRaw> parsed) =>
+        MemoryLlmParsing.MapItems(parsed, ParseType,
+            (type, text, salience) => new AutolearnItem(type, text, salience));
+
+    // Маппинг строки типа из ответа LLM в PersonaMemoryType (неизвестное → semantic)
+    private static PersonaMemoryType ParseType(string? s) => s?.Trim().ToLowerInvariant() switch
     {
-        var result = new List<AutolearnItem>();
-        foreach (var it in parsed)
-        {
-            var text = it.Text?.Trim();
-            if (string.IsNullOrWhiteSpace(text)) continue;
-            var type = it.Type?.Trim().ToLowerInvariant() switch
-            {
-                "episodic" => PersonaMemoryType.Episodic,
-                "procedural" => PersonaMemoryType.Procedural,
-                _ => PersonaMemoryType.Semantic,
-            };
-            // Важность: отсутствует → 1.0, иначе кламп в 0.05..1
-            var salience = it.Salience is null ? 1.0 : Math.Clamp(it.Salience.Value, 0.05, 1.0);
-            result.Add(new AutolearnItem(type, text, salience));
-        }
-        return result.Take(8).ToList();
-    }
+        "episodic" => PersonaMemoryType.Episodic,
+        "procedural" => PersonaMemoryType.Procedural,
+        _ => PersonaMemoryType.Semantic,
+    };
 
     private static AutolearnFocus? ParseFocus(FocusRaw? focus)
     {
@@ -216,30 +212,6 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
         return new AutolearnFocus(what, focus!.Status?.Trim() ?? "", focus.NextStep?.Trim());
     }
 
-    // Первый сбалансированный JSON-фрагмент между open/close (устойчиво к преамбуле/fence)
-    private static string? ExtractBalanced(string raw, char open, char close)
-    {
-        var start = raw.IndexOf(open);
-        if (start < 0) return null;
-        int depth = 0; bool inStr = false, esc = false;
-        for (var i = start; i < raw.Length; i++)
-        {
-            var c = raw[i];
-            if (inStr)
-            {
-                if (esc) esc = false;
-                else if (c == '\\') esc = true;
-                else if (c == '"') inStr = false;
-                continue;
-            }
-            if (c == '"') inStr = true;
-            else if (c == open) depth++;
-            else if (c == close && --depth == 0) return raw[start..(i + 1)];
-        }
-        return null;
-    }
-
-    private sealed record ItemRaw(string? Type, string? Text, double? Salience = null);
     private sealed record FocusRaw(string? What, string? Status, string? NextStep);
-    private sealed record ResponseRaw(List<ItemRaw>? Items, FocusRaw? Focus);
+    private sealed record ResponseRaw(List<MemoryLlmParsing.ItemRaw>? Items, FocusRaw? Focus);
 }

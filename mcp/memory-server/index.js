@@ -96,6 +96,20 @@ const TOOLS = [
       properties: { id: { type: 'string', description: 'ID записи памяти' } },
     },
   },
+  {
+    name: 'memory_rethink',
+    description: 'Переписать (уточнить) существующую запись памяти по id: заменяет её текст на новую ' +
+      'формулировку. Используй, когда факт изменился или ты хочешь сформулировать его точнее — ' +
+      'вместо того чтобы плодить дубль через memory_remember. id узнаёшь через memory_list/memory_search.',
+    inputSchema: {
+      type: 'object',
+      required: ['id', 'text'],
+      properties: {
+        id: { type: 'string', description: 'ID переписываемой записи памяти' },
+        text: { type: 'string', description: 'Новый текст записи (заменит прежний)' },
+      },
+    },
+  },
 ];
 
 // team_memory_* — только у проектных персон (PROJECT_ID задан). Память команды не типизирована
@@ -147,6 +161,20 @@ const TEAM_TOOLS = [
       properties: { id: { type: 'string', description: 'ID записи командной памяти' } },
     },
   },
+  {
+    name: 'team_memory_update',
+    description: 'Переписать (уточнить) запись общей памяти команды проекта по id: заменяет её текст. ' +
+      'Используй, когда общий факт/договорённость изменились — вместо дубля через team_memory_remember. ' +
+      'id узнаёшь через team_memory_list/team_memory_search.',
+    inputSchema: {
+      type: 'object',
+      required: ['id', 'text'],
+      properties: {
+        id: { type: 'string', description: 'ID переписываемой записи командной памяти' },
+        text: { type: 'string', description: 'Новый текст записи (заменит прежний)' },
+      },
+    },
+  },
 ];
 
 function json(data) {
@@ -179,6 +207,12 @@ async function callTool(name, args) {
       await api(`${base}/${encodeURIComponent(args.id)}`, { method: 'DELETE' });
       return { content: [{ type: 'text', text: `Запись ${args.id} удалена из памяти.` }] };
 
+    case 'memory_rethink':
+      return json(await api(`${base}/${encodeURIComponent(args.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ text: args.text }),
+      }));
+
     case 'team_memory_remember': {
       const body = { text: args.text };
       if (typeof args.type === 'string') body.type = args.type;
@@ -197,6 +231,12 @@ async function callTool(name, args) {
     case 'team_memory_forget':
       await api(`${teamBase}/${encodeURIComponent(args.id)}`, { method: 'DELETE' });
       return { content: [{ type: 'text', text: `Запись ${args.id} удалена из памяти команды.` }] };
+
+    case 'team_memory_update':
+      return json(await api(`${teamBase}/${encodeURIComponent(args.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ text: args.text }),
+      }));
 
     default:
       throw new Error(`Неизвестный инструмент: ${name}`);

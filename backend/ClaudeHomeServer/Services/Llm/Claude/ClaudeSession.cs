@@ -907,10 +907,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 var hasTeam = !string.IsNullOrEmpty(_memoryMcp.ProjectId);
                 string? memoryHint = hasPersonal
                     ? "У тебя есть долгая память между разговорами — управляй ей через MCP-инструменты mcp__memory__* " +
-                      "(memory_remember, memory_search, memory_list, memory_forget). Типы: semantic — устойчивые факты и " +
+                      "(memory_remember, memory_search, memory_list, memory_rethink, memory_forget). Типы: semantic — устойчивые факты и " +
                       "предпочтения пользователя; episodic — что было/обсуждалось в прошлых разговорах; procedural — выученные " +
                       "приёмы и правила. Когда узнаёшь что-то важное о пользователе или договариваешься о чём-то на будущее — " +
-                      "запоминай это (memory_remember). Когда нужно вспомнить контекст — ищи в памяти (memory_search)."
+                      "запоминай это (memory_remember). Когда нужно вспомнить контекст — ищи в памяти (memory_search). Записи можно " +
+                      "не только добавлять и забывать: если факт изменился — не плоди дубль, а УТОЧНИ существующую запись по id " +
+                      "через memory_rethink (перезапись текста)."
                     : null;
                 if (hasTeam)
                 {
@@ -921,7 +923,8 @@ public class ClaudeSession : ILlmSessionAdapter
                           "используют все, кто работает в этом проекте: ";
                     teamHint +=
                         "mcp__memory__team_memory_remember (добавить общий факт/решение проекта), team_memory_list " +
-                        "(посмотреть, что уже знает команда), team_memory_forget (удалить устаревшее). Пиши туда то, что " +
+                        "(посмотреть, что уже знает команда), team_memory_update (уточнить/переписать запись по id, " +
+                        "когда общий факт изменился — вместо дубля), team_memory_forget (удалить устаревшее). Пиши туда то, что " +
                         "относится к проекту в целом" +
                         (hasPersonal
                             ? " и полезно другим персонам команды — а не то, что касается лично тебя (это остаётся в memory_remember)."

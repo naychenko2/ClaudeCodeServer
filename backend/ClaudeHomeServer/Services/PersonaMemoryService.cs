@@ -33,6 +33,8 @@ public sealed class PersonaMemoryService
     private readonly PersonaManager _personas;
     private readonly UserStore _users;
     private readonly TeamMemoryService? _teamMemory;
+    // LLM-резолвер записи памяти (разрешение противоречий на авто-пути); null в юнит-тестах
+    private readonly Memory.MemoryWriteResolver? _resolver;
     private readonly ILogger<PersonaMemoryService> _logger;
     private readonly string _storePath;
     private readonly MemoryScoringOptions _scoring;
@@ -44,6 +46,8 @@ public sealed class PersonaMemoryService
     // Семантический дедуп на входе: порог близости и прирост важности при повторе (P1)
     private readonly double _dedupThreshold;
     private readonly double _dedupBoost;
+    // Порог зоны конфликта: кандидаты в [ConflictThreshold, DedupThreshold) идут в LLM-резолвер (Memory #2)
+    private readonly double _conflictThreshold;
     private readonly Dictionary<string, MemState> _store;
     private readonly Lock _saveLock = new();
     private readonly SemaphoreSlim _syncLock = new(1, 1);
@@ -51,12 +55,13 @@ public sealed class PersonaMemoryService
 
     public PersonaMemoryService(KnowledgeService knowledge, PersonaManager personas, UserStore users,
         IConfiguration config, ILogger<PersonaMemoryService> logger,
-        TeamMemoryService? teamMemory = null)
+        TeamMemoryService? teamMemory = null, Memory.MemoryWriteResolver? resolver = null)
     {
         _knowledge = knowledge;
         _personas = personas;
         _users = users;
         _teamMemory = teamMemory;
+        _resolver = resolver;
         _logger = logger;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
@@ -75,6 +80,7 @@ public sealed class PersonaMemoryService
         _maxEpisodic = int.TryParse(config["Persona:MemoryMaxEpisodic"], out var mep) && mep > 0 ? mep : 40;
         _dedupThreshold = ReadDouble(config, "Persona:DedupThreshold", 0.85);
         _dedupBoost = ReadDouble(config, "Persona:DedupSalienceBoost", 0.1);
+        _conflictThreshold = ReadDouble(config, "Memory:ConflictThreshold", 0.6);
         _store = JsonFileStore.Load<Dictionary<string, MemState>>(_storePath, JsonOpts) ?? new();
     }
 
@@ -183,6 +189,92 @@ public sealed class PersonaMemoryService
                 return e;
         }
         return null;
+    }
+
+    // Авто-путь с разрешением ПРОТИВОРЕЧИЙ (Memory #2, Mem0 ADD/UPDATE/DELETE/NOOP). Дубль
+    // (≥DedupThreshold) — как RememberAsync (reinforcement). Иначе близкие кандидаты в зоне конфликта
+    // [ConflictThreshold, DedupThreshold) отдаются LLM-резолверу: UPDATE дополняет существующий,
+    // DELETE вытесняет устаревший + добавляет новый, ADD кладёт рядом, NOOP отбрасывает. Гейтится
+    // Enabled+Available; без резолвера/датасета/кандидатов — обычный RememberAsync. Ошибки → ADD.
+    public async Task<PersonaMemoryEntry?> RememberWithResolutionAsync(string ownerId, string personaId,
+        PersonaMemoryType type, string text, List<string>? tags, string? sourceSessionId,
+        double? salience = null, bool pending = false)
+    {
+        // Резолвер выключен / Dify недоступен → обычный семантический write-path (простой дедуп)
+        if (_resolver is not { Enabled: true } || !Available)
+            return await RememberAsync(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+
+        var persona = _personas.Get(personaId, ownerId);
+        if (persona is null || string.IsNullOrWhiteSpace(text)) return null;
+        var trimmed = text.Trim();
+
+        var state = GetState(personaId);
+        if (string.IsNullOrEmpty(state.DatasetId))   // датасета ещё нет — сопоставлять не с чем
+            return await RememberAsync(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+
+        try
+        {
+            var (dup, candidates) = await FindDuplicateAndCandidatesAsync(state, type, trimmed);
+            if (dup is not null)   // явный дубль — усиливаем, резолвер не нужен
+            {
+                Reinforce(personaId, dup.Id, trimmed, salience);
+                QueueSync(ownerId, personaId);
+                return dup;
+            }
+            if (candidates.Count == 0)   // нет соседей в зоне конфликта — обычное добавление
+                return Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+
+            var decision = await _resolver.ResolveAsync(trimmed, TypeLabel(type), candidates);
+            switch (decision.Op)
+            {
+                case Memory.MemoryWriteOp.Noop:
+                    return null;   // дубль/незначимо — ничего не добавляем
+                case Memory.MemoryWriteOp.Update when !string.IsNullOrEmpty(decision.TargetId):
+                    // Новый уточняет существующий → заменяем текст target на объединённую формулировку
+                    return Update(ownerId, personaId, decision.TargetId, decision.MergedText!)
+                        ?? Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+                case Memory.MemoryWriteOp.Delete when !string.IsNullOrEmpty(decision.TargetId):
+                    // Новый делает существующий устаревшим → удаляем target, добавляем новый
+                    Forget(ownerId, personaId, decision.TargetId);
+                    return Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+                default:   // Add и невалидные Update/Delete
+                    return Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Разрешение записи памяти персоны {Persona}", personaId);
+            return Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
+        }
+    }
+
+    // Найти дубль (≥DedupThreshold) и близких кандидатов зоны конфликта [ConflictThreshold, DedupThreshold)
+    // ТОГО ЖЕ типа (Dify retrieve). Дубль (наивысший скор) возвращается сразу с пустым списком кандидатов.
+    private async Task<(PersonaMemoryEntry? Dup, List<Memory.MemoryWriteCandidate> Candidates)>
+        FindDuplicateAndCandidatesAsync(MemState state, PersonaMemoryType type, string text)
+    {
+        var candidates = new List<Memory.MemoryWriteCandidate>();
+        var chunks = await _knowledge.RetrieveAsync(state.DatasetId!, text, 8);
+        if (chunks.Count == 0) return (null, candidates);
+
+        Dictionary<string, string> byDocId;
+        List<PersonaMemoryEntry> entries;
+        lock (_saveLock)
+        {
+            byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+            entries = state.Entries.ToList();
+        }
+        var byId = entries.ToDictionary(e => e.Id);
+
+        foreach (var ch in chunks.OrderByDescending(c => c.Score))
+        {
+            if (ch.Score < _conflictThreshold) break;   // дальше только менее близкие — не интересны
+            if (!byDocId.TryGetValue(ch.DocumentId, out var entryId)) continue;
+            if (!byId.TryGetValue(entryId, out var e) || e.Type != type) continue;
+            if (ch.Score >= _dedupThreshold) return (e, candidates);   // явный дубль
+            candidates.Add(new Memory.MemoryWriteCandidate(e.Id, e.Text));
+        }
+        return (null, candidates);
     }
 
     // Reinforcement при повторе факта: усилить важность, освежить обращение, взять более

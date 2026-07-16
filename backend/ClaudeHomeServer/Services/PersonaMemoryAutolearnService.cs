@@ -82,9 +82,10 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
             var saved = 0;
             foreach (var item in result.Items)
             {
-                // Семантический write-path: близкий факт усилит существующую запись, а не создаст дубль.
+                // Авто-путь с разрешением противоречий (Memory #2): дубль усилит существующую запись,
+                // конфликт с существующим фактом → LLM-резолвер (UPDATE/DELETE), иначе ADD/NOOP.
                 // Новые факты — pending (предложены), попадают в recall только после подтверждения (③-3.2)
-                if (await _memory.RememberAsync(persona.OwnerId, persona.Id, item.Type, item.Text,
+                if (await _memory.RememberWithResolutionAsync(persona.OwnerId, persona.Id, item.Type, item.Text,
                         null, sessionId, item.Salience, pending: true) is not null)
                     saved++;
             }

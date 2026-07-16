@@ -40,6 +40,8 @@ public class TeamMemoryService
     private readonly KnowledgeService? _knowledge;
     private readonly UserStore? _users;
     private readonly ProjectManager? _projects;
+    // LLM-резолвер записи памяти (разрешение противоречий на авто-пути); null в юнит-тестах
+    private readonly Memory.MemoryWriteResolver? _resolver;
 
     // Sibling-стор семантического слоя: data/team-memory-knowledge.json (ключ «owner:project»)
     private readonly string _knowledgeStorePath;
@@ -54,17 +56,21 @@ public class TeamMemoryService
     private readonly MemoryFusionOptions _fusion;
     private readonly int _maxEntries;
     private readonly double _dedupThreshold;
+    // Порог зоны конфликта: кандидаты в [ConflictThreshold, DedupThreshold) идут в LLM-резолвер (Memory #2)
+    private readonly double _conflictThreshold;
 
     // Прибавка важности при повторе факта: дедуп-on-write усиливает существующую запись, а не плодит дубль
     private const double DedupBoost = 0.1;
 
     public TeamMemoryService(IConfiguration config, ILogger<TeamMemoryService>? log = null,
-        KnowledgeService? knowledge = null, UserStore? users = null, ProjectManager? projects = null)
+        KnowledgeService? knowledge = null, UserStore? users = null, ProjectManager? projects = null,
+        Memory.MemoryWriteResolver? resolver = null)
     {
         _log = log;
         _knowledge = knowledge;
         _users = users;
         _projects = projects;
+        _resolver = resolver;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
         _storePath = Path.Combine(dataDir, "team-memory.json");
@@ -82,6 +88,7 @@ public class TeamMemoryService
         _fusion = ReadFusion(config);
         _maxEntries = int.TryParse(config["TeamMemory:MaxEntries"], out var me) && me > 0 ? me : 200;
         _dedupThreshold = ReadDouble(config, "TeamMemory:DedupThreshold", 0.85);
+        _conflictThreshold = ReadDouble(config, "Memory:ConflictThreshold", 0.6);
 
         _kStore = JsonFileStore.Load<Dictionary<string, KnowledgeState>>(_knowledgeStorePath, JsonOpts) ?? new();
         Load();
@@ -220,6 +227,87 @@ public class TeamMemoryService
                 return e;
         }
         return null;
+    }
+
+    // Авто-путь с разрешением ПРОТИВОРЕЧИЙ (Memory #2, Mem0 ADD/UPDATE/DELETE/NOOP). Дубль
+    // (≥DedupThreshold) — как AddAsync (reinforcement). Иначе близкие кандидаты зоны конфликта
+    // [ConflictThreshold, DedupThreshold) отдаются LLM-резолверу: UPDATE дополняет существующий,
+    // DELETE вытесняет устаревший + добавляет новый, ADD кладёт рядом, NOOP отбрасывает (→ null).
+    // Гейтится Enabled+Available; без резолвера/датасета/кандидатов — обычный AddAsync. Ошибки → ADD.
+    public async Task<TeamMemoryEntry?> AddWithResolutionAsync(string ownerId, string projectId, string text,
+        TeamMemoryType type = TeamMemoryType.Fact, TeamMemorySource source = TeamMemorySource.AutoTurn,
+        string? sourceSessionId = null, double? salience = null)
+    {
+        // Резолвер выключен / Dify недоступен → обычный семантический write-path (простой дедуп)
+        if (_resolver is not { Enabled: true } || !Available)
+            return await AddAsync(ownerId, projectId, text, type, source, sourceSessionId, salience);
+
+        var trimmed = text.Trim();
+        var state = GetKnowledgeState(ownerId, projectId);
+        if (string.IsNullOrEmpty(state.DatasetId))   // датасета ещё нет — сопоставлять не с чем
+            return await AddAsync(ownerId, projectId, text, type, source, sourceSessionId, salience);
+
+        try
+        {
+            var (dup, candidates) = await FindDuplicateAndCandidatesAsync(state, type, trimmed);
+            if (dup is not null)   // явный дубль — усиливаем, резолвер не нужен
+            {
+                Reinforce(ownerId, projectId, dup.Id, trimmed, salience);
+                QueueSync(ownerId, projectId);
+                return dup;
+            }
+            if (candidates.Count == 0)   // нет соседей в зоне конфликта — обычное добавление
+                return Add(ownerId, projectId, text, type, source, sourceSessionId, salience);
+
+            var decision = await _resolver.ResolveAsync(trimmed, TypeLabel(type), candidates);
+            switch (decision.Op)
+            {
+                case Memory.MemoryWriteOp.Noop:
+                    return null;   // дубль/незначимо — ничего не добавляем
+                case Memory.MemoryWriteOp.Update when !string.IsNullOrEmpty(decision.TargetId):
+                    // Новый уточняет существующий → заменяем текст target на объединённую формулировку
+                    return Update(ownerId, projectId, decision.TargetId, decision.MergedText!)
+                        ?? Add(ownerId, projectId, text, type, source, sourceSessionId, salience);
+                case Memory.MemoryWriteOp.Delete when !string.IsNullOrEmpty(decision.TargetId):
+                    // Новый делает существующий устаревшим → удаляем target, добавляем новый
+                    Remove(ownerId, projectId, decision.TargetId);
+                    return Add(ownerId, projectId, text, type, source, sourceSessionId, salience);
+                default:   // Add и невалидные Update/Delete
+                    return Add(ownerId, projectId, text, type, source, sourceSessionId, salience);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log?.LogDebug(ex, "team-memory: разрешение записи {Project}", projectId);
+            return Add(ownerId, projectId, text, type, source, sourceSessionId, salience);
+        }
+    }
+
+    // Найти дубль (≥DedupThreshold) и близких кандидатов зоны конфликта [ConflictThreshold, DedupThreshold)
+    // ТОГО ЖЕ типа (Dify retrieve). Дубль (наивысший скор) возвращается сразу с пустым списком кандидатов.
+    private async Task<(TeamMemoryEntry? Dup, List<Memory.MemoryWriteCandidate> Candidates)>
+        FindDuplicateAndCandidatesAsync(KnowledgeState state, TeamMemoryType type, string text)
+    {
+        var candidates = new List<Memory.MemoryWriteCandidate>();
+        var chunks = await _knowledge!.RetrieveAsync(state.DatasetId!, text, 8);
+        if (chunks.Count == 0) return (null, candidates);
+
+        Dictionary<string, string> byDocId;
+        lock (_kLock) byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+
+        List<TeamMemoryEntry> entries;
+        lock (_saveLock) entries = Get(state.OwnerId, state.ProjectId).ToList();
+        var byId = entries.ToDictionary(e => e.Id);
+
+        foreach (var ch in chunks.OrderByDescending(c => c.Score))
+        {
+            if (ch.Score < _conflictThreshold) break;   // дальше только менее близкие — не интересны
+            if (!byDocId.TryGetValue(ch.DocumentId, out var entryId)) continue;
+            if (!byId.TryGetValue(entryId, out var e) || e.Type != type) continue;
+            if (ch.Score >= _dedupThreshold) return (e, candidates);   // явный дубль
+            candidates.Add(new Memory.MemoryWriteCandidate(e.Id, e.Text));
+        }
+        return (null, candidates);
     }
 
     // Reinforcement при повторе факта: усилить важность и взять более полный текст (если новый длиннее).

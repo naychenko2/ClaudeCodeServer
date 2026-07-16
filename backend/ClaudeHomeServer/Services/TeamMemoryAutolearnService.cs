@@ -109,17 +109,19 @@ public sealed class TeamMemoryAutolearnService : IHostedService
             if (items.Count == 0) return;
 
             string? lastId = null;
+            var saved = 0;
             foreach (var item in items)
             {
-                // Семантический write-path: близкий по смыслу факт усилит существующую запись,
-                // а не создаст дубль (при Dify); без Dify — точный дедуп внутри Add
-                var entry = await _memory.AddAsync(ownerId, projectId, item.Text, item.Type, source, sessionId, item.Salience);
-                lastId = entry.Id;
+                // Авто-путь с разрешением противоречий (Memory #2): дубль усилит существующую запись,
+                // конфликт → LLM-резолвер (UPDATE/DELETE), иначе ADD; NOOP (дубль/незначимо) → null.
+                var entry = await _memory.AddWithResolutionAsync(ownerId, projectId, item.Text, item.Type, source, sessionId, item.Salience);
+                if (entry is not null) { lastId = entry.Id; saved++; }
             }
+            if (saved == 0) return;   // всё отброшено резолвером — уборку/уведомления не гоняем
 
             _log.LogInformation(
                 "team-autolearn: проект {Project}, сессия {Session} — {Count} записей командной памяти",
-                projectId, sessionId, items.Count);
+                projectId, sessionId, saved);
 
             // Потолок памяти команды: механическое вытеснение хвоста сверх TeamMemory:MaxEntries —
             // сразу, чтобы стор не рос неограниченно при одном лишь autolearn
@@ -136,7 +138,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
 
             // Активность-лента проекта
             _events?.Append(projectId, ownerId, ProjectEventTypes.MemoryLearned, "team",
-                $"Команда: запомнила {items.Count} факт(ов) проекта", sessionId);
+                $"Команда: запомнила {saved} факт(ов) проекта", sessionId);
         }
         catch (Exception ex)
         {

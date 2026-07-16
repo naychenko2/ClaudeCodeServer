@@ -50,6 +50,8 @@ public class TeamMemoryService
 
     // Параметры скоринга (взвешенная сумма) и потолок памяти
     private readonly MemoryScoringOptions _scoring;
+    // Параметры гибридного retrieval (слияние semantic+keyword) — Memory:Fusion:*
+    private readonly MemoryFusionOptions _fusion;
     private readonly int _maxEntries;
     private readonly double _dedupThreshold;
 
@@ -77,6 +79,7 @@ public class TeamMemoryService
             ReadDouble(config, "TeamMemory:Score:TypeWeight", d.TypeWeight),
             ReadDouble(config, "TeamMemory:Score:RecencyHalfLifeDays", d.RecencyHalfLifeDays),
             ReadDouble(config, "TeamMemory:Score:MinRelevance", d.MinRelevance));
+        _fusion = ReadFusion(config);
         _maxEntries = int.TryParse(config["TeamMemory:MaxEntries"], out var me) && me > 0 ? me : 200;
         _dedupThreshold = ReadDouble(config, "TeamMemory:DedupThreshold", 0.85);
 
@@ -86,6 +89,18 @@ public class TeamMemoryService
 
     private static double ReadDouble(IConfiguration config, string key, double fallback) =>
         double.TryParse(config[key], System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
+
+    // Параметры гибридного retrieval из конфига Memory:Fusion:* (общие для персоны и команды)
+    private static MemoryFusionOptions ReadFusion(IConfiguration config)
+    {
+        var d = MemoryFusionOptions.Default;
+        return new MemoryFusionOptions(
+            SemanticWeight: ReadDouble(config, "Memory:Fusion:SemanticWeight", d.SemanticWeight),
+            KeywordWeight: ReadDouble(config, "Memory:Fusion:KeywordWeight", d.KeywordWeight),
+            Method: string.Equals(config["Memory:Fusion:Method"], "rrf", StringComparison.OrdinalIgnoreCase)
+                ? MemoryFusionMethod.Rrf : MemoryFusionMethod.WeightedSum,
+            RrfK: ReadDouble(config, "Memory:Fusion:RrfK", d.RrfK));
+    }
 
     // Настроен ли семантический слой (Dify). Без него — полнотекстовый fallback.
     public bool Available => _knowledge?.IsConfigured == true;
@@ -305,18 +320,25 @@ public class TeamMemoryService
         return MemoryFulltext.Rank(snapshot, query, topK, e => e.Text);
     }
 
-    // Ранжирование через Dify: релевантность по чанкам → взвешенная сумма TeamMemoryScorer → topK
+    // Ранжирование через Dify: гибридная релевантность (semantic Dify + keyword полнотекст) →
+    // взвешенная сумма TeamMemoryScorer → topK
     private async Task<List<TeamMemoryEntry>> RankViaDifyAsync(
         KnowledgeState state, IReadOnlyList<TeamMemoryEntry> snapshot, string query, int topK)
     {
         Dictionary<string, string> byDocId;
         lock (_kLock) byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
 
+        // Гибридный retrieval: semantic (Dify) + keyword (полнотекст) сливаются в единый relevance.
+        // Keyword добирает точные термины/идентификаторы, которые вектор пропускает (③-#3).
         var chunks = await _knowledge!.RetrieveAsync(state.DatasetId!, query, Math.Max(topK, 12));
-        var relevance = new Dictionary<string, double>();
+        var semantic = new Dictionary<string, double>();
         foreach (var ch in chunks)
             if (byDocId.TryGetValue(ch.DocumentId, out var entryId))
-                relevance[entryId] = Math.Max(relevance.GetValueOrDefault(entryId), ch.Score);
+                semantic[entryId] = Math.Max(semantic.GetValueOrDefault(entryId), ch.Score);
+        // Keyword-сигнал считаем по всему снапшоту (не только по кандидатам Dify): дёшево и позволяет
+        // всплыть точному совпадению, не попавшему в топ-чанки Dify.
+        var keyword = MemoryFulltext.Relevance(snapshot, query, e => e.Id, e => e.Text, e => e.Tags);
+        var relevance = MemoryRetrievalFusion.Fuse(semantic, keyword, _fusion);
 
         var now = DateTime.UtcNow;
         return snapshot

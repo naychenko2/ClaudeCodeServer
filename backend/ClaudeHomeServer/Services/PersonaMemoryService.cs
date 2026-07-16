@@ -36,6 +36,8 @@ public sealed class PersonaMemoryService
     private readonly ILogger<PersonaMemoryService> _logger;
     private readonly string _storePath;
     private readonly MemoryScoringOptions _scoring;
+    // Параметры гибридного retrieval (слияние semantic+keyword) — Memory:Fusion:*
+    private readonly MemoryFusionOptions _fusion;
     // Потолки памяти (не гейтятся флагом консолидации — жёсткая защита от разрастания)
     private readonly int _maxEntries;
     private readonly int _maxEpisodic;
@@ -68,6 +70,7 @@ public sealed class PersonaMemoryService
             ReadDouble(config, "Persona:Score:TypeWeight", d.TypeWeight),
             ReadDouble(config, "Persona:Score:RecencyHalfLifeDays", d.RecencyHalfLifeDays),
             ReadDouble(config, "Persona:Score:MinRelevance", d.MinRelevance));
+        _fusion = ReadFusion(config);
         _maxEntries = int.TryParse(config["Persona:MemoryMaxEntries"], out var me) && me > 0 ? me : 150;
         _maxEpisodic = int.TryParse(config["Persona:MemoryMaxEpisodic"], out var mep) && mep > 0 ? mep : 40;
         _dedupThreshold = ReadDouble(config, "Persona:DedupThreshold", 0.85);
@@ -77,6 +80,18 @@ public sealed class PersonaMemoryService
 
     private static double ReadDouble(IConfiguration config, string key, double fallback) =>
         double.TryParse(config[key], System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
+
+    // Параметры гибридного retrieval из конфига Memory:Fusion:* (общие для персоны и команды)
+    private static MemoryFusionOptions ReadFusion(IConfiguration config)
+    {
+        var d = MemoryFusionOptions.Default;
+        return new MemoryFusionOptions(
+            SemanticWeight: ReadDouble(config, "Memory:Fusion:SemanticWeight", d.SemanticWeight),
+            KeywordWeight: ReadDouble(config, "Memory:Fusion:KeywordWeight", d.KeywordWeight),
+            Method: string.Equals(config["Memory:Fusion:Method"], "rrf", StringComparison.OrdinalIgnoreCase)
+                ? MemoryFusionMethod.Rrf : MemoryFusionMethod.WeightedSum,
+            RrfK: ReadDouble(config, "Memory:Fusion:RrfK", d.RrfK));
+    }
 
     public bool Available => _knowledge.IsConfigured;
 
@@ -269,12 +284,20 @@ public sealed class PersonaMemoryService
         Dictionary<string, double> relevance;
         if (Available && !string.IsNullOrEmpty(state.DatasetId))
         {
+            // Гибридный retrieval: semantic (Dify) + keyword (полнотекст) сливаются в единый relevance.
+            // Keyword добирает точные термины/идентификаторы, которые вектор пропускает (③-#3).
             var byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
             var chunks = await _knowledge.RetrieveAsync(state.DatasetId!, query, Math.Max(topK, 12));
-            relevance = new();
+            var semantic = new Dictionary<string, double>();
             foreach (var ch in chunks)
                 if (byDocId.TryGetValue(ch.DocumentId, out var entryId))
-                    relevance[entryId] = Math.Max(relevance.GetValueOrDefault(entryId), ch.Score);
+                    semantic[entryId] = Math.Max(semantic.GetValueOrDefault(entryId), ch.Score);
+            // Keyword-сигнал считаем по всему скоупу (а не только по кандидатам Dify): дёшево
+            // (in-memory подстроки по ≤150 записям) и позволяет всплыть точному совпадению, которое
+            // в топ-чанки Dify не попало вовсе.
+            var keyword = MemoryFulltext.Relevance(entriesSnapshot, query,
+                e => e.Id, e => e.Text, e => e.Tags);
+            relevance = MemoryRetrievalFusion.Fuse(semantic, keyword, _fusion);
         }
         else
         {

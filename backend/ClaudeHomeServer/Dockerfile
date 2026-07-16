@@ -32,6 +32,12 @@ COPY --from=frontend /src/frontend/dist /app/publish/wwwroot
 # ===== 4. Runtime: node:22 (node+npm+git+bash) + .NET runtime + claude CLI =====
 # База — официальный node-образ (на buildpack-deps): уже содержит node, npm, git, bash.
 # .NET-runtime копируем из образа Microsoft, claude ставим из npm — без apt/nuget/nodesource.
+# ===== PTY-bridge (C-хелпер forkpty) =====
+FROM gcc:latest AS pty-bridge
+WORKDIR /src
+COPY backend/pty-bridge/pty-bridge.c ./
+RUN gcc -O2 -static -o pty-bridge pty-bridge.c -lutil
+
 FROM node:22-bookworm AS runtime
 
 # .NET 9 runtime из официального образа (вся раскладка /usr/share/dotnet + муксер)
@@ -51,6 +57,7 @@ RUN npm install -g skills
 RUN useradd -m -u 1001 app
 WORKDIR /app
 
+COPY --from=pty-bridge /src/pty-bridge /app/pty-bridge
 COPY --from=backend /app/publish ./
 COPY --from=mcp /src/mcp-dify/dist        ./mcp-dify/dist
 COPY --from=mcp /src/mcp-dify/node_modules ./mcp-dify/node_modules

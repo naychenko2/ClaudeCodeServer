@@ -18,6 +18,7 @@ export interface Project {
   difyDatasetId?: string;
   systemPrompt?: string;
   showHiddenFiles?: boolean;
+  toolsEnabled?: boolean;        // вкладка «Инструменты» (терминал + preview)
   permissionRules?: PermissionRule[];
   boardColumns?: BoardColumn[];   // кастомные колонки Kanban-доски; отсутствует = дефолтные 3
   builtInSystemPrompt?: string;
@@ -30,6 +31,20 @@ export interface BoardColumn {
   name: string;
   category: TaskStatus;   // 'todo' | 'inProgress' | 'done'
   color?: string;
+}
+
+// Элемент доски агентов (диспетчерская: GET /api/board/agents)
+export interface BoardItem {
+  taskId: string;
+  title: string;
+  projectId?: string;
+  sessionId?: string;
+  column: 'queue' | 'working' | 'waiting' | 'done';
+  sessionStatus: string;
+  personaId?: string;
+  currentToolName?: string;
+  startedAt?: string;
+  permissionPending: boolean;
 }
 
 // Часть эффективного системного промпта (в порядке отправки в claude)

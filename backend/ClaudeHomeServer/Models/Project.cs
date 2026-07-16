@@ -13,6 +13,7 @@ public class Project
     public string? DifyDatasetId { get; set; }
     public string? SystemPrompt { get; set; }
     public bool ShowHiddenFiles { get; set; } = false;
+    public bool ToolsEnabled { get; set; } = false;
     public Dictionary<string, List<string>>? DocumentTags { get; set; }
     // Правила авто-разрешений/запретов для permission-запросов (см. PermissionRule)
     public List<PermissionRule>? PermissionRules { get; set; }

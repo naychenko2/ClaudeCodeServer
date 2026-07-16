@@ -30,6 +30,8 @@ import { ensurePersonasLoaded } from '../lib/personas';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
 import type { PersonaView } from '../features/personas/PersonaToolbar';
 import { TeamCommandCenter } from '../features/personas/TeamCommandCenter';
+import { TerminalPanel } from '../components/terminal/TerminalPanel';
+import { PreviewPanel } from '../components/preview/PreviewPanel';
 
 interface Props {
   project: Project;
@@ -40,7 +42,7 @@ interface Props {
   onLogout: () => void;
 }
 
-type LeftTab = 'sessions' | 'files' | 'tasks' | 'personas';
+type LeftTab = 'sessions' | 'files' | 'tasks' | 'personas' | 'tools';
 type FileSubTab = 'files' | 'knowledge';
 
 // Иконки вкладок проекта для мобильного компакт-режима (Feather-стиль, как HubTabs)
@@ -53,6 +55,7 @@ const LEFT_TAB_ICONS: Record<LeftTab, React.ReactNode> = {
   files: leftTabSvg(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />),
   tasks: leftTabSvg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>),
   personas: leftTabSvg(<><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" /></>),
+  tools: leftTabSvg(<><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></>),
 };
 
 function useWindowWidth() {
@@ -93,8 +96,8 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     // Сохранённое 'agents' — ключ до переименования вкладки персон
     const saved = (savedRaw as string) === 'agents' ? 'personas' : savedRaw;
     const ok = saved === 'sessions' || saved === 'files' || saved === 'tasks'
-      || saved === 'personas';
-    return ok ? saved! : 'sessions';
+      || saved === 'personas' || saved === 'tools';
+    return ok && (saved !== 'tools' || project.toolsEnabled) ? saved! : 'sessions';
   });
   const [fileSubTab, setFileSubTab] = useState<FileSubTab>(() => loadWorkspaceState(project.id)?.fileSubTab ?? 'files');
   const [activeSession, setActiveSession] = useState<Session | null>(() => {
@@ -133,6 +136,8 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   }, [project.id]);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
+  type ToolsTab = 'terminal' | 'preview';
+  const [toolsTab, setToolsTab] = useState<ToolsTab>('terminal');
   const activeSessionRef = useRef<Session | null>(null);
   activeSessionRef.current = activeSession;
 
@@ -347,6 +352,7 @@ const windowWidth = useWindowWidth();
     { value: 'files', label: 'Файлы' },
     { value: 'tasks', label: 'Задачи' },
     { value: 'personas' as LeftTab, label: 'Команда' },
+    ...(project.toolsEnabled ? [{ value: 'tools' as LeftTab, label: 'Инструменты' }] : []),
   ];
   // Мобильный компакт-режим переключателя: неактивные вкладки иконками,
   // подпись только у активной (как HubTabs) — 4 вкладки помещаются без обрезания
@@ -745,7 +751,24 @@ const windowWidth = useWindowWidth();
     }
   }, [project.id, knowledgeDocMap]);
 
-
+  const ToolsPane = ({ projectId }: { projectId: string }) => (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ flexShrink: 0, padding: '10px 12px', borderBottom: `1px solid ${C.border}` }}>
+        <PillSwitch<ToolsTab>
+          value={toolsTab}
+          options={[
+            { value: 'terminal' as ToolsTab, label: 'Терминал' },
+            { value: 'preview' as ToolsTab, label: 'Preview' },
+          ]}
+          onChange={setToolsTab}
+          fill
+        />
+      </div>
+      {toolsTab === 'terminal'
+        ? <TerminalPanel projectId={projectId} />
+        : <PreviewPanel projectId={projectId} />}
+    </div>
+  );
 
   const Sidebar = (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel, flexShrink: 0, height: '100%' }}>
@@ -825,6 +848,8 @@ const windowWidth = useWindowWidth();
           <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
         ) : leftTab === 'personas' ? (
           <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
+        ) : leftTab === 'tools' ? (
+          <ToolsPane projectId={project.id} />
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
@@ -874,6 +899,8 @@ const windowWidth = useWindowWidth();
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
               : leftTab === 'personas'
               ? <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
+              : leftTab === 'tools'
+              ? <ToolsPane projectId={project.id} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'

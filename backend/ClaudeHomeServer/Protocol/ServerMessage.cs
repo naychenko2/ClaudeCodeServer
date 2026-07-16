@@ -104,6 +104,18 @@ public record CompactStatusMessage(string? Status, string? CompactResult = null,
 public record ExitedMessage()
     : ServerMessage("exited");
 
+// Terminal PTY: вывод от сервера к клиенту (Data = фрагмент текста)
+public record TerminalOutputMessage(string Data, bool IsError = false)
+    : ServerMessage("terminal_output");
+
+// Terminal PTY: смена статуса (starting/running/stopped/error)
+public record TerminalStatusMessage(string Status, int? ExitCode = null)
+    : ServerMessage("terminal_status");
+
+// Preview dev-server: смена статуса
+public record PreviewStatusMessage(string Status, int? Port = null, string? Error = null)
+    : ServerMessage("preview_status");
+
 public record StatusChangedMessage(string Status, string? LastMessage = null, int MessageCount = 0)
     : ServerMessage("status_changed");
 

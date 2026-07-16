@@ -842,6 +842,12 @@ const windowWidth = useWindowWidth();
   const handleTabSwitch = (tab: LeftTab) => {
     setLeftTab(tab);
     if (isMobile) setMobileView('sidebar');
+    // Синхронизируем историю с активной вкладкой. Уходя с «Команды», убираем persona из
+    // записи — иначе «назад» (например из открытого файла) по устаревшей записи с
+    // persona:null восстановит командный центр вместо возврата к списку вкладки.
+    if (tab !== 'personas') {
+      navReplace({ screen: 'project', project, view: 'sidebar', file: openFile ?? null, task: null });
+    }
   };
 
   const handleAddToKnowledge = useCallback(async (relativePath: string) => {

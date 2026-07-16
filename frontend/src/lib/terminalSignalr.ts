@@ -79,13 +79,14 @@ export async function renameTerminal(terminalId: string, name: string): Promise<
 export async function sendTerminalInput(terminalId: string, data: string): Promise<void> {
   const conn = getConnection()
   if (conn.state !== signalR.HubConnectionState.Connected) return
-  await conn.invoke('TerminalInput', terminalId, data)
+  // fire-and-forget: терминал мог закрыться (гонка) — сервер отклонит вызов, ввод игнорируем
+  try { await conn.invoke('TerminalInput', terminalId, data) } catch { /* закрыт/чужой */ }
 }
 
 export async function resizeTerminal(terminalId: string, cols: number, rows: number): Promise<void> {
   const conn = getConnection()
   if (conn.state !== signalR.HubConnectionState.Connected) return
-  await conn.invoke('TerminalResize', terminalId, cols, rows)
+  try { await conn.invoke('TerminalResize', terminalId, cols, rows) } catch { /* закрыт/чужой */ }
 }
 
 type TerminalMsgHandler = (msg: {

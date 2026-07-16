@@ -265,6 +265,10 @@ public sealed class TerminalService : IDisposable
         }
     }
 
+    /// <summary>Владеет ли пользователь терминалом (существует и принадлежит ему).</summary>
+    public bool Owns(string terminalId, string userId)
+        => _terminals.TryGetValue(terminalId, out var instance) && instance.UserId == userId;
+
     public async Task WriteInputAsync(string terminalId, string data)
     {
         if (_terminals.TryGetValue(terminalId, out var instance))

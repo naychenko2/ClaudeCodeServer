@@ -79,7 +79,7 @@ type PillGeom = { left: number; width: number };
 // так тап между вкладками анимируется, а не перескакивает.
 const pillMemory = new Map<string, PillGeom>();
 
-export function PillSwitch<T extends string>({ value, options, onChange, fill, isMobile, draggable, persistKey, compact, variant = 'default' }: {
+export function PillSwitch<T extends string>({ value, options, onChange, fill, isMobile, draggable, persistKey, compact, autoCompact, variant = 'default' }: {
   value: T;
   options: { value: T; label: string; icon?: ReactNode }[];
   onChange: (v: T) => void;
@@ -87,16 +87,30 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
   isMobile?: boolean;
   draggable?: boolean;
   persistKey?: string;
-  // Компактный режим (узкие экраны): неактивные сегменты — только иконка,
-  // подпись видна лишь у активного; пилюля перетекает в новую ширину сама.
   compact?: boolean;
-  // 'hub' — навигатор верхнего уровня: своя «чернильная» гамма мимо accent
-  // (тёмная плашка активного, кремовый текст), без утопленной дорожки —
-  // чтобы отличаться от локальных переключателей внутри панелей.
+  /** Авто-компакт: включает compact при переполнении трека */
+  autoCompact?: boolean;
   variant?: 'default' | 'hub';
 }) {
   const hub = variant === 'hub';
   const trackRef = useRef<HTMLDivElement>(null);
+  const [overflowCompact, setOverflowCompact] = useState(false);
+  const effectiveCompact = compact ?? (autoCompact ? overflowCompact : false);
+
+  // ResizeObserver для авто-детекта переполнения
+  useEffect(() => {
+    if (!autoCompact || !trackRef.current) return;
+    const measure = () => {
+      const track = trackRef.current;
+      if (!track) return;
+      const itemsWidth = Array.from(track.children).reduce((acc, child) => acc + (child as HTMLElement).offsetWidth, 0);
+      setOverflowCompact(itemsWidth > track.offsetWidth);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(trackRef.current);
+    return () => ro.disconnect();
+  }, [autoCompact, options]);
   const btnRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const suppressClick = useRef(false);               // гасим клик, если это был drag
 
@@ -247,7 +261,7 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
         const active = highlight === i;
         // В compact подпись привязана к value (не к highlight): при drag ширины
         // сегментов не меняются под пальцем — снапшот rects остаётся валидным
-        const showLabel = !compact || opt.value === value;
+        const showLabel = !effectiveCompact || opt.value === value;
         return (
           <button key={opt.value} ref={el => { btnRefs.current[i] = el; }}
             onClick={() => { if (suppressClick.current) return; onChange(opt.value); }}
@@ -255,10 +269,10 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
             style={{
               position: 'relative', zIndex: 1,
               flex: fill ? 1 : undefined,
-              padding: compact ? (showLabel ? '0 12px' : '0 11px') : isMobile ? '8px 12px' : '6px 12px',
-              minHeight: compact ? 40 : isMobile ? 40 : 32,
+              padding: effectiveCompact ? (showLabel ? '0 12px' : '0 11px') : isMobile ? '8px 12px' : '6px 12px',
+              minHeight: effectiveCompact ? 40 : isMobile ? 40 : 32,
               borderRadius: TB.pillRadius - 2, border: 'none', cursor: 'pointer',
-              fontSize: compact ? 12 : 13, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap',
+              fontSize: effectiveCompact ? 12 : 13, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap',
               transition: 'color 0.15s',
               background: 'transparent',
               color: active ? (hub ? C.onNavInk : C.textHeading) : C.textSecondary,

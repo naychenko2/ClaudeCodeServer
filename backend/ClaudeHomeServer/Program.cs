@@ -139,6 +139,8 @@ builder.Services.AddHostedService<NoteExpiryService>();
 // Терминал (PTY) и Preview (dev-server) — под гейтом workspace-destructive
 builder.Services.AddSingleton<TerminalService>();
 builder.Services.AddSingleton<DevServerService>();
+builder.Services.AddSingleton<LaunchConfigService>();
+builder.Services.AddSingleton<ProjectServiceDiscovery>();
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");
 builder.Services.AddHttpClient("fal");
@@ -396,9 +398,9 @@ app.Use(async (ctx, next) =>
             var restPath = match.Groups[2].Value ?? "/";
 
             var devServer = ctx.RequestServices.GetRequiredService<DevServerService>();
-            // В MVP проверка порта — если сервер не запущен, 503.
+            // Порт активного для превью сервиса проекта; если ни один не запущен — 503.
             // Аутентификация: iframe внутри приложения, которое уже за [Authorize].
-            var port = devServer.GetPortNoAuth(projectId);
+            var port = devServer.GetActivePreviewPort(projectId);
             if (port is null)
             {
                 ctx.Response.StatusCode = 503;

@@ -112,8 +112,8 @@ public record TerminalOutputMessage(string Data, bool IsError = false, string? T
 public record TerminalStatusMessage(string Status, int? ExitCode = null, string? TerminalId = null)
     : ServerMessage("terminal_status");
 
-// Preview dev-server: смена статуса
-public record PreviewStatusMessage(string Status, int? Port = null, string? Error = null)
+// Preview dev-server: смена статуса конкретного сервиса
+public record PreviewStatusMessage(string Status, int? Port = null, string? Error = null, string? ServiceId = null)
     : ServerMessage("preview_status");
 
 public record StatusChangedMessage(string Status, string? LastMessage = null, int MessageCount = 0)

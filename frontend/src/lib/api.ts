@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
@@ -130,15 +130,32 @@ export const api = {
     // Кастомные колонки Kanban-доски проекта (пустой массив → дефолтные 3)
     updateBoardColumns: (id: string, columns: BoardColumn[]) =>
       request<Project>(`/projects/${id}/board-columns`, { method: 'PUT', body: JSON.stringify({ columns }) }),
-    // Dev-server live preview
-    previewStart: (id: string, command: string, args: string[], port?: number) =>
-      request<{ status: string; port?: number; error?: string }>(`/projects/${id}/preview/start`, {
-        method: 'POST', body: JSON.stringify({ command, args, port }),
+    // Preview: сервисы проекта (инференс из манифестов + сохранённые в .claude/launch.json)
+    services: (id: string) =>
+      request<{ services: ProjectService[]; activeServiceId: string | null }>(`/projects/${id}/services`),
+    previewStart: (id: string, svc: {
+      serviceId: string; name: string; command: string; args: string[];
+      cwd?: string; port?: number; autoPort?: boolean; env?: Record<string, string>;
+    }) =>
+      request<{ status: string; port?: number; error?: string; serviceId: string }>(`/projects/${id}/preview/start`, {
+        method: 'POST', body: JSON.stringify(svc),
       }),
-    previewStop: (id: string) =>
-      request<void>(`/projects/${id}/preview/stop`, { method: 'POST' }),
+    previewStop: (id: string, serviceId: string) =>
+      request<{ status: string }>(`/projects/${id}/preview/stop`, {
+        method: 'POST', body: JSON.stringify({ serviceId }),
+      }),
     previewStatus: (id: string) =>
-      request<{ status: string; port?: number }>(`/projects/${id}/preview/status`),
+      request<{ running: { serviceId: string; name: string; port: number | null; status: string; error: string | null }[]; activeServiceId: string | null }>(`/projects/${id}/preview/status`),
+    previewActive: (id: string, serviceId: string) =>
+      request<{ activeServiceId: string }>(`/projects/${id}/preview/active`, {
+        method: 'POST', body: JSON.stringify({ serviceId }),
+      }),
+    getLaunchConfig: (id: string) =>
+      request<{ configurations: LaunchConfigEntry[] }>(`/projects/${id}/launch-config`),
+    putLaunchConfig: (id: string, configurations: LaunchConfigEntry[]) =>
+      request<{ configurations: LaunchConfigEntry[] }>(`/projects/${id}/launch-config`, {
+        method: 'PUT', body: JSON.stringify({ configurations }),
+      }),
   },
 
   // Доска агентов (диспетчерская)

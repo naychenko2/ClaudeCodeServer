@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { Project, Session, SkillsData, AuthState, Task } from '../types';
+import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
+import type { Project, Session, SkillsData, AuthState, Task, ProjectService } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
@@ -30,7 +30,7 @@ import { ensurePersonasLoaded } from '../lib/personas';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
 import type { PersonaView } from '../features/personas/PersonaToolbar';
 import { TeamCommandCenter } from '../features/personas/TeamCommandCenter';
-import { ToolsSidebar, type PreviewSession } from '../components/tools/ToolsSidebar';
+import { ToolsSidebar } from '../components/tools/ToolsSidebar';
 import { TerminalView } from '../components/terminal/TerminalView';
 import { PreviewView } from '../components/preview/PreviewView';
 
@@ -141,7 +141,56 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const [toolsTab, setToolsTab] = useState<ToolsTab>('terminal');
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
   const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
-  const [previewSessions, setPreviewSessions] = useState<PreviewSession[]>([]);
+  const [previewServices, setPreviewServices] = useState<ProjectService[]>([]);
+  const [terminalBusy, setTerminalBusy] = useState(false);
+
+  // ── Preview: список сервисов проекта + запуск/остановка ─────────────────
+  const refreshServices = useCallback(async () => {
+    try {
+      const r = await api.projects.services(project.id);
+      setPreviewServices(r.services);
+      if (r.activeServiceId) setActivePreviewId(r.activeServiceId);
+    } catch { /* офлайн — оставляем как есть */ }
+  }, [project.id]);
+
+  const startService = useCallback(async (svc: ProjectService) => {
+    setPreviewServices(prev => prev.map(s => s.id === svc.id ? { ...s, status: 'starting', error: null } : s));
+    setActivePreviewId(svc.id);
+    setToolsTab('preview');
+    try {
+      const r = await api.projects.previewStart(project.id, {
+        serviceId: svc.id, name: svc.name, command: svc.command, args: svc.args,
+        cwd: svc.cwd ?? undefined, port: svc.suggestedPort ?? undefined, autoPort: svc.autoPort,
+      });
+      setPreviewServices(prev => prev.map(s => s.id === svc.id
+        ? { ...s, status: r.status, runningPort: r.port ?? null, error: r.error ?? null }
+        : s));
+    } catch {
+      setPreviewServices(prev => prev.map(s => s.id === svc.id ? { ...s, status: 'error' } : s));
+    }
+  }, [project.id]);
+
+  const stopService = useCallback(async (serviceId: string) => {
+    try { await api.projects.previewStop(project.id, serviceId); } catch { /* ignore */ }
+    setPreviewServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'stopped', runningPort: null } : s));
+  }, [project.id]);
+
+  const selectPreview = useCallback(async (serviceId: string) => {
+    setActivePreviewId(serviceId);
+    setToolsTab('preview');
+    try { await api.projects.previewActive(project.id, serviceId); } catch { /* ignore */ }
+  }, [project.id]);
+
+  // Живой статус сервисов из broadcast preview_status (группа user_*)
+  useEffect(() => {
+    return onMessage(msg => {
+      if (msg.type !== 'preview_status' || !msg.serviceId) return;
+      const sid = msg.serviceId;
+      setPreviewServices(prev => prev.map(s => s.id === sid
+        ? { ...s, status: msg.status, runningPort: msg.port ?? s.runningPort, error: msg.error ?? null }
+        : s));
+    });
+  }, []);
   const activeSessionRef = useRef<Session | null>(null);
   activeSessionRef.current = activeSession;
 
@@ -351,16 +400,13 @@ const windowWidth = useWindowWidth();
     } catch { /* офлайн — остаёмся на задаче */ }
   };
 
-  const leftTabOptions: { value: LeftTab; label: string }[] = [
-    { value: 'sessions', label: 'Чаты' },
-    { value: 'files', label: 'Файлы' },
-    { value: 'tasks', label: 'Задачи' },
-    { value: 'personas' as LeftTab, label: 'Команда' },
-    ...(project.toolsEnabled ? [{ value: 'tools' as LeftTab, label: 'Инструменты' }] : []),
+  const leftTabOptions: { value: LeftTab; label: string; icon?: ReactNode }[] = [
+    { value: 'sessions', label: 'Чаты', icon: LEFT_TAB_ICONS.sessions },
+    { value: 'files', label: 'Файлы', icon: LEFT_TAB_ICONS.files },
+    { value: 'tasks', label: 'Задачи', icon: LEFT_TAB_ICONS.tasks },
+    { value: 'personas' as LeftTab, label: 'Команда', icon: LEFT_TAB_ICONS.personas },
+    ...(project.toolsEnabled ? [{ value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools }] : []),
   ];
-  // Мобильный компакт-режим переключателя: неактивные вкладки иконками,
-  // подпись только у активной (как HubTabs) — 4 вкладки помещаются без обрезания
-  const leftTabOptionsMobile = leftTabOptions.map(o => ({ ...o, icon: LEFT_TAB_ICONS[o.value] }));
 
   // «Поговорить» из проектной вкладки «Команда»: сессия персоны создаётся в этом
   // проекте — открываем её на месте (переключаемся на «Чаты» и выбираем).
@@ -756,22 +802,61 @@ const windowWidth = useWindowWidth();
   }, [project.id, knowledgeDocMap]);
 
   const ToolsPane = ({ projectId }: { projectId: string }) => {
-    const activePreview = previewSessions.find(p => p.id === activePreviewId);
+    const activePreview = previewServices.find(s => s.id === activePreviewId);
     return (
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        {toolsTab === 'terminal' && activeTerminalId ? (
-          <TerminalView terminalId={activeTerminalId} />
-        ) : toolsTab === 'preview' && activePreview ? (
-          <PreviewView
-            preview={activePreview}
-            projectId={projectId}
-            onStop={id => setPreviewSessions(prev => prev.filter(p => p.id !== id))}
-          />
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>
-            {toolsTab === 'terminal' ? 'Выберите или создайте терминал' : 'Запустите dev-сервер'}
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        {/* Хедер контентной зоны — как у других панелей */}
+        <div style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center',
+          height: 52, padding: '0 14px',
+          borderBottom: `1px solid ${C.divider}`, background: C.bgMain,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+            {toolsTab === 'terminal' ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textHeading}
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textHeading}
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" />
+              </svg>
+            )}
+            <span style={{ fontSize: 14, fontWeight: 600, color: C.textHeading }}>
+              {toolsTab === 'terminal' ? 'Терминал' : 'Preview'}
+            </span>
+            {/* Индикатор активности терминала */}
+            {toolsTab === 'terminal' && activeTerminalId && (
+              <span style={{
+                fontSize: 11, color: terminalBusy ? C.warning : C.success,
+                display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8,
+              }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: terminalBusy ? C.warning : C.success,
+                }} />
+                {terminalBusy ? 'выполняется…' : 'готов'}
+              </span>
+            )}
           </div>
-        )}
+        </div>
+        {/* Контент */}
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          {toolsTab === 'terminal' && activeTerminalId ? (
+            <TerminalView terminalId={activeTerminalId} onActivity={setTerminalBusy} />
+          ) : toolsTab === 'preview' && activePreview ? (
+            <PreviewView
+              service={activePreview}
+              projectId={projectId}
+              onStop={stopService}
+            />
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>
+              {toolsTab === 'terminal' ? 'Выберите или создайте терминал' : 'Запустите dev-сервер'}
+            </div>
+          )}
+        </div>
       </div>
     );
   };
@@ -844,6 +929,7 @@ const windowWidth = useWindowWidth();
             options={leftTabOptions}
             onChange={handleTabSwitch}
             fill
+            autoCompact
           />
         </div>
       )}
@@ -857,8 +943,10 @@ const windowWidth = useWindowWidth();
         ) : leftTab === 'tools' ? (
           <ToolsSidebar projectId={project.id} activeTab={toolsTab} onTabChange={setToolsTab}
             activeTerminalId={activeTerminalId} onSelectTerminal={setActiveTerminalId}
-            activePreviewId={activePreviewId} onSelectPreview={setActivePreviewId}
-            previewSessions={previewSessions} onPreviewSessionsChange={setPreviewSessions} />
+            activePreviewId={activePreviewId} previewServices={previewServices}
+            onRefreshServices={refreshServices} onStartService={startService}
+            onStopService={stopService} onSelectPreview={selectPreview}
+            terminalBusy={terminalBusy} />
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
@@ -883,7 +971,7 @@ const windowWidth = useWindowWidth();
             </BackButton>
             <PillSwitch<LeftTab>
               value={leftTab}
-              options={leftTabOptionsMobile}
+              options={leftTabOptions}
               onChange={handleTabSwitch}
               isMobile
               compact
@@ -923,7 +1011,9 @@ const windowWidth = useWindowWidth();
         </div>
         {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
-          {personasMode
+          {leftTab === 'tools'
+            ? <ToolsPane projectId={project.id} />
+            : personasMode
             ? ((selectedPersonaId || personaCreating)
                 ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} initialView={pendingPersonaView} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} onBack={handlePersonaCleared} />
                 : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />)
@@ -1039,8 +1129,25 @@ const windowWidth = useWindowWidth();
           </div>
         );
 
-        // Вкладка «Команда»: центральная зона = широкая форма профиля персоны (тулбар
-        // сверху) либо пустой стейт. Сайдбар держит только список.
+        // Вкладка «Инструменты»: центральная зона = TerminalView или PreviewView
+        if (leftTab === 'tools') {
+          const collapsedBar = sidebarMode === 'collapsed' && (
+            <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
+              <IconButton size="md" variant="soft" onClick={() => setSidebarMode('open')} title="Открыть панель">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                  <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                </svg>
+              </IconButton>
+            </div>
+          );
+          return (
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              {collapsedBar}
+              <ToolsPane projectId={project.id} />
+            </div>
+          );
+        }
+
         if (personasMode) {
           const collapsedBar = sidebarMode === 'collapsed' && (
             <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
@@ -1063,6 +1170,11 @@ const windowWidth = useWindowWidth();
           );
         }
 
+        // Вкладка «Инструменты» — сразу ToolsPane, не трогаем openFile/selectedTask
+        if ((leftTab as string) === 'tools') {
+          return <ToolsPane projectId={project.id} />;
+        }
+
         return (
           <>
             {/* Открытая задача — карточка в основной зоне (как открытый файл), ✕ возвращает чат */}
@@ -1072,7 +1184,7 @@ const windowWidth = useWindowWidth();
               </div>
             )}
 
-            {/* Нет открытого файла и задачи — доска задач проекта, иначе чат */}
+            // Нет открытого файла и задачи — доска задач проекта, иначе чат, иначе инструменты
             {!openFile && !selectedTask && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 {showProjectBoard

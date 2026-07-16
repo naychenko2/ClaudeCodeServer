@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Protocol;
@@ -7,10 +9,12 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
-/// <summary>Экземпляр запущенного dev-сервера проекта.</summary>
+/// <summary>Экземпляр запущенного сервиса проекта (один процесс).</summary>
 internal sealed class DevServerInstance : IDisposable
 {
     public string ProjectId { get; }
+    public string ServiceId { get; }
+    public string Name { get; set; }
     public Process Process { get; set; }
     public string UserId { get; }
     public int Port { get; set; }
@@ -18,9 +22,11 @@ internal sealed class DevServerInstance : IDisposable
     public string? Error { get; set; }
     public DateTime LastActivity { get; set; }
 
-    public DevServerInstance(string projectId, Process process, string userId)
+    public DevServerInstance(string projectId, string serviceId, string name, Process process, string userId)
     {
         ProjectId = projectId;
+        ServiceId = serviceId;
+        Name = name;
         Process = process;
         UserId = userId;
         LastActivity = DateTime.UtcNow;
@@ -37,13 +43,25 @@ internal sealed class DevServerInstance : IDisposable
     }
 }
 
-/// <summary>Менеджер dev-серверов: запуск/остановка per-project.</summary>
+/// <summary>Одна запущенная запись сервиса (для отдачи фронту).</summary>
+public record RunningServiceInfo(string ServiceId, string Name, int? Port, string Status, string? Error);
+
+/// <summary>
+/// Менеджер сервисов Preview: несколько процессов на проект (ключ = projectId:serviceId).
+/// Держит «активный для превью» сервис на проект — на его порт указывает iframe-прокси.
+/// </summary>
 public sealed class DevServerService
 {
     private readonly ConcurrentDictionary<string, DevServerInstance> _servers = new();
+    // projectId → serviceId активного для превью сервиса
+    private readonly ConcurrentDictionary<string, string> _activePreview = new();
     private readonly ProjectManager _projects;
     private readonly IHubContext<SessionHub> _hub;
     private readonly ILogger<DevServerService> _log;
+
+    private static readonly Regex PortRegex = new(
+        @"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public DevServerService(ProjectManager projects, IHubContext<SessionHub> hub, ILogger<DevServerService> log)
     {
@@ -52,18 +70,24 @@ public sealed class DevServerService
         _log = log;
     }
 
-    /// <summary>Запустить dev-сервер. Если уже запущен — порт из instance.</summary>
-    public async Task<DevServerStartResult> StartAsync(string projectId, string userId,
-        string command, string[] args, int? fixedPort = null)
+    private static string Key(string projectId, string serviceId) => projectId + ":" + serviceId;
+
+    /// <summary>Запустить сервис. Уже запущен — возвращаем его порт и делаем активным для превью.</summary>
+    public async Task<DevServerStartResult> StartAsync(string projectId, string userId, string serviceId,
+        string name, string command, string[] args, string? cwd = null,
+        int? port = null, bool autoPort = false, Dictionary<string, string>? env = null)
     {
-        if (_servers.TryGetValue(projectId, out var existing))
+        var key = Key(projectId, serviceId);
+        if (_servers.TryGetValue(key, out var existing))
         {
             if (existing.Status == "started")
-                return new DevServerStartResult(true, existing.Port, existing.Status);
+            {
+                _activePreview[projectId] = serviceId;
+                return new DevServerStartResult(true, existing.Port, "started");
+            }
             if (existing.Status == "starting")
                 return new DevServerStartResult(true, null, "starting");
-            // stopped/error — удаляем и стартуем заново
-            _servers.TryRemove(projectId, out _);
+            _servers.TryRemove(key, out _);
             existing.Dispose();
         }
 
@@ -71,35 +95,72 @@ public sealed class DevServerService
         if (project is null)
             return new DevServerStartResult(false, null, "error", "Проект не найден");
 
+        string workingDir;
+        try
+        {
+            workingDir = string.IsNullOrWhiteSpace(cwd)
+                ? project.RootPath
+                : FileService.SafeJoinPublic(project.RootPath, cwd);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new DevServerStartResult(false, null, "error", "Недопустимый рабочий каталог");
+        }
+
         var psi = new ProcessStartInfo
         {
             FileName = command,
-            Arguments = string.Join(" ", args),
-            WorkingDirectory = project.RootPath,
+            WorkingDirectory = workingDir,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        if (env != null)
+            foreach (var (k, v) in env) psi.Environment[k] = v;
 
-        var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        process.Start();
+        // autoPort без явного порта → берём свободный. Явный/авто-порт прокидываем в окружение
+        // (PORT для Node-фреймворков, ASPNETCORE_URLS для .NET), чтобы сервис слушал именно его.
+        int? fixedPort = port;
+        if (!fixedPort.HasValue && autoPort) fixedPort = GetFreePort();
+        if (fixedPort.HasValue)
+        {
+            psi.Environment["PORT"] = fixedPort.Value.ToString();
+            if (!psi.Environment.ContainsKey("ASPNETCORE_URLS"))
+                psi.Environment["ASPNETCORE_URLS"] = $"http://localhost:{fixedPort.Value}";
+        }
 
-        var instance = new DevServerInstance(projectId, process, userId);
-        _servers[projectId] = instance;
+        Process process;
+        try
+        {
+            process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+            process.Start();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Не удалось запустить сервис {ServiceId} ({Command})", serviceId, command);
+            return new DevServerStartResult(false, null, "error", $"Не удалось запустить: {ex.Message}");
+        }
 
-        // Если порт задан явно — сразу считаем стартовавшим
+        var instance = new DevServerInstance(projectId, serviceId, name, process, userId);
+        _servers[key] = instance;
+        process.Exited += (_, _) => OnExited(key);
+
+        // Всегда дренируем оба потока (иначе буфер переполнится и процесс зависнет);
+        // попутно детектим порт, если он не задан.
+        _ = DrainStreams(process, instance);
+
         if (fixedPort.HasValue)
         {
             instance.Port = fixedPort.Value;
             instance.Status = "started";
-            await BroadcastStatus(projectId, "started", instance.Port);
+            _activePreview[projectId] = serviceId;
+            await BroadcastStatus(projectId, serviceId, "started", instance.Port);
             return new DevServerStartResult(true, instance.Port, "started");
         }
 
-        // Иначе парсим stdout на http://localhost:PORT
-        _ = ParsePortFromOutput(process, instance, projectId);
-        // Ждём до 30 секунд
+        // Ждём до 30 секунд появления порта в выводе.
         for (int i = 0; i < 60; i++)
         {
             await Task.Delay(500);
@@ -109,57 +170,72 @@ public sealed class DevServerService
         }
 
         var exited = process.WaitForExit(2000);
-        var exitCode = process.ExitCode;
-        _servers.TryRemove(projectId, out _);
+        var exitCode = exited ? process.ExitCode : -1;
+        instance.Status = "error";
+        instance.Error = exited ? $"Процесс завершился с кодом {exitCode}" : "Таймаут: порт не обнаружен";
+        _servers.TryRemove(key, out _);
         instance.Dispose();
-
-        return new DevServerStartResult(false, null, "error",
-            exited ? $"Процесс завершился с кодом {exitCode}" : "Таймаут: порт не обнаружен");
+        await BroadcastStatus(projectId, serviceId, "error", null, instance.Error);
+        return new DevServerStartResult(false, null, "error", instance.Error);
     }
 
-    /// <summary>Остановить dev-сервер.</summary>
-    public async Task StopAsync(string projectId, string userId)
+    /// <summary>Остановить сервис.</summary>
+    public async Task StopAsync(string projectId, string userId, string serviceId)
     {
-        if (_servers.TryRemove(projectId, out var instance))
+        if (_servers.TryGetValue(Key(projectId, serviceId), out var instance))
         {
             if (instance.UserId != userId)
                 throw new UnauthorizedAccessException("Доступ запрещён");
+            _servers.TryRemove(Key(projectId, serviceId), out _);
             instance.Dispose();
-            _log.LogInformation("Dev-сервер проекта {ProjectId} остановлен", projectId);
+            if (_activePreview.TryGetValue(projectId, out var active) && active == serviceId)
+                _activePreview.TryRemove(projectId, out _);
+            _log.LogInformation("Сервис {ServiceId} проекта {ProjectId} остановлен", serviceId, projectId);
+            await BroadcastStatus(projectId, serviceId, "stopped", null);
         }
-        await Task.CompletedTask;
     }
 
-    /// <summary>Получить порт без проверки пользователя (для middleware).</summary>
-    public int? GetPortNoAuth(string projectId)
+    /// <summary>Назначить активный для превью сервис (на его порт указывает iframe-прокси).</summary>
+    public void SetActivePreview(string projectId, string serviceId) => _activePreview[projectId] = serviceId;
+
+    /// <summary>Порт активного для превью сервиса (для middleware, без проверки владельца).</summary>
+    public int? GetActivePreviewPort(string projectId)
     {
-        if (_servers.TryGetValue(projectId, out var instance))
-        {
-            if (instance.Status == "started") return instance.Port;
-        }
+        if (_activePreview.TryGetValue(projectId, out var serviceId) &&
+            _servers.TryGetValue(Key(projectId, serviceId), out var inst) &&
+            inst.Status == "started" && inst.Port > 0)
+            return inst.Port;
+
+        // Фолбэк: первый запущенный сервис проекта, если активный не задан.
+        var prefix = projectId + ":";
+        foreach (var (k, v) in _servers)
+            if (k.StartsWith(prefix, StringComparison.Ordinal) && v.Status == "started" && v.Port > 0)
+                return v.Port;
         return null;
     }
 
-    /// <summary>Получить порт запущенного dev-сервера.</summary>
-    public int? GetPort(string projectId, string userId)
+    /// <summary>Список запущенных (и недавно упавших) сервисов проекта.</summary>
+    public List<RunningServiceInfo> GetRunning(string projectId, string userId)
     {
-        if (_servers.TryGetValue(projectId, out var instance))
+        var prefix = projectId + ":";
+        var list = new List<RunningServiceInfo>();
+        foreach (var (k, inst) in _servers)
         {
-            if (instance.UserId != userId) return null;
-            if (instance.Status == "started") return instance.Port;
+            if (!k.StartsWith(prefix, StringComparison.Ordinal)) continue;
+            if (inst.UserId != userId) continue;
+            list.Add(new RunningServiceInfo(inst.ServiceId, inst.Name, inst.Port == 0 ? null : inst.Port, inst.Status, inst.Error));
         }
-        return null;
+        return list;
     }
 
-    /// <summary>Статус dev-сервера.</summary>
-    public (string status, int? port, string? error) GetStatus(string projectId, string userId)
+    /// <summary>Id активного для превью сервиса проекта (для владельца).</summary>
+    public string? GetActiveServiceId(string projectId, string userId)
     {
-        if (_servers.TryGetValue(projectId, out var instance))
-        {
-            if (instance.UserId != userId) return ("stopped", null, null);
-            return (instance.Status, instance.Port, instance.Error);
-        }
-        return ("stopped", null, null);
+        if (_activePreview.TryGetValue(projectId, out var serviceId) &&
+            _servers.TryGetValue(Key(projectId, serviceId), out var inst) &&
+            inst.UserId == userId)
+            return serviceId;
+        return null;
     }
 
     /// <summary>Остановить всё (при shutdown).</summary>
@@ -167,63 +243,71 @@ public sealed class DevServerService
     {
         foreach (var (id, instance) in _servers)
         {
-            _log.LogInformation("Shutdown: останов dev-сервера проекта {ProjectId}", id);
+            _log.LogInformation("Shutdown: останов сервиса {Key}", id);
             instance.Dispose();
         }
         _servers.Clear();
+        _activePreview.Clear();
     }
 
-    private async Task ParsePortFromOutput(Process process, DevServerInstance instance, string projectId)
+    private void OnExited(string key)
     {
-        var reg = new Regex(@"http://localhost:(\d+)", RegexOptions.IgnoreCase);
-        var tcs = new TaskCompletionSource<bool>();
-
-        // Читаем оба потока (stdout + stderr) — Vite пишет URL в stderr
-        var stdoutTask = Task.Run(() =>
+        if (_servers.TryGetValue(key, out var inst) && inst.Status == "started")
         {
-            string? line;
-            while ((line = process.StandardOutput.ReadLine()) != null)
-            {
-                var m = reg.Match(line);
-                if (m.Success && instance.Port == 0)
-                {
-                    instance.Port = int.Parse(m.Groups[1].Value);
-                    instance.Status = "started";
-                    _ = BroadcastStatus(projectId, "started", instance.Port);
-                    tcs.TrySetResult(true);
-                }
-            }
-            return Task.CompletedTask;
-        });
-
-        var stderrTask = Task.Run(() =>
-        {
-            string? line;
-            while ((line = process.StandardError.ReadLine()) != null)
-            {
-                var m = reg.Match(line);
-                if (m.Success && instance.Port == 0)
-                {
-                    instance.Port = int.Parse(m.Groups[1].Value);
-                    instance.Status = "started";
-                    _ = BroadcastStatus(projectId, "started", instance.Port);
-                    tcs.TrySetResult(true);
-                }
-            }
-            return Task.CompletedTask;
-        });
-
-        await Task.WhenAny(stdoutTask, stderrTask);
+            inst.Status = "stopped";
+            if (_activePreview.TryGetValue(inst.ProjectId, out var active) && active == inst.ServiceId)
+                _activePreview.TryRemove(inst.ProjectId, out _);
+            _ = BroadcastStatus(inst.ProjectId, inst.ServiceId, "stopped", null);
+        }
     }
 
-    private async Task BroadcastStatus(string projectId, string status, int? port, string? error = null)
+    private async Task DrainStreams(Process process, DevServerInstance instance)
+    {
+        async Task Pump(TextReader reader)
+        {
+            string? line;
+            while ((line = await reader.ReadLineAsync()) != null)
+            {
+                instance.LastActivity = DateTime.UtcNow;
+                if (instance.Port != 0) continue;
+                var m = PortRegex.Match(line);
+                if (m.Success)
+                {
+                    instance.Port = int.Parse(m.Groups[1].Value);
+                    instance.Status = "started";
+                    _activePreview[instance.ProjectId] = instance.ServiceId;
+                    _ = BroadcastStatus(instance.ProjectId, instance.ServiceId, "started", instance.Port);
+                }
+            }
+        }
+
+        try
+        {
+            await Task.WhenAll(Pump(process.StandardOutput), Pump(process.StandardError));
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Дренаж потоков сервиса {ServiceId} прерван", instance.ServiceId);
+        }
+    }
+
+    private static int GetFreePort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
+    }
+
+    private async Task BroadcastStatus(string projectId, string serviceId, string status, int? port, string? error = null)
     {
         try
         {
             var project = _projects.GetById(projectId);
             if (project is null) return;
             await _hub.Clients.Group("user_" + project.OwnerId)
-                .SendAsync("message", new PreviewStatusMessage(status, port, error));
+                .SendAsync("message", new PreviewStatusMessage(status, port, error, serviceId));
         }
         catch (Exception ex)
         {

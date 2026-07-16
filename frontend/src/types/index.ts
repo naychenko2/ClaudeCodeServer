@@ -344,6 +344,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'team_memory_changed'; action: 'added' | 'updated' | 'removed'; projectId: string; entryId?: string }
   | { type: 'speaker_changed'; personaId: string; label: string }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
+  | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
 );
@@ -353,6 +354,35 @@ export interface UsageInfo {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+}
+
+// Preview: запускаемый сервис проекта (инференс из манифеста или из .claude/launch.json)
+export interface ProjectService {
+  id: string;
+  name: string;
+  source: string;               // launch.json | npm | dotnet | docker-compose | procfile | makefile | custom
+  command: string;
+  args: string[];
+  cwd: string | null;
+  suggestedPort: number | null;
+  autoPort: boolean;
+  saved: boolean;               // из .claude/launch.json — можно редактировать/удалять
+  status: string;               // idle | starting | started | stopped | error
+  runningPort: number | null;
+  error: string | null;
+}
+
+// Одна конфигурация из .claude/launch.json (формат Claude Desktop)
+export interface LaunchConfigEntry {
+  name?: string;
+  runtimeExecutable?: string;
+  runtimeArgs?: string[];
+  program?: string;
+  args?: string[];
+  port?: number;
+  autoPort?: boolean;
+  cwd?: string;
+  env?: Record<string, string>;
 }
 
 // Состояние одного окна лимита подписки (из rate_limit_event). utilization: 0..1.

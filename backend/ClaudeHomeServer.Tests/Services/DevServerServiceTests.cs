@@ -27,18 +27,29 @@ public class DevServerServiceTests
     }
 
     [Fact]
-    public void GetStatus_WithNoServers_ReturnsStopped()
+    public void GetRunning_WithNoServers_ReturnsEmpty()
     {
-        var (status, port, error) = _svc.GetStatus("nonexistent", "user1");
-        status.Should().Be("stopped");
-        port.Should().BeNull();
+        _svc.GetRunning("nonexistent", "user1").Should().BeEmpty();
     }
 
     [Fact]
-    public void GetPortNoAuth_WithNoServers_ReturnsNull()
+    public void GetActivePreviewPort_WithNoServers_ReturnsNull()
     {
-        var port = _svc.GetPortNoAuth("nonexistent");
-        port.Should().BeNull();
+        _svc.GetActivePreviewPort("nonexistent").Should().BeNull();
+    }
+
+    [Fact]
+    public void GetActiveServiceId_WithNoServers_ReturnsNull()
+    {
+        _svc.GetActiveServiceId("nonexistent", "user1").Should().BeNull();
+    }
+
+    [Fact]
+    public void SetActivePreview_WithoutStartedServer_StillHasNoPort()
+    {
+        _svc.SetActivePreview("proj", "svc");
+        // Активный назначен, но процесс не запущен — порта нет.
+        _svc.GetActivePreviewPort("proj").Should().BeNull();
     }
 
     [Fact]

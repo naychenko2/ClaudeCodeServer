@@ -35,6 +35,27 @@ internal sealed class TerminalInstance : IDisposable
     // Сериализация записи в stdin моста: ввод и resize не должны перемешать байты кадров.
     public object StdinLock { get; } = new();
 
+    // Кольцевой буфер недавнего вывода — реплеится новому вьюеру при Connect
+    // (уход с вкладки/reconnect/другое устройство размонтируют xterm и теряют его буфер).
+    private readonly object _bufLock = new();
+    private readonly System.Text.StringBuilder _outputBuffer = new();
+    private const int MaxOutputBufferChars = 200_000;
+
+    public void AppendOutput(string chunk)
+    {
+        lock (_bufLock)
+        {
+            _outputBuffer.Append(chunk);
+            if (_outputBuffer.Length > MaxOutputBufferChars)
+                _outputBuffer.Remove(0, _outputBuffer.Length - MaxOutputBufferChars);
+        }
+    }
+
+    public string GetBufferedOutput()
+    {
+        lock (_bufLock) return _outputBuffer.ToString();
+    }
+
     public TerminalInstance(string id, string projectId, string name, Process process, string userId,
         int cols, int rows, StreamWriter stdinWriter, bool isWindows, bool usesPtyBridge, string? shell = null)
     {
@@ -197,6 +218,14 @@ public sealed class TerminalService : IDisposable
         if (instance.UserId != userId) return null;
 
         instance.AddViewer(connId);
+        // Реплей накопленного вывода ТОЛЬКО новому подключению (до входа в группу, чтобы
+        // не задвоить с live-выводом): xterm при ремоунте пуст, история восстанавливается.
+        var buffered = instance.GetBufferedOutput();
+        if (buffered.Length > 0)
+        {
+            try { await _hub.Clients.Client(connId).SendAsync("message", new TerminalOutputMessage(buffered, false, terminalId)); }
+            catch { }
+        }
         await GroupsAdd(connId, terminalId);
         return ToDto(instance);
     }
@@ -312,6 +341,7 @@ public sealed class TerminalService : IDisposable
                 var n = await reader.ReadAsync(buf, 0, buf.Length);
                 if (n == 0) break;
                 var chunk = new string(buf, 0, n);
+                if (_terminals.TryGetValue(terminalId, out var inst)) inst.AppendOutput(chunk);
                 await SendToTerminalGroup(terminalId, new TerminalOutputMessage(chunk, isError, terminalId));
             }
         }

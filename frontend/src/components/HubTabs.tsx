@@ -42,7 +42,7 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
       value={value}
       onChange={onChange}
       draggable
-      compact={mobile ? 'auto' : undefined}
+      compact={mobile}
       persistKey="hub-tabs"
       variant="hub"
       options={options}

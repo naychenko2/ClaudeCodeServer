@@ -2,11 +2,14 @@
 // кнопка настройки колонок. Читает общий стор boardControls. Два layout:
 // 'inline' — горизонтально над сеткой (хаб/мобайл), 'sidebar' — вертикально (десктоп-проект).
 
+import { SlidersHorizontal } from 'lucide-react';
 import { C, FONT, R } from '../../../lib/design';
 import { BOARD_GROUP_LABEL, PRIORITY_COLOR, PRIORITY_LABEL, PRIORITY_ORDER, type BoardGroupBy } from '../../../lib/tasks';
 import {
   useBoardControls, setGroupBy, setSearch, togglePriorityFilter, setAssigneeFilter,
 } from '../../../lib/boardControls';
+import { useIsMobile } from '../../../lib/breakpoints';
+import { ToolbarOverflowMenu } from '../../../components/ToolbarOverflowMenu';
 
 const LABEL_STYLE = {
   fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,
@@ -20,6 +23,7 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
 }) {
   const { groupBy, search, priorities, assignee } = useBoardControls();
   const sidebar = layout === 'sidebar';
+  const isMobile = useIsMobile();
 
   const groupSelect = (
     <label style={{ display: sidebar ? 'block' : 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -130,6 +134,78 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
           {assigneeToggle}
         </div>
         {columnsBtn}
+      </div>
+    );
+  }
+
+  // Мобильный inline: поиск (primary) + «Фильтры» (группировка/приоритет/исполнитель/колонки — в боттом-шит).
+  if (isMobile) {
+    const activeCount = (priorities.length > 0 ? 1 : 0) + (assignee !== 'all' ? 1 : 0);
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>{searchInput}</div>
+        <ToolbarOverflowMenu
+          isMobile
+          title="Фильтры"
+          triggerIcon={<SlidersHorizontal size={15} strokeWidth={2.2} />}
+          triggerLabel="Фильтры"
+          indicator={activeCount}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '4px 6px 10px' }}>
+            <div>
+              <span style={{ ...LABEL_STYLE, display: 'block', marginBottom: 6 }}>Дорожки</span>
+              <select
+                value={groupBy}
+                onChange={e => setGroupBy(e.target.value as BoardGroupBy)}
+                style={{
+                  width: '100%', boxSizing: 'border-box', padding: '9px 10px',
+                  border: `1px solid ${C.border}`, borderRadius: R.lg, background: C.bgWhite,
+                  color: C.textPrimary, fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                {groupOptions.map(g => <option key={g} value={g}>{BOARD_GROUP_LABEL[g]}</option>)}
+              </select>
+            </div>
+            <div>
+              <span style={{ ...LABEL_STYLE, display: 'block', marginBottom: 6 }}>Приоритет</span>
+              {priorityChips}
+            </div>
+            <div>
+              <span style={{ ...LABEL_STYLE, display: 'block', marginBottom: 6 }}>Исполнитель</span>
+              <div style={{ display: 'flex', border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden' }}>
+                {(['all', 'me', 'claude'] as const).map(a => (
+                  <button
+                    key={a}
+                    onClick={() => setAssigneeFilter(a)}
+                    style={{
+                      flex: 1, padding: '9px 11px', cursor: 'pointer', border: 'none',
+                      background: assignee === a ? C.accentLight : C.bgWhite,
+                      color: assignee === a ? C.accent : C.textSecondary,
+                      fontFamily: FONT.sans, fontSize: 13, fontWeight: assignee === a ? 700 : 500,
+                    }}
+                  >
+                    {a === 'all' ? 'Все' : a === 'me' ? 'Я' : 'Claude'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {onEditColumns && (
+              <button
+                onClick={onEditColumns}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%',
+                  padding: '10px 12px', cursor: 'pointer', border: `1px solid ${C.border}`, borderRadius: R.lg,
+                  background: C.bgWhite, fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textPrimary,
+                }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="4" width="4.5" height="16" rx="1.5" /><rect x="9.75" y="4" width="4.5" height="16" rx="1.5" /><rect x="16.5" y="4" width="4.5" height="16" rx="1.5" />
+                </svg>
+                Настроить колонки
+              </button>
+            )}
+          </div>
+        </ToolbarOverflowMenu>
       </div>
     );
   }

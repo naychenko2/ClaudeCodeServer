@@ -122,7 +122,7 @@ export const api = {
       request<void>(`/projects/${encodeURIComponent(id)}/team-memory/${encodeURIComponent(entryId)}`, { method: 'DELETE' }),
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null }) =>
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; toolsEnabled?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
     getBuiltinPrompt: () => request<{ content: string }>('/projects/builtin-prompt'),
@@ -130,6 +130,15 @@ export const api = {
     // Кастомные колонки Kanban-доски проекта (пустой массив → дефолтные 3)
     updateBoardColumns: (id: string, columns: BoardColumn[]) =>
       request<Project>(`/projects/${id}/board-columns`, { method: 'PUT', body: JSON.stringify({ columns }) }),
+    // Dev-server live preview
+    previewStart: (id: string, command: string, args: string[], port?: number) =>
+      request<{ status: string; port?: number; error?: string }>(`/projects/${id}/preview/start`, {
+        method: 'POST', body: JSON.stringify({ command, args, port }),
+      }),
+    previewStop: (id: string) =>
+      request<void>(`/projects/${id}/preview/stop`, { method: 'POST' }),
+    previewStatus: (id: string) =>
+      request<{ status: string; port?: number }>(`/projects/${id}/preview/status`),
   },
 
   // Доска агентов (диспетчерская)

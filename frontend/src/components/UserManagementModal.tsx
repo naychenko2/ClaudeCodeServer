@@ -5,28 +5,7 @@ import { api } from '../lib/api';
 import { C, R, FONT, SHADOW, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, TextField, Button, SegmentedControl } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-
-const MOBILE_BP = 600;
-
-function useIsMobile() {
-  const [mobile, setMobile] = useState(() =>
-    typeof window !== 'undefined'
-      ? window.matchMedia(`(max-width: ${MOBILE_BP - 1}px)`).matches
-      : false
-  );
-  useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${MOBILE_BP - 1}px)`);
-    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
-    setMobile(mq.matches);
-    if (mq.addEventListener) mq.addEventListener('change', handler);
-    else mq.addListener(handler);
-    return () => {
-      if (mq.removeEventListener) mq.removeEventListener('change', handler);
-      else mq.removeListener(handler);
-    };
-  }, []);
-  return mobile;
-}
+import { useIsMobile } from '../lib/breakpoints';
 
 interface Props {
   currentUserId?: string;

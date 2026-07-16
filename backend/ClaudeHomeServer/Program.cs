@@ -142,6 +142,9 @@ builder.Services.AddHostedService<TaskSchedulerService>();
 builder.Services.AddHostedService<ChatExpiryService>();
 builder.Services.AddHostedService<ChatTurnLoggerService>();
 builder.Services.AddHostedService<NoteExpiryService>();
+// Терминал (PTY) и Preview (dev-server) — под гейтом workspace-destructive
+builder.Services.AddSingleton<TerminalService>();
+builder.Services.AddSingleton<DevServerService>();
 builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("dify");
 builder.Services.AddHttpClient("fal");
@@ -379,6 +382,46 @@ app.Use(async (ctx, next) =>
     });
 }
 
+// Dev-server preview proxy: /preview/{projectId}/{**path} → http://127.0.0.1:{port}
+{
+    var previewInvoker = new HttpMessageInvoker(new SocketsHttpHandler
+    {
+        UseProxy = false,
+        AllowAutoRedirect = false,
+        AutomaticDecompression = DecompressionMethods.None,
+        UseCookies = false,
+    });
+
+    app.Use(async (ctx, next) =>
+    {
+        var path = ctx.Request.Path.Value ?? "";
+        var match = System.Text.RegularExpressions.Regex.Match(path, @"^/preview/([^/]+)(/.*)?$");
+        if (match.Success)
+        {
+            var projectId = match.Groups[1].Value;
+            var restPath = match.Groups[2].Value ?? "/";
+
+            var devServer = ctx.RequestServices.GetRequiredService<DevServerService>();
+            // В MVP проверка порта — если сервер не запущен, 503.
+            // Аутентификация: iframe внутри приложения, которое уже за [Authorize].
+            var port = devServer.GetPortNoAuth(projectId);
+            if (port is null)
+            {
+                ctx.Response.StatusCode = 503;
+                await ctx.Response.WriteAsync("{\"error\":\"Dev-сервер не запущен\"}");
+                return;
+            }
+
+            var destUrl = $"http://127.0.0.1:{port}{restPath}{ctx.Request.QueryString}";
+            var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
+            await forwarder.SendAsync(ctx, destUrl, previewInvoker,
+                ForwarderRequestConfig.Empty, HttpTransformer.Default);
+            return;
+        }
+        await next();
+    });
+}
+
 // Раздача фронтенда: wwwroot/ рядом с exe (prod) или ../../frontend/dist (dev)
 var wwwrootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");
 var devDistPath = Path.GetFullPath(Path.Combine(
@@ -419,11 +462,15 @@ if (Directory.Exists(distPath))
 app.MapReverseProxy();
 app.MapControllers();
 app.MapHub<SessionHub>("/hubs/session");
+app.MapHub<TerminalHub>("/hubs/terminal");
 
-// Graceful shutdown: гасим все живые процессы claude (и их дочерние node MCP-серверы),
-// иначе после остановки сервера они остаются зомби
+// Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы
 app.Lifetime.ApplicationStopping.Register(() =>
-    app.Services.GetRequiredService<SessionManager>().KillAllProcesses());
+{
+    app.Services.GetRequiredService<SessionManager>().KillAllProcesses();
+    app.Services.GetRequiredService<TerminalService>().Dispose();
+    app.Services.GetRequiredService<DevServerService>().ShutdownAll();
+});
 
 app.Run();
 

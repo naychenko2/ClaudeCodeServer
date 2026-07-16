@@ -28,7 +28,6 @@ import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
 import { NotesPage } from './features/notes/NotesPage'
 import { PersonasPage } from './features/personas/PersonasPage'
-import { AgentKanbanPage } from './features/agent-kanban/AgentKanbanPage'
 import { ensureNotificationsSubscribed } from './lib/notifications'
 import { KnowledgePage } from './features/knowledge/KnowledgePage'
 import { NotificationsPage } from './features/notifications/NotificationsPage'
@@ -242,7 +241,7 @@ export default function App() {
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
-    const seed: NavSnapshot = { screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'notifications' ? 'notifications' : hubTab === 'agent-kanban' ? 'agent-kanban' : 'projects' }
+    const seed: NavSnapshot = { screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'notifications' ? 'notifications' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
     // Диплинк #/personas/{id}: сохраняем персону в снимок, иначе сид затрёт id в URL
@@ -395,7 +394,7 @@ export default function App() {
     }
     localStorage.setItem(HUB_TAB_KEY, t)
     setHubTab(t)
-    const dest: NavSnapshot = { screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'notifications' ? 'notifications' : t === 'agent-kanban' ? 'agent-kanban' : 'projects' }
+    const dest: NavSnapshot = { screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'notifications' ? 'notifications' : 'projects' }
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Иначе латеральное
     // переключение табов — replace (без разрастания истории).
@@ -595,8 +594,6 @@ export default function App() {
               ? <KnowledgePage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : effectiveHubTab === 'notifications'
                 ? <NotificationsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
-              : effectiveHubTab === 'agent-kanban'
-                ? <AgentKanbanPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : project
                 // key: прямой переход проект→проект (back/forward) обязан перемонтировать
                 // WorkspacePage — иначе useState-инициализаторы не перечитают состояние

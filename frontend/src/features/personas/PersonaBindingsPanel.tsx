@@ -5,6 +5,7 @@ import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { bumpPersonas } from '../../lib/personas';
+import { showToast } from '../../lib/toast';
 import { Button, IconField, Menu, MenuItem, Toggle, WaitingIndicator } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
@@ -81,7 +82,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       bumpPersonas();
     } catch (e) {
       setAllAccess(!next);
-      alert(e instanceof Error ? e.message : 'Не удалось сохранить настройку.');
+      showToast('Умения', e instanceof Error ? e.message : 'Не удалось сохранить настройку.');
     } finally {
       setAllAccessBusy(false);
     }
@@ -154,7 +155,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       const updated = await api.personas.updateBinding(persona.id, b.id, dto);
       setBindings(prev => (prev ?? []).map(x => x.id === b.id ? updated : x));
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Не удалось сохранить привязку.');
+      showToast('Умения', e instanceof Error ? e.message : 'Не удалось сохранить привязку.');
     }
   };
 
@@ -195,7 +196,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       if (expandedId === b.id) setExpandedId(null);
       setConfirmDelId(null);
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Не удалось удалить привязку.');
+      showToast('Умения', e instanceof Error ? e.message : 'Не удалось удалить привязку.');
     }
   };
 
@@ -227,7 +228,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       setPanel(null);
       flash([created.id]);
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Не удалось добавить привязку.');
+      showToast('Умения', e instanceof Error ? e.message : 'Не удалось добавить привязку.');
     }
   };
 
@@ -248,7 +249,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       void putBinding(expanded, { condition: cond });
       resetAiJob(condKey);
     } else if (condJob.status === 'error') {
-      alert(condJob.error ?? 'Не удалось сформулировать условие.');
+      showToast('Умения', condJob.error ?? 'Не удалось сформулировать условие.');
       resetAiJob(condKey);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -259,7 +260,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       setPanel({ ...panel, condition: panelCondJob.result });
       resetAiJob(panelCondKey);
     } else if (panelCondJob.status === 'error') {
-      alert(panelCondJob.error ?? 'Не удалось сформулировать условие.');
+      showToast('Умения', panelCondJob.error ?? 'Не удалось сформулировать условие.');
       resetAiJob(panelCondKey);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -324,7 +325,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       resetAiJob(suggestKey);
       flash(added);
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Не удалось добавить.');
+      showToast('Умения', e instanceof Error ? e.message : 'Не удалось добавить.');
       resetAiJob(suggestKey);
       void load();
     } finally {

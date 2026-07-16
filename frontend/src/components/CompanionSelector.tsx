@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { Check, ChevronDown, MessageCircle, Users } from 'lucide-react';
+import { Check, ChevronDown, MessageCircle, MessagesSquare, Users } from 'lucide-react';
 import type { Persona, AgentInfo } from '../types';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { personaLabel } from '../lib/personas';
@@ -28,12 +28,15 @@ interface Props {
   // Групповой чат (флаг persona-group-chats): мультивыбор 2-8 персон,
   // первая выбранная — ведущая; подтверждение создаёт новый групповой чат.
   onCreateGroup?: (personaIds: string[]) => void;
+  // Мобильное слияние: футер-строка «Обсудить с командой…» в дропдауне собеседника
+  // (запускает ту же раскрывашку механик, что кнопка Users в композере). Разгрузка row2.
+  onDiscussTeam?: () => void;
 }
 
 // Единый селектор «собеседника» чата: персоны (наша фича) и стандартные .md-агенты
 // Claude в одном дропдауне. Заменяет пару PersonaSelector + AgentSelector в композере.
 // Раскрытие/мобильное позиционирование — по образцу PersonaSelector.
-export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup }: Props) {
+export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup, onDiscussTeam }: Props) {
   const [open, setOpen] = useState(false);
   // Режим мультивыбора участников группового чата (внутри того же дропдауна)
   const [groupMode, setGroupMode] = useState(false);
@@ -388,6 +391,25 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
             >
               <Users size={16} strokeWidth={2} style={{ flexShrink: 0 }} />
               Групповой чат…
+            </button>
+          )}
+
+          {/* Мобильное слияние: «Обсудить с командой» живёт здесь же, а не отдельной
+              иконкой в ряду контролов — акцентная строка как флагманская фича */}
+          {onDiscussTeam && (
+            <button
+              onClick={() => { onDiscussTeam(); setOpen(false); }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.accentLight; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
+                marginTop: 2, borderTop: `1px solid ${C.divider}`, borderRadius: R.md,
+                border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
+                color: C.accent, fontSize: 12.5, fontWeight: 600, fontFamily: FONT.sans,
+              }}
+            >
+              <MessagesSquare size={16} strokeWidth={2} style={{ flexShrink: 0 }} />
+              Обсудить с командой…
             </button>
           )}
         </div>

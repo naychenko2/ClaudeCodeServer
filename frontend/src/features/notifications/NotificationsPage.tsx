@@ -1,7 +1,10 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Bell, CheckCheck, Search, Trash2 } from 'lucide-react';
+import { Bell, CheckCheck, Search, Trash2, Columns, SlidersHorizontal } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
 import { HubHeader } from '../../components/HubHeader';
+import { ConfirmDialog } from '../../components/ui';
+import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
+import { useIsMobile } from '../../lib/breakpoints';
 import type { HubTab } from '../../components/HubTabs';
 import type { AuthState } from '../../types';
 import type { NotificationItem, NotificationKind } from '../../types';
@@ -16,6 +19,7 @@ import {
   deleteNotification,
   deleteReadAll,
 } from '../../lib/notifications';
+import { AgentKanban } from '../agent-kanban/AgentKanban';
 
 // Токены design.ts (CSS-переменные) — хардкод-hex ломал тёмную тему
 const KIND_META: Record<NotificationKind, { icon: string; color: string; bg: string }> = {
@@ -255,9 +259,14 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
   onLogout: () => void;
   onHubTab: (t: HubTab) => void;
 }) {
+  // Режим: 'notifications' (по умолчанию) или 'dispatcher'
+  const [mode, setMode] = useState<'notifications' | 'dispatcher'>('notifications');
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [, forceUpdate] = useState(0);
+  // Подтверждение очистки прочитанных — через ConfirmDialog вместо window.confirm
+  const [confirmClear, setConfirmClear] = useState(false);
+  const isMobile = useIsMobile();
 
   const rerender = useCallback(() => forceUpdate(n => n + 1), []);
 
@@ -288,6 +297,21 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
     groups[gk].push(n);
   });
 
+  // Мобильная разгрузка toolbar (наши концепции): фильтр-чипы → «Фильтр» (overflow),
+  // действия «Прочитать всё/Очистить» → «⋯», поиск — primary во всю ширину.
+  const filterItems: OverflowItem[] = FILTERS.map(f => ({
+    key: f.key, label: f.label, dot: filter === f.key, onClick: () => setFilter(f.key),
+  }));
+  const actionItems: OverflowItem[] = [];
+  if (totalUnread > 0) actionItems.push({
+    key: 'readall', icon: <CheckCheck size={16} />, label: 'Прочитать всё',
+    onClick: () => { void markAllRead().then(rerender); },
+  });
+  if (notifs.some(n => n.isRead)) actionItems.push({
+    key: 'clear', icon: <Trash2 size={16} />, label: 'Очистить прочитанные', danger: true,
+    onClick: () => setConfirmClear(true),
+  });
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <HubHeader value="notifications" onTab={onHubTab} auth={auth} onLogout={onLogout} />
@@ -296,177 +320,235 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
         flex: 1, overflow: 'auto', padding: '24px 16px',
         display: 'flex', justifyContent: 'center',
       }}>
-        <div style={{ width: '100%', maxWidth: 680 }}>
+        <div style={{ width: '100%', maxWidth: mode === 'notifications' ? 680 : 1180 }}>
 
           {/* Page header */}
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             marginBottom: 24, flexWrap: 'wrap', gap: 12,
           }}>
-            <div>
-              <div style={{
-                fontFamily: FONT.serif, fontSize: FS.h2, fontWeight: 700,
-                color: C.textHeading, letterSpacing: '-0.3px',
-              }}>
-                Уведомления
-                <span style={{
-                  fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 400,
-                  color: C.textMuted, marginLeft: SP.md,
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+              {!isMobile && (
+                <div style={{
+                  fontFamily: FONT.serif, fontSize: FS.h2, fontWeight: 700,
+                  color: C.textHeading, letterSpacing: '-0.3px',
                 }}>
-                  {notifs.length} всего · {totalUnread} непрочитанных
-                </span>
-              </div>
+                  {mode === 'notifications' ? 'Уведомления' : 'Диспетчер'}
+                </div>
+              )}
+              {/* PillSwitch: Уведомления / Диспетчер */}
               <div style={{
-                fontSize: FS.sm, color: C.textMuted, marginTop: 2,
+                display: 'inline-flex', border: `1px solid ${C.border}`,
+                borderRadius: R.md, overflow: 'hidden',
               }}>
-                Напоминания, ответы агентов, системные события
+                <button
+                  onClick={() => setMode('notifications')}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    padding: '5px 12px', cursor: 'pointer',
+                    border: 'none',
+                    background: mode === 'notifications' ? C.accent : 'transparent',
+                    color: mode === 'notifications' ? C.onAccent : C.textSecondary,
+                    fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
+                  }}
+                >
+                  <Bell size={14} />
+                  Уведомления
+                </button>
+                <button
+                  onClick={() => setMode('dispatcher')}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    padding: '5px 12px', cursor: 'pointer',
+                    border: 'none',
+                    background: mode === 'dispatcher' ? C.accent : 'transparent',
+                    color: mode === 'dispatcher' ? C.onAccent : C.textSecondary,
+                    fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600,
+                  }}
+                >
+                  <Columns size={14} />
+                  Диспетчер
+                </button>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: SP.md, alignItems: 'center' }}>
-              {/* Search */}
-              <div style={{ position: 'relative', width: 200 }}>
-                <Search size={14} style={{
-                  position: 'absolute', left: 10, top: '50%',
-                  transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none',
-                }} />
+            {mode === 'notifications' && !isMobile && (
+              <div style={{ display: 'flex', gap: SP.md, alignItems: 'center' }}>
+                {/* Search */}
+                <div style={{ position: 'relative', width: 200 }}>
+                  <Search size={14} style={{
+                    position: 'absolute', left: 10, top: '50%',
+                    transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none',
+                  }} />
+                  <input
+                    placeholder="Поиск..."
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    style={{
+                      width: '100%', height: 34,
+                      padding: '0 12px 0 32px',
+                      border: `1px solid ${C.border}`,
+                      borderRadius: R.md,
+                      background: C.bgCard,
+                      fontFamily: FONT.sans,
+                      fontSize: FS.sm,
+                      color: C.textPrimary,
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+                {totalUnread > 0 && (
+                  <button
+                    style={{
+                      padding: '7px 16px', borderRadius: R.md,
+                      border: `1px solid ${C.border}`,
+                      background: C.bgCard, color: C.textSecondary,
+                      fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 500,
+                      cursor: 'pointer', whiteSpace: 'nowrap',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                    }}
+                    onClick={() => markAllRead().then(rerender)}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textSecondary; }}
+                  >
+                    <CheckCheck size={14} /> Прочитать всё
+                  </button>
+                )}
+                {notifs.some(n => n.isRead) && (
+                  <button
+                    style={{
+                      padding: '7px 16px', borderRadius: R.md,
+                      border: `1px solid ${C.border}`,
+                      background: C.bgCard, color: C.textMuted,
+                      fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 500,
+                      cursor: 'pointer', whiteSpace: 'nowrap',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                    }}
+                    onClick={() => setConfirmClear(true)}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = C.danger; e.currentTarget.style.color = C.danger; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textMuted; }}
+                  >
+                    <Trash2 size={14} /> Очистить прочитанные
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Мобильная строка toolbar: поиск (primary) + «Фильтр» (overflow) + «⋯» действия */}
+          {mode === 'notifications' && isMobile && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: SP.lg }}>
+              <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
                 <input
-                  placeholder="Поиск..."
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  style={{
-                    width: '100%', height: 34,
-                    padding: '0 12px 0 32px',
-                    border: `1px solid ${C.border}`,
-                    borderRadius: R.md,
-                    background: C.bgCard,
-                    fontFamily: FONT.sans,
-                    fontSize: FS.sm,
-                    color: C.textPrimary,
-                    outline: 'none',
-                  }}
+                  placeholder="Поиск..." value={search} onChange={e => setSearch(e.target.value)}
+                  style={{ width: '100%', height: 38, padding: '0 12px 0 32px', border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgCard, fontFamily: FONT.sans, fontSize: 16, color: C.textPrimary, outline: 'none', boxSizing: 'border-box' }}
                 />
               </div>
-              {totalUnread > 0 && (
-                <button
-                  style={{
-                    padding: '7px 16px', borderRadius: R.md,
-                    border: `1px solid ${C.border}`,
-                    background: C.bgCard, color: C.textSecondary,
-                    fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 500,
-                    cursor: 'pointer', whiteSpace: 'nowrap',
-                    display: 'flex', alignItems: 'center', gap: 6,
-                  }}
-                  onClick={() => markAllRead().then(rerender)}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textSecondary; }}
-                >
-                  <CheckCheck size={14} /> Прочитать всё
-                </button>
-              )}
-              {notifs.some(n => n.isRead) && (
-                <button
-                  style={{
-                    padding: '7px 16px', borderRadius: R.md,
-                    border: `1px solid ${C.border}`,
-                    background: C.bgCard, color: C.textMuted,
-                    fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 500,
-                    cursor: 'pointer', whiteSpace: 'nowrap',
-                    display: 'flex', alignItems: 'center', gap: 6,
-                  }}
-                  onClick={() => {
-                    if (window.confirm('Удалить все прочитанные уведомления?'))
-                      deleteReadAll().then(rerender);
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = C.danger; e.currentTarget.style.color = C.danger; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textMuted; }}
-                >
-                  <Trash2 size={14} /> Очистить прочитанные
-                </button>
-              )}
+              <ToolbarOverflowMenu isMobile title="Фильтр" triggerIcon={<SlidersHorizontal size={15} strokeWidth={2.2} />} triggerLabel="Фильтр" indicator={filter !== 'all' ? true : undefined} items={filterItems} />
+              {actionItems.length > 0 && <ToolbarOverflowMenu isMobile title="Действия" items={actionItems} />}
             </div>
-          </div>
+          )}
 
-          {/* Filter chips */}
-          <div style={{ display: 'flex', gap: SP.sm, marginBottom: SP.xl, flexWrap: 'wrap' }}>
-            {FILTERS.map(f => (
-              <button
-                key={f.key}
-                style={{
-                  padding: '5px 14px', borderRadius: 999,
-                  fontSize: FS.sm, fontWeight: 500,
-                  color: filter === f.key ? C.onAccent : C.textSecondary,
-                  background: filter === f.key ? C.accent : 'transparent',
-                  border: `1px solid ${filter === f.key ? C.accent : C.border}`,
-                  cursor: 'pointer', fontFamily: FONT.sans,
-                  whiteSpace: 'nowrap',
-                }}
-                onClick={() => setFilter(f.key)}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Notification list */}
-          {Object.keys(groups).length === 0 ? (
-            <div style={{
-              display: 'flex', flexDirection: 'column',
-              alignItems: 'center', justifyContent: 'center',
-              padding: '64px 16px', textAlign: 'center',
-            }}>
-              <div style={{
-                width: 96, height: 96, borderRadius: '50%',
-                background: C.bgPanel,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 40, color: C.textMuted, marginBottom: 24,
-              }}>
-                <Bell size={40} />
-              </div>
-              <div style={{
-                fontSize: FS.lg, fontWeight: 600,
-                color: C.textHeading, marginBottom: SP.sm,
-              }}>
-                Всё чисто
-              </div>
-              <div style={{
-                fontSize: FS.sm, color: C.textMuted,
-                maxWidth: 320, lineHeight: 1.6,
-              }}>
-                {search
-                  ? 'Нет уведомлений по вашему запросу'
-                  : 'Нет уведомлений по выбранному фильтру'}
-              </div>
-            </div>
+          {mode === 'dispatcher' ? (
+            <AgentKanban />
           ) : (
-            Object.entries(groups).map(([gk, gnotifs]) => (
-              <div key={gk} style={{ marginBottom: SP.xl }}>
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: SP.lg,
-                  marginBottom: SP.lg,
-                  fontSize: FS.sm, fontWeight: 600,
-                  color: C.textMuted, textTransform: 'uppercase',
-                  letterSpacing: '0.6px',
-                }}>
-                  {gk}
-                  <div style={{
-                    flex: 1, height: 1, background: C.borderLight,
-                  }} />
+            <>
+              {/* Filter chips — десктоп; на мобиле фильтр в «⋯ Фильтр» */}
+              {!isMobile && (
+                <div style={{ display: 'flex', gap: SP.sm, marginBottom: SP.xl, flexWrap: 'wrap' }}>
+                  {FILTERS.map(f => (
+                    <button
+                      key={f.key}
+                      style={{
+                        padding: '5px 14px', borderRadius: 999,
+                        fontSize: FS.sm, fontWeight: 500,
+                        color: filter === f.key ? C.onAccent : C.textSecondary,
+                        background: filter === f.key ? C.accent : 'transparent',
+                        border: `1px solid ${filter === f.key ? C.accent : C.border}`,
+                        cursor: 'pointer', fontFamily: FONT.sans,
+                        whiteSpace: 'nowrap',
+                      }}
+                      onClick={() => setFilter(f.key)}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
                 </div>
-                {gnotifs.map(n => (
-                  <div key={n.id} style={{ marginBottom: SP.lg }}>
-                    <NotificationCard
-                      item={n}
-                      onRead={async (id) => { await markRead(id); rerender(); }}
-                      onDelete={async (id) => { await deleteNotification(id); rerender(); }}
-                    />
+              )}
+
+              {/* Notification list */}
+              {Object.keys(groups).length === 0 ? (
+                <div style={{
+                  display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center',
+                  padding: '64px 16px', textAlign: 'center',
+                }}>
+                  <div style={{
+                    width: 96, height: 96, borderRadius: '50%',
+                    background: C.bgPanel,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 40, color: C.textMuted, marginBottom: 24,
+                  }}>
+                    <Bell size={40} />
                   </div>
-                ))}
-              </div>
-            ))
+                  <div style={{
+                    fontSize: FS.lg, fontWeight: 600,
+                    color: C.textHeading, marginBottom: SP.sm,
+                  }}>
+                    Всё чисто
+                  </div>
+                  <div style={{
+                    fontSize: FS.sm, color: C.textMuted,
+                    maxWidth: 320, lineHeight: 1.6,
+                  }}>
+                    {search
+                      ? 'Нет уведомлений по вашему запросу'
+                      : 'Нет уведомлений по выбранному фильтру'}
+                  </div>
+                </div>
+              ) : (
+                Object.entries(groups).map(([gk, gnotifs]) => (
+                  <div key={gk} style={{ marginBottom: SP.xl }}>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: SP.lg,
+                      marginBottom: SP.lg,
+                      fontSize: FS.sm, fontWeight: 600,
+                      color: C.textMuted, textTransform: 'uppercase',
+                      letterSpacing: '0.6px',
+                    }}>
+                      {gk}
+                      <div style={{
+                        flex: 1, height: 1, background: C.borderLight,
+                      }} />
+                    </div>
+                    {gnotifs.map(n => (
+                      <div key={n.id} style={{ marginBottom: SP.lg }}>
+                        <NotificationCard
+                          item={n}
+                          onRead={async (id) => { await markRead(id); rerender(); }}
+                          onDelete={async (id) => { await deleteNotification(id); rerender(); }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ))
+              )}
+            </>
           )}
 
         </div>
       </div>
+
+      {confirmClear && (
+        <ConfirmDialog
+          title="Очистить прочитанные?"
+          subtitle="Все прочитанные уведомления будут удалены."
+          confirmLabel="Очистить"
+          confirmVariant="danger"
+          onConfirm={() => { setConfirmClear(false); void deleteReadAll().then(rerender); }}
+          onCancel={() => setConfirmClear(false)}
+        />
+      )}
     </div>
   );
 }

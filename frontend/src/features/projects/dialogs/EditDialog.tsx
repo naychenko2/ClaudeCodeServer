@@ -25,6 +25,7 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
   const [groupId, setGroupId] = useState(project.groupId ?? '');
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
+  const [toolsEnabled, setToolsEnabled] = useState(project.toolsEnabled ?? false);
   const [rules, setRules] = useState<PermissionRule[]>(project.permissionRules ?? []);
   const [draftPrompt, setDraftPrompt] = useState('');
   const [promptParts, setPromptParts] = useState<SystemPromptPart[] | null>(null);
@@ -49,6 +50,7 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
         groupId,
         systemPrompt,
         showHiddenFiles,
+        toolsEnabled,
         permissionRules: rules.filter(r => r.pattern.trim()).map(r => ({ pattern: r.pattern.trim(), action: r.action })),
       });
       onSuccess(updated);
@@ -300,6 +302,39 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
           <span style={{
             position: 'absolute', top: 3,
             left: showHiddenFiles ? 21 : 3,
+            width: 16, height: 16,
+            background: C.bgWhite, borderRadius: '50%',
+            transition: 'left 0.15s',
+          }} />
+        </button>
+      </div>
+      {/* Инструменты (терминал + preview) */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '11px 14px', background: C.bgWhite,
+        border: `1px solid ${C.border}`, borderRadius: R.xl,
+      }}>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>
+            Инструменты
+          </div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>
+            Встроенный терминал и предпросмотр dev-сервера
+          </div>
+        </div>
+        <button
+          onClick={() => setToolsEnabled(v => !v)}
+          style={{
+            flexShrink: 0,
+            width: 40, height: 22,
+            background: toolsEnabled ? C.accent : C.border,
+            border: 'none', borderRadius: 11, cursor: 'pointer',
+            position: 'relative', transition: 'background 0.15s',
+          }}
+        >
+          <span style={{
+            position: 'absolute', top: 3,
+            left: toolsEnabled ? 21 : 3,
             width: 16, height: 16,
             background: C.bgWhite, borderRadius: '50%',
             transition: 'left 0.15s',

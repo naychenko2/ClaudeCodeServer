@@ -21,6 +21,7 @@ import type { AutomationRuleDto, Persona, PersonaAutomationRule, Project } from 
 import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { bumpPersonas } from '../../lib/personas';
+import { showToast } from '../../lib/toast';
 import { Button, Field, Menu, MenuItem, SegmentedControl, TextField, Toggle } from '../../components/ui';
 import { SectionLabel } from '../tasks/bits';
 import { TRIGGER_META, ACTION_META, triggerDetails, rulesCounter } from './automationMeta';
@@ -118,7 +119,7 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
       await bumpPersonas();
       closeEdit();
     } catch (e: any) {
-      window.alert(e?.message ?? 'Не удалось сохранить правило');
+      showToast('Проактивность', e?.message ?? 'Не удалось сохранить правило');
     } finally { setSaving(false); }
   }
 
@@ -157,7 +158,7 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
       await bumpPersonas();
       setAdding(null);
     } catch (e: any) {
-      window.alert(e?.message ?? 'Не удалось создать правило');
+      showToast('Проактивность', e?.message ?? 'Не удалось создать правило');
     } finally { setAddSaving(false); }
   }
 
@@ -190,7 +191,7 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
       await bumpPersonas();
       setSuggest(null);
     } catch (e: any) {
-      window.alert(e?.message ?? 'Не удалось добавить правила.');
+      showToast('Проактивность', e?.message ?? 'Не удалось добавить правила.');
       setSuggest(null);
     }
   }

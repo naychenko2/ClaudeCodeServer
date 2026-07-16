@@ -32,6 +32,20 @@ export interface BoardColumn {
   color?: string;
 }
 
+// Элемент доски агентов (диспетчерская: GET /api/board/agents)
+export interface BoardItem {
+  taskId: string;
+  title: string;
+  projectId?: string;
+  sessionId?: string;
+  column: 'queue' | 'working' | 'waiting' | 'done';
+  sessionStatus: string;
+  personaId?: string;
+  currentToolName?: string;
+  startedAt?: string;
+  permissionPending: boolean;
+}
+
 // Часть эффективного системного промпта (в порядке отправки в claude)
 export interface SystemPromptPart {
   kind: 'builtin' | 'user' | 'auto';

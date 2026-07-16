@@ -112,6 +112,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderBalanceService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory,
     ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory>();
+builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<NotificationStore>();

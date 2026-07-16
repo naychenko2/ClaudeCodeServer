@@ -12,7 +12,7 @@ import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
 import { api } from '../lib/api';
 import { C, FONT } from '../lib/design';
 import { useSidebarWidth } from '../lib/sidebarWidth';
-import { MOBILE_MAX, MOBILE_QUERY } from '../lib/breakpoints';
+import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
 import type { HubTab } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
@@ -381,7 +381,7 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
 const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth <= MOBILE_MAX;
-  const isTablet = windowWidth > MOBILE_MAX && windowWidth < 1200;
+  const isTablet = windowWidth > MOBILE_MAX && windowWidth <= TABLET_MAX;
 
   // Задачи (за фич-флагом): вкладка «Задачи» в сайдбаре + карточка задачи в центре.
   // Открытая задача ведёт себя как открытый файл: переключение вкладок сайдбара

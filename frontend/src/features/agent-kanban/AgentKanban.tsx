@@ -2,8 +2,10 @@ import { useEffect, useState, useMemo } from 'react';
 import { ensurePersonasLoaded, usePersonas } from '../../lib/personas';
 import { ensureAgentsLoaded, useAgentBoard } from '../../lib/agentBoard';
 import { AgentCard } from './AgentCard';
+import { SlidersHorizontal } from 'lucide-react';
 import { C, FONT, R } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
+import { ToolbarOverflowMenu } from '../../components/ToolbarOverflowMenu';
 import { api } from '../../lib/api';
 import type { Project } from '../../types';
 
@@ -104,6 +106,12 @@ export function AgentKanban() {
   }, [items, timeWindow, personaFilter, projectFilter]);
 
   const hasItems = filtered.length > 0;
+  // Мобильная разгрузка (наши концепции): фильтры Период/Агент/Проект → «⋯ Фильтры»
+  const activeFilterCount = (timeWindow !== '3days' ? 1 : 0) + (personaFilter !== 'all' ? 1 : 0) + (projectFilter !== 'all' ? 1 : 0);
+  const filterSecLabel: React.CSSProperties = {
+    fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,
+    textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8,
+  };
 
   // Чип-фильтр в стиле календаря (CalendarPage.filterChip)
   const filterChip = (key: string, label: string, active: boolean, onClick: () => void) => (
@@ -127,54 +135,90 @@ export function AgentKanban() {
 
   return (
     <div>
-      {/* Фильтры — всегда видны */}
+      {/* Фильтры: десктоп — ряд чипов; мобилка — «⋯ Фильтры» (наши концепции разгрузки) */}
       <div style={{ marginBottom: 16 }}>
-        <div className="cc-hide-scrollbar" style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          overflowX: 'auto', paddingBottom: 2, flexWrap: 'wrap',
-        }}>
-          <span style={{
-            fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,
-            textTransform: 'uppercase', letterSpacing: '0.07em', flexShrink: 0,
+        {isMobile ? (
+          <ToolbarOverflowMenu
+            isMobile title="Фильтры"
+            triggerIcon={<SlidersHorizontal size={15} strokeWidth={2.2} />}
+            triggerLabel="Фильтры"
+            indicator={activeFilterCount || undefined}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '4px 6px 10px' }}>
+              <div>
+                <div style={filterSecLabel}>Период</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {TIME_WINDOWS.map(w => filterChip(w.key, w.label, timeWindow === w.key, () => setTimeWindow(w.key)))}
+                </div>
+              </div>
+              {personaOptions.length > 0 && (
+                <div>
+                  <div style={filterSecLabel}>Агент</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {filterChip('all', 'Все', personaFilter === 'all', () => setPersonaFilter('all'))}
+                    {personaOptions.map(pid => filterChip(pid, personas.find(p => p.id === pid)?.name ?? pid.slice(0, 7), personaFilter === pid, () => setPersonaFilter(pid)))}
+                  </div>
+                </div>
+              )}
+              {projectOptions.length > 0 && (
+                <div>
+                  <div style={filterSecLabel}>Проект</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {filterChip('all', 'Все', projectFilter === 'all', () => setProjectFilter('all'))}
+                    {projectOptions.map(pid => filterChip(pid, projectMap.get(pid) ?? pid.slice(0, 7), projectFilter === pid, () => setProjectFilter(pid)))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </ToolbarOverflowMenu>
+        ) : (
+          <div className="cc-hide-scrollbar" style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            overflowX: 'auto', paddingBottom: 2, flexWrap: 'wrap',
           }}>
-            Период
-          </span>
-          {TIME_WINDOWS.map(w =>
-            filterChip(w.key, w.label, timeWindow === w.key, () => setTimeWindow(w.key))
-          )}
+            <span style={{
+              fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,
+              textTransform: 'uppercase', letterSpacing: '0.07em', flexShrink: 0,
+            }}>
+              Период
+            </span>
+            {TIME_WINDOWS.map(w =>
+              filterChip(w.key, w.label, timeWindow === w.key, () => setTimeWindow(w.key))
+            )}
 
-          {personaOptions.length > 0 && (
-            <>
-              <span style={{
-                fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,
-                textTransform: 'uppercase', letterSpacing: '0.07em', flexShrink: 0, marginLeft: 8,
-              }}>
-                Агент
-              </span>
-              {filterChip('all', 'Все', personaFilter === 'all', () => setPersonaFilter('all'))}
-              {personaOptions.map(pid =>
-                filterChip(pid, personas.find(p => p.id === pid)?.name ?? pid.slice(0, 7),
-                  personaFilter === pid, () => setPersonaFilter(pid))
-              )}
-            </>
-          )}
+            {personaOptions.length > 0 && (
+              <>
+                <span style={{
+                  fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,
+                  textTransform: 'uppercase', letterSpacing: '0.07em', flexShrink: 0, marginLeft: 8,
+                }}>
+                  Агент
+                </span>
+                {filterChip('all', 'Все', personaFilter === 'all', () => setPersonaFilter('all'))}
+                {personaOptions.map(pid =>
+                  filterChip(pid, personas.find(p => p.id === pid)?.name ?? pid.slice(0, 7),
+                    personaFilter === pid, () => setPersonaFilter(pid))
+                )}
+              </>
+            )}
 
-          {projectOptions.length > 0 && (
-            <>
-              <span style={{
-                fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,
-                textTransform: 'uppercase', letterSpacing: '0.07em', flexShrink: 0, marginLeft: 8,
-              }}>
-                Проект
-              </span>
-              {filterChip('all', 'Все', projectFilter === 'all', () => setProjectFilter('all'))}
-              {projectOptions.map(pid =>
-                filterChip(pid, projectMap.get(pid) ?? pid.slice(0, 7),
-                  projectFilter === pid, () => setProjectFilter(pid))
-              )}
-            </>
-          )}
-        </div>
+            {projectOptions.length > 0 && (
+              <>
+                <span style={{
+                  fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,
+                  textTransform: 'uppercase', letterSpacing: '0.07em', flexShrink: 0, marginLeft: 8,
+                }}>
+                  Проект
+                </span>
+                {filterChip('all', 'Все', projectFilter === 'all', () => setProjectFilter('all'))}
+                {projectOptions.map(pid =>
+                  filterChip(pid, projectMap.get(pid) ?? pid.slice(0, 7),
+                    projectFilter === pid, () => setProjectFilter(pid))
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Доска */}

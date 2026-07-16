@@ -5,7 +5,9 @@ import { C, R, FONT } from '../lib/design';
 import { api } from '../lib/api';
 import { agentDotColor } from './AgentSelector';
 import { SkillSearchDialog } from './SkillSearchDialog';
+import { ConfirmDialog } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { showToast } from '../lib/toast';
 
 interface Props {
   projectId: string;
@@ -16,6 +18,8 @@ export function SkillsPanel({ projectId }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
+  // Подтверждение удаления навыка проекта — через ConfirmDialog вместо window.confirm
+  const [pendingDelete, setPendingDelete] = useState<SkillInfo | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -26,6 +30,13 @@ export function SkillsPanel({ projectId }: Props) {
   }, [projectId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const confirmRemoveSkill = async () => {
+    if (!pendingDelete) return;
+    try { await api.skills.uninstall(pendingDelete.name, 'project', projectId); await load(); }
+    catch { showToast('Навыки', 'Не удалось удалить навык'); }
+    setPendingDelete(null);
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -57,6 +68,17 @@ export function SkillsPanel({ projectId }: Props) {
         />
       )}
 
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Удалить навык?"
+          subtitle={`Навык «${pendingDelete.name}» будет удалён из проекта.`}
+          confirmLabel="Удалить"
+          confirmVariant="danger"
+          onConfirm={confirmRemoveSkill}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
+
       {/* Тело */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
         {loading && <LoadingSkeleton />}
@@ -85,11 +107,7 @@ export function SkillsPanel({ projectId }: Props) {
                   <SkillCard
                     key={skill.name}
                     skill={skill}
-                    onRemove={async () => {
-                      if (!confirm(`Удалить навык «${skill.name}» из проекта?`)) return;
-                      try { await api.skills.uninstall(skill.name, 'project', projectId); await load(); }
-                      catch { alert('Не удалось удалить навык'); }
-                    }}
+                    onRemove={() => setPendingDelete(skill)}
                   />
                 ))}
               </Section>

@@ -16,17 +16,7 @@ import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaAutomationPanel } from './PersonaAutomationPanel';
 import { PersonaWizard } from './PersonaWizard';
-
-function useIsMobile(): boolean {
-  const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const h = (e: MediaQueryListEvent) => setM(e.matches);
-    mq.addEventListener('change', h);
-    return () => mq.removeEventListener('change', h);
-  }, []);
-  return m;
-}
+import { useIsMobile } from '../../lib/breakpoints';
 
 // Проектная вкладка «Команда»: САЙДБАРНЫЙ СПИСОК персон этого проекта.
 // Форма редактирования/создания живёт отдельно — в центральной зоне (ProjectPersonaPane).
@@ -110,12 +100,14 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
   }, []);
   // Навигация между вкладками: если правим и есть несохранённое — сначала спросить
   const goView = (v: PersonaView) => {
-    if (editing && status.dirty && !window.confirm('Отменить несохранённые изменения?')) return;
+    if (editing && status.dirty) { setConfirmDiscard(() => () => { setEditing(false); setView(v); }); return; }
     setEditing(false);
     setView(v);
   };
   // Живой цвет из формы — мгновенная перекраска акцентной полосы/тулбара
   const [liveColor, setLiveColor] = useState<string | undefined>(undefined);
+  // Подтверждение отмены несохранённых изменений — через ConfirmDialog вместо window.confirm
+  const [confirmDiscard, setConfirmDiscard] = useState<null | (() => void)>(null);
 
   // Удаление в два шага: запрос подтверждения (диалог) → само удаление
   const [deleteTarget, setDeleteTarget] = useState<Persona | null>(null);
@@ -179,7 +171,7 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
           onView={goView}
           editing={editing}
           onEdit={() => setEditing(true)}
-          onCancelEdit={() => { if (!status.dirty || window.confirm('Отменить изменения?')) setEditing(false); }}
+          onCancelEdit={() => { if (status.dirty) setConfirmDiscard(() => () => setEditing(false)); else setEditing(false); }}
           status={status}
           talking={talking}
           onTalk={() => talk(persona)}
@@ -253,6 +245,16 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
           confirmVariant="danger"
           onConfirm={() => doDelete(deleteTarget)}
           onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+      {confirmDiscard && (
+        <ConfirmDialog
+          title="Отменить изменения?"
+          subtitle="Несохранённые изменения профиля будут потеряны."
+          confirmLabel="Отменить изменения"
+          confirmVariant="danger"
+          onConfirm={() => { const act = confirmDiscard; setConfirmDiscard(null); act?.(); }}
+          onCancel={() => setConfirmDiscard(null)}
         />
       )}
     </div>

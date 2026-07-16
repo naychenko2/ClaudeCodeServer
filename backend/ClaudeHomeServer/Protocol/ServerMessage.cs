@@ -112,6 +112,10 @@ public record TerminalOutputMessage(string Data, bool IsError = false, string? T
 public record TerminalStatusMessage(string Status, int? ExitCode = null, string? TerminalId = null)
     : ServerMessage("terminal_status");
 
+// Terminal PTY: терминал переименован
+public record TerminalRenamedMessage(string TerminalId, string Name)
+    : ServerMessage("terminal_renamed");
+
 // Preview dev-server: смена статуса
 public record PreviewStatusMessage(string Status, int? Port = null, string? Error = null)
     : ServerMessage("preview_status");

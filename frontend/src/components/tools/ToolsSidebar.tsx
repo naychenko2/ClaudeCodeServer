@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Plus, X, Terminal, Monitor, Circle, Square, Play } from 'lucide-react'
+import { useState, useCallback } from 'react'
+import { Plus, Terminal, Monitor, Circle, Square, Play } from 'lucide-react'
 import { C, R, FONT } from '../../lib/design'
-import { IconButton, Button } from '../ui'
-import * as ts from '../../lib/terminalSignalr'
+import { IconButton } from '../ui'
+import type * as ts from '../../lib/terminalSignalr'
 import { api } from '../../lib/api'
 
 type ToolsTab = 'terminal' | 'preview'
@@ -20,59 +20,37 @@ interface Props {
   projectId: string
   activeTab: ToolsTab
   onTabChange: (t: ToolsTab) => void
+  // Список терминалов и операции подняты в WorkspacePage (нужны и хедеру ToolsPane)
+  terminals: ts.TerminalInfo[]
+  onCreateTerminal: () => void
+  onStopTerminal: (id: string) => void
+  onRenameTerminal: (id: string, name: string) => void
   onSelectTerminal: (id: string | null) => void
   activeTerminalId: string | null
   onSelectPreview: (id: string | null) => void
   activePreviewId: string | null
   previewSessions: PreviewSession[]
   onPreviewSessionsChange: (sessions: PreviewSession[] | ((prev: PreviewSession[]) => PreviewSession[])) => void
+  terminalBusy?: boolean
 }
 
 export function ToolsSidebar({
   projectId, activeTab, onTabChange,
+  terminals, onCreateTerminal, onStopTerminal, onRenameTerminal,
   onSelectTerminal, activeTerminalId,
   onSelectPreview, activePreviewId,
   previewSessions, onPreviewSessionsChange,
+  terminalBusy,
 }: Props) {
-  const [terminals, setTerminals] = useState<ts.TerminalInfo[]>([])
-  const [creatingTerminal, setCreatingTerminal] = useState(false)
+  // Инлайн-переименование: id редактируемого терминала + текущее значение поля
+  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null)
 
-  // Refresh terminal list
-  const refreshTerminals = useCallback(async () => {
-    try {
-      const list = await ts.listTerminals(projectId)
-      setTerminals(list)
-    } catch { /* ignore */ }
-  }, [projectId])
-
-  useEffect(() => {
-    if (activeTab === 'terminal') refreshTerminals()
-  }, [activeTab, refreshTerminals])
-
-  // Подписка на статусы терминалов
-  useEffect(() => {
-    return ts.onTerminalMessage(msg => {
-      if (msg.type === 'terminal_status') {
-        refreshTerminals()
-      }
+  const commitRename = useCallback(() => {
+    setRenaming(prev => {
+      if (prev && prev.value.trim()) onRenameTerminal(prev.id, prev.value.trim())
+      return null
     })
-  }, [refreshTerminals])
-
-  const handleCreateTerminal = useCallback(async () => {
-    setCreatingTerminal(true)
-    try {
-      const t = await ts.createTerminal(projectId)
-      setTerminals(prev => [...prev.filter(x => x.id !== t.id), t])
-      onSelectTerminal(t.id)
-    } catch { /* ignore */ }
-    setCreatingTerminal(false)
-  }, [projectId, onSelectTerminal])
-
-  const handleStopTerminal = useCallback(async (id: string) => {
-    await ts.stopTerminal(id)
-    if (activeTerminalId === id) onSelectTerminal(null)
-    refreshTerminals()
-  }, [activeTerminalId, onSelectTerminal, refreshTerminals])
+  }, [onRenameTerminal])
 
   const handleStartPreview = useCallback(async () => {
     const ps: PreviewSession = {
@@ -127,19 +105,47 @@ export function ToolsSidebar({
               onMouseEnter={e => { if (activeTerminalId !== t.id) e.currentTarget.style.background = C.bgInset }}
               onMouseLeave={e => { if (activeTerminalId !== t.id) e.currentTarget.style.background = 'transparent' }}
             >
-              <Circle size={8} fill={t.status === 'running' ? C.success : C.textMuted}
-                color={t.status === 'running' ? C.success : C.textMuted} />
-              <span style={{ flex: 1, fontSize: 13, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {t.name}
-              </span>
-              <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); handleStopTerminal(t.id) }} title="Остановить">
+              {/* Индикатор: зелёный пульс при занятости, зелёный статика когда готов, серый когда остановлен */}
+              <span style={{
+                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                background: t.status === 'running'
+                  ? (activeTerminalId === t.id && terminalBusy ? C.warning : C.success)
+                  : C.textMuted,
+                transition: 'background 0.2s',
+              }} />
+              {renaming?.id === t.id ? (
+                <input
+                  autoFocus
+                  value={renaming.value}
+                  onChange={e => setRenaming({ id: t.id, value: e.target.value })}
+                  onClick={e => e.stopPropagation()}
+                  onBlur={commitRename}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+                    else if (e.key === 'Escape') { e.preventDefault(); setRenaming(null) }
+                  }}
+                  style={{
+                    flex: 1, minWidth: 0, fontSize: 13, fontFamily: FONT.sans,
+                    color: C.textPrimary, background: C.bgWhite,
+                    border: `1px solid ${C.accent}`, borderRadius: 6, padding: '2px 6px', outline: 'none',
+                  }}
+                />
+              ) : (
+                <span
+                  onDoubleClick={e => { e.stopPropagation(); setRenaming({ id: t.id, value: t.name }) }}
+                  title="Двойной клик — переименовать"
+                  style={{ flex: 1, fontSize: 13, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {t.name}
+                </span>
+              )}
+              <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onStopTerminal(t.id) }} title="Остановить">
                 <Square size={10} />
               </IconButton>
             </div>
           ))}
           <button
-            onClick={handleCreateTerminal}
-            disabled={creatingTerminal}
+            onClick={onCreateTerminal}
             style={{
               width: '100%', padding: '8px 10px', borderRadius: R.md, cursor: 'pointer',
               border: `1px dashed ${C.border}`, background: 'transparent',
@@ -149,7 +155,7 @@ export function ToolsSidebar({
             } as React.CSSProperties}
           >
             <Plus size={14} strokeWidth={2} />
-            {creatingTerminal ? 'Создание...' : 'Новый терминал'}
+            Новый терминал
           </button>
         </div>
       )}
@@ -157,7 +163,7 @@ export function ToolsSidebar({
       {/* Список preview */}
       {activeTab === 'preview' && (
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px' }}>
-          {previews.map(p => (
+          {previewSessions.map((p: PreviewSession) => (
             <div
               key={p.id}
               onClick={() => onSelectPreview(p.id)}

@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import { RotateCcw, Square, Terminal } from 'lucide-react'
-import { C, R, FONT } from '../../lib/design'
+import { C } from '../../lib/design'
 import { IconButton, Button } from '../ui'
 import type { PreviewSession } from '../tools/ToolsSidebar'
 

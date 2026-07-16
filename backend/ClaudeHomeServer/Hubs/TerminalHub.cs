@@ -49,6 +49,12 @@ public class TerminalHub : Hub
         await _terminal.StopAsync(terminalId, UserId!);
     }
 
+    /// <summary>Переименовать терминал.</summary>
+    public async Task<TerminalInfoDto?> RenameTerminal(string terminalId, string name)
+    {
+        return await _terminal.RenameAsync(terminalId, UserId!, name);
+    }
+
     /// <summary>Ввод в терминал.</summary>
     public async Task TerminalInput(string terminalId, string data)
     {

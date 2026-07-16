@@ -15,25 +15,28 @@ const TAB_ICONS: Record<HubTab, ReactNode> = {
   notifications: <MessageCircle size={18} strokeWidth={2} />,
 };
 
+// Подписи разделов (единый источник для таббара и overflow-меню «Разделы»)
+export const TAB_LABELS: Record<HubTab, string> = {
+  chats: 'Чаты', projects: 'Проекты', calendar: 'Календарь', notes: 'Заметки',
+  personas: 'Персоны', knowledge: 'Знания', notifications: 'Уведомления',
+};
+// Полный набор разделов таббара по умолчанию (desktop)
+const DEFAULT_TABS: HubTab[] = ['chats', 'projects', 'calendar', 'notes', 'personas'];
+
 // Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки | Персоны» — на общем PillSwitch.
 // mobile: компакт-режим — неактивные сегменты иконками, подпись только у активного
 // (разделы помещаются на 320px без обрезания и скролла).
-export function HubTabs({ value, onChange, mobile }: {
+export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
   value: HubTab;
   onChange: (t: HubTab) => void;
   mobile?: boolean;
+  // Какие разделы показать. На мобиле HubHeader передаёт сокращённый primary-набор,
+  // остальное уходит в «⋯ Разделы» (overflow), чтобы вкладки не скроллились под обрез.
+  tabs?: HubTab[];
 }) {
-  const options = [
-    { value: 'chats' as HubTab, label: 'Чаты' },
-    { value: 'projects' as HubTab, label: 'Проекты' },
-    { value: 'calendar' as HubTab, label: 'Календарь' },
-    { value: 'notes' as HubTab, label: 'Заметки' },
-    { value: 'personas' as HubTab, label: 'Персоны' },
-  ]
-    // 5 разделов в компакт-таббаре (compact-режим: неактивные иконками, подпись только у активного).
-    // «Знания» убраны из хаба — вызов живёт в меню аватара («Настройка знаний»); сам экран доступен
-    // по onTab('knowledge') и диплинку #/knowledge/{id}. «Уведомления» — только колокольчик.
-    .map(o => mobile ? { ...o, icon: TAB_ICONS[o.value] } : o);
+  const options = tabs.map(v => mobile
+    ? { value: v, label: TAB_LABELS[v], icon: TAB_ICONS[v] }
+    : { value: v, label: TAB_LABELS[v] });
   return (
     <PillSwitch<HubTab>
       value={value}

@@ -29,8 +29,35 @@ internal sealed class TerminalInstance : IDisposable
     // Для Windows-фолбэка — запоминаем shell
     public bool IsWindows { get; }
 
+    // Терминал работает через pty-bridge (Linux + бинарь на месте) → ввод/resize
+    // идут кадрами протокола. Иначе (Windows-powershell, bash-фолбэк) — сырой stdin.
+    public bool UsesPtyBridge { get; }
+    // Сериализация записи в stdin моста: ввод и resize не должны перемешать байты кадров.
+    public object StdinLock { get; } = new();
+
+    // Кольцевой буфер недавнего вывода — реплеится новому вьюеру при Connect
+    // (уход с вкладки/reconnect/другое устройство размонтируют xterm и теряют его буфер).
+    private readonly object _bufLock = new();
+    private readonly System.Text.StringBuilder _outputBuffer = new();
+    private const int MaxOutputBufferChars = 200_000;
+
+    public void AppendOutput(string chunk)
+    {
+        lock (_bufLock)
+        {
+            _outputBuffer.Append(chunk);
+            if (_outputBuffer.Length > MaxOutputBufferChars)
+                _outputBuffer.Remove(0, _outputBuffer.Length - MaxOutputBufferChars);
+        }
+    }
+
+    public string GetBufferedOutput()
+    {
+        lock (_bufLock) return _outputBuffer.ToString();
+    }
+
     public TerminalInstance(string id, string projectId, string name, Process process, string userId,
-        int cols, int rows, StreamWriter stdinWriter, bool isWindows, string? shell = null)
+        int cols, int rows, StreamWriter stdinWriter, bool isWindows, bool usesPtyBridge, string? shell = null)
     {
         Id = id;
         ProjectId = projectId;
@@ -42,6 +69,7 @@ internal sealed class TerminalInstance : IDisposable
         LastActivity = DateTime.UtcNow;
         StdinWriter = stdinWriter;
         IsWindows = isWindows;
+        UsesPtyBridge = usesPtyBridge;
         Shell = shell;
     }
 
@@ -96,6 +124,7 @@ public sealed class TerminalService : IDisposable
         }
 
         var isWindows = OperatingSystem.IsWindows();
+        var usesPtyBridge = false;
 
         Process process;
         StreamWriter stdin;
@@ -126,6 +155,7 @@ public sealed class TerminalService : IDisposable
             shell = "bash";
             if (File.Exists(PtyBridgePath))
             {
+                usesPtyBridge = true;
                 var psi = new ProcessStartInfo
                 {
                     FileName = PtyBridgePath,
@@ -164,7 +194,7 @@ public sealed class TerminalService : IDisposable
         }
 
         var instance = new TerminalInstance(terminalId, projectId, name, process, userId,
-            cols, rows, stdin, isWindows, shell);
+            cols, rows, stdin, isWindows, usesPtyBridge, shell);
         instance.AddViewer(connId);
         _terminals[terminalId] = instance;
 
@@ -188,6 +218,14 @@ public sealed class TerminalService : IDisposable
         if (instance.UserId != userId) return null;
 
         instance.AddViewer(connId);
+        // Реплей накопленного вывода ТОЛЬКО новому подключению (до входа в группу, чтобы
+        // не задвоить с live-выводом): xterm при ремоунте пуст, история восстанавливается.
+        var buffered = instance.GetBufferedOutput();
+        if (buffered.Length > 0)
+        {
+            try { await _hub.Clients.Client(connId).SendAsync("message", new TerminalOutputMessage(buffered, false, terminalId)); }
+            catch { }
+        }
         await GroupsAdd(connId, terminalId);
         return ToDto(instance);
     }
@@ -200,6 +238,18 @@ public sealed class TerminalService : IDisposable
             .Select(ToDto)
             .OrderBy(t => t.Id)
             .ToList();
+    }
+
+    /// <summary>Переименовать терминал.</summary>
+    public async Task<TerminalInfoDto?> RenameAsync(string terminalId, string userId, string name)
+    {
+        if (!_terminals.TryGetValue(terminalId, out var instance)) return null;
+        if (instance.UserId != userId) throw new HubException("Доступ запрещён");
+        var trimmed = name.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed)) return ToDto(instance);
+        instance.Name = trimmed.Length > 60 ? trimmed[..60] : trimmed;
+        await SendToTerminalGroup(terminalId, new TerminalRenamedMessage(terminalId, instance.Name));
+        return ToDto(instance);
     }
 
     public async Task StopAsync(string terminalId, string userId)
@@ -220,8 +270,16 @@ public sealed class TerminalService : IDisposable
         if (_terminals.TryGetValue(terminalId, out var instance))
         {
             instance.LastActivity = DateTime.UtcNow;
-            await instance.StdinWriter.WriteAsync(data);
-            await instance.StdinWriter.FlushAsync();
+            if (instance.UsesPtyBridge)
+            {
+                // Данные ввода — кадром протокола (type=0x00), чтобы не смешиваться с resize
+                WriteFrame(instance, 0x00, System.Text.Encoding.UTF8.GetBytes(data));
+            }
+            else
+            {
+                await instance.StdinWriter.WriteAsync(data);
+                await instance.StdinWriter.FlushAsync();
+            }
         }
     }
 
@@ -231,17 +289,39 @@ public sealed class TerminalService : IDisposable
         instance.Cols = cols;
         instance.Rows = rows;
 
-        if (!instance.IsWindows && File.Exists(PtyBridgePath))
+        if (instance.UsesPtyBridge)
         {
-            var resizeCmd = new byte[]
+            // resize-кадр (type=0x01): payload = cols BE + rows BE
+            var payload = new byte[]
             {
-                0x1B, (byte)'R',
                 (byte)((cols >> 8) & 0xFF), (byte)(cols & 0xFF),
                 (byte)((rows >> 8) & 0xFF), (byte)(rows & 0xFF),
             };
-            try { instance.StdinWriter.BaseStream.Write(resizeCmd, 0, resizeCmd.Length); instance.StdinWriter.BaseStream.Flush(); }
-            catch { }
+            WriteFrame(instance, 0x01, payload);
         }
+    }
+
+    // Кадр протокола pty-bridge: [type:1][len:4 BE][payload]. Пишем в stdin моста под
+    // локом, чтобы конкурентные ввод и resize не перемешали байты соседних кадров.
+    private static void WriteFrame(TerminalInstance instance, byte type, byte[] payload)
+    {
+        var header = new byte[5];
+        header[0] = type;
+        header[1] = (byte)((payload.Length >> 24) & 0xFF);
+        header[2] = (byte)((payload.Length >> 16) & 0xFF);
+        header[3] = (byte)((payload.Length >> 8) & 0xFF);
+        header[4] = (byte)(payload.Length & 0xFF);
+        try
+        {
+            lock (instance.StdinLock)
+            {
+                var s = instance.StdinWriter.BaseStream;
+                s.Write(header, 0, header.Length);
+                if (payload.Length > 0) s.Write(payload, 0, payload.Length);
+                s.Flush();
+            }
+        }
+        catch { /* мост закрыт/умер — ход завершится по exited */ }
     }
 
     public async Task RemoveViewerAsync(string connId)
@@ -261,6 +341,7 @@ public sealed class TerminalService : IDisposable
                 var n = await reader.ReadAsync(buf, 0, buf.Length);
                 if (n == 0) break;
                 var chunk = new string(buf, 0, n);
+                if (_terminals.TryGetValue(terminalId, out var inst)) inst.AppendOutput(chunk);
                 await SendToTerminalGroup(terminalId, new TerminalOutputMessage(chunk, isError, terminalId));
             }
         }

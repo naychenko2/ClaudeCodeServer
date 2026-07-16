@@ -340,6 +340,8 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
   // Развёрнута ли форма правки профиля (внутри вида «Профиль»). key={persona.id}
   // перемонтирует компонент, так что смена персоны сбрасывает editing сама.
   const [editing, setEditing] = useState(false);
+  // Подтверждение отмены несохранённых изменений — через ConfirmDialog вместо window.confirm
+  const [confirmDiscard, setConfirmDiscard] = useState<null | (() => void)>(null);
 
   // Императивный доступ к форме профиля + её состояние (для кнопок тулбара)
   const formRef = useRef<PersonaFormHandle>(null);
@@ -350,7 +352,7 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
 
   // Навигация между вкладками: если правим и есть несохранённое — сначала спросить
   const goView = (v: PersonaView) => {
-    if (editing && status.dirty && !window.confirm('Отменить несохранённые изменения?')) return;
+    if (editing && status.dirty) { setConfirmDiscard(() => () => { setEditing(false); setView(v); }); return; }
     setEditing(false);
     setView(v);
   };
@@ -412,7 +414,7 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
         onView={goView}
         editing={editing}
         onEdit={() => setEditing(true)}
-        onCancelEdit={() => { if (!status.dirty || window.confirm('Отменить изменения?')) setEditing(false); }}
+        onCancelEdit={() => { if (status.dirty) setConfirmDiscard(() => () => setEditing(false)); else setEditing(false); }}
         status={status}
         talking={talking}
         onTalk={onTalk}
@@ -424,6 +426,17 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
       {/* Тонкая акцентная полоса персоны */}
       <div style={{ flex: 'none', height: 2, background: `${accent}55` }} />
       {content}
+
+      {confirmDiscard && (
+        <ConfirmDialog
+          title="Отменить изменения?"
+          subtitle="Несохранённые изменения профиля будут потеряны."
+          confirmLabel="Отменить изменения"
+          confirmVariant="danger"
+          onConfirm={() => { const act = confirmDiscard; setConfirmDiscard(null); act?.(); }}
+          onCancel={() => setConfirmDiscard(null)}
+        />
+      )}
     </div>
   );
 }

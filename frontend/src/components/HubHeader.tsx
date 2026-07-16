@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Bell, History } from 'lucide-react';
+import { Bell, Book, History, Share2, Users } from 'lucide-react';
 import type { AuthState } from '../types';
 import { C, FONT, TB, SHADOW } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { HubTabs, type HubTab } from './HubTabs';
+import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { AvatarMenu } from '../features/projects/AvatarMenu';
 import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
@@ -73,6 +74,19 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
 
   const openHistory = () => window.dispatchEvent(new Event(PRODUCT_HISTORY_EVENT));
 
+  // Мобильный хаб: 3 primary-раздела в таббаре, остальное — в «⋯ Разделы» (боттом-шит),
+  // вместо тихого скролла 6 вкладок под обрез экрана.
+  const PRIMARY_MOBILE: HubTab[] = ['chats', 'projects', 'calendar'];
+  const HIDDEN_MOBILE: HubTab[] = ['notes', 'personas', 'knowledge'];
+  // Если активен спрятанный раздел — показываем его 4-й вкладкой, чтобы подсветка была верной
+  const mobileTabs = HIDDEN_MOBILE.includes(value) ? [...PRIMARY_MOBILE, value] : PRIMARY_MOBILE;
+  const sectionItems: OverflowItem[] = [
+    { key: 'notes', icon: <Share2 size={18} strokeWidth={2} />, label: 'Заметки', onClick: () => onTab('notes') },
+    { key: 'personas', icon: <Users size={18} strokeWidth={2} />, label: 'Персоны', onClick: () => onTab('personas') },
+    { key: 'knowledge', icon: <Book size={18} strokeWidth={2} />, label: 'Знания', onClick: () => onTab('knowledge') },
+    { key: 'history', icon: <History size={18} strokeWidth={2} />, label: 'Что нового', onClick: openHistory, dot: historyBadge > 0 || neverSeen },
+  ];
+
   // «Утренний бриф» и «Единый поиск» убраны из шапки — доступны через AI-палитру (⌘/Ctrl+K).
 
   const logo = (
@@ -102,10 +116,19 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
       {/* Центр — переключатель вкладок. На мобиле — компакт-режим (иконки, подпись
           у активного): 6 разделов; на узком экране таббар скроллится, не обрезается */}
       {isMobile ? (
-        <div className="cc-no-scrollbar" style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center', overflowX: 'auto', overflowY: 'hidden' }}>
-          <div style={{ flexShrink: 0, display: 'flex' }}>
-            <HubTabs mobile value={value} onChange={onTab} />
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+          <div className="cc-no-scrollbar" style={{ minWidth: 0, display: 'flex', overflowX: 'auto', overflowY: 'hidden' }}>
+            <div style={{ flexShrink: 0, display: 'flex' }}>
+              <HubTabs mobile value={value} onChange={onTab} tabs={mobileTabs} />
+            </div>
           </div>
+          {/* Разделы за пределами primary-тройки — в overflow «⋯», а не под скролл */}
+          <ToolbarOverflowMenu
+            isMobile
+            title="Разделы"
+            indicator={(historyBadge > 0 || neverSeen) ? true : undefined}
+            items={sectionItems}
+          />
         </div>
       ) : (
         <HubTabs value={value} onChange={onTab} />
@@ -194,13 +217,9 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile}
-          // На мобилке «Что нового» переезжает в меню (в шапке нет места); индикатор
-          // новизны переносим на аватар и в пункт меню, чтобы он не потерялся
-          onShowHistory={isMobile ? openHistory : undefined}
-          historyBadge={historyBadge}
-          historyNeverSeen={neverSeen}
-          // «Знания» убраны из хаб-таббара — вызов живёт в меню аватара (все платформы)
-          onOpenKnowledge={() => onTab('knowledge')}
+          // «Что нового» и «Знания» на мобиле уехали в «⋯ Разделы»; на десктопе «Знания»
+          // остаются здесь (в таббаре их нет), а «Что нового» — отдельной кнопкой в шапке.
+          onOpenKnowledge={!isMobile ? () => onTab('knowledge') : undefined}
         />
       </div>
 

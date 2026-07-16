@@ -94,23 +94,28 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
 }) {
   const hub = variant === 'hub';
   const trackRef = useRef<HTMLDivElement>(null);
+  // Скрытый эталон полнотекстового ряда — по нему меряем «влезает ли текст».
+  // Мерить видимые кнопки нельзя: (1) в них попадает absolute-пилюля, (2) в компакте
+  // они уже сжаты до иконок → замер осциллирует. Эталон всегда полнотекстовый и вне потока.
+  const measureRef = useRef<HTMLDivElement>(null);
   const [overflowCompact, setOverflowCompact] = useState(false);
   const effectiveCompact = compact ?? (autoCompact ? overflowCompact : false);
 
-  // ResizeObserver для авто-детекта переполнения
+  // Авто-детект переполнения: натуральная ширина полнотекстового ряда vs доступная ширина трека
   useEffect(() => {
-    if (!autoCompact || !trackRef.current) return;
+    if (!autoCompact) return;
+    const track = trackRef.current;
+    const probe = measureRef.current;
+    if (!track || !probe) return;
     const measure = () => {
-      const track = trackRef.current;
-      if (!track) return;
-      const itemsWidth = Array.from(track.children).reduce((acc, child) => acc + (child as HTMLElement).offsetWidth, 0);
-      setOverflowCompact(itemsWidth > track.offsetWidth);
+      // −6 — внутренние отступы трека (padding 3 с каждой стороны)
+      setOverflowCompact(probe.offsetWidth > track.clientWidth - 6);
     };
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(trackRef.current);
+    ro.observe(track);
     return () => ro.disconnect();
-  }, [autoCompact, options]);
+  }, [autoCompact, options, isMobile, fill]);
   const btnRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const suppressClick = useRef(false);               // гасим клик, если это был drag
 
@@ -241,6 +246,22 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
         touchAction: draggable ? 'none' : undefined,  // не даём странице скроллиться при drag
       }}
     >
+      {/* Скрытый эталон: полнотекстовый ряд без fill — по нему решаем, включать ли компакт */}
+      {autoCompact && (
+        <div ref={measureRef} aria-hidden style={{
+          position: 'absolute', visibility: 'hidden', pointerEvents: 'none', top: 0, left: 0,
+          display: 'flex', gap: 3, whiteSpace: 'nowrap',
+        }}>
+          {options.map((opt, i) => (
+            <span key={i} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, boxSizing: 'border-box',
+              padding: isMobile ? '8px 12px' : '6px 12px', fontSize: 13, fontWeight: 600,
+            }}>
+              {opt.icon}{opt.label}
+            </span>
+          ))}
+        </div>
+      )}
       {/* Скользящая пилюля */}
       {geom && (
         <div
@@ -262,6 +283,8 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
         // В compact подпись привязана к value (не к highlight): при drag ширины
         // сегментов не меняются под пальцем — снапшот rects остаётся валидным
         const showLabel = !effectiveCompact || opt.value === value;
+        // В компакте активный сегмент показываем ТЕКСТОМ без иконки, остальные — иконкой
+        const showIcon = !effectiveCompact || opt.value !== value;
         return (
           <button key={opt.value} ref={el => { btnRefs.current[i] = el; }}
             onClick={() => { if (suppressClick.current) return; onChange(opt.value); }}
@@ -280,7 +303,7 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
               touchAction: draggable ? 'none' : undefined,
             }}
           >
-            {opt.icon}
+            {showIcon && opt.icon}
             {showLabel && opt.label}
           </button>
         );

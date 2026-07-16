@@ -4,6 +4,7 @@ import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { SkillsDropdown } from './SkillsDropdown';
 import { MentionsDropdown } from './MentionsDropdown';
 import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
+import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { TeamDrawer } from '../features/team/TeamDrawer';
 import {
   DEFAULT_TEAM_SETTINGS, buildTeamTurnText, teamMechanic,
@@ -830,8 +831,28 @@ export function Composer({
       onSelect={onCompanionChange}
       isMobile={isMobile}
       onCreateGroup={onCreateGroup}
+      // На мобиле «Обсудить с командой» сливается в дропдаун собеседника (разгрузка ряда)
+      onDiscussTeam={isMobile && canDiscuss ? () => setTeamOpen(true) : undefined}
     />
   ) : null;
+
+  // Мобильный overflow «⋯»: цикл «до готово» + вставка скилла (уводим из ряда контролов —
+  // так он не наматывается в 2-3 строки, а «/» скилл возвращается на мобил). Обсуждение
+  // с командой обычно сливается в дропдаун собеседника; если собеседника нет — кладём сюда.
+  const overflowItems: OverflowItem[] = [];
+  if (onToggleWorkLoop) overflowItems.push({
+    key: 'loop', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />,
+    label: 'Цикл «до готово»', sublabel: 'Повторять итерациями, пока не готово',
+    toggle: loopActive, onClick: () => { void onToggleWorkLoop(); },
+  });
+  if (skills.length > 0) overflowItems.push({
+    key: 'slash', icon: <span style={{ fontFamily: FONT.mono, fontSize: 15, fontWeight: 700, lineHeight: 1 }}>/</span>,
+    label: 'Вставить скилл', sublabel: 'Список навыков через «/»', onClick: handleSlashButton,
+  });
+  if (canDiscuss && !companionSelector) overflowItems.push({
+    key: 'discuss', icon: <Users size={16} strokeWidth={ICON_STROKE} />,
+    label: 'Обсудить с командой', onClick: () => setTeamOpen(true),
+  });
 
   return (
     <div>
@@ -941,17 +962,18 @@ export function Composer({
       )}
 
       {isMobile ? (
-        /* Мобильная раскладка: поле ввода во всю ширину, контролы — отдельным рядом снизу */
+        /* Мобильная раскладка: статус-пилюли + поле сверху; primary-контролы фиксированным
+           рядом снизу. Цикл/скилл спрятаны в «⋯», собеседник и «Обсудить с командой» слиты —
+           row2 не наматывается в 2-3 строки, mic/send всегда на месте (гарантированные 2 строки). */
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{teamChip}{inputArea}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>{teamChip}{loopBadge}{inputArea}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {/* Левая группа — переносится на 2-ю строку при нехватке места:
-                mode/companion уходят вниз, а не выпихивают mic/send */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
+            {/* Primary-контролы: overflow-меню, вложение, режим, собеседник */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+              {overflowItems.length > 0 && (
+                <ToolbarOverflowMenu isMobile items={overflowItems} title="Ещё" indicator={loopActive} />
+              )}
               {attachButton}
-              {discussButton}
-              {loopButton}
-              {loopBadge}
               {modeButton}
               {companionSelector}
             </div>

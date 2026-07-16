@@ -1,7 +1,10 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Bell, CheckCheck, Search, Trash2, Columns } from 'lucide-react';
+import { Bell, CheckCheck, Search, Trash2, Columns, SlidersHorizontal } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
 import { HubHeader } from '../../components/HubHeader';
+import { ConfirmDialog } from '../../components/ui';
+import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
+import { useIsMobile } from '../../lib/breakpoints';
 import type { HubTab } from '../../components/HubTabs';
 import type { AuthState } from '../../types';
 import type { NotificationItem, NotificationKind } from '../../types';
@@ -261,6 +264,9 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [, forceUpdate] = useState(0);
+  // Подтверждение очистки прочитанных — через ConfirmDialog вместо window.confirm
+  const [confirmClear, setConfirmClear] = useState(false);
+  const isMobile = useIsMobile();
 
   const rerender = useCallback(() => forceUpdate(n => n + 1), []);
 
@@ -291,6 +297,21 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
     groups[gk].push(n);
   });
 
+  // Мобильная разгрузка toolbar (наши концепции): фильтр-чипы → «Фильтр» (overflow),
+  // действия «Прочитать всё/Очистить» → «⋯», поиск — primary во всю ширину.
+  const filterItems: OverflowItem[] = FILTERS.map(f => ({
+    key: f.key, label: f.label, dot: filter === f.key, onClick: () => setFilter(f.key),
+  }));
+  const actionItems: OverflowItem[] = [];
+  if (totalUnread > 0) actionItems.push({
+    key: 'readall', icon: <CheckCheck size={16} />, label: 'Прочитать всё',
+    onClick: () => { void markAllRead().then(rerender); },
+  });
+  if (notifs.some(n => n.isRead)) actionItems.push({
+    key: 'clear', icon: <Trash2 size={16} />, label: 'Очистить прочитанные', danger: true,
+    onClick: () => setConfirmClear(true),
+  });
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <HubHeader value="notifications" onTab={onHubTab} auth={auth} onLogout={onLogout} />
@@ -306,13 +327,15 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             marginBottom: 24, flexWrap: 'wrap', gap: 12,
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-              <div style={{
-                fontFamily: FONT.serif, fontSize: FS.h2, fontWeight: 700,
-                color: C.textHeading, letterSpacing: '-0.3px',
-              }}>
-                {mode === 'notifications' ? 'Уведомления' : 'Диспетчер'}
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+              {!isMobile && (
+                <div style={{
+                  fontFamily: FONT.serif, fontSize: FS.h2, fontWeight: 700,
+                  color: C.textHeading, letterSpacing: '-0.3px',
+                }}>
+                  {mode === 'notifications' ? 'Уведомления' : 'Диспетчер'}
+                </div>
+              )}
               {/* PillSwitch: Уведомления / Диспетчер */}
               <div style={{
                 display: 'inline-flex', border: `1px solid ${C.border}`,
@@ -348,7 +371,7 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
                 </button>
               </div>
             </div>
-            {mode === 'notifications' && (
+            {mode === 'notifications' && !isMobile && (
               <div style={{ display: 'flex', gap: SP.md, alignItems: 'center' }}>
                 {/* Search */}
                 <div style={{ position: 'relative', width: 200 }}>
@@ -400,10 +423,7 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
                       cursor: 'pointer', whiteSpace: 'nowrap',
                       display: 'flex', alignItems: 'center', gap: 6,
                     }}
-                    onClick={() => {
-                      if (window.confirm('Удалить все прочитанные уведомления?'))
-                        deleteReadAll().then(rerender);
-                    }}
+                    onClick={() => setConfirmClear(true)}
                     onMouseEnter={e => { e.currentTarget.style.borderColor = C.danger; e.currentTarget.style.color = C.danger; }}
                     onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textMuted; }}
                   >
@@ -414,30 +434,47 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
             )}
           </div>
 
+          {/* Мобильная строка toolbar: поиск (primary) + «Фильтр» (overflow) + «⋯» действия */}
+          {mode === 'notifications' && isMobile && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: SP.lg }}>
+              <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
+                <input
+                  placeholder="Поиск..." value={search} onChange={e => setSearch(e.target.value)}
+                  style={{ width: '100%', height: 38, padding: '0 12px 0 32px', border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgCard, fontFamily: FONT.sans, fontSize: 16, color: C.textPrimary, outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+              <ToolbarOverflowMenu isMobile title="Фильтр" triggerIcon={<SlidersHorizontal size={15} strokeWidth={2.2} />} triggerLabel="Фильтр" indicator={filter !== 'all' ? true : undefined} items={filterItems} />
+              {actionItems.length > 0 && <ToolbarOverflowMenu isMobile title="Действия" items={actionItems} />}
+            </div>
+          )}
+
           {mode === 'dispatcher' ? (
             <AgentKanban />
           ) : (
             <>
-              {/* Filter chips */}
-              <div style={{ display: 'flex', gap: SP.sm, marginBottom: SP.xl, flexWrap: 'wrap' }}>
-                {FILTERS.map(f => (
-                  <button
-                    key={f.key}
-                    style={{
-                      padding: '5px 14px', borderRadius: 999,
-                      fontSize: FS.sm, fontWeight: 500,
-                      color: filter === f.key ? C.onAccent : C.textSecondary,
-                      background: filter === f.key ? C.accent : 'transparent',
-                      border: `1px solid ${filter === f.key ? C.accent : C.border}`,
-                      cursor: 'pointer', fontFamily: FONT.sans,
-                      whiteSpace: 'nowrap',
-                    }}
-                    onClick={() => setFilter(f.key)}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
+              {/* Filter chips — десктоп; на мобиле фильтр в «⋯ Фильтр» */}
+              {!isMobile && (
+                <div style={{ display: 'flex', gap: SP.sm, marginBottom: SP.xl, flexWrap: 'wrap' }}>
+                  {FILTERS.map(f => (
+                    <button
+                      key={f.key}
+                      style={{
+                        padding: '5px 14px', borderRadius: 999,
+                        fontSize: FS.sm, fontWeight: 500,
+                        color: filter === f.key ? C.onAccent : C.textSecondary,
+                        background: filter === f.key ? C.accent : 'transparent',
+                        border: `1px solid ${filter === f.key ? C.accent : C.border}`,
+                        cursor: 'pointer', fontFamily: FONT.sans,
+                        whiteSpace: 'nowrap',
+                      }}
+                      onClick={() => setFilter(f.key)}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {/* Notification list */}
               {Object.keys(groups).length === 0 ? (
@@ -501,6 +538,17 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
 
         </div>
       </div>
+
+      {confirmClear && (
+        <ConfirmDialog
+          title="Очистить прочитанные?"
+          subtitle="Все прочитанные уведомления будут удалены."
+          confirmLabel="Очистить"
+          confirmVariant="danger"
+          onConfirm={() => { setConfirmClear(false); void deleteReadAll().then(rerender); }}
+          onCancel={() => setConfirmClear(false)}
+        />
+      )}
     </div>
   );
 }

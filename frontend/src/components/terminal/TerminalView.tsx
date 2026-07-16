@@ -8,14 +8,21 @@ import { sendTerminalInput, resizeTerminal, onTerminalMessage, connectTerminal }
 interface Props {
   terminalId: string
   onActivity?: (busy: boolean) => void
+  // Терминал виден (активная вкладка). Скрытые остаются смонтированными и копят вывод;
+  // при показе нужен refit — в display:none xterm меряет нулевой размер.
+  visible?: boolean
 }
 
-export function TerminalView({ terminalId, onActivity }: Props) {
+export function TerminalView({ terminalId, onActivity, visible = true }: Props) {
   const termRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const disposedRef = useRef(false)
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // onActivity — через ref: смена колбэка не должна пересоздавать xterm (иначе экран
+  // чернеет и теряется ввод/вывод). xterm живёт ровно на один terminalId.
+  const onActivityRef = useRef(onActivity)
+  onActivityRef.current = onActivity
 
   const handleResize = useCallback(() => {
     const fit = fitAddonRef.current
@@ -57,14 +64,14 @@ export function TerminalView({ terminalId, onActivity }: Props) {
 
     // Busy detection: user sent a command (any data with newline)
     const markBusy = () => {
-      onActivity?.(true)
+      onActivityRef.current?.(true)
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
     }
 
     // Busy detection: output received → schedule idle after 400ms pause
     const markOutput = () => {
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
-      idleTimerRef.current = setTimeout(() => onActivity?.(false), 400)
+      idleTimerRef.current = setTimeout(() => onActivityRef.current?.(false), 400)
     }
 
     setTimeout(() => { if (!disposedRef.current) handleResize() }, 50)
@@ -76,7 +83,7 @@ export function TerminalView({ terminalId, onActivity }: Props) {
     })
 
     connectTerminal(terminalId).then(t => {
-      if (t) { onActivity?.(false); markOutput() }
+      if (t) { onActivityRef.current?.(false); markOutput() }
     })
 
     const unsub = onTerminalMessage((msg) => {
@@ -86,7 +93,7 @@ export function TerminalView({ terminalId, onActivity }: Props) {
         markOutput()
       } else if (msg.type === 'terminal_status' && msg.terminalId === terminalId) {
         if (msg.status === 'stopped') {
-          onActivity?.(false)
+          onActivityRef.current?.(false)
           term.writeln(`\r\n\x1b[90m[Process exited with code ${msg.exitCode ?? '?'}]\x1b[0m`)
         }
       }
@@ -100,7 +107,7 @@ export function TerminalView({ terminalId, onActivity }: Props) {
       xtermRef.current = null
       fitAddonRef.current = null
     }
-  }, [terminalId, handleResize, onActivity])
+  }, [terminalId, handleResize])
 
   useEffect(() => {
     const el = termRef.current
@@ -109,6 +116,18 @@ export function TerminalView({ terminalId, onActivity }: Props) {
     observer.observe(el)
     return () => observer.disconnect()
   }, [handleResize])
+
+  // Стал видимым (переключились на эту вкладку терминала) — пересчитать размер и
+  // перерисовать из буфера xterm (в скрытом состоянии fit меряет нулевой размер).
+  useEffect(() => {
+    if (!visible) return
+    const id = setTimeout(() => {
+      if (disposedRef.current) return
+      handleResize()
+      xtermRef.current?.refresh(0, (xtermRef.current.rows || 1) - 1)
+    }, 0)
+    return () => clearTimeout(id)
+  }, [visible, handleResize])
 
   return (
     <div ref={termRef} style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: C.termBg, padding: 4 }} />

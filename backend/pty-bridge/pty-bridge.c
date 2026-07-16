@@ -4,8 +4,15 @@
  * Создаёт псевдо-терминал, запускает /bin/bash в нём,
  * релеит stdin → master fd, master fd → stdout.
  *
- * Resize: stdin-байт 0x1B (ESC), затем 'R', затем 2 байта cols
- * (big-endian), 2 байта rows. Всё остальное — ввод в PTY.
+ * ПРОТОКОЛ stdin (кадры, чтобы управление не смешивалось с вводом):
+ *   [type:1][len:4 big-endian][payload:len]
+ *     type=0x00 — данные ввода: payload пишется как есть в PTY;
+ *     type=0x01 — resize: payload = 4 байта (cols big-endian, rows big-endian).
+ *   Раньше resize слался inband спецпоследовательностью ESC 'R' в тот же поток —
+ *   это ломало ввод escape-последовательностей (стрелки: ведущий ESC терялся),
+ *   а байты размера (напр. rows=24=0x18) утекали в шелл как ^X. Кадры это исключают.
+ *
+ * master fd → stdout: сырой вывод PTY (без обёртки).
  *
  * Компиляция:
  *   gcc -O2 -static -o pty-bridge pty-bridge.c -lutil
@@ -17,6 +24,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +54,85 @@ static volatile sig_atomic_t child_exited = 0;
 static void sigchld_handler(int signo) {
     (void)signo;
     child_exited = 1;
+}
+
+/* Записать все байты в fd (с учётом частичных write) */
+static void write_all(int fd, const unsigned char *data, size_t n) {
+    size_t written = 0;
+    while (written < n) {
+        ssize_t w = write(fd, data + written, n - written);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        written += (size_t)w;
+    }
+}
+
+/* ---- Парсер кадров stdin (устойчив к фрагментации на границах read) ---- */
+enum frame_state { F_TYPE, F_LEN, F_PAYLOAD };
+static enum frame_state fstate = F_TYPE;
+static unsigned char frame_type = 0;
+static unsigned char len_buf[4];
+static int len_idx = 0;
+static uint32_t frame_len = 0;
+static uint32_t frame_got = 0;
+static unsigned char resize_buf[4];
+
+/* Обработать очередной прочитанный из stdin блок по протоколу кадров */
+static void process_stdin(const unsigned char *buf, ssize_t n) {
+    ssize_t i = 0;
+    while (i < n) {
+        unsigned char c = buf[i];
+        switch (fstate) {
+            case F_TYPE:
+                frame_type = c;
+                fstate = F_LEN;
+                len_idx = 0;
+                i++;
+                break;
+            case F_LEN:
+                len_buf[len_idx++] = c;
+                i++;
+                if (len_idx == 4) {
+                    frame_len = ((uint32_t)len_buf[0] << 24) | ((uint32_t)len_buf[1] << 16)
+                              | ((uint32_t)len_buf[2] << 8)  | (uint32_t)len_buf[3];
+                    frame_got = 0;
+                    if (frame_len == 0) {
+                        fstate = F_TYPE; /* пустой кадр — ничего не делаем */
+                    } else {
+                        fstate = F_PAYLOAD;
+                    }
+                }
+                break;
+            case F_PAYLOAD: {
+                uint32_t remaining = frame_len - frame_got;
+                uint32_t avail = (uint32_t)(n - i);
+                uint32_t take = avail < remaining ? avail : remaining;
+                if (frame_type == 0x00) {
+                    /* данные — стримим сразу куском в PTY */
+                    write_all(master_fd, buf + i, take);
+                } else if (frame_type == 0x01) {
+                    /* resize — собираем до 4 байт */
+                    for (uint32_t k = 0; k < take; k++) {
+                        if (frame_got + k < sizeof(resize_buf))
+                            resize_buf[frame_got + k] = buf[i + k];
+                    }
+                }
+                frame_got += take;
+                i += (ssize_t)take;
+                if (frame_got == frame_len) {
+                    if (frame_type == 0x01 && frame_len >= 4) {
+                        unsigned short cols = (unsigned short)((resize_buf[0] << 8) | resize_buf[1]);
+                        unsigned short rows = (unsigned short)((resize_buf[2] << 8) | resize_buf[3]);
+                        set_winsize(master_fd, cols, rows);
+                    }
+                    fstate = F_TYPE;
+                }
+                break;
+            }
+        }
+    }
 }
 
 int main(int argc, char **argv) {
@@ -86,18 +173,16 @@ int main(int argc, char **argv) {
     sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
     sigaction(SIGCHLD, &sa, NULL);
 
-    /* Режим stdin: неканонический, без эха (relay, не терминал) */
-    tcgetattr(STDIN_FILENO, &term);
-    term.c_lflag &= ~(ECHO | ICANON | ISIG);
-    term.c_cc[VMIN] = 1;
-    term.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSANOW, &term);
+    /* Режим stdin: неканонический, без эха (relay, не терминал).
+     * stdin здесь — pipe от .NET; tcsetattr на pipe вернёт ENOTTY, это ок. */
+    if (tcgetattr(STDIN_FILENO, &term) == 0) {
+        term.c_lflag &= ~(ECHO | ICANON | ISIG);
+        term.c_cc[VMIN] = 1;
+        term.c_cc[VTIME] = 0;
+        tcsetattr(STDIN_FILENO, TCSANOW, &term);
+    }
 
-    /* Буфер и позиция чтения resize-команды */
     unsigned char buf[BUF_SIZE];
-    int resize_state = 0; /* 0=обычный, 1=ESC получен, 2='R' получен, 3+ = чтение размера */
-    unsigned char resize_cols[2], resize_rows[2];
-    int resize_idx = 0;
 
     /* Основной цикл: select на stdin и master_fd */
     while (1) {
@@ -119,74 +204,28 @@ int main(int argc, char **argv) {
             break;
         }
 
-        /* Чтение из PTY master → stdout */
+        /* Чтение из PTY master → stdout (сырой вывод) */
         if (FD_ISSET(master_fd, &rfds)) {
             ssize_t n = read(master_fd, buf, BUF_SIZE);
             if (n <= 0) break;
-            ssize_t written = 0;
-            while (written < n) {
-                ssize_t w = write(STDOUT_FILENO, buf + written, (size_t)(n - written));
-                if (w < 0) {
-                    if (errno == EINTR) continue;
-                    break;
-                }
-                written += w;
-            }
+            write_all(STDOUT_FILENO, buf, (size_t)n);
             fflush(stdout);
         }
 
-        /* Чтение stdin → обработка resize / relay в PTY */
-        if (FD_ISSET(STDIN_FILENO, &rfds)) {
+        /* Чтение stdin → разбор кадров → relay данных / resize */
+        if (!child_exited && FD_ISSET(STDIN_FILENO, &rfds)) {
             ssize_t n = read(STDIN_FILENO, buf, BUF_SIZE);
             if (n <= 0) break;
-
-            for (ssize_t i = 0; i < n; i++) {
-                unsigned char c = buf[i];
-
-                if (resize_state > 0) {
-                    /* Внутри resize-команды */
-                    if (resize_state == 1 && c == 'R') {
-                        resize_state = 2;
-                        resize_idx = 0;
-                    } else if (resize_state >= 2 && resize_state < 4) {
-                        /* Чтение cols (2 байта big-endian) */
-                        resize_cols[resize_idx++] = c;
-                        if (resize_idx == 2) { resize_state = 4; resize_idx = 0; }
-                    } else if (resize_state >= 4 && resize_state < 6) {
-                        /* Чтение rows (2 байта big-endian) */
-                        resize_rows[resize_idx++] = c;
-                        if (resize_idx == 2) {
-                            unsigned short new_cols = (unsigned short)((resize_cols[0] << 8) | resize_cols[1]);
-                            unsigned short new_rows = (unsigned short)((resize_rows[0] << 8) | resize_rows[1]);
-                            set_winsize(master_fd, new_cols, new_rows);
-                            resize_state = 0;
-                        }
-                    } else {
-                        /* Любой другой байт после ESC — отбой resize-режима */
-                        /* Relay предыдущих байтов (ESC + не-R) в PTY — упрощённо релеим всё */
-                        resize_state = 0;
-                        /* Этот байт пойдёт в PTY через обычный путь */
-                    }
-                }
-
-                if (resize_state == 0) {
-                    if (c == 0x1B) {
-                        resize_state = 1; /* ожидаем 'R' */
-                    } else {
-                        /* Relay в PTY */
-                        char ch = (char)c;
-                        ssize_t w = write(master_fd, &ch, 1);
-                        (void)w; /* игнорируем ошибки записи */
-                    }
-                }
-            }
+            process_stdin(buf, n);
         }
 
         if (child_exited && ret == 0) break;
     }
 
-    /* Дожидаемся ребёнка */
+    /* Дожидаемся ребёнка. Если вышли из цикла из-за закрытия stdin (не смерти ребёнка) —
+     * шлём шеллу SIGHUP, иначе waitpid заблокируется на живом интерактивном bash. */
     if (child_pid > 0) {
+        if (!child_exited) kill(child_pid, SIGHUP);
         int status;
         waitpid(child_pid, &status, 0);
     }

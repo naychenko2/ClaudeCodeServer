@@ -70,6 +70,12 @@ export async function stopTerminal(terminalId: string): Promise<void> {
   await conn.invoke('StopTerminal', terminalId)
 }
 
+export async function renameTerminal(terminalId: string, name: string): Promise<TerminalInfo | null> {
+  const conn = getConnection()
+  if (conn.state !== signalR.HubConnectionState.Connected) await ensureConnected()
+  return conn.invoke('RenameTerminal', terminalId, name)
+}
+
 export async function sendTerminalInput(terminalId: string, data: string): Promise<void> {
   const conn = getConnection()
   if (conn.state !== signalR.HubConnectionState.Connected) return
@@ -89,6 +95,7 @@ type TerminalMsgHandler = (msg: {
   status?: string
   exitCode?: number
   terminalId?: string
+  name?: string
 }) => void
 
 export function onTerminalMessage(handler: TerminalMsgHandler): () => void {

@@ -119,9 +119,9 @@ export function RateLimitBar({ w }: { w: RateWindow }) {
 // компактнее по ширине (для мобильного объединённого чипа).
 // wide — более широкий поповер на мобилке (для объединённого чипа с двумя секциями:
 // шире → меньше переносов → ниже по высоте, помещается на экран).
-function BadgeShell({ label, amount, title, isMobile, tone, stacked, wide, children }: {
+function BadgeShell({ label, amount, title, isMobile, tone, stacked, wide, pulse, children }: {
   label?: string; amount: React.ReactNode; title: string; isMobile?: boolean;
-  tone?: 'warn' | 'danger'; stacked?: boolean; wide?: boolean; children: React.ReactNode;
+  tone?: 'warn' | 'danger'; stacked?: boolean; wide?: boolean; pulse?: boolean; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const toneBg = tone === 'danger' ? RATE_COLORS.danger.bg : tone === 'warn' ? RATE_COLORS.warn.bg : C.bgWhite;
@@ -145,6 +145,8 @@ function BadgeShell({ label, amount, title, isMobile, tone, stacked, wide, child
         {label && <span style={{ fontFamily: FONT.sans, fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</span>}
         {amount}
       </button>
+      {/* Пульс-индикатор «на бегу» — сигнал активного workflow без отдельного чипа в ряду */}
+      {pulse && <span style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: C.accent, border: `2px solid ${C.bgPanel}`, animation: 'pulsedot 1.2s ease-in-out infinite', pointerEvents: 'none' }} />}
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
@@ -567,10 +569,13 @@ function MobileCombinedBadge(props: {
   isCliProvider: boolean; providerName: string; cost: CostStats; falCost: FalCostStats;
   balance: ProviderBalance | null; billing: ClaudeBilling; onBillingChange: (b: ClaudeBilling) => void;
   windows: RateWindow[];
+  // workflow (мобилка): прогресс фаз втягивается в этот же чип вместо отдельного бейджа
+  activeWorkflow?: { phasesDone: number; phasesTotal: number };
 }) {
   const {
-    estimate, isCompacting, isCliProvider, providerName, cost, falCost, balance, billing, windows,
+    estimate, isCompacting, isCliProvider, providerName, cost, falCost, balance, billing, windows, activeWorkflow,
   } = props;
+  const wfActive = !!activeWorkflow;
 
   // Что доступно к показу в каждой секции
   const showCtx = hasContextInfo(estimate);
@@ -578,8 +583,8 @@ function MobileCombinedBadge(props: {
     ? hasProviderCostInfo(cost, balance)
     : hasClaudeCostInfo(cost, windows);
   const hasFal = !isCliProvider && falCost.total > 0;
-  // Совсем нечего показывать — прячем чип
-  if (!showCtx && !showCost && !hasFal) return null;
+  // Совсем нечего показывать — прячем чип (но активный workflow держит чип на экране)
+  if (!showCtx && !showCost && !hasFal && !wfActive) return null;
 
   // Подсветка пилюли — худшая из контекста и стоимости
   const ctxTone = estimate.level !== 'normal' ? estimate.level : undefined;
@@ -600,7 +605,14 @@ function MobileCombinedBadge(props: {
   // Компактнее по ширине, чтобы не распирать узкую мобильную шапку.
   const amountNode = (
     <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0, minWidth: 0 }}>
-      {showCtx && <ContextAmount estimate={estimate} isCompacting={isCompacting} isMobile />}
+      {/* Пока идёт workflow — на лицевой стороне спиннер + прогресс фаз (вместо % контекста);
+          сам контекст остаётся доступен в поповере */}
+      {wfActive ? (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <div className="tool-spinner" style={{ width: 10, height: 10 }} />
+          <span>{activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'Workflow'}</span>
+        </span>
+      ) : showCtx ? <ContextAmount estimate={estimate} isCompacting={isCompacting} isMobile /> : null}
       {(showCost || hasFal) && (
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{costSummary}</span>
       )}
@@ -618,11 +630,18 @@ function MobileCombinedBadge(props: {
       tone={tone}
       stacked
       wide
+      pulse={wfActive}
       title="Контекст и расход сессии — нажмите для деталей"
     >
-      {showCtx && <ContextPopoverBody {...props} />}
+      {wfActive && (
+        <div>
+          <div style={badgeTitleStyle}>Workflow</div>
+          <BadgeRow k="Фаза" v={activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'идёт'} />
+        </div>
+      )}
+      {showCtx && <div style={wfActive ? sectionDivider : undefined}><ContextPopoverBody {...props} /></div>}
       {showCost && (
-        <div style={showCtx ? sectionDivider : undefined}>
+        <div style={(wfActive || showCtx) ? sectionDivider : undefined}>
           {isCliProvider
             ? <ProviderCostPopoverBody providerName={providerName} stats={cost} balance={balance} />
             : <ClaudeCostPopoverBody stats={cost} billing={billing} onBillingChange={props.onBillingChange} windows={windows} />}
@@ -804,6 +823,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const personaZoneText = personaIsProject
     ? (personaZoneName ? `Проект · ${personaZoneName}` : 'Проект')
     : 'Глобальный';
+  // Происхождение чата (задача/автоматизация). На мобиле — компактной иконкой в подзаголовке
+  // titleBlock (не отдельным чипом в ряду), на десктопе — полным бейджем в тулбаре.
+  const origin = resolveChatOrigin(session);
+  const originInline = origin && isMobile ? <ChatOriginBadge origin={origin} iconOnly style={{ flexShrink: 0 }} /> : null;
   // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
   // При наличии персоны — её идентификация доминирует: аватар + роль (serif, цвет персоны)
   // и вторая строка «имя · зона · модель». session.name уходит в тултип, чтобы не потеряться.
@@ -864,6 +887,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           {session.name ?? 'Групповой чат'}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: 1 }}>
+          {originInline}
           <span style={{ fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             Отвечает: {persona ? personaTitleLines(persona).primary + (personaTitleLines(persona).secondary ? ` (${personaTitleLines(persona).secondary})` : '') : '—'}
           </span>
@@ -885,6 +909,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         </span>
         {/* Строка 2: имя персоны + пилюля зоны + модель/effort (компактно) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: 1 }}>
+          {originInline}
           {personaTitleLines(persona).secondary && (
             <span style={{ flexShrink: 0, fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {personaTitleLines(persona).secondary}
@@ -911,6 +936,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         {session.name ?? 'Новый чат'}
       </div>
       <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {originInline && <span style={{ marginRight: 4, verticalAlign: 'middle' }}>{originInline}</span>}
         {/* .md-агент чата — лёгкая пометка: цветная точка + имя (не персона-блок) */}
         {agent && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 4, verticalAlign: 'baseline' }}>
@@ -934,10 +960,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const titleEl = isMobile && onBack
     ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
     : titleBlock;
-  // Контекст происхождения чата (задача/автоматизация) — виден независимо от того,
-  // ведётся ли чат от лица персоны (titleBlock рендерит персону не во всех случаях).
-  const origin = resolveChatOrigin(session);
-  const originBadge = origin ? <ChatOriginBadge origin={origin} /> : null;
+  // На десктопе происхождение — полный бейдж в ряду; на мобиле оно уже встроено
+  // в подзаголовок titleBlock (originInline), поэтому в ряду его не дублируем.
+  const originBadge = origin && !isMobile ? <ChatOriginBadge origin={origin} /> : null;
 
   // Пилюля временного чата: остаток до авто-удаления; клик — быстрый путь к настройке.
   // На мобиле не показываем — шапка и так плотная, метка есть в списке чатов
@@ -958,7 +983,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {expiryLeft}
     </button>
   ) : null;
-  const workflowBadge = activeWorkflow ? (
+  // На мобиле прогресс workflow втянут в объединённый чип (costBadges) — отдельный
+  // бейдж рисуем только на десктопе, где ряду хватает места.
+  const workflowBadge = activeWorkflow && !isMobile ? (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
       background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, flexShrink: 0,
@@ -987,6 +1014,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       online={online} assistantName={asstName}
       isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost}
       balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={rateWindows}
+      activeWorkflow={activeWorkflow}
     />
   ) : (
     <>

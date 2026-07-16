@@ -514,9 +514,9 @@ const windowWidth = useWindowWidth();
     ...(projectForEdit.toolsEnabled ? [{ value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools }] : []),
   ];
 
-  // Мобильный таббар проекта: primary — Чаты/Файлы/Задачи; Команда/Инструменты/Использование
-  // уезжают в «⋯» (как «⋯ Разделы» в верхней навигации HubHeader), чтобы пилюли не скроллились.
-  const PROJECT_PRIMARY_MOBILE: LeftTab[] = ['sessions', 'files', 'tasks'];
+  // Мобильный таббар проекта: primary — Чаты/Файлы/Задачи/Команда (4 помещаются);
+  // Инструменты и «Использование» уезжают в «⋯» (как «⋯ Разделы» в HubHeader).
+  const PROJECT_PRIMARY_MOBILE: LeftTab[] = ['sessions', 'files', 'tasks', 'personas'];
   const projectHiddenTabs = leftTabOptions.filter(o => !PROJECT_PRIMARY_MOBILE.includes(o.value));
   // Если активна спрятанная вкладка — показываем её 4-й пилюлей, чтобы подсветка была верной.
   const mobileLeftTabOptions = projectHiddenTabs.some(o => o.value === leftTab)

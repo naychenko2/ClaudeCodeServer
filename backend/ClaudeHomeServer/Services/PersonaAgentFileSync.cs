@@ -226,8 +226,32 @@ public sealed class PersonaAgentFileSync
     private string OwnerDir(string ownerId, string dirKey) =>
         Path.Combine(_baseDir, ownerId, dirKey);
 
-    private string Generate(Persona persona) =>
-        _generator.Generate(persona, _bindings.EffectiveToolEnabled(persona.OwnerId ?? "", persona, "web"));
+    private string Generate(Persona persona)
+    {
+        var ownerId = persona.OwnerId ?? "";
+        return _generator.Generate(persona, new PersonaAgentFileContext(
+            _bindings.EffectiveToolEnabled(ownerId, persona, "web"),
+            _bindings.EffectiveToolEnabled(ownerId, persona, "tasks"),
+            _bindings.EffectiveToolEnabled(ownerId, persona, "notes"),
+            _bindings.BuildSubagentIndex(ownerId, persona),
+            ModelAliasFor(_providers, persona.Model)));
+    }
+
+    // Алиас-тир модели персоны для пина в frontmatter сабагента. Пинится только тир
+    // Claude-модели (opus/sonnet/haiku): алиас безопасен у всех провайдеров — Claude-чат
+    // резолвит его в настоящий тир, сторонние маппят env-переменными BuildCliEnv в модель
+    // сессии. ID сторонних провайдеров и незнакомые Claude-ID не пинятся (null — без пина).
+    internal static string? ModelAliasFor(LlmProviderRegistry providers, string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return null;
+        if (!string.Equals(providers.ProviderKey(model), "claude", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var m = model.ToLowerInvariant();
+        if (m.Contains("opus")) return "opus";
+        if (m.Contains("sonnet")) return "sonnet";
+        if (m.Contains("haiku")) return "haiku";
+        return null;
+    }
 
     public static bool IsReserved(string handle) =>
         ReservedAgentNames.Contains(handle, StringComparer.OrdinalIgnoreCase);

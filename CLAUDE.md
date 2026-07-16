@@ -277,17 +277,23 @@ WorkingDirectory = `project.RootPath`
   (регистрирует инструмент `persona_ask`) и `PERSONAS_SELF_ID`, а в промпт добавляется
   подсказка со списком «@handle — Роль (Имя)» (`BuildPersonasContext.MentionsHint`).
   `POST /api/personas/ask` — one-shot
-  ответ персоны от её лица (слой `BuildPersonaPrompt` + recall памяти + модель персоны,
-  `OneShotClaudeRunner`; таймаут `Persona:AskTimeoutMs`, дефолт 120с). Анти-рекурсия по
-  построению: one-shot без MCP, глубина делегирования 1. Фронт: автокомплит `@` в Composer
+  ответ персоны от её лица (слой `BuildPersonaPrompt` + recall памяти + выжимки
+  Always-привязок + модель и effort персоны, `OneShotClaudeRunner`; таймаут
+  `Persona:AskTimeoutMs`, дефолт 120с; после ответа консультация уходит в память
+  персоны — `PersonaMemoryAutolearnService.LearnFromConsultation`, фокус не трогается).
+  Анти-рекурсия по построению: one-shot без MCP, глубина делегирования 1. Фронт: автокомплит `@` в Composer
   ([MentionsDropdown.tsx](frontend/src/components/MentionsDropdown.tsx)). Handle персон
   транслитерируется из кириллицы (PersonaManager.Slugify).
-- **Дискуссия «Обсудить с командой»** (поверх @упоминаний, тот же флаг): кнопка в композере
-  чата персоны → [DiscussTeamDialog.tsx](frontend/src/features/personas/DiscussTeamDialog.tsx)
-  (выбор 1-2 участников + вопрос) → обычное сообщение с промпт-обвязкой: ведущая персона
-  опрашивает участников через persona_ask, возражает при разногласиях (один раунд) и сводит
-  итог. Бэкенд и протокол не участвуют. При включённом `persona-group-chats` в диалоге есть
-  второй режим — «Совещание» (см. ниже).
+- **Механики «Обсудить с командой»** (поверх @упоминаний): реестр и сборка текста хода —
+  [teamMechanics.ts](frontend/src/features/team/teamMechanics.ts) (`buildTeamTurnText`),
+  бэкенд и протокол не участвуют. Механики: дискуссия через @упоминания, workflow-скрипты
+  с персонами в ролях (`/panel-of-experts`, `/review-consilium`, `/red-team`,
+  `/team-implement` — participants/executors = handle персон) и `/oh-my-claudecode:*`
+  (персоны туда подставляются хинтом OmcPersonaRouting); доступность механики гейтится
+  наличием скилла (`requiredSkill`). Старые серверные механики «Совещание» (P7) и
+  «Конвейер пантеона» УДАЛЕНЫ вместе с DiscussTeamDialog/MeetingView/PipelineView;
+  legacy `meeting_phase`/`pipeline_phase` в старых историях молча пропускаются
+  (ChatHistoryService).
 - **Контракт характера (P1) + дисциплина (P2)**: `Persona.Contract` (character/tone/mustDo/
   mustNot/outputFormat/speechExamples/instructions — слоты вместо единого текста; legacy
   `SystemPrompt` остаётся у персон без контракта; `instructions` — длинный регламент роли
@@ -337,21 +343,6 @@ WorkingDirectory = `project.RootPath`
   UI: мультивыбор «Групповой чат…» в CompanionSelector (чекбоксы 2-4, метка «ведущая»,
   предупреждение про разных провайдеров), стек аватаров в ChatHeaderBar (активный — с
   цветным кольцом), участники первыми в @автокомплите.
-- **Совещание (P7, тот же флаг)**: [PersonaMeetingService.cs](backend/ClaudeHomeServer/Services/PersonaMeetingService.cs) —
-  `POST /api/chats/{id}/meeting` {question, personaIds?} (дефолт — participants чата; в чате
-  одной персоны personaIds обязателен), `POST .../meeting/cancel`. Три фазы one-shot через
-  [PersonaAskService.cs](backend/ClaudeHomeServer/Services/PersonaAskService.cs) (вынос
-  persona_ask из контроллера; интерфейс `IOneShotRunner` для моков): independent (N параллельных
-  позиций, ≤3 одновременно) → attack (каждому — позиции остальных: «критикуй слабое, защищай
-  своё, явно уступай сильному аргументу») → synthesis (итог от ведущей её моделью). Итого
-  ~2N+1 вызовов; упавшая персона → IsError-entry, <2 живых — фаза error; общий колпак
-  `Persona:MeetingTimeoutMs` (600с), персональный — `Persona:AskTimeoutMs`. Каждая фаза
-  пишется в историю вне хода (`StoredMeetingPhaseMessage` через `SessionManager.AppendStoredAsync` —
-  обобщённый паттерн PublishFalCostAsync) + live `meeting_phase`/`meeting_progress`.
-  Фронт: карточка [MeetingView.tsx](frontend/src/components/chat/MeetingView.tsx) (аккордеон
-  по персонам, спиннеры прогресса, «Итог» крупно, «Продолжить обсуждение» — краткий итог
-  обычным сообщением в транскрипт CLI, «Отменить»); запуск — переключатель
-  «Обсуждение/Совещание» в DiscussTeamDialog (лимит 4, подпись «≈2N+1 вызовов»).
 - **Долгая память** (типизация 2026 semantic/episodic/procedural):
   [PersonaMemoryService.cs](backend/ClaudeHomeServer/Services/PersonaMemoryService.cs) — записи в
   `data/persona-memory.json` (источник правды) + семантический слой в Dify-датасет
@@ -403,19 +394,16 @@ WorkingDirectory = `project.RootPath`
 - **Флаги**: `personas` (раздел + чат + память + аватар + персона-исполнитель задач + вкладка
   «Задачи»), `persona-memory-autolearn` (авто-извлечение фактов из диалога),
   `persona-memory-consolidation` (фоновая уборка памяти), `persona-mentions`
-  (@упоминания + persona_ask + дискуссия), `persona-group-chats` (групповые чаты + совещания P7).
+  (@упоминания + persona_ask + «Обсудить с командой»), `persona-group-chats` (групповые чаты).
 
-## Механики OmO в чатах (флаги `ultrawork-keyword`, `work-loop`)
+## Механики OmO в чатах (флаг `work-loop`)
 
 Тексты — переводы oh-my-openagent ([docs/omo-adoption.md](docs/omo-adoption.md)); рантайм-константы —
 [Services/Prompts/OmoPrompts*.cs](backend/ClaudeHomeServer/Services/Prompts/OmoPrompts.cs)
-(Ultrawork/Categories генерируются скриптом docs/omo/gen-omo-prompts.ps1 из переводов).
+(Categories генерируются скриптом docs/omo/gen-omo-prompts.ps1 из переводов).
 
-- **Магическое слово ultrawork** (`ultrawork-keyword`): слово `ultrawork`/`ulw`/`ультра`/`ультраворк`
-  отдельным словом в сообщении → `SessionManager.BuildCliTurnText` дописывает переведённый режим
-  максимального усилия к тексту хода ТОЛЬКО для CLI (история/UI/LastMessage хранят исходное
-  сообщение). Фронт детектит то же правило сам ([lib/ultrawork.ts](frontend/src/lib/ultrawork.ts)) —
-  бейдж «⚡ ультра» на сообщении в ленте.
+- Своя вставка «магического слова ultrawork» УДАЛЕНА: слова `ultrawork`/`ulw` ловит
+  keyword-detector плагина oh-my-claudecode (см. BuildCliTurnText).
 - **Цикл «до готово»** (`work-loop`, по мотивам ralph/ulw-loop): тумблер в композере →
   `PUT /api/chats/{id}/loop` → `Session.WorkLoop` {promise=«ГОТОВО», iteration, maxIterations
   (конфиг `Loop:MaxIterations`, дефолт 20), phase working|verifying}. Пока цикл активен, к ходу
@@ -427,19 +415,6 @@ WorkingDirectory = `project.RootPath`
   в композере. Текст хода агрегируется в `SessionEntry.LoopTurnText` (поиск маркера).
 - Справочник категорий делегирования (`OmoPrompts.DelegationCategories`) — секция «ДЕЛЕГИРОВАНИЕ»
   в промпте персоны-исполнителя задач (TaskExecutionService).
-- **Конвейер пантеона** (`persona-pipeline`, идея конвейера ролей OmO): эстафета
-  анализ → план → ревью → авто-исполнение. [PersonaPipelineService.cs](backend/ClaudeHomeServer/Services/PersonaPipelineService.cs)
-  (образец — PersonaMeetingService): материализует роли (`ConnectPantheon` для
-  metis/prometheus/momus + executor), фазы analysis (Метида) → plan (Прометей) → review
-  (Мом: детект `[REJECT]` → доработка плана, до 2 кругов; двойной REJECT → error без
-  исполнения) — one-shot через PersonaAskService; фаза execute (Сизиф/Гефест) —
-  реальный ход: `SetPersona` исполнителю (в группе — текущий спикер) + `SetWorkLoopAsync(true)`
-  + `SendMessageAsync(план)`; вынесена в `virtual ExecuteAsync` (seam для тестов).
-  `POST /api/chats/{id}/pipeline` {task, executorKey?}, `.../pipeline/cancel`; протокол —
-  `pipeline_progress`/`pipeline_phase` (+ StoredPipelinePhaseMessage). Фронт: третий режим
-  «Конвейер» в [DiscussTeamDialog](frontend/src/features/personas/DiscussTeamDialog.tsx)
-  (кнопка «Обсудить с командой» доступна в ЛЮБОМ чате при флаге), карточка фаз
-  [PipelineView](frontend/src/components/chat/PipelineView.tsx).
 
 ## REST API
 
@@ -484,11 +459,7 @@ POST                /api/personas/ask                  { handle, question, conte
                                                        (one-shot ответ персоны от её лица; флаг persona-mentions; дёргается MCP personas-server)
 POST                /api/chats/group                   { personaIds[], mode?, name? } → Session  (групповой чат, флаг persona-group-chats)
 PUT                 /api/chats/{id}/participants       { personaIds[] } → Session  (состав группы; спикер сохраняется, иначе ведущая)
-POST                /api/chats/{id}/meeting            { question, personaIds? } → { meetingId }  (совещание P7; дефолт — participants чата)
-POST                /api/chats/{id}/meeting/cancel     → 204  (отмена идущего совещания)
 PUT                 /api/chats/{id}/loop               { enabled } → Session  (цикл «до готово», флаг work-loop; работает и для проектных сессий)
-POST                /api/chats/{id}/pipeline           { task, executorKey? } → { pipelineId }  (конвейер пантеона, флаг persona-pipeline)
-POST                /api/chats/{id}/pipeline/cancel    → 204  (отмена идущего конвейера)
 GET/POST/DELETE     /api/knowledge                     (базы знаний Dify: список релевантных + CRUD; раздел «Знания»)
 GET                 /api/knowledge/{id}                → база знаний + документы
 POST                /api/knowledge                     { title, description?, visibility: personal|public } → { id, title, visibility }

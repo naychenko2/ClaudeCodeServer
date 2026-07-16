@@ -131,6 +131,44 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
         }
     }
 
+    // Запись памяти после one-shot консультации (persona_ask): тот же промпт/парсер, что у
+    // сессионного autolearn, но транскрипт — переданный вопрос + ответ персоны, а рабочий
+    // фокус НЕ трогается (консультация — побочный разговор, затирать «что я сейчас делаю»
+    // нельзя). Фон, best-effort: ошибки не влияют на уже отданный ответ.
+    public void LearnFromConsultation(Persona persona, string question, string answer)
+    {
+        if (!persona.MemoryEnabled) return;
+        _ = Task.Run(() => LearnConsultationSafeAsync(persona, question, answer));
+    }
+
+    private async Task LearnConsultationSafeAsync(Persona persona, string question, string answer)
+    {
+        try
+        {
+            var transcript = $"Ассистент (по поручению пользователя): {question}\n\n{persona.Name}: {answer}";
+            if (transcript.Length > TranscriptBudget) transcript = transcript[..TranscriptBudget];
+
+            var model = _runner.NormalizeModel(
+                _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
+            var raw = await _runner.RunAsync(BuildPrompt(persona, transcript), model, LlmTimeout, default);
+
+            var saved = 0;
+            foreach (var item in Parse(raw).Items)
+                if (await _memory.RememberWithResolutionAsync(persona.OwnerId, persona.Id, item.Type, item.Text,
+                        null, null, item.Salience, pending: true) is not null)
+                    saved++;
+
+            if (saved > 0)
+                _log.LogInformation("autolearn: персона {Persona}, консультация — сохранено {Count} записей памяти",
+                    persona.Id, saved);
+            _memory.EnforceCap(persona.OwnerId, persona.Id);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "autolearn: память после консультации персоны {Persona}", persona.Id);
+        }
+    }
+
     private static string BuildPrompt(Persona persona, string transcript)
     {
         var sb = new StringBuilder();

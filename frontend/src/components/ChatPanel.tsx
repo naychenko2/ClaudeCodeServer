@@ -619,10 +619,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем
-  // в один контур (внешние линии сверху/снизу + разделители между соседями), чтобы
-  // file_changed между инструментами не разрывал стопку. Контур рисуем только если в
-  // блоке есть хотя бы один инструмент; одиночные file_changed остаются обычными карточками.
-  // Группировка — O(n) с постройкой карт по всей ленте, поэтому в useMemo от items.
+  // в один контур (внешние линии сверху/снизу + разделители между соседями). Стопку не
+  // рвут ни file_changed, ни размышления между действиями, ни невидимые элементы —
+  // после завершения хода весь блок (включая одиночное действие) сворачивается в
+  // строку «N действий». Группировка — O(n) с постройкой карт по всей ленте (useMemo).
   const renderedItems = useMemo(() => {
     // Последний task-вызов (lastTaskIdx) исключаем из блока действий, как и TodoWrite:
     // на его месте рисуется отдельная карточка чек-листа, ей не место внутри контура
@@ -710,7 +710,26 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       } else if (inBlock(items[i], i)) {
         const start = i;
         const slice: Array<[ChatItem, number]> = [];
-        while (i < items.length && inBlock(items[i], i)) { slice.push([items[i], i]); i++; }
+        // Прозрачные для группировки: рендерятся в null и не должны рвать стопку действий
+        const isInvisible = (it: ChatItem) => it.kind === 'session_started' || it.kind === 'resumed' || it.kind === 'fal_cost';
+        // Размышления верхнего уровня прячем внутрь группы, если они стоят МЕЖДУ действиями
+        const isThought = (it: ChatItem) => (it.kind === 'thinking' && !it.parentToolUseId) || it.kind === 'redacted_thinking';
+        const isSuppressed = (it: ChatItem) => suppressedByWorkflow.has(it) || suppressedByAgentParent.has(it);
+        while (i < items.length) {
+          if (isSuppressed(items[i]) || isInvisible(items[i])) { i++; continue; }
+          if (inBlock(items[i], i)) { slice.push([items[i], i]); i++; continue; }
+          if (isThought(items[i])) {
+            // Lookahead: впитываем размышления, только если дальше идёт ещё действие —
+            // размышление перед финальным ответом остаётся видимой строкой над ним
+            let j = i;
+            while (j < items.length && (isThought(items[j]) || isInvisible(items[j]) || isSuppressed(items[j]))) j++;
+            if (j < items.length && inBlock(items[j], j)) {
+              for (; i < j; i++) if (isThought(items[i])) slice.push([items[i], i]);
+              continue;
+            }
+          }
+          break;
+        }
         // Один контур: инструменты и изменения файлов — компактными строками (в т.ч. одиночные).
         // Для agent-вызовов с детьми сразу рисуем детей inline под родителем — иначе при параллельных
         // агентах все их инструменты сливаются в один безымянный блок после шапки.
@@ -720,8 +739,23 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           if (items[k].kind === 'user_message') break;
           if (items[k].kind === 'result') { isGroupDone = true; break; }
         }
+        // Изменения файлов не теряются при сворачивании: в свёрнутой шапке — те же плашки
+        // (дедуп по пути, +N/−N событий суммируются), при раскрытии они на своих местах
+        const fileAgg = new Map<string, Extract<ChatItem, { kind: 'file_changed' }>>();
+        for (const [it] of slice) {
+          if (it.kind !== 'file_changed') continue;
+          const prev = fileAgg.get(it.path);
+          fileAgg.set(it.path, prev ? { ...it, added: prev.added + it.added, removed: prev.removed + it.removed } : it);
+        }
+        const filesSummary = fileAgg.size > 0
+          ? [...fileAgg.values()].map(f => (
+              <div key={`fsum-${f.path}`} style={{ borderTop: `1px solid ${C.bgInset}` }}>
+                <FileChangedRow item={f} online={online} onOpenFile={onOpenFile} onRevert={project ? handleRevert : undefined} />
+              </div>
+            ))
+          : undefined;
         pushNode(
-          <ToolGroupBlock key={`grp-${itemKey(slice[0][0], start)}`} isGroupDone={isGroupDone} toolCount={toolCount}>
+          <ToolGroupBlock key={`grp-${itemKey(slice[0][0], start)}`} isGroupDone={isGroupDone} toolCount={toolCount} summary={filesSummary}>
             {slice.map(([it, idx], gi) => {
               // Финальный текст сабагента из транскрипта дублирует тело ответа (tool_result) —
               // после завершения в активности его не показываем (ответ рендерит сама карточка)

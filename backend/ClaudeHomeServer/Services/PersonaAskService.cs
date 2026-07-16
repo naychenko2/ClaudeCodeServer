@@ -4,12 +4,15 @@ using ClaudeHomeServer.Services.Llm;
 namespace ClaudeHomeServer.Services;
 
 // One-shot ответ персоны от её лица: слой персоны (роль + характер) + recall её долгой
-// памяти + вопрос; модель — модель персоны. Вынесен из PersonasController.Ask, чтобы
-// персон можно было спрашивать без HTTP (persona_ask из MCP персон). Анти-рекурсия по
-// построению: one-shot идёт без MCP-серверов — «спросить третью персону» изнутри нельзя.
+// памяти + выжимки Always-привязок + вопрос; модель и effort — персоны. После ответа
+// консультация уходит в её память (autolearn, фон). Вынесен из PersonasController.Ask,
+// чтобы персон можно было спрашивать без HTTP (persona_ask из MCP персон). Анти-рекурсия
+// по построению: one-shot идёт без MCP-серверов — «спросить третью персону» изнутри нельзя.
 public sealed class PersonaAskService(
     PersonaMemoryService memory,
     PersonaPromptBuilder promptBuilder,
+    PersonaBindingsService bindings,
+    PersonaMemoryAutolearnService autolearn,
     IOneShotRunner oneShot,
     IConfiguration config,
     ILogger<PersonaAskService> log)
@@ -34,6 +37,15 @@ public sealed class PersonaAskService(
             catch (Exception ex) { log.LogWarning(ex, "persona_ask: recall памяти {Persona}", persona.Id); }
         }
 
+        // Выжимки Always-привязок по тексту вопроса — тоже best-effort: инструментов
+        // у one-shot нет, единственный способ дать персоне её источники — серверный
+        try
+        {
+            var extracts = await bindings.BuildAlwaysExtractsAsync(ownerId, persona, question);
+            if (!string.IsNullOrWhiteSpace(extracts)) sb.AppendLine().AppendLine(extracts);
+        }
+        catch (Exception ex) { log.LogWarning(ex, "persona_ask: выжимки привязок {Persona}", persona.Id); }
+
         sb.AppendLine();
         sb.AppendLine("Тебя спрашивает ассистент пользователя из другого разговора. Этот разговор ты не видишь — " +
                       "отвечай по вопросу и переданному контексту, от своего лица и в своём характере, по существу.");
@@ -43,9 +55,13 @@ public sealed class PersonaAskService(
 
         var timeout = TimeSpan.FromMilliseconds(
             int.TryParse(config["Persona:AskTimeoutMs"], out var t) ? t : 120_000);
-        var answer = await oneShot.RunAsync(sb.ToString(), oneShot.NormalizeModel(persona.Model), timeout, ct);
+        var answer = await oneShot.RunAsync(sb.ToString(), oneShot.NormalizeModel(persona.Model),
+            timeout, ct, persona.Effort);
         if (string.IsNullOrWhiteSpace(answer))
             throw new InvalidOperationException("Персона не ответила (пустой ответ модели)");
+
+        // Консультация не должна быть бесследной для памяти персоны (фон, best-effort)
+        autolearn.LearnFromConsultation(persona, question, answer);
         return answer;
     }
 }

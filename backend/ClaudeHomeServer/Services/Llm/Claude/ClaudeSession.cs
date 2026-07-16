@@ -762,11 +762,14 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!string.IsNullOrWhiteSpace(Info.Effort))
             args.AddRange(["--effort", Info.Effort]);
 
-        // Файловые сабагенты-персоны: на агентном ходу не монтируем
-        // (анти-рекурсия, как TASKS_EXECUTE/PERSONAS_MENTIONS); без Task консультанты
-        // недостижимы — план не собираем. Ошибки провайдера — ход без консультантов.
+        // Файловые сабагенты-персоны. На агентном ходу (agentDepth >= 1) план урезается
+        // до pmem-серверов: подсказки и --add-dir не даём (анти-рекурсия, как
+        // TASKS_EXECUTE/PERSONAS_MENTIONS), но .md-файлы в cwd проекта/Chats CLI видит
+        // и без add-dir — если модель всё же позовёт Task(handle), память сабагента
+        // должна быть достижима, иначе frontmatter (mcpServers: [pmem_…]) укажет в пустоту.
+        // Ошибки провайдера — ход без консультантов.
         PersonaAgentsContext? personaAgents = null;
-        if (agentDepth < 1 && _personaAgentsProvider is not null
+        if (_personaAgentsProvider is not null
             && !_disallowedTools.Contains("Task", StringComparer.Ordinal))
         {
             try { personaAgents = _personaAgentsProvider(); }
@@ -774,6 +777,8 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 Console.Error.WriteLine($"[ClaudeSession] План сабагентов-персон не собрался: {ex.Message}");
             }
+            if (agentDepth >= 1 && personaAgents is not null)
+                personaAgents = personaAgents with { AddDirs = [], AgentHandles = [] };
         }
 
         // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)

@@ -10,21 +10,26 @@ import { AgentTextBlock, AgentThinkingBlock, NEUTRAL_AGENT_ACCENT } from './Agen
 export interface ActivityEntry { item: ChatItem; idx: number }
 
 // Блок группы инструментов: во время стриминга — раскрыт плоско; после завершения —
-// одиночное действие остаётся раскрытым, N>1 автоматически сворачивается в строку
-// «N действий». Кнопка заголовка переключает.
-export function ToolGroupBlock({ isGroupDone, toolCount, children }: {
+// автоматически сворачивается в строку «N действий» (одиночные тоже — содержимое
+// действий по умолчанию скрыто). Кнопка заголовка переключает. summary — что остаётся
+// видимым в свёрнутом виде под заголовком (плашки изменённых файлов); при раскрытии
+// вместо него рендерятся children, где те же файлы стоят на своих местах в хронологии.
+export function ToolGroupBlock({ isGroupDone, toolCount, summary, children }: {
   isGroupDone: boolean;
   toolCount: number;
+  summary?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const [expanded, setExpanded] = useState(true);
+  // Группа из одних file_changed (toolCount 0) не сворачивается — иначе строка «0 действий»
+  const collapsible = isGroupDone && toolCount > 0;
   useEffect(() => {
-    if (isGroupDone && toolCount > 1) setExpanded(false);
-  }, [isGroupDone, toolCount]);
+    if (collapsible) setExpanded(false);
+  }, [collapsible]);
 
   return (
     <div style={{ borderTop: `1px solid ${C.bgInset}`, borderBottom: `1px solid ${C.bgInset}` }}>
-      {isGroupDone && (
+      {collapsible && (
         <button
           onClick={() => setExpanded(v => !v)}
           style={{
@@ -41,7 +46,7 @@ export function ToolGroupBlock({ isGroupDone, toolCount, children }: {
             : <ChevronDown size={12} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />}
         </button>
       )}
-      {(!isGroupDone || expanded) && children}
+      {(!collapsible || expanded) ? children : summary}
     </div>
   );
 }

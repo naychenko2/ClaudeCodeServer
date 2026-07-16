@@ -12,8 +12,10 @@ public interface IOneShotRunner
 
     // ownerId — владелец вызова: его среда исполнения определяет, где запустится claude
     // (локально или в песочнице). null — системный вызов, всегда локально.
+    // effort — усилие рассуждения (--effort), для моделей с его поддержкой.
     Task<string> RunAsync(string prompt, string? model = null,
-        TimeSpan? timeout = null, CancellationToken ct = default, string? ownerId = null);
+        TimeSpan? timeout = null, CancellationToken ct = default,
+        string? ownerId = null, string? effort = null);
 }
 
 // Общий раннер одноразовых вызовов claude --print (без сессии): промпт через stdin,
@@ -31,7 +33,8 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         llmProviders.ResolveByModel(model) is { Enabled: false } ? null : model;
 
     public async Task<string> RunAsync(string prompt, string? model = null,
-        TimeSpan? timeout = null, CancellationToken ct = default, string? ownerId = null)
+        TimeSpan? timeout = null, CancellationToken ct = default,
+        string? ownerId = null, string? effort = null)
     {
         var launcher = launchers.ForOwner(ownerId);
         var workDir = Path.Combine(launcher.HostTempDir, "claude-oneshot");
@@ -48,6 +51,11 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         {
             args.Add("--model");
             args.Add(model);
+        }
+        if (!string.IsNullOrWhiteSpace(effort))
+        {
+            args.Add("--effort");
+            args.Add(effort);
         }
 
         var env = llmProviders.BuildCliEnv(model);

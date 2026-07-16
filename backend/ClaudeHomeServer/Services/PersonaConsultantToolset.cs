@@ -58,13 +58,15 @@ public static class PersonaConsultantToolset
         return "pmem_" + slug;
     }
 
-    // Инструменты собственного memory-сервера консультанта: чтение + запись личной памяти
-    // (её собственное решение, что запомнить) + чтение командной памяти проекта.
-    // team_memory_remember/forget НЕ выдаются — общие данные команды не для фонового write.
+    // Инструменты собственного memory-сервера консультанта: recall (фокус + скоринг) и
+    // чтение + запись личной памяти (её собственное решение, что запомнить) + чтение
+    // командной памяти проекта. team_memory_remember/forget НЕ выдаются — общие данные
+    // команды не для фонового write.
     public static IReadOnlyList<string> MemoryTools(string pmemKey, bool teamMemory)
     {
         var tools = new List<string>
         {
+            $"mcp__{pmemKey}__memory_recall",
             $"mcp__{pmemKey}__memory_search", $"mcp__{pmemKey}__memory_list",
             $"mcp__{pmemKey}__memory_remember", $"mcp__{pmemKey}__memory_forget",
         };
@@ -80,14 +82,16 @@ public static class PersonaConsultantToolset
     // Полный allow-list консультанта. Custom.DisallowedTools персоны только СУЖАЕТ набор
     // (точное совпадение имени); Access расширить его не может — безопасность сабагента
     // не зависит от профиля, рассчитанного на живой надзор. Единственное расширение —
-    // явный опт-ин исполнителя (IsExecutor).
-    public static IReadOnlyList<string> Build(Persona persona, bool webAllowed)
+    // явный опт-ин исполнителя (IsExecutor). Гейты tasks/notes/web — эффективные
+    // возможности персоны (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools).
+    public static IReadOnlyList<string> Build(Persona persona, bool webAllowed,
+        bool tasksAllowed = true, bool notesAllowed = true)
     {
         var tools = new List<string>(BuiltIn);
         if (IsExecutor(persona)) tools.AddRange(Executor);
         if (webAllowed) tools.AddRange(Web);
-        tools.AddRange(TasksRead);
-        tools.AddRange(NotesRead);
+        if (tasksAllowed) tools.AddRange(TasksRead);
+        if (notesAllowed) tools.AddRange(NotesRead);
         tools.AddRange(PersonasRead);
         tools.AddRange(WspRead);
         if (persona.MemoryEnabled)

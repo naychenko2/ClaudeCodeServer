@@ -10,8 +10,13 @@ namespace ClaudeHomeServer.Services;
 // отдаёт статический fallback. Модели CLI-провайдеров (LlmProviders, при заданном ApiKey):
 // записи конфига (окна/цены) + опциональный опрос GET {ApiBaseUrl}/models
 // (OpenAI-совместимый) — новые модели дописываются с дефолтами.
-public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFactory httpFactory)
+public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFactory httpFactory, IConfiguration config)
 {
+    // Опрос claude CLI можно выключить конфигом (ModelCatalog:QueryCli=false): интеграционные
+    // тесты поднимают приложение десятки раз, и каждый прогрев каталога спавнил бы настоящий
+    // claude.exe (мелькающие консольные окна его дочерних bash/cmd). Без опроса — Fallback.
+    private readonly bool _queryCli = config.GetValue("ModelCatalog:QueryCli", true);
+
     // IsCurated=false — модель обнаружена опросом API провайдера, без ручной карточки
     // (нет описания/цен); UI может свернуть такие в «другие модели»
     public record ModelInfo(string Value, string DisplayName, string? Description,
@@ -62,11 +67,14 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
                 if (!IsCacheFresh())
                 {
                     List<ModelInfo>? fresh = null;
-                    try { fresh = await QueryCliAsync(ct); }
-                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                    catch (Exception ex)
+                    if (_queryCli)
                     {
-                        Console.Error.WriteLine($"[ModelCatalog] Не удалось получить список моделей: {ex.Message}");
+                        try { fresh = await QueryCliAsync(ct); }
+                        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[ModelCatalog] Не удалось получить список моделей: {ex.Message}");
+                        }
                     }
 
                     _lastQueryFailed = fresh is null or { Count: 0 };

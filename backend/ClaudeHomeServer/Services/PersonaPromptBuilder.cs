@@ -14,6 +14,14 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
     public string Build(Persona persona, string? model, bool switched = false, bool greeted = false) =>
         BuildCore(persona, providers.ProviderKey(model), switched, greeted);
 
+    // Промпт файлового сабагента: модель исполнения неизвестна на этапе генерации
+    // (.md общий для чатов всех провайдеров, сабагент бежит на модели сессии) —
+    // вместо провайдерного слоя универсальный набор дисциплины.
+    public string BuildForSubagent(Persona persona) =>
+        BuildCore(persona, SubagentProviderKey, switched: false, greeted: false);
+
+    internal const string SubagentProviderKey = "subagent";
+
     internal static string BuildCore(Persona persona, string providerKey, bool switched, bool greeted)
     {
         var sb = new StringBuilder();
@@ -145,12 +153,14 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
 
     // Claude дисциплинирован из коробки — краткость + прагматизм; DeepSeek склонен к
     // галлюцинациям и многословию — полный набор с самопроверкой; GLM — калибровка
-    // пяти сбоев и outcome-first, без секции достоверности.
+    // пяти сбоев и outcome-first, без секции достоверности. Сабагент — универсальный
+    // провайдер-нейтральный набор (модель исполнения на этапе генерации неизвестна).
     private static string[] DisciplineFor(string providerKey) => providerKey switch
     {
         "claude" => [Brevity, LeastChange],
         "deepseek" => [Brevity, Verification, SelfCheck, TurnIntent, NeverRules, AntiSlop],
         "glm" => [Brevity, FiveFailures, OutcomeFirst, NeverRules, AntiSlop],
+        SubagentProviderKey => [Brevity, LeastChange, NeverRules],
         _ => [Brevity, NeverRules],
     };
 }

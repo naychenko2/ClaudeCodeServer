@@ -255,6 +255,51 @@ public class PersonaBindingsService
         return extracts is null ? index : index + "\n" + extracts;
     }
 
+    // Статический индекс привязок для ФАЙЛОВОГО САБАГЕНТА (.claude/agents/{handle}.md).
+    // Отличия от блока хода: секции workspace неизвестны (сабагента зовут из чужих сессий) —
+    // считаем смонтированными read-секции files/knowledge и просим сообщать о недоступном;
+    // Always-источники помечаются «(всегда)» — сабагент подгружает их в начале работы сам
+    // (серверных выжимок по тексту хода у статического файла нет). null — привязок нет.
+    public string? BuildSubagentIndex(string ownerId, Persona persona)
+    {
+        var active = persona.Bindings?.Where(b => b.Mode != PersonaBindingMode.Off).ToList();
+        if (active is not { Count: > 0 }) return null;
+
+        var mounted = new[] { "files", "knowledge" };
+        var lines = new List<string>();
+        foreach (var binding in active)
+        {
+            if (lines.Count >= IndexLimit) break;
+            var way = DescribeWay(ownerId, binding, mounted);
+            if (way is null) continue;
+            var always = binding.Mode == PersonaBindingMode.Always ? " (всегда)" : "";
+            var cond = binding.Condition?.Trim();
+            lines.Add(string.IsNullOrEmpty(cond)
+                ? $"- [{TypeLabel(binding.Type)}]{always} всегда под рукой → {way}"
+                : $"- [{TypeLabel(binding.Type)}]{always} Когда: {cond} → {way}");
+        }
+        if (lines.Count == 0) return null;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("## Привязанные знания и правила");
+        sb.AppendLine("К тебе привязаны источники знаний и правила. Источники с пометкой «(всегда)» " +
+                      "подгрузи указанным способом в начале работы; остальные — когда выполняется их " +
+                      "условие. Если указанный инструмент недоступен в этом окружении — скажи об этом " +
+                      "и работай без источника, не выдумывай его содержимое.");
+        foreach (var line in lines) sb.AppendLine(line);
+        return sb.ToString().TrimEnd();
+    }
+
+    // Выжимки Always-привязок для one-shot persona_ask: инструментов у one-shot нет,
+    // поэтому индекс способов бесполезен — подмешиваем только серверные выжимки
+    // по тексту вопроса. null — Always-привязок нет или ничего не нашлось.
+    public Task<string?> BuildAlwaysExtractsAsync(string ownerId, Persona persona, string question)
+    {
+        var active = persona.Bindings?.Where(b => b.Mode != PersonaBindingMode.Off).ToList();
+        if (active is not { Count: > 0 }) return Task.FromResult<string?>(null);
+        return BuildExtractsAsync(ownerId, active, question);
+    }
+
     // Индекс привязок: заголовок + инструкция + строка на привязку (лимит IndexLimit).
     // Привязка с недоступным способом (нет секции workspace, цель не найдена) опускается.
     // Internal — для юнит-тестов чистой логики сборки.

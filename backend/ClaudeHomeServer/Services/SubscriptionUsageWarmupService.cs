@@ -22,31 +22,58 @@ public sealed class SubscriptionUsageWarmupService(
     IConfiguration config) : BackgroundService
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
+    private const int DefaultRecheckMinutes = 15;
     private const string Prompt = "ping";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!config.GetValue($"{ClaudeSubscriptionPool.Section}:WarmupOnStartup", true))
-            return;
         if (!pool.HasExtra)
             return; // одна подписка — балансировать нечего
 
         var timeout = TimeSpan.FromMilliseconds(
             config.GetValue($"{ClaudeSubscriptionPool.Section}:WarmupTimeoutMs", (int)DefaultTimeout.TotalMilliseconds));
 
-        // Основной аккаунт + все дополнительные подписки. Пробуем последовательно, чтобы не
-        // ловить пачку процессов claude на старте и не жечь окна параллельно.
+        // Стартовый прогрев — по всем аккаунтам сразу.
+        if (config.GetValue($"{ClaudeSubscriptionPool.Section}:WarmupOnStartup", true))
+            await ProbeKeysAsync(AllKeys(), timeout, stoppingToken);
+
+        // Периодический переопрос ВЫВЕДЕННЫХ из ротации аккаунтов: ловим возврат раньше resetsAt
+        // (и с реальной цифрой), не трогая здоровые (они и так получают ходы). 0 — выключено.
+        var interval = config.GetValue($"{ClaudeSubscriptionPool.Section}:RecheckIntervalMinutes", DefaultRecheckMinutes);
+        if (interval <= 0) return;
+
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(interval));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(stoppingToken))
+            {
+                var parked = AllKeys().Where(k => !pool.IsInRotation(k)).ToList();
+                if (parked.Count > 0)
+                    await ProbeKeysAsync(parked, timeout, stoppingToken);
+            }
+        }
+        catch (OperationCanceledException) { /* остановка приложения */ }
+    }
+
+    // Основной аккаунт + все дополнительные подписки.
+    private List<string> AllKeys()
+    {
         var keys = new List<string> { ClaudeSubscriptionPool.PrimaryKey };
         keys.AddRange(pool.All.Where(s => s.Enabled).Select(s => s.Key));
+        return keys;
+    }
 
+    // Пробуем последовательно, чтобы не плодить процессы claude и не жечь окна параллельно.
+    private async Task ProbeKeysAsync(IEnumerable<string> keys, TimeSpan timeout, CancellationToken ct)
+    {
         foreach (var key in keys)
         {
-            if (stoppingToken.IsCancellationRequested) return;
+            if (ct.IsCancellationRequested) return;
             try
             {
-                await ProbeAsync(key, timeout, stoppingToken);
+                await ProbeAsync(key, timeout, ct);
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 return;
             }
@@ -147,8 +174,9 @@ public sealed class SubscriptionUsageWarmupService(
         }
     }
 
-    // Записываем снимок утилизации и — если аккаунт отбит — помечаем его exhausted в пуле
-    // (та же логика, что и в боевом пути SessionManager).
+    // Записываем снимок утилизации и правим состояние пула по свежему ответу:
+    // отбит (rejected/100%) → MarkExhausted; здоровый ответ на ранее исчерпанном аккаунте →
+    // снимаем пометку (возврат в ротацию раньше resetsAt). Та же логика exhausted, что в SessionManager.
     private void RecordAndGuard(string key, RateLimitMessage m)
     {
         usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt,
@@ -160,6 +188,11 @@ public sealed class SubscriptionUsageWarmupService(
                 ? (DateTime?)dt.ToUniversalTime() : null;
             pool.MarkExhausted(key, resetsAt);
             Console.Error.WriteLine($"[SubscriptionWarmup] '{key}': лимит исчерпан (status={m.Status}), выведена из ротации");
+        }
+        else if (pool.IsExhausted(key))
+        {
+            pool.Reset(key); // аккаунт снова отвечает — вернуть в ротацию, не дожидаясь resetsAt
+            Console.Error.WriteLine($"[SubscriptionWarmup] '{key}': лимит восстановлен, возвращена в ротацию");
         }
     }
 }

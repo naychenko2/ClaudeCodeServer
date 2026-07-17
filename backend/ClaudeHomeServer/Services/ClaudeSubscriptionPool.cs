@@ -5,18 +5,26 @@ using ClaudeHomeServer.Models;
 namespace ClaudeHomeServer.Services;
 
 // Пул подписок Claude. Позволяет использовать несколько аккаунтов на одном сервере:
-// новые чаты случайно распределяются между non-exhausted подписками;
-// при исчерпании лимита одной — сервер автоматически переключается на другую.
+// новые чаты направляются на наименее загруженную подписку (по утилизации 5-часового
+// окна), аккаунты выше мягкого порога выводятся из ротации заранее; при полном
+// исчерпании лимита одной — сервер автоматически переключается на другую.
 public class ClaudeSubscriptionPool
 {
     public const string Section = "ClaudeSubscriptions";
     public const string PrimaryKey = "claude";
+
+    // Окно лимита, по которому роутим новые чаты (короткое, самое частое ограничение).
+    private const string RoutingLimitType = "five_hour";
+    private const double DefaultSoftThreshold = 0.8;
 
     // Без известного времени сброса помечаем на полчаса: пятичасовое окно всё равно
     // не сбросится быстрее, а редкие пробные чаты сами продлят пометку при новом rejected.
     private static readonly TimeSpan DefaultExhaustion = TimeSpan.FromMinutes(30);
 
     private readonly IReadOnlyList<ClaudeSubscriptionConfig> _subscriptions;
+    private readonly UsageService? _usage;
+    // Аккаунт с утилизацией 5h-окна >= порога выводится из ротации (если есть кто ниже).
+    private readonly double _softThreshold;
     // exhaustedKey → resetsAt (UTC, null = пока не сбросится вручную / DefaultExhaustion)
     private readonly ConcurrentDictionary<string, DateTime?> _exhausted = new();
 
@@ -32,6 +40,8 @@ public class ClaudeSubscriptionPool
                 list.Add(cfg);
         }
         _subscriptions = list.AsReadOnly();
+        _usage = usage;
+        _softThreshold = config.GetValue($"{Section}:SoftThreshold", DefaultSoftThreshold);
 
         if (usage is not null)
             RestoreFromSnapshots(usage);
@@ -62,8 +72,11 @@ public class ClaudeSubscriptionPool
     /// <summary>Есть ли хотя бы одна дополнительная подписка</summary>
     public bool HasExtra => _subscriptions.Count > 0;
 
-    /// <summary>Выбрать ключ подписки для новой сессии: random non-exhausted.</summary>
-    /// Возвращает "claude" (основная) если нет дополнительных или все исчерпаны.
+    /// <summary>Выбрать ключ подписки для новой сессии: наименее загруженный аккаунт.</summary>
+    /// Жёстко отсекаются исчерпанные (rejected/100% без overage); среди оставшихся —
+    /// минимальная утилизация 5h-окна (при равенстве — случайный). Так аккаунт, близкий
+    /// к лимиту, естественно выпадает из ротации: пока есть кто свободнее, чаты идут туда.
+    /// Все исчерпаны — минимум из всех (вместо слепого fallback на основную).
     public string Pick()
     {
         if (_subscriptions.Count == 0)
@@ -78,10 +91,64 @@ public class ClaudeSubscriptionPool
             if (!IsExhausted(sub.Key))
                 candidates.Add(sub.Key);
 
-        if (candidates.Count == 0)
-            return PrimaryKey; // все исчерпаны — fallback на основную
+        return LeastLoaded(candidates.Count > 0 ? candidates : AllKeys());
+    }
 
-        return candidates[Random.Shared.Next(candidates.Count)];
+    /// <summary>Аккаунт «в ротации» для новых чатов — утилизация 5h-окна ниже мягкого порога.</summary>
+    /// Для наблюдаемости/UI: строгий выбор наименее загруженного и так не отправит чат
+    /// на аккаунт выше порога, пока есть кто ниже; но статус нужен, чтобы показать «выведен».
+    public bool IsInRotation(string key) => EffectiveUtilization(key) < _softThreshold;
+
+    /// <summary>Порог утилизации 5h-окна, выше которого аккаунт считается выведенным из ротации.</summary>
+    public double SoftThreshold => _softThreshold;
+
+    /// <summary>Утилизация 5-часового окна аккаунта (0..1) по последнему снимку usage.</summary>
+    /// Окно с истёкшим ResetsAt считаем сброшенным (0%), нет данных — тоже 0% (свежий аккаунт).
+    public double EffectiveUtilization(string key)
+    {
+        if (_usage is null) return 0;
+        if (!_usage.GetAllBySubscription().TryGetValue(key, out var snapshots)) return 0;
+
+        var last = snapshots.LastOrDefault(s => s.LimitType == RoutingLimitType);
+        if (last is null) return 0;
+
+        if (DateTime.TryParse(last.ResetsAt, CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var resetsAt)
+            && resetsAt <= DateTime.UtcNow)
+            return 0;
+
+        return last.Utilization ?? 0;
+    }
+
+    // Ключ с минимальной утилизацией; при равенстве — случайный среди минимальных.
+    private string LeastLoaded(IReadOnlyList<string> keys)
+    {
+        var best = double.MaxValue;
+        var winners = new List<string>();
+        foreach (var k in keys)
+        {
+            var u = EffectiveUtilization(k);
+            if (u < best - 1e-9)
+            {
+                best = u;
+                winners.Clear();
+                winners.Add(k);
+            }
+            else if (Math.Abs(u - best) <= 1e-9)
+            {
+                winners.Add(k);
+            }
+        }
+        return winners.Count == 0 ? PrimaryKey : winners[Random.Shared.Next(winners.Count)];
+    }
+
+    // Основная + все дополнительные подписки.
+    private List<string> AllKeys()
+    {
+        var keys = new List<string>(_subscriptions.Count + 1) { PrimaryKey };
+        foreach (var sub in _subscriptions)
+            keys.Add(sub.Key);
+        return keys;
     }
 
     /// <summary>Пометить подписку как исчерпанную.</summary>

@@ -28,6 +28,11 @@ internal sealed class SubagentStreamWatcher : IDisposable
 
     public bool IsDisposed { get; private set; }
 
+    // Тот же контекст наблюдения? Same-process ход (init повторяется в том же процессе)
+    // переиспользует живой ватчер — пересоздание без дренажа теряло бы хвост транскриптов
+    public bool Matches(string cwd, string claudeSessionId) =>
+        !IsDisposed && _cwd == cwd && _claudeSessionId == claudeSessionId;
+
     public SubagentStreamWatcher(string cwd, string claudeSessionId, Func<ServerMessage, Task> onMessage)
     {
         _cwd = cwd;
@@ -57,11 +62,18 @@ internal sealed class SubagentStreamWatcher : IDisposable
             {
                 while (!_cts.IsCancellationRequested)
                 {
-                    await ScanAsync();
+                    // Транзиентная ошибка ФС не должна убивать цикл насовсем — иначе поток
+                    // сабагентов молчит до конца прогона (пустые карточки «Активности»)
+                    try { await ScanAsync(); }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[SubagentWatcher] Скан не удался, пропускаем тик: {ex.Message}");
+                    }
                     await Task.Delay(PollInterval, _cts.Token);
                 }
             }
             catch (OperationCanceledException) { /* штатная остановка */ }
+            catch (ObjectDisposedException) { /* Dispose между сканом и Delay — штатная остановка */ }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"[SubagentWatcher] Цикл поллинга упал: {ex.Message}");
@@ -90,7 +102,13 @@ internal sealed class SubagentStreamWatcher : IDisposable
             if (_dir is null) return;
 
             foreach (var file in Directory.GetFiles(_dir, "agent-*.jsonl", SearchOption.TopDirectoryOnly).OrderBy(f => f))
-                await ScanFileAsync(file);
+                // Ошибка одного файла (исчез/занят между GetFiles и чтением) не должна
+                // блокировать чтение остальных сабагентов
+                try { await ScanFileAsync(file); }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[SubagentWatcher] Файл {Path.GetFileName(file)} не прочитан: {ex.Message}");
+                }
         }
         finally { _scanLock.Release(); }
     }

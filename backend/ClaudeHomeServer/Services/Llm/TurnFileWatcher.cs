@@ -15,6 +15,9 @@ public sealed class TurnFileWatcher(string rootPath, Func<ServerMessage, Task> o
     public void Start()
     {
         if (!Directory.Exists(rootPath)) return;
+        // Повторный Start без Stop (новый ход при опоздавшей финализации старого прогона)
+        // не должен утекать прежним FileSystemWatcher
+        _watcher?.Dispose();
         _watcher = new FileSystemWatcher(rootPath)
         {
             IncludeSubdirectories = true,

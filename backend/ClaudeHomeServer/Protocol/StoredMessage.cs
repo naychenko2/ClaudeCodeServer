@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredFalCostMessage), "fal_cost")]
 [JsonDerivedType(typeof(StoredCompactBoundaryMessage), "compact_boundary")]
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
+[JsonDerivedType(typeof(StoredWorkflowProgressMessage), "workflow_progress")]
 public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
@@ -112,6 +113,22 @@ public class StoredToolUseMessage : StoredMessage
     public string? Result { get; set; }
     public bool IsError { get; set; }
     public string? ParentToolUseId { get; init; }
+    // Фоновый агент (run_in_background/Workflow) реально завершился (bg_agent_done):
+    // у него tool_result — лишь квитанция запуска, признак завершения — только этот.
+    // null — не фоновый вызов либо старая история
+    public bool? BgDone { get; set; }
+}
+
+// Последний снапшот workflow_progress (по ToolUseId вызова Workflow) — чтобы карточка
+// workflow и вкладка «Агенты» переживали перезагрузку страницы и рестарт сервера.
+// Aborted=true — прогресс восстановлен из истории после рестарта: ватчеров больше нет,
+// незавершённые агенты уже не завершатся
+public class StoredWorkflowProgressMessage : StoredMessage
+{
+    public string ToolUseId { get; init; } = "";
+    public bool IsDone { get; set; }
+    public bool? Aborted { get; set; }
+    public IReadOnlyList<WorkflowAgentDto>? Agents { get; set; }
 }
 
 // AskUserQuestion: Resolved/Answers заполняются при ответе пользователя

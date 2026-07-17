@@ -45,7 +45,50 @@ public class ChatHistoryService
             // JsonException — запись не по схеме; в обоих случаях элемент пропускаем
             catch (Exception ex) when (ex is JsonException or NotSupportedException) { }
         }
+
+        // История читается с диска только когда живого аккумулятора нет (рестарт сервера,
+        // холодное чтение) — значит, процессов и ватчеров тоже нет: незавершённый прогресс
+        // workflow и фоновые агенты без bg_agent_done уже не завершатся. Помечаем,
+        // иначе карточки крутили бы спиннер вечно.
+        foreach (var m in messages)
+            switch (m)
+            {
+                case StoredWorkflowProgressMessage { IsDone: false } wp:
+                    wp.IsDone = true;
+                    wp.Aborted = true;
+                    break;
+                case StoredToolUseMessage { BgDone: null, Result: not null } tu
+                    when IsBgLaunchAck(tu.Result):
+                    tu.BgDone = true;
+                    break;
+            }
+
         return Task.FromResult(messages);
+    }
+
+    // tool_result фонового запуска — квитанция CLI, а не ответ (зеркало isAsyncLaunchAck
+    // на фронте + маркеры workflow/resume)
+    private static bool IsBgLaunchAck(string result) =>
+        result.StartsWith("Async agent launched successfully", StringComparison.OrdinalIgnoreCase)
+        || result.Contains("resumed from transcript in the background", StringComparison.Ordinal)
+        || result.Contains("Transcript dir:", StringComparison.Ordinal);
+
+    // Маркер обрыва хода рестартом сервера: дописывается при старте для сессий, бывших
+    // Working/Waiting — иначе карточки инструментов без result крутят спиннер вечно,
+    // а фронт не находит конца хода
+    public async Task AppendTurnAbortedAsync(string claudeSessionId)
+    {
+        var messages = await LoadAsync(claudeSessionId);
+        if (messages.Count == 0) return;
+        // Ход реально оборван, только если после последнего сообщения пользователя
+        // нет result/error
+        for (var i = messages.Count - 1; i >= 0; i--)
+        {
+            if (messages[i] is StoredResultMessage or StoredErrorMessage) return;
+            if (messages[i] is StoredUserMessage) break;
+        }
+        messages.Add(new StoredErrorMessage("Сервер был перезапущен во время хода — ход прерван"));
+        await SaveAsync(claudeSessionId, messages);
     }
 
     public Task SaveAsync(string claudeSessionId, List<StoredMessage> messages)

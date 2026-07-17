@@ -78,6 +78,11 @@ public class SessionHub : Hub
         // кто был на связи в момент самого хода (актуально для персон-автоматизаций)
         if (_sessions.GetLastRecallManifest(sessionId) is { } recall)
             await Clients.Caller.SendAsync("message", recall with { SessionId = sessionId });
+
+        // Ожидающая карточка (разрешение/вопрос/план): CLI ждёт ответа до часового таймаута —
+        // без replay клиент после F5 видел бы лишь «Claude печатает…» без возможности ответить
+        if (_sessions.GetPendingInteraction(sessionId) is { } pending)
+            await Clients.Caller.SendAsync("message", pending with { SessionId = sessionId });
     }
 
     public async Task LeaveSession(string sessionId)

@@ -34,6 +34,13 @@ internal class TurnAccumulator
         lock (_lock) _saveKey = claudeSessionId;
     }
 
+    // Чат удалён: снапшоты больше не пишем — финализация прогона, доигрывающаяся после
+    // удаления (drain сабагентов, поздние tool_result), пересоздавала бы history.json
+    public void MarkDeleted()
+    {
+        lock (_lock) _saveKey = null;
+    }
+
     // Персона текущего хода: её id пишется в text-сообщения истории (авторство реплик).
     // Обновляется перед каждым ходом — после смены собеседника новые реплики получают
     // новую персону, а старые сохраняют прежнюю.
@@ -112,7 +119,58 @@ internal class TurnAccumulator
             {
                 msg.Result = content;
                 msg.IsError = isError;
+                return;
             }
+            // Инструмент завершился после конца хода (дочерний вызов доживающего фонового
+            // агента) — его tool_use уже уплыл в _history: дописываем результат туда,
+            // иначе после перезагрузки карточка крутила бы спиннер вечно
+            for (var i = _history.Count - 1; i >= 0; i--)
+                if (_history[i] is StoredToolUseMessage h && h.Id == toolUseId)
+                {
+                    h.Result = content;
+                    h.IsError = isError;
+                    return;
+                }
+        }
+    }
+
+    // Завершение фоновых агентов (bg_agent_done): помечаем их tool_use — единственный
+    // признак «ответ готов» для карточек с квитанцией фонового запуска
+    public void OnBgAgentsDone(IReadOnlyList<string> toolUseIds)
+    {
+        lock (_lock)
+        {
+            foreach (var id in toolUseIds)
+            {
+                if (_pendingTools.TryGetValue(id, out var msg))
+                {
+                    msg.BgDone = true;
+                    continue;
+                }
+                for (var i = _history.Count - 1; i >= 0; i--)
+                    if (_history[i] is StoredToolUseMessage h && h.Id == id)
+                    {
+                        h.BgDone = true;
+                        break;
+                    }
+            }
+        }
+    }
+
+    // Последний снапшот прогресса workflow — upsert по ToolUseId прямо в _history
+    // (событие внеходовое: тики приходят и после конца хода)
+    public void OnWorkflowProgress(string toolUseId, bool isDone, IReadOnlyList<WorkflowAgentDto> agents)
+    {
+        lock (_lock)
+        {
+            foreach (var m in _history)
+                if (m is StoredWorkflowProgressMessage exists && exists.ToolUseId == toolUseId)
+                {
+                    exists.IsDone = isDone;
+                    exists.Agents = agents;
+                    return;
+                }
+            _history.Add(new StoredWorkflowProgressMessage { ToolUseId = toolUseId, IsDone = isDone, Agents = agents });
         }
     }
 

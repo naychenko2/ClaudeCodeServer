@@ -26,6 +26,19 @@ public class SessionManager
         public System.Text.StringBuilder LoopTurnText = new();
         // Ход завершился ошибкой (result error / error) — цикл не продолжаем
         public bool LoopTurnFailed;
+        // Текущий ход нёс протокол цикла «до готово» (выставляет BuildCliTurnText):
+        // продолжение цикла решается по result ИМЕННО этого хода, а не по exited —
+        // после механики доживания exited приходит лишь со смертью прогона (до 30 мин
+        // при живых фоновых агентах). Чужие ходы (REST-канал агентов, /compact,
+        // ходы-продолжения CLI) протокола не несут и цикл не двигают.
+        public volatile bool LoopTurnInFlight;
+        // Ожидающая карточка взаимодействия (разрешение/вопрос/план) — replay при
+        // JoinSession: без него клиент после F5 видел бы «Claude печатает…» без
+        // возможности ответить, а CLI ждал бы до часового таймаута
+        public ServerMessage? PendingInteraction;
+        // Контекст адаптера устарел (смена собеседника / правка персоны) — убирается
+        // ЛЕНИВО перед следующим ходом, чтобы не рвать активный ход и доживающих агентов
+        public volatile bool AdapterStale;
         // Одиночный per-turn ожидатель хода (SendMessageAndWaitAsync): резолвится в
         // OnMessageAsync на result/error/exited и безусловно обнуляется (Interlocked)
         public TaskCompletionSource<TurnResult>? TurnWaiter;
@@ -324,9 +337,11 @@ public class SessionManager
     {
         var list = JsonFileStore.Load<List<Session>>(_sessionsFilePath, _jsonOpts);
         if (list is null) return;
+        List<string> abortedMidTurn = [];
         foreach (var session in list)
         {
             // Процесс умер при рестарте — "живые" статусы переводим в orphaned
+            var wasLive = session.Status is SessionStatus.Working or SessionStatus.Waiting;
             session.Status = session.Status switch
             {
                 SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting
@@ -334,8 +349,21 @@ public class SessionManager
                 SessionStatus.Active => SessionStatus.Finished,
                 _ => session.Status,
             };
+            if (wasLive && session.ClaudeSessionId is not null)
+                abortedMidTurn.Add(session.ClaudeSessionId);
             _sessions[session.Id] = new SessionEntry { Info = session };
         }
+        // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт
+        if (abortedMidTurn.Count > 0)
+            _ = Task.Run(async () =>
+            {
+                foreach (var csid in abortedMidTurn)
+                    try { await _history.AppendTurnAbortedAsync(csid); }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[SessionManager] Маркер обрыва хода ({csid}) не записан: {ex.Message}");
+                    }
+            });
     }
 
     private void SaveSessions()
@@ -704,14 +732,8 @@ public class SessionManager
     private void InvalidatePersonaSessions(string personaId)
     {
         foreach (var entry in _sessions.Values.Where(e => e.Info.PersonaId == personaId))
-        {
-            if (entry.Process is { } old)
-            {
-                entry.Process = null;
-                FireAndForget(old.DisposeAsync().AsTask(),
-                    $"остановка адаптера после изменения персоны ({entry.Info.Id})");
-            }
-        }
+            // Ленивая уборка (см. SwitchSpeaker): не рвём активный ход и доживающих агентов
+            if (entry.Process is not null) entry.AdapterStale = true;
     }
 
     // Групповая надстройка промпта: участники чата + дисциплина «отвечай только от своего
@@ -1007,13 +1029,11 @@ public class SessionManager
         if (switching) entry.Info.PersonaSwitched = true;
         entry.Info.UpdatedAt = DateTime.UtcNow;
 
-        // Ходов не было — пересоздаём адаптер с новым контекстом при следующем сообщении
-        if (entry.Process is { } old)
-        {
-            entry.Process = null;
-            FireAndForget(old.DisposeAsync().AsTask(),
-                $"остановка адаптера при смене собеседника ({entry.Info.Id})");
-        }
+        // Адаптер несёт контекст прежнего собеседника (memory-MCP, привязки) — пометим
+        // устаревшим. Уборка ЛЕНИВАЯ (EnsureProcessAsync перед следующим ходом), а не
+        // немедленная: мгновенный dispose обрывал бы активный ход и убивал доживающих
+        // фоновых агентов молча
+        if (entry.Process is not null) entry.AdapterStale = true;
         SaveSessions();
     }
 
@@ -1170,7 +1190,10 @@ public class SessionManager
 
         if (entry.Info.WorkLoop is { } loop)
         {
-            entry.LoopTurnText.Clear(); // копим текст нового хода для поиска маркера
+            // Буфер LoopTurnText здесь НЕ чистим: ход ставится в очередь, а стримящийся
+            // сейчас ход ещё копит текст — очистка на постановке стирала бы его маркер.
+            // Буфер потребляет и чистит ContinueWorkLoopAsync по result хода.
+            entry.LoopTurnInFlight = true;
             // Верификационный ход идёт со своей директивой — рабочий протокол не дописываем
             if (loop.Phase != "verifying")
                 result += "\n\n" + OmoPrompts.WorkLoopTurn(loop.Promise);
@@ -1264,6 +1287,19 @@ public class SessionManager
     // После перезапуска сервера Process может быть null — восстанавливаем сессию
     private async Task EnsureProcessAsync(string sessionId, SessionEntry entry)
     {
+        // Отложенная уборка устаревшего адаптера (смена собеседника/правка персоны):
+        // дожидаемся dispose ДО старта нового — иначе старый процесс ещё умирает,
+        // когда новый уже поднялся с --resume того же транскрипта
+        if (entry.AdapterStale && entry.Process is { } stale)
+        {
+            entry.AdapterStale = false;
+            entry.Process = null;
+            try { await stale.DisposeAsync(); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Уборка устаревшего адаптера ({sessionId}): {ex.Message}");
+            }
+        }
         if (entry.Process is not null) return;
 
         // Переиспускаем существующий in-memory аккумулятор (процесс мог быть сброшен
@@ -1389,6 +1425,7 @@ public class SessionManager
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         entry.Process?.RespondPermission(requestId, behavior);
+        entry.PendingInteraction = null;
         FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
             $"смена статуса после permission ({sessionId})");
     }
@@ -1436,12 +1473,17 @@ public class SessionManager
             loop is not null, loop?.Iteration ?? 0, loop?.MaxIterations ?? 0, loop?.Phase));
     }
 
-    // Автопродолжение цикла «до готово»: вызывается после штатного завершения хода (exited).
+    // Автопродолжение цикла «до готово»: вызывается по result хода, нёсшего протокол цикла.
     // Маркер найден → верификационный ход, затем стоп; нет → продолжение до лимита итераций.
     private async Task ContinueWorkLoopAsync(string sessionId)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (entry.Info.WorkLoop is not { } loop) return;
+
+        // Буфер потребляем и чистим здесь (а не при постановке хода): очистка на постановке
+        // стирала бы текст стримящегося хода при параллельной отправке пользователя
+        var turnText = entry.LoopTurnText.ToString();
+        entry.LoopTurnText.Clear();
 
         if (entry.LoopTurnFailed)
         {
@@ -1449,8 +1491,7 @@ public class SessionManager
             return;
         }
 
-        var promiseFound = entry.LoopTurnText.ToString()
-            .Contains($"<promise>{loop.Promise}</promise>", StringComparison.OrdinalIgnoreCase);
+        var promiseFound = ContainsPromiseMarker(turnText, loop.Promise);
 
         if (loop.Phase == "verifying")
         {
@@ -1464,6 +1505,7 @@ public class SessionManager
             loop.Phase = "verifying";
             SaveSessions();
             await BroadcastWorkLoopAsync(sessionId, entry);
+            if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём
             await SendMessageAsync(sessionId, OmoPrompts.WorkLoopVerification, [], systemDirective: true);
             return;
         }
@@ -1477,14 +1519,26 @@ public class SessionManager
 
         SaveSessions();
         await BroadcastWorkLoopAsync(sessionId, entry);
+        if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём
         await SendMessageAsync(sessionId,
             OmoPrompts.WorkLoopContinuation(loop.Promise, loop.Iteration, loop.MaxIterations), [], systemDirective: true);
+    }
+
+    // Маркер завершения ищем вне код-блоков и с точным регистром: модель часто цитирует
+    // протокол в начале хода («когда закончу — выведу `<promise>…</promise>`») — бэктики
+    // и ``` не считаются исполнением обещания
+    internal static bool ContainsPromiseMarker(string text, string promise)
+    {
+        var stripped = System.Text.RegularExpressions.Regex.Replace(text, "```[\\s\\S]*?(```|$)", "");
+        stripped = System.Text.RegularExpressions.Regex.Replace(stripped, "`[^`\n]*`", "");
+        return stripped.Contains($"<promise>{promise}</promise>", StringComparison.Ordinal);
     }
 
     public void AnswerQuestion(string sessionId, string toolUseId, string answerText)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         entry.Process?.AnswerQuestion(toolUseId, answerText);
+        entry.PendingInteraction = null;
         // Фиксируем ответ в истории, чтобы карточка вопроса пережила перезагрузку
         if (entry.Accumulator is not null)
         {
@@ -1511,6 +1565,7 @@ public class SessionManager
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         entry.Process?.RespondPlan(requestId, approve, feedback);
+        entry.PendingInteraction = null;
         // Фиксируем решение по плану в истории, чтобы карточка пережила перезагрузку
         if (entry.Accumulator is not null)
         {
@@ -1525,6 +1580,9 @@ public class SessionManager
     public async Task DeleteAsync(string sessionId)
     {
         if (!_sessions.TryRemove(sessionId, out var entry)) return;
+        // Стоп снапшотам ДО удаления файлов: финализация прогона (drain сабагентов,
+        // поздние tool_result) доигрывается после dispose и пересоздала бы history.json
+        entry.Accumulator?.MarkDeleted();
         if (entry.Process is not null)
             await entry.Process.DisposeAsync();
         // Дочищаем историю на диске — иначе data/sessions/{id} копится мусором
@@ -1569,8 +1627,13 @@ public class SessionManager
     public IReadOnlyList<WorkflowProgressMessage> GetWorkflowProgress(string sessionId)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return [];
-        return entry.WorkflowProgress.Values.ToList();
+        // Снимок под локом: словарь конкурентно мутируют таймер-потоки ватчеров
+        lock (entry.WorkflowProgress) return entry.WorkflowProgress.Values.ToList();
     }
+
+    // Ожидающая карточка взаимодействия (разрешение/вопрос/план) — replay при JoinSession
+    public ServerMessage? GetPendingInteraction(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) ? entry.PendingInteraction : null;
 
     // Последний манифест recall (F3) сессии — replay при подключении клиента (JoinSession),
     // как и у workflow_progress: без этого «использовано сейчас» видно только тем, кто был
@@ -1621,9 +1684,22 @@ public class SessionManager
                 case WorkflowProgressMessage m:
                     if (entry is not null)
                     {
-                        if (m.IsDone) entry.WorkflowProgress.Remove(m.ToolUseId);
-                        else entry.WorkflowProgress[m.ToolUseId] = m;
+                        // Кэш мутируют таймер-потоки ватчеров (несколько workflow = несколько
+                        // потоков), читает JoinSession — только под локом
+                        lock (entry.WorkflowProgress)
+                        {
+                            if (m.IsDone) entry.WorkflowProgress.Remove(m.ToolUseId);
+                            else entry.WorkflowProgress[m.ToolUseId] = m;
+                        }
                     }
+                    // Последний снапшот — в историю: карточка workflow и вкладка «Агенты»
+                    // должны переживать перезагрузку страницы и рестарт сервера
+                    acc.OnWorkflowProgress(m.ToolUseId, m.IsDone, m.Agents);
+                    if (m.IsDone) await acc.SaveSnapshotAsync(_history);
+                    break;
+                case BgAgentDoneMessage m:
+                    acc.OnBgAgentsDone(m.ToolUseIds);
+                    await acc.SaveSnapshotAsync(_history);
                     break;
                 case FileChangedMessage m:  acc.OnFileChanged(m.Path, m.Added, m.Removed); break;
                 case CompactBoundaryMessage m:
@@ -1657,7 +1733,12 @@ public class SessionManager
                         _subscriptionPool.MarkExhausted(entry.Info.Provider, resetsAt);
                     }
                     break;
-                case ErrorMessage m:        await acc.OnErrorAsync(m.Text, _history); break;
+                case ErrorMessage m:
+                    await acc.OnErrorAsync(m.Text, _history);
+                    // Ошибка хода (в т.ч. упавший старт процесса) — цикл «до готово»
+                    // не продолжаем; иначе ретрай-шторм до лимита итераций
+                    if (entry is not null) entry.LoopTurnFailed = true;
+                    break;
             }
         }
         catch (Exception ex)
@@ -1696,7 +1777,12 @@ public class SessionManager
             SessionStatus? newStatus = null;
 
             if (msg is PermissionRequestMessage or AskQuestionMessage or PlanReviewMessage)
+            {
                 newStatus = SessionStatus.Waiting;
+                // Кэш для replay при JoinSession: после F5 клиент должен снова увидеть
+                // карточку, которую ждёт CLI
+                entry.PendingInteraction = msg;
+            }
             else if (msg is ResultMessage rm)
                 // Active (не Finished): клиент по active перезагружает историю хода;
                 // финальный Finished выставится по ExitedMessage ниже
@@ -1713,22 +1799,30 @@ public class SessionManager
                     _ => null,
                 };
 
+            // Конец хода/обрыв — ожидающей карточки больше нет
+            if (msg is ResultMessage or ErrorMessage or ExitedMessage)
+                entry.PendingInteraction = null;
+
             if (newStatus.HasValue)
                 await ApplyStatusAsync(sessionId, entry, newStatus.Value);
 
-            // Цикл «до готово»: ход штатно завершился (exited) — решаем, продолжать ли.
+            // Цикл «до готово»: решение о продолжении — по result/error хода, нёсшего
+            // протокол цикла (LoopTurnInFlight). Раньше триггером был exited, но после
+            // механики доживания exited приходит лишь со смертью прогона — цикл замирал
+            // на десятки минут при живых фоновых агентах.
             // В фоне, чтобы не блокировать read-loop адаптера пересозданием процесса.
-            if (msg is ExitedMessage && entry.Info.WorkLoop is not null
-                && entry.Info.Status is SessionStatus.Finished or SessionStatus.Active)
+            if (msg is ResultMessage or ErrorMessage && entry.LoopTurnInFlight)
             {
-                _ = Task.Run(async () =>
-                {
-                    try { await ContinueWorkLoopAsync(sessionId); }
-                    catch (Exception ex)
+                entry.LoopTurnInFlight = false;
+                if (entry.Info.WorkLoop is not null)
+                    _ = Task.Run(async () =>
                     {
-                        Console.Error.WriteLine($"[SessionManager] Цикл «до готово» ({sessionId}): {ex.Message}");
-                    }
-                });
+                        try { await ContinueWorkLoopAsync(sessionId); }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[SessionManager] Цикл «до готово» ({sessionId}): {ex.Message}");
+                        }
+                    });
             }
         }
 

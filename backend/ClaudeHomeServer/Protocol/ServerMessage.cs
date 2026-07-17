@@ -51,6 +51,12 @@ public record ToolInputDeltaMessage(string ToolUseId, string PartialJson)
 public record ToolResultMessage(string ToolUseId, string Content, bool IsError)
     : ServerMessage("tool_result");
 
+// Завершение фоновых агентов (Agent run_in_background / Workflow): toolUseId их карточек.
+// Единственный достоверный сигнал «агент закончил» для UI — по <task-notification> CLI;
+// Aborted=true — агенты умерли вместе с процессом (финализация прогона), не доработав
+public record BgAgentDoneMessage(IReadOnlyList<string> ToolUseIds, bool Aborted = false)
+    : ServerMessage("bg_agent_done");
+
 public record PermissionRequestMessage(string RequestId, string ToolName, object ToolInput)
     : ServerMessage("permission_request");
 

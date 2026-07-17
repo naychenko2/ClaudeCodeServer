@@ -45,11 +45,19 @@ internal sealed class MainTranscriptTailer : IDisposable
             {
                 while (!_cts.IsCancellationRequested)
                 {
-                    Scan();
+                    // Транзиентная ошибка ФС (файл занят CLI/антивирусом) не должна убивать
+                    // цикл насовсем: без tailer'а завершения фоновых задач перестают замечаться
+                    // и прогон висит зомби до потолка BgLingerTimeout
+                    try { Scan(); }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[TranscriptTailer] Скан не удался, пропускаем тик: {ex.Message}");
+                    }
                     await Task.Delay(PollInterval, _cts.Token);
                 }
             }
             catch (OperationCanceledException) { /* штатная остановка */ }
+            catch (ObjectDisposedException) { /* Dispose между Scan и Delay — штатная остановка */ }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"[TranscriptTailer] Цикл поллинга упал: {ex.Message}");

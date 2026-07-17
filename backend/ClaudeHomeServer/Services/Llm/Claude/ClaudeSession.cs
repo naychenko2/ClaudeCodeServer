@@ -1082,11 +1082,22 @@ public class ClaudeSession : ILlmSessionAdapter
 
         var process = new Process { StartInfo = psi };
 
-        process.Start();
+        // Start() может вернуть false (процесс не создан) — тогда обращение к HasExited/StandardInput
+        // ниже бросило бы невнятное «No process is associated with this object». Проверяем bool явно
+        // и оборачиваем Win32Exception (нет исполняемого файла, нехватка ресурсов) в понятное сообщение.
+        try
+        {
+            if (!process.Start())
+                throw new InvalidOperationException($"claude не запущен: процесс не создан ({psi.FileName})");
+        }
+        catch (Exception ex) when (ex is not InvalidOperationException)
+        {
+            throw new InvalidOperationException($"Не удалось запустить claude ({psi.FileName}): {ex.Message}", ex);
+        }
         _currentProcess = process;
 
         if (_currentProcess.HasExited)
-            throw new InvalidOperationException("Не удалось запустить claude process");
+            throw new InvalidOperationException("claude мгновенно завершился при старте");
 
         _fileWatcher.Start();
 

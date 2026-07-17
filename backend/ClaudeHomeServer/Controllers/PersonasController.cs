@@ -899,11 +899,26 @@ public class PersonasController : ControllerBase
         var persona = _personas.Get(id, UserId);
         if (persona is null) return NotFound();
         var rule = ParseRule(req);
+        // Идемпотентность: повторный вызов с теми же параметрами (ретрай MCP-инструмента,
+        // автопродолжение цикла, повтор хода после сбоя) не плодит дубль — если правило с той
+        // же сигнатурой уже есть, возвращаем существующее вместо создания второго.
+        var dup = persona.AutomationRules?.FirstOrDefault(r => AutomationSignature(r) == AutomationSignature(rule));
+        if (dup is not null) return Ok(dup);
         var list = new List<PersonaAutomationRule>(persona.AutomationRules ?? []) { rule };
         _personas.UpdateRules(id, UserId, list);
         await Broadcast("updated", id);
         return Ok(rule);
     }
+
+    // Сигнатура правила для дедупа: тип и аргументы триггера, тяжесть и инструкция действия, имя.
+    // Полное совпадение = дубль (защита от повторных POST при ретраях/сбоях хода).
+    private static string AutomationSignature(PersonaAutomationRule r) =>
+        string.Join("",
+            r.Trigger.Type,
+            JsonSerializer.Serialize(r.Trigger.Args),
+            r.Action.Weight,
+            r.Action.Instruction?.Trim() ?? "",
+            r.Name.Trim());
 
     // Полная замена набора правил (PUT-семантика)
     [HttpPut("{id}/automation")]

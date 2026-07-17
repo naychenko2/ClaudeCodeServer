@@ -59,9 +59,60 @@ public class ClaudeSession : ILlmSessionAdapter
     // не дожидаясь часового watchdog.
     private static readonly TimeSpan ResultExitGrace = TimeSpan.FromSeconds(15);
 
-    // Выставляется при получении финального result текущего хода (см. ProcessLineAsync);
-    // читается только потоком чтения stdout — синхронизация не нужна.
-    private bool _resultSeen;
+    // Потолок доживания процесса с работающими фоновыми агентами после конца хода.
+    // Агенты (Agent run_in_background, Workflow) живут ВНУТРИ процесса CLI: убить его
+    // по грейсу — значит убить их на середине (наблюдалось на проде: task-notification
+    // «status=stopped» у всех агентов длиннее 15 секунд). Значение — из Claude:BgLingerMinutes.
+    public static TimeSpan BgLingerTimeout { get; set; } = TimeSpan.FromMinutes(30);
+
+    // Процессный прогон: один запуск claude CLI. Может пережить ход — пока в нём доживают
+    // фоновые агенты, процесс не убиваем, а следующий совместимый ход отдаём ему же в stdin
+    // (stream-json это штатно поддерживает). Поля мутирует поток чтения stdout (reader);
+    // исключения помечены у полей.
+    private sealed class CliRun
+    {
+        public required Process Process { get; init; }
+        // Сигнатура окружения запуска (модель/режим/env/набор MCP/слой персоны) — следующий
+        // ход можно отдать живому процессу только при полном совпадении (см. BuildLaunchSignature)
+        public required string Signature { get; init; }
+        public string? TurnMcpPath { get; init; }
+        public Task? ReaderTask { get; set; }
+        public Task<string>? StderrTask { get; set; }
+        // Ход завершён (result без parent_tool_use_id получен); между ходами true.
+        // Сбрасывает поток нового хода в TrySubmitTurn (под _stdinLock)
+        public volatile bool TurnDone;
+        // Резолвится reader'ом на result текущего хода (или финализацией — процесс умер)
+        public TaskCompletionSource TurnTcs { get; set; } = NewTcs();
+        // Живые фоновые задачи прогона (agentId/runId из tool_result запуска);
+        // читается и потоками ходов — доступ под lock (PendingBg)
+        public readonly HashSet<string> PendingBg = [];
+        // Фоновый запуск замечен, но id не распарсился — точный учёт невозможен,
+        // доживание ограничено только потолком BgLingerTimeout
+        public volatile bool PendingBgUnknown;
+        // toolUseId вызовов Agent/Task c run_in_background и Workflow — ждём их tool_result,
+        // чтобы достать id фоновой задачи
+        public readonly HashSet<string> BgLaunchCandidates = [];
+        public volatile bool StdinClosed;
+        // Прогон убит ради несовместимого нового хода: ExitedMessage не слать —
+        // статусом сессии владеет уже новый ход
+        public volatile bool SuppressExited;
+
+        public bool HasPendingBg
+        {
+            get { lock (PendingBg) return PendingBg.Count > 0 || PendingBgUnknown; }
+        }
+
+        public static TaskCompletionSource NewTcs() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    // Текущий прогон; присваивает поток хода (под _turnLock), обнуляет финализация reader'а
+    private CliRun? _run;
+
+    // Хвостовой ридер главного транскрипта: завершения фоновых задач (<task-notification>)
+    // CLI пишет в транскрипт, в stdout завершённого хода их может не быть (проверено live) —
+    // без ридера pending прогона не опустел бы и процесс висел бы до потолка BgLingerTimeout
+    private MainTranscriptTailer? _transcriptTailer;
 
     // Коннекторы аккаунта claude.ai (Calendar, Drive, Gamma, Miro и др.) вливаются в каждую
     // сессию автоматически помимо --mcp-config — их нельзя убрать через конфиг. Блокируем
@@ -170,7 +221,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // dataset id) + tasks-server с контекстом сессии; для сессий сторонних провайдеров —
     // ещё и user-scope серверы из ~/.claude.json (fal-ai и др.: изолированный
     // CLAUDE_CONFIG_DIR их не видит). null → базовый конфиг как есть.
-    private string? BuildTurnMcpConfig(string? datasetId, PersonaAgentsContext? personaAgents = null)
+    // Возвращает путь temp-конфига и отсортированный набор ключей серверов — ключи входят
+    // в сигнатуру прогона (сам путь и содержимое меняются каждый ход: новый файл, свежий JWT)
+    private (string? Path, string ServerKeys) BuildTurnMcpConfig(string? datasetId, PersonaAgentsContext? personaAgents = null)
     {
         var tasksServerPath = _tasksMcp is not null ? TasksServerLocator.FindTasksServerPath() : null;
         var hasTasks = tasksServerPath is not null;
@@ -189,7 +242,7 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var userServers = LoadUserScopeMcpServers();
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
-            && !hasDataset && userServers is null && !(hasConsultants && memoryServerPath is not null)) return null;
+            && !hasDataset && userServers is null && !(hasConsultants && memoryServerPath is not null)) return (null, "");
 
         try
         {
@@ -376,17 +429,17 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
             }
 
-            if (servers.Count == 0) return null;
+            if (servers.Count == 0) return (null, "");
             var combined = new System.Text.Json.Nodes.JsonObject { ["mcpServers"] = servers };
             var tmpPath = Path.Combine(Path.GetTempPath(), $"claude-mcp-{Guid.NewGuid():N}.json");
             File.WriteAllText(tmpPath, combined.ToJsonString());
-            return tmpPath;
+            return (tmpPath, string.Join(",", servers.Select(kv => kv.Key).OrderBy(k => k, StringComparer.Ordinal)));
         }
         catch (Exception ex)
         {
             // Без лога сессия молча пойдёт без MCP-серверов (tasks/dify) — обязательно сообщаем
             Console.Error.WriteLine($"[ClaudeSession] Не удалось собрать MCP-конфиг хода, используется базовый конфиг: {ex.Message}");
-            return null;
+            return (null, "");
         }
     }
 
@@ -447,7 +500,13 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Статус Error выставит SessionManager по ErrorMessage
                 await _onMessage(new ErrorMessage(ex.Message));
             }
-            finally { _turnLock.Release(); }
+            finally
+            {
+                // Ход закончился — следующий (если его инициирует человек) идёт с полным
+                // набором инструментов; действует ровно на ход внутри _turnLock
+                _currentTurnAgentDepth = 0;
+                _turnLock.Release();
+            }
         });
 
         return Task.CompletedTask;
@@ -662,13 +721,40 @@ public class ClaudeSession : ILlmSessionAdapter
         finally { _stdinLock.Release(); }
     }
 
-    // Закрытие stdin под тем же локом — не обрываем чужую запись на середине строки
-    private void CloseStdin(Process? proc)
+    // Закрытие stdin под тем же локом — не обрываем чужую запись на середине строки.
+    // StdinClosed помечаем до Close: прогон с закрытым stdin ходы больше не принимает
+    private void CloseStdin(CliRun run)
     {
-        if (proc is null) return;
         _stdinLock.Wait();
-        try { proc.StandardInput.Close(); }
+        try
+        {
+            run.StdinClosed = true;
+            run.Process.StandardInput.Close();
+        }
         catch { /* поток уже закрыт или процесс мёртв — не критично */ }
+        finally { _stdinLock.Release(); }
+    }
+
+    // Отдать ход живому процессу доживающего прогона (same-process ход). false — прогон
+    // непригоден (умер/stdin закрыт/запись сорвалась): ход пойдёт новым процессом
+    private bool TrySubmitTurn(CliRun run, string userMessageJson)
+    {
+        _stdinLock.Wait();
+        try
+        {
+            if (run.StdinClosed || run.Process.HasExited) return false;
+            run.TurnTcs = CliRun.NewTcs();
+            run.TurnDone = false;
+            run.Process.StandardInput.WriteLine(userMessageJson);
+            run.Process.StandardInput.Flush();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            run.TurnDone = true; // прогон между ходами; финализация резолвит его TurnTcs
+            Console.Error.WriteLine($"[ClaudeSession] Ход в живой процесс не записался, стартуем новый: {ex.Message}");
+            return false;
+        }
         finally { _stdinLock.Release(); }
     }
 
@@ -743,7 +829,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)
         var currentWk = _wkStore?.GetByPath(_rootPath);
         var currentDatasetId = currentWk?.DifyDatasetId;
-        string? turnMcpPath = BuildTurnMcpConfig(currentDatasetId, personaAgents);
+        var (turnMcpPath, mcpServerKeys) = BuildTurnMcpConfig(currentDatasetId, personaAgents);
         var effectiveMcpConfig = turnMcpPath ?? _mcpConfigPath;
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
             args.AddRange(["--mcp-config", effectiveMcpConfig]);
@@ -768,9 +854,15 @@ public class ClaudeSession : ILlmSessionAdapter
         if (_disallowedTools.Length > 0)
             args.AddRange(["--disallowedTools", string.Join(",", _disallowedTools)]);
 
-        // Системный промпт: пересчитываем и передаём КАЖДЫЙ ход. Каждый ход — новый процесс
-        // claude --print --resume, а --append-system-prompt не сохраняется в транскрипте сессии:
-        // не передать его → инструкции (fal-ai/запрет ASCII, Dify, теги) пропадут на этом ходу.
+        // Слой персоны из системного промпта — жёсткая часть сигнатуры прогона
+        // (смена собеседника посреди доживания = несовместимый ход → новый процесс)
+        string? personaLayerPrompt = null;
+
+        // Системный промпт: пересчитываем и передаём КАЖДЫЙ ход. Ход в новом процессе
+        // (claude --print --resume) получает его через --append-system-prompt — тот не
+        // сохраняется в транскрипте сессии: не передать → инструкции (fal-ai/запрет ASCII,
+        // Dify, теги) пропадут. Same-process ход промпт живого процесса НЕ обновляет —
+        // recall/подсказки на нём остаются со старта прогона (мягкая деградация).
         {
             var basePrompt = ProjectManager.BuildSystemPrompt(
                 _rawSystemPrompt, currentDatasetId != null, currentWk?.DocumentTags);
@@ -1008,6 +1100,7 @@ public class ClaudeSession : ILlmSessionAdapter
             string? agentPrompt = _personaPromptProvider?.Invoke();
             if (agentPrompt is null && !string.IsNullOrEmpty(Info.AgentName) && _skills is not null)
                 agentPrompt = _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName);
+            personaLayerPrompt = agentPrompt;
 
             var combinedPrompt = agentPrompt is not null
                 ? (string.IsNullOrWhiteSpace(basePrompt)
@@ -1023,6 +1116,94 @@ public class ClaudeSession : ILlmSessionAdapter
             if (manifestItems is { Count: > 0 })
                 _ = _onMessage(new RecallManifestMessage(
                     manifestItems.Select(i => new RecallItemDto(i.Kind, i.Ref, i.Title, i.Snippet)).ToList()));
+        }
+
+        // Env-оверрайды процесса собираем заранее (не сразу в psi): пары входят в сигнатуру прогона
+        var envOverrides = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            // claude --print по умолчанию ждёт фоновые задачи (субагентов workflow) не дольше 600с,
+            // затем принудительно завершается: «Background tasks still running after 600s; terminating».
+            // Из-за этого длинные workflow обрывались на 10-й минуте, не доходя до конца. 0 = ждать без
+            // ограничения по времени; нас страхует watchdog (см. WatchdogFor).
+            ["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] = "0",
+
+            // Даём MCP-серверам больше времени на подключение при старте хода: с дефолтным
+            // таймаутом медленно стартующий node-сервер (personas и др.) не успевал
+            // зарегистрировать тулы, и первый же вызов падал «No such tool available»
+            // (модель ретраила, но карточка ошибки засоряла ленту).
+            ["MCP_TIMEOUT"] = "30000",
+        };
+
+        // Сторонний провайдер (DeepSeek/GLM): перенаправляем CLI на его Anthropic-совместимый
+        // эндпоинт. Env считаются каждый ход — модель сессии могла смениться между ходами.
+        var cliEnv = _providers?.BuildCliEnv(Info.Model);
+        if (cliEnv is not null)
+        {
+            foreach (var (k, v) in cliEnv)
+                envOverrides[k] = v;
+        }
+        else if (_subscriptionPool?.HasExtra == true
+            && Info.Provider != "claude"
+            && _providers?.GetByKey(Info.Provider) is null)
+        {
+            var sub = _subscriptionPool.All.FirstOrDefault(s => s.Key == Info.Provider);
+            if (sub?.Enabled == true)
+            {
+                var oauthEnv = _providers?.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, sub.ApiKey, Info.Model);
+                if (oauthEnv is not null)
+                    foreach (var (k, v) in oauthEnv)
+                        envOverrides[k] = v;
+            }
+        }
+
+        // Сообщение хода: с картинками content — массив блоков (text + image base64), иначе строка
+        var imageBlocks = BuildImageBlocks(imagePaths);
+        object content;
+        if (imageBlocks.Count == 0)
+        {
+            content = text;
+        }
+        else
+        {
+            var blocks = new List<object> { new { type = "text", text } };
+            blocks.AddRange(imageBlocks);
+            content = blocks;
+        }
+        var userMessageJson = JsonSerializer.Serialize(new
+        {
+            type = "user",
+            message = new { role = "user", content }
+        });
+
+        var signature = BuildLaunchSignature(args, mcpServerKeys, envOverrides, personaLayerPrompt);
+
+        // Same-process ход: прогон дожил с прошлого хода (фоновые агенты ещё работают),
+        // окружение не изменилось — отдаём сообщение живому процессу в stdin, агенты
+        // переживают смену хода. Собранный temp MCP-конфиг не пригодился — убираем.
+        var existing = _run;
+        if (existing is not null && existing.TurnDone && existing.Signature == signature
+            && TrySubmitTurn(existing, userMessageJson))
+        {
+            Console.WriteLine("[ClaudeSession] Ход отдан живому процессу прогона (фоновые агенты доживают)");
+            if (turnMcpPath != null)
+                try { File.Delete(turnMcpPath); }
+                catch { /* приберёт финализация прогона по своему пути */ }
+            await existing.TurnTcs.Task.WaitAsync(ct);
+            return;
+        }
+
+        // Живой, но несовместимый прогон (сменились модель/режим/персона/env — или запись
+        // в stdin сорвалась): убиваем и дожидаемся финализации. Его фоновые агенты гибнут —
+        // осознанная плата за смену окружения; CLI сообщит о них notification'ом на resume.
+        // ExitedMessage прогона подавляем: статусом сессии владеет новый ход.
+        if (existing is not null)
+        {
+            existing.SuppressExited = true;
+            try { existing.Process.Kill(entireProcessTree: true); }
+            catch { /* процесс уже завершился */ }
+            if (existing.ReaderTask is { } prevReader)
+                try { await prevReader.WaitAsync(TimeSpan.FromSeconds(15), CancellationToken.None); }
+                catch (TimeoutException) { /* финализация зависла — не блокируем новый ход */ }
         }
 
         // claude.exe пишет/читает UTF-8. Без явной кодировки .NET берёт системную
@@ -1045,40 +1226,7 @@ public class ClaudeSession : ILlmSessionAdapter
         };
         // ArgumentList экранирует каждый аргумент корректно (важно для многострочного системного промпта)
         foreach (var a in args) psi.ArgumentList.Add(a);
-
-        // claude --print по умолчанию ждёт фоновые задачи (субагентов workflow) не дольше 600с,
-        // затем принудительно завершается: «Background tasks still running after 600s; terminating».
-        // Из-за этого длинные workflow обрывались на 10-й минуте, не доходя до конца. 0 = ждать без
-        // ограничения по времени; нас страхует watchdog IdleTimeout (если claude замолчит дольше — прервём сами).
-        psi.Environment["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] = "0";
-
-        // Даём MCP-серверам больше времени на подключение при старте хода: с дефолтным
-        // таймаутом медленно стартующий node-сервер (personas и др.) не успевал
-        // зарегистрировать тулы, и первый же вызов падал «No such tool available»
-        // (модель ретраила, но карточка ошибки засоряла ленту).
-        psi.Environment["MCP_TIMEOUT"] = "30000";
-
-        // Сторонний провайдер (DeepSeek/GLM): перенаправляем CLI на его Anthropic-совместимый
-        // эндпоинт. Env считаются каждый ход — модель сессии могла смениться между ходами.
-        var cliEnv = _providers?.BuildCliEnv(Info.Model);
-        if (cliEnv is not null)
-        {
-            foreach (var (k, v) in cliEnv)
-                psi.Environment[k] = v;
-        }
-        else if (_subscriptionPool?.HasExtra == true
-            && Info.Provider != "claude"
-            && _providers?.GetByKey(Info.Provider) is null)
-        {
-            var sub = _subscriptionPool.All.FirstOrDefault(s => s.Key == Info.Provider);
-            if (sub?.Enabled == true)
-            {
-                var oauthEnv = _providers?.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, sub.ApiKey, Info.Model);
-                if (oauthEnv is not null)
-                    foreach (var (k, v) in oauthEnv)
-                        psi.Environment[k] = v;
-            }
-        }
+        foreach (var (k, v) in envOverrides) psi.Environment[k] = v;
 
         var process = new Process { StartInfo = psi };
 
@@ -1096,70 +1244,91 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         _currentProcess = process;
 
-        if (_currentProcess.HasExited)
-            throw new InvalidOperationException("claude мгновенно завершился при старте");
-
-        _fileWatcher.Start();
-
-        // Читаем stderr асинхронно, иначе при переполнении буфера процесс зависнет
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-
-        // stdin оставляем открытым — claude пишет control_response в него при permission-запросах.
-        // С картинками content — массив блоков (text + image base64), иначе просто строка.
-        var imageBlocks = BuildImageBlocks(imagePaths);
-        object content;
-        if (imageBlocks.Count == 0)
-        {
-            content = text;
-        }
-        else
-        {
-            var blocks = new List<object> { new { type = "text", text } };
-            blocks.AddRange(imageBlocks);
-            content = blocks;
-        }
-        var msg = JsonSerializer.Serialize(new
-        {
-            type = "user",
-            message = new { role = "user", content }
-        });
-        await _stdinLock.WaitAsync(ct);
+        CliRun run;
         try
         {
-            await process.StandardInput.WriteLineAsync(msg);
-            await process.StandardInput.FlushAsync();
-        }
-        finally { _stdinLock.Release(); }
+            if (process.HasExited)
+                throw new InvalidOperationException("claude мгновенно завершился при старте");
 
+            _fileWatcher.Start();
+
+            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath };
+            // Читаем stderr асинхронно, иначе при переполнении буфера процесс зависнет
+            run.StderrTask = process.StandardError.ReadToEndAsync(ct);
+
+            // stdin оставляем открытым — claude пишет control_response в него при permission-запросах
+            await _stdinLock.WaitAsync(ct);
+            try
+            {
+                await process.StandardInput.WriteLineAsync(userMessageJson);
+                await process.StandardInput.FlushAsync();
+            }
+            finally { _stdinLock.Release(); }
+
+            _run = run;
+        }
+        catch
+        {
+            // Прогон не собрался: reader не стартовал, финализировать некому — прибираем сами
+            // и завершаем ход ExitedMessage, иначе статус сессии застрянет в Working
+            _fileWatcher.Stop();
+            try { process.Kill(entireProcessTree: true); }
+            catch { /* процесс уже завершился */ }
+            process.Dispose();
+            _currentProcess = null;
+            if (turnMcpPath != null)
+                try { File.Delete(turnMcpPath); }
+                catch { /* temp-каталог приберёт ОС */ }
+            await _onMessage(new ExitedMessage());
+            throw;
+        }
+
+        // Reader живёт дольше хода — до смерти процесса (доживание фоновых агентов);
+        // финализация прогона (ватчеры, temp-конфиг, ExitedMessage) — на нём
+        run.ReaderTask = Task.Run(() => ReadLoopAsync(run, _cts.Token), CancellationToken.None);
+
+        await run.TurnTcs.Task.WaitAsync(ct);
+
+        // Без живых фоновых задач сохраняем прежнюю семантику хода: возвращаемся, когда процесс
+        // умер и финализирован (ExitedMessage послан до release _turnLock). С ними — сразу:
+        // прогон доживает, чат остаётся Active, ExitedMessage пошлёт финализация.
+        if (!run.HasPendingBg && run.ReaderTask is { } reader)
+            await reader.WaitAsync(ct);
+    }
+
+    // Цикл чтения stdout прогона. Принадлежит прогону, не ходу: переживает result и
+    // продолжает транслировать события доживающих фоновых агентов и ходов-продолжений CLI
+    private async Task ReadLoopAsync(CliRun run, CancellationToken ct)
+    {
         try
         {
-            _resultSeen = false;
             while (!ct.IsCancellationRequested)
             {
-                // Watchdog: пересоздаём linked CTS на каждую строку.
-                // Если claude замолчал дольше IdleTimeout — прерываем и сообщаем об ошибке.
-                // После result ждём лишь короткий грейс: ход завершён, зависший процесс убиваем молча.
+                // Watchdog: пересоздаём linked CTS на каждую строку; допустимая тишина
+                // зависит от состояния прогона (активный ход / доживание / выход CLI)
+                var armedTurnDone = run.TurnDone;
                 using var watchdogCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                watchdogCts.CancelAfter(_resultSeen ? ResultExitGrace : IdleTimeout);
+                watchdogCts.CancelAfter(WatchdogFor(run));
 
                 string? line;
                 try
                 {
-                    line = await process.StandardOutput.ReadLineAsync(watchdogCts.Token);
+                    line = await run.Process.StandardOutput.ReadLineAsync(watchdogCts.Token);
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
-                    if (_resultSeen)
-                    {
-                        // result уже отдан — процесс держат плагинные хуки/мосты, завершаем без ошибки
-                        try { process.Kill(entireProcessTree: true); }
-                        catch { /* процесс уже завершился */ }
-                        break;
-                    }
-                    // Сработал watchdog (не внешняя отмена сессии)
-                    await _onMessage(new ErrorMessage(
-                        $"Claude не отвечает более {IdleTimeout.TotalMinutes:0} мин — прерываем"));
-                    try { process.Kill(entireProcessTree: true); }
+                    // Пока ждали с коротким таймаутом, начался same-process ход — переармируем
+                    if (armedTurnDone && !run.TurnDone) continue;
+                    if (!run.TurnDone)
+                        // Активный ход молчит дольше IdleTimeout — прерываем с ошибкой
+                        await _onMessage(new ErrorMessage(
+                            $"Claude не отвечает более {IdleTimeout.TotalMinutes:0} мин — прерываем"));
+                    else if (run.HasPendingBg)
+                        Console.Error.WriteLine(
+                            $"[ClaudeSession] Фоновые агенты не завершились за {BgLingerTimeout.TotalMinutes:0} мин тишины — завершаем процесс");
+                    // Иначе: result отдан, фоновых задач нет — процесс держат плагинные
+                    // хуки/мосты (наблюдалось с oh-my-claudecode), гасим молча
+                    try { run.Process.Kill(entireProcessTree: true); }
                     catch { /* процесс уже завершился */ }
                     break;
                 }
@@ -1170,19 +1339,36 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
         catch (OperationCanceledException) { /* отмена сессии — штатно */ }
-        finally
+        catch (Exception ex)
         {
-            _fileWatcher.Stop();
-            CloseStdin(process);
-            if (!process.HasExited)
-            {
-                try { process.Kill(entireProcessTree: true); }
-                catch { /* процесс уже завершился */ }
-                // Ограниченное ожидание завершения — Kill() асинхронен на некоторых ОС
-                using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                try { await process.WaitForExitAsync(exitCts.Token); }
-                catch (OperationCanceledException) { } // 10 с истекло — идём дальше
-            }
+            Console.Error.WriteLine($"[ClaudeSession] Цикл чтения прогона упал: {ex.Message}");
+        }
+        finally { await FinalizeRunAsync(run); }
+    }
+
+    // Допустимая тишина stdout по состоянию прогона: активный ход — щедрый IdleTimeout;
+    // доживание с фоновыми агентами — потолок BgLingerTimeout (агенты работают молча:
+    // их транскрипты пишутся на диск, в stdout родителя ничего); иначе — короткий грейс
+    private static TimeSpan WatchdogFor(CliRun run) =>
+        !run.TurnDone ? IdleTimeout
+        : run.HasPendingBg ? BgLingerTimeout
+        : ResultExitGrace;
+
+    // Финализация прогона: единственная точка уборки после смерти процесса
+    private async Task FinalizeRunAsync(CliRun run)
+    {
+        _fileWatcher.Stop();
+        CloseStdin(run);
+        if (!run.Process.HasExited)
+        {
+            try { run.Process.Kill(entireProcessTree: true); }
+            catch { /* процесс уже завершился */ }
+            // Ограниченное ожидание завершения — Kill() асинхронен на некоторых ОС
+            using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            try { await run.Process.WaitForExitAsync(exitCts.Token); }
+            catch (OperationCanceledException) { } // 10 с истекло — идём дальше
+        }
+        if (run.StderrTask is { } stderrTask)
             try
             {
                 var stderr = await stderrTask;
@@ -1194,33 +1380,62 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 Console.Error.WriteLine($"[ClaudeSession] Чтение stderr не удалось: {ex.Message}");
             }
-            process.Dispose();
-            _currentProcess = null;
-            if (turnMcpPath != null)
-                try { File.Delete(turnMcpPath); }
-                catch (Exception ex)
-                {
-                    // В temp-конфиге сервисный токен — важно знать, если он не удалился
-                    Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp MCP-конфиг {turnMcpPath}: {ex.Message}");
-                }
+        run.Process.Dispose();
+        if (ReferenceEquals(_currentProcess, run.Process)) _currentProcess = null;
+        Interlocked.CompareExchange(ref _run, null, run);
 
-            // Ватчеры завершившихся workflow задиспозились сами — убираем их из списка
-            lock (_workflowWatchers) _workflowWatchers.RemoveAll(w => w.IsDisposed);
-
-            // Дочитываем хвосты транскриптов сабагентов и останавливаем ватчер хода
-            if (_subagentWatcher is not null)
+        if (run.TurnMcpPath != null)
+            try { File.Delete(run.TurnMcpPath); }
+            catch (Exception ex)
             {
-                await _subagentWatcher.DrainAsync();
-                _subagentWatcher.Dispose();
-                _subagentWatcher = null;
+                // В temp-конфиге сервисный токен — важно знать, если он не удалился
+                Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp MCP-конфиг {run.TurnMcpPath}: {ex.Message}");
             }
 
-            // Ход закончился — следующий (если его инициирует человек) идёт с полным набором инструментов
-            _currentTurnAgentDepth = 0;
+        // Ватчеры завершившихся workflow задиспозились сами — убираем их из списка
+        lock (_workflowWatchers) _workflowWatchers.RemoveAll(w => w.IsDisposed);
 
-            // Статусом владеет SessionManager: Finished/Active он выставит по ExitedMessage
-            await _onMessage(new ExitedMessage());
+        // Дочитываем хвосты транскриптов сабагентов и останавливаем ватчеры прогона
+        if (_subagentWatcher is not null)
+        {
+            await _subagentWatcher.DrainAsync();
+            _subagentWatcher.Dispose();
+            _subagentWatcher = null;
         }
+        _transcriptTailer?.Dispose();
+        _transcriptTailer = null;
+
+        // Ход, ждущий result, его уже не дождётся — процесс умер: резолвим, чтобы
+        // RunTurnAsync не завис (обрыв пользователю виден по ExitedMessage/статусу)
+        run.TurnDone = true;
+        run.TurnTcs.TrySetResult();
+
+        // Статусом владеет SessionManager: Finished/Active он выставит по ExitedMessage
+        if (!run.SuppressExited)
+            await _onMessage(new ExitedMessage());
+    }
+
+    // Сигнатура окружения прогона — жёсткая часть запуска процесса. Совпала у следующего
+    // хода → его можно отдать живому процессу в stdin; отличие → новый процесс.
+    // Исключены изменчивые на каждый ход части: --resume (не меняется в рамках сессии),
+    // путь temp MCP-конфига (вместо него набор ключей серверов: содержимое несёт свежий JWT)
+    // и системный промпт целиком — из него в сигнатуре только слой персоны, recall/подсказки
+    // деградируют мягко.
+    private static string BuildLaunchSignature(
+        IReadOnlyList<string> args, string mcpServerKeys,
+        IReadOnlyDictionary<string, string> envOverrides, string? personaLayerPrompt)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (var i = 0; i < args.Count; i++)
+        {
+            if (args[i] is "--resume" or "--mcp-config" or "--append-system-prompt") { i++; continue; }
+            sb.Append(args[i]).Append('\u0001');
+        }
+        sb.Append("mcp=").Append(mcpServerKeys).Append('\u0001');
+        foreach (var (k, v) in envOverrides) sb.Append(k).Append('=').Append(v).Append('\u0001');
+        if (!string.IsNullOrEmpty(personaLayerPrompt))
+            sb.Append("persona=").Append(personaLayerPrompt);
+        return sb.ToString();
     }
 
     private async Task ProcessLineAsync(string line)
@@ -1266,6 +1481,15 @@ public class ClaudeSession : ILlmSessionAdapter
                     _subagentWatcher?.Dispose();
                     _subagentWatcher = new SubagentStreamWatcher(cwd ?? _rootPath, Info.ClaudeSessionId!, _onMessage);
                     _subagentWatcher.Start();
+
+                    // Ридер notification'ов — один на прогон (init повторяется на каждом ходе
+                    // нового CLI; пересоздание сбросило бы офсет и пропустило завершения)
+                    if (_transcriptTailer is null)
+                    {
+                        _transcriptTailer = new MainTranscriptTailer(
+                            cwd ?? _rootPath, Info.ClaudeSessionId!, HandleTaskNotification);
+                        _transcriptTailer.Start();
+                    }
                 }
                 else if (sysSubtype == "compact_boundary")
                 {
@@ -1332,10 +1556,25 @@ public class ClaudeSession : ILlmSessionAdapter
                     await _onMessage(new ErrorMessage(resText.GetString()!));
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials));
-                // Ход завершён — дальше ждём выхода процесса не дольше ResultExitGrace
-                _resultSeen = true;
-                // Закрываем stdin: все permission-запросы уже обработаны, Claude может завершить процесс
-                CloseStdin(_currentProcess);
+                // Ход завершён. Без живых фоновых задач закрываем stdin — CLI выйдет сам,
+                // дальше ждём его не дольше ResultExitGrace. С ними stdin держим открытым:
+                // прогон доживает (агенты работают внутри процесса) и готов принять
+                // следующий совместимый ход. Это же касается ходов-продолжений CLI
+                // (ответы на task-notification) — у них свои result'ы.
+                if (_run is { } doneRun)
+                {
+                    doneRun.TurnDone = true;
+                    if (!doneRun.HasPendingBg) CloseStdin(doneRun);
+                    else
+                    {
+                        int pendingCount;
+                        lock (doneRun.PendingBg) pendingCount = doneRun.PendingBg.Count;
+                        Console.WriteLine(
+                            $"[ClaudeSession] Ход завершён, прогон доживает: фоновых задач {pendingCount}"
+                            + (doneRun.PendingBgUnknown ? " (+неучтённые)" : ""));
+                    }
+                    doneRun.TurnTcs.TrySetResult();
+                }
                 // Гарантия исполнения одобренного плана: если ход завершился, а Claude так и не
                 // приступил к правкам — дошлём команду на реализацию (следующий ход — без plan-режима)
                 if (_awaitPlanExecution)
@@ -1382,7 +1621,13 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!root.TryGetProperty("message", out var msg)) return;
         if (!msg.TryGetProperty("content", out var content)) return;
         // Строковый content — служебные user-сообщения CLI (summary после компакта,
-        // <local-command-stdout>): не tool_result, в ленту не транслируем
+        // <local-command-stdout>, task-notification): не tool_result, в ленту не транслируем.
+        // task-notification — завершение фоновой задачи, вычёркиваем её из pending прогона
+        if (content.ValueKind == JsonValueKind.String)
+        {
+            HandleTaskNotification(content.GetString());
+            return;
+        }
         if (content.ValueKind != JsonValueKind.Array) return;
 
         foreach (var block in content.EnumerateArray())
@@ -1414,6 +1659,10 @@ public class ClaudeSession : ILlmSessionAdapter
 
             await _onMessage(new ToolResultMessage(toolUseId, resultContent, isError));
 
+            // Запуск фоновой задачи (async-агент, resume через SendMessage, workflow) —
+            // берём её id на учёт прогона: пока pending не пуст, процесс переживает ход
+            TrackBgLaunch(toolUseId, resultContent, isError);
+
             // Если это результат Workflow с транскриптом — запускаем watcher
             if (!isError && resultContent.Contains("Transcript dir:"))
             {
@@ -1433,6 +1682,71 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
             }
         }
+    }
+
+    // Паттерны учёта фоновых задач. Id агентов у CLI бывают и hex (a4faf5af…), и base36
+    // (br4ihb0jl) — берём общий алфавит [0-9a-zA-Z_-] (проверено live на CLI 2.1.212+)
+    private static readonly System.Text.RegularExpressions.Regex BgAgentIdRe =
+        new(@"agentId:\s*([0-9a-zA-Z_-]{6,})", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex BgResumedRe =
+        new(@"Agent ""([0-9a-zA-Z_-]{6,})""", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex BgWorkflowRe =
+        new(@"runId:\s*(wf_[0-9a-zA-Z_-]{4,})", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex TaskIdRe =
+        new(@"<task-id>([^<]+)</task-id>", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Учёт запуска фоновой задачи по tool_result: async-агент — «Async agent launched …
+    // agentId: X», возобновление — «Agent "X" … resumed from transcript in the background»,
+    // workflow — «runId: wf_…». Структурный кандидат (run_in_background/Workflow из
+    // HandleAssistantToolsAsync) без распарсенного id → PendingBgUnknown: точный учёт
+    // потерян, доживание прогона ограничится только потолком BgLingerTimeout.
+    private void TrackBgLaunch(string toolUseId, string content, bool isError)
+    {
+        var run = _run;
+        if (run is null) return;
+        bool candidate;
+        lock (run.PendingBg) candidate = run.BgLaunchCandidates.Remove(toolUseId);
+        if (isError) return;
+
+        // Гейт по маркерам запуска: без него агентский id пришлось бы искать в любом
+        // tool_result (Bash с логами нашего же продукта дал бы ложный pending навсегда)
+        var launchLike = candidate
+            || content.Contains("Async agent launched", StringComparison.Ordinal)
+            || content.Contains("resumed from transcript in the background", StringComparison.Ordinal)
+            || content.Contains("Transcript dir:", StringComparison.Ordinal);
+        if (!launchLike) return;
+
+        var m = BgAgentIdRe.Match(content);
+        if (!m.Success) m = BgWorkflowRe.Match(content);
+        if (!m.Success && content.Contains("in the background", StringComparison.Ordinal))
+            m = BgResumedRe.Match(content);
+        if (m.Success)
+            lock (run.PendingBg) run.PendingBg.Add(m.Groups[1].Value);
+        else if (candidate)
+            run.PendingBgUnknown = true;
+    }
+
+    // Уведомление CLI о завершении фоновых задач: user-ход со строковым content
+    // <task-notification>…<task-id>X</task-id>… Вычёркиваем задачи из pending; если прогон
+    // между ходами и pending опустел — закрываем stdin: CLI дообработает хвост
+    // (свой ход-продолжение с ответом на уведомление) и выйдет сам.
+    private void HandleTaskNotification(string? text)
+    {
+        var run = _run;
+        if (run is null || text is null
+            || !text.Contains("<task-notification>", StringComparison.Ordinal)) return;
+        int removed, left;
+        lock (run.PendingBg)
+        {
+            var before = run.PendingBg.Count;
+            foreach (System.Text.RegularExpressions.Match m in TaskIdRe.Matches(text))
+                run.PendingBg.Remove(m.Groups[1].Value.Trim());
+            removed = before - run.PendingBg.Count;
+            left = run.PendingBg.Count;
+        }
+        if (removed > 0)
+            Console.WriteLine($"[ClaudeSession] Фоновая задача завершилась ({removed} шт.), осталось {left}");
+        if (run.TurnDone && !run.HasPendingBg && !run.StdinClosed) CloseStdin(run);
     }
 
     private async Task HandleStreamEventAsync(JsonElement root)
@@ -1530,6 +1844,16 @@ public class ClaudeSession : ILlmSessionAdapter
             // Workflow по имени (без inline-script) → дописываем meta-блок скрипта, чтобы фронт
             // показал этапы (дотики фаз + N/M в тулбаре и карточке)
             if (toolName == "Workflow") toolInput = EnrichWorkflowInput(toolInput);
+
+            // Кандидат в фоновые задачи прогона: Agent/Task с run_in_background или Workflow —
+            // подтверждение запуска и id задачи придут в tool_result (TrackBgLaunch)
+            if (parentId is null && _run is { } bgRun && toolId.Length > 0
+                && (toolName == "Workflow"
+                    || (toolName is "Agent" or "Task" && block.TryGetProperty("input", out var inputEl)
+                        && inputEl.TryGetProperty("run_in_background", out var bgEl)
+                        && bgEl.ValueKind == JsonValueKind.True)))
+                lock (bgRun.PendingBg) bgRun.BgLaunchCandidates.Add(toolId);
+
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }
 
@@ -1611,6 +1935,8 @@ public class ClaudeSession : ILlmSessionAdapter
         _fileWatcher.Dispose();
         _subagentWatcher?.Dispose();
         _subagentWatcher = null;
+        _transcriptTailer?.Dispose();
+        _transcriptTailer = null;
         lock (_workflowWatchers)
         {
             foreach (var w in _workflowWatchers) w.Dispose();

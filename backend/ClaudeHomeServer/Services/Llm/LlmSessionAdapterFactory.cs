@@ -27,6 +27,9 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     {
         _mcpConfigPath = config["McpConfigPath"];
         _disallowedTools = config.GetSection("Claude:DisallowedTools").Get<string[]>() ?? [];
+        // Потолок доживания процесса с фоновыми агентами после конца хода (минуты)
+        if (int.TryParse(config["Claude:BgLingerMinutes"], out var lingerMin) && lingerMin > 0)
+            Claude.ClaudeSession.BgLingerTimeout = TimeSpan.FromMinutes(lingerMin);
         _skills = skills;
         _workspaceStore = workspaceStore;
         _providers = providers;

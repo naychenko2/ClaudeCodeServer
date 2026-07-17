@@ -94,10 +94,11 @@ public class ClaudeSubscriptionPool
         return LeastLoaded(candidates.Count > 0 ? candidates : AllKeys());
     }
 
-    /// <summary>Аккаунт «в ротации» для новых чатов — утилизация 5h-окна ниже мягкого порога.</summary>
-    /// Для наблюдаемости/UI: строгий выбор наименее загруженного и так не отправит чат
-    /// на аккаунт выше порога, пока есть кто ниже; но статус нужен, чтобы показать «выведен».
-    public bool IsInRotation(string key) => EffectiveUtilization(key) < _softThreshold;
+    /// <summary>Аккаунт «в ротации» для новых чатов.</summary>
+    /// Выведен, если исчерпан (rejected/100% — жёсткое состояние, `utilization` при rejected
+    /// CLI может не прислать) ИЛИ утилизация 5h-окна выше мягкого порога. Зеркалит логику Pick,
+    /// который исключает исчерпанных до сравнения утилизаций.
+    public bool IsInRotation(string key) => !IsExhausted(key) && EffectiveUtilization(key) < _softThreshold;
 
     /// <summary>Порог утилизации 5h-окна, выше которого аккаунт считается выведенным из ротации.</summary>
     public double SoftThreshold => _softThreshold;

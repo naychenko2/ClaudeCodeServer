@@ -28,7 +28,8 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                     : subscriptionPool.All.FirstOrDefault(s => s.Key == key)?.DisplayName;
                 named[key] = new SubscriptionUsage(snaps, displayName,
                     InRotation: subscriptionPool.IsInRotation(key),
-                    Utilization: subscriptionPool.EffectiveUtilization(key));
+                    Utilization: subscriptionPool.EffectiveUtilization(key),
+                    Exhausted: subscriptionPool.IsExhausted(key));
             }
             return Ok(new UsageResponse(all, plan, named, subscriptionPool.SoftThreshold));
         }

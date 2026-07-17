@@ -223,6 +223,23 @@ public class ClaudeSubscriptionPoolTests : IDisposable
     }
 
     [Fact]
+    public void IsInRotation_Исчерпанная_НеВРотации_ДажеБезUtilization()
+    {
+        // Как на проде: rejected без числа utilization → EffectiveUtilization=0, но аккаунт
+        // исчерпан → должен быть выведен из ротации (иначе бейдж соврёт «в ротации»).
+        var config = Config(softThreshold: 0.8, "second");
+        var usage = new UsageService(config);
+        usage.Record("five_hour", null, "rejected", isUsingOverage: false,
+            resetsAt: DateTime.UtcNow.AddHours(2).ToString("o"), subscriptionKey: "second");
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.IsExhausted("second").Should().BeTrue();
+        pool.EffectiveUtilization("second").Should().Be(0);
+        pool.IsInRotation("second").Should().BeFalse();
+    }
+
+    [Fact]
     public void SoftThreshold_ЧитаетсяИзКонфига()
     {
         var pool = new ClaudeSubscriptionPool(Config(softThreshold: 0.7));

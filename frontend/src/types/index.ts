@@ -430,6 +430,8 @@ export interface SubscriptionUsage {
   // Берёт ли пул этот аккаунт для новых чатов + эффективная утилизация 5h-окна (0..1)
   inRotation?: boolean;
   utilization?: number;
+  // Жёсткое исчерпание (rejected/100%) — выведен независимо от числа utilization
+  exhausted?: boolean;
 }
 
 // Статистика аккаунта fal.ai (баланс + расход за период)

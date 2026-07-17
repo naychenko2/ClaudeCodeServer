@@ -25,6 +25,7 @@ public record UsageResponse(IReadOnlyList<UsageSnapshot> Snapshots, PlanInfo? Pl
 
 // Utilisation одной подписки: снимки + опциональное имя + статус роутинга.
 // InRotation — берёт ли пул этот аккаунт для новых чатов; Utilization — эффективная
-// утилизация 5h-окна (истёкшее окно/нет данных = 0), по которой считается InRotation.
+// утилизация 5h-окна (истёкшее окно/нет данных = 0); Exhausted — жёсткое исчерпание
+// (rejected/100%), при котором аккаунт выведен независимо от числа Utilization.
 public record SubscriptionUsage(IReadOnlyList<UsageSnapshot> Snapshots, string? Name = null,
-    bool InRotation = true, double Utilization = 0);
+    bool InRotation = true, double Utilization = 0, bool Exhausted = false);

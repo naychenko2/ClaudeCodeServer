@@ -78,13 +78,17 @@ function WindowCard({ w }: { w: RateWindow }) {
   );
 }
 
-type RotationInfo = { inRotation?: boolean; utilization?: number; threshold?: number };
+type RotationInfo = { inRotation?: boolean; utilization?: number; threshold?: number; exhausted?: boolean };
 
 // Статус роутинга аккаунта: берёт ли пул его для новых чатов (только при пуле подписок)
 function RotationBadge({ info }: { info: RotationInfo }) {
   const out = info.inRotation === false;
   const pct = Math.round((info.utilization ?? 0) * 100);
   const thr = Math.round((info.threshold ?? 0.8) * 100);
+  // Причина выведения: жёсткое исчерпание (лимит отбит) vs мягкий порог по нагрузке
+  const reason = !out ? 'новые чаты могут направляться сюда'
+    : info.exhausted ? 'лимит исчерпан — новые чаты идут на свободные аккаунты'
+    : `нагрузка 5ч ${pct}% ≥ порога ${thr}% — новые чаты идут на свободные аккаунты`;
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 8,
       background: out ? C.warningBg : C.bgWhite, border: `1px solid ${out ? C.warning : C.border}`,
@@ -93,10 +97,7 @@ function RotationBadge({ info }: { info: RotationInfo }) {
       <span style={{ fontWeight: 600, color: out ? C.warningText : C.textHeading }}>
         {out ? 'Выведен из ротации' : 'В ротации'}
       </span>
-      <span style={{ color: C.textMuted }}>
-        {out ? `нагрузка 5ч ${pct}% ≥ порога ${thr}% — новые чаты идут на свободные аккаунты`
-             : 'новые чаты могут направляться сюда'}
-      </span>
+      <span style={{ color: C.textMuted }}>{reason}</span>
     </div>
   );
 }
@@ -369,7 +370,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
   const rotationOf = (key: string): RotationInfo | undefined => {
     const s = usage?.subscriptions?.[key];
     if (!s || s.inRotation === undefined) return undefined;
-    return { inRotation: s.inRotation, utilization: s.utilization, threshold: usage?.rotationThreshold };
+    return { inRotation: s.inRotation, utilization: s.utilization, threshold: usage?.rotationThreshold, exhausted: s.exhausted };
   };
   const tabs = ([['claude', 'Claude']] as [string, string][])
     .concat(subKeys.filter(k => k !== 'claude').map(k => [k, usage!.subscriptions![k].name ?? k] as [string, string]))

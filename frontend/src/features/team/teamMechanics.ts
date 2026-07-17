@@ -150,6 +150,20 @@ export function teamMechanic(id: TeamMechanicId): TeamMechanic {
 // Фиксированное начало обвязки дискуссии — по нему же детектится бейдж в ленте
 const DISCUSS_PREFIX = 'Обсуди со мной и командой вопрос';
 
+// Тема в двойных кавычках для string-механик (ralplan/deep-interview/autopilot/trace/sci):
+// внутренние прямые кавычки заменяются на «ёлочки» (попарно), иначе цитата рвётся, а
+// декодер quotedTopic режет тему по первой внутренней кавычке. JSON-механики не трогаем —
+// JSON.stringify экранирует сам.
+function quoteTopic(t: string): string {
+  let open = true;
+  const safe = t.replace(/"/g, () => {
+    const ch = open ? '«' : '»';
+    open = !open;
+    return ch;
+  });
+  return `"${safe}"`;
+}
+
 /**
  * Собирает текст хода для механики. Тема берётся из композера; настройки — из раскрывашки.
  * Для autopilot с untilDone цикл «до готово» включается ОТДЕЛЬНО (PUT /chats/{id}/loop) —
@@ -193,18 +207,18 @@ export function buildTeamTurnText(
         s.interviewFirst ? '--interactive' : null,
         s.deliberate ? '--deliberate' : null,
       ].filter(Boolean).join(' ');
-      return `/oh-my-claudecode:ralplan ${flags ? flags + ' ' : ''}"${t}"`;
+      return `/oh-my-claudecode:ralplan ${flags ? flags + ' ' : ''}${quoteTopic(t)}`;
     }
     case 'interview':
-      return `/oh-my-claudecode:deep-interview --${s.depth} "${t}"`;
+      return `/oh-my-claudecode:deep-interview --${s.depth} ${quoteTopic(t)}`;
     case 'autopilot':
-      return `/oh-my-claudecode:autopilot "${t}"`;
+      return `/oh-my-claudecode:autopilot ${quoteTopic(t)}`;
     case 'qa':
       return `/oh-my-claudecode:ultraqa --${s.qaTarget}${t ? ` ${t}` : ''}`;
     case 'trace':
-      return `/oh-my-claudecode:trace "${t}"`;
+      return `/oh-my-claudecode:trace ${quoteTopic(t)}`;
     case 'sci':
-      return `/oh-my-claudecode:sciomc "${t}"`;
+      return `/oh-my-claudecode:sciomc ${quoteTopic(t)}`;
     case 'review': {
       // review-consilium.js парсит JSON-args сам; participants — handle персон по порядку осей
       const args: Record<string, unknown> = { lenses: s.reviewLenses, verify: s.reviewVerify };

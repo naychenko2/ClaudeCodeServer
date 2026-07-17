@@ -22,6 +22,10 @@ public class PersonaManager
     private readonly ConcurrentDictionary<string, Persona> _personas = new();
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
+    // Сериализация ConnectPantheon: check-then-create (GetByTemplateKey → Create) без лока
+    // давал дубли персон с одним TemplateKey при параллельных connect. Отдельный от _saveLock,
+    // чтобы не держать его во время Save/OnPersonaCreated внутри Create.
+    private readonly Lock _connectLock = new();
     private readonly ILogger<PersonaManager>? _log;
     private readonly ProjectEventLogService? _events;
 
@@ -229,22 +233,26 @@ public class PersonaManager
                 ?? throw new KeyNotFoundException($"Роль пантеона не найдена: {k}")).ToList()
             : OmoPantheonCatalog.All.ToList();
 
-        var result = new List<Persona>();
-        foreach (var t in wanted)
+        // Весь connect атомарен: параллельный вызов ждёт и находит уже созданных
+        lock (_connectLock)
         {
-            var existing = GetByTemplateKey(userId, t.Key);
-            if (existing is not null) { result.Add(existing); continue; }
+            var result = new List<Persona>();
+            foreach (var t in wanted)
+            {
+                var existing = GetByTemplateKey(userId, t.Key);
+                if (existing is not null) { result.Add(existing); continue; }
 
-            var persona = Create(userId, t.Name, t.Role, t.Description, systemPrompt: null,
-                t.Model, t.Effort, PersonaScope.Global, projectId: null,
-                t.Color, t.Greeting, memoryEnabled: true, t.Tools, t.Contract, t.Access,
-                specialty: t.Specialty);
-            persona.TemplateKey = t.Key;
-            persona.TemplateInstructionsHash = HashInstructions(t.Contract.Instructions);
-            result.Add(persona);
+                var persona = Create(userId, t.Name, t.Role, t.Description, systemPrompt: null,
+                    t.Model, t.Effort, PersonaScope.Global, projectId: null,
+                    t.Color, t.Greeting, memoryEnabled: true, t.Tools, t.Contract, t.Access,
+                    specialty: t.Specialty);
+                persona.TemplateKey = t.Key;
+                persona.TemplateInstructionsHash = HashInstructions(t.Contract.Instructions);
+                result.Add(persona);
+            }
+            Save();
+            return result;
         }
-        Save();
-        return result;
     }
 
     // Авто-обновление регламентов подключённых ролей при изменении каталога (апдейт сервера):

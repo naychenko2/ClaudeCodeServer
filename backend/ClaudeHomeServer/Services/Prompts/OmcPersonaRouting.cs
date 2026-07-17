@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Prompts;
@@ -51,8 +52,15 @@ public static class OmcPersonaRouting
         ("тестировщик", PersonaSpecialty.Tester),
     ];
 
+    // Магслова ultrawork/ulw включают тот же режим плагина (keyword-detector OMC) —
+    // роутинг персон должен срабатывать и на них. Паттерн зеркалит фронтовый
+    // lib/ultrawork.ts: границы слова, чтобы «ulw» внутри других слов не считался.
+    private static readonly Regex MagicWordRe = new(@"(?<![\p{L}\p{N}])(ultrawork|ulw)(?![\p{L}\p{N}])",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     public static bool MentionsPluginCommand(string text) =>
-        text.Contains(CommandPrefix, StringComparison.OrdinalIgnoreCase);
+        text.Contains(CommandPrefix, StringComparison.OrdinalIgnoreCase)
+        || MagicWordRe.IsMatch(text);
 
     // executorCapable — у персоны есть write-доступ в сабагентах: к советническим типам
     // добавляются исполнительские её специальности
@@ -81,13 +89,27 @@ public static class OmcPersonaRouting
     // null — замещать некем (ни у одной персоны нет подходящей специальности).
     public static string? BuildHint(IReadOnlyList<Persona> personas)
     {
+        // Детерминизм при дублях специальности: каждый тип плагина закрепляется за ОДНОЙ
+        // персоной (первой по Handle ordinal), иначе в таблице две строки на один тип и
+        // модель выбирает произвольно. Оставшиеся кандидаты — одной строкой «резерв».
         var lines = new List<string>();
-        foreach (var p in personas)
+        var reserve = new List<string>();
+        var taken = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var p in personas.OrderBy(x => x.Handle, StringComparer.Ordinal))
         {
             var executor = PersonaConsultantToolset.IsExecutor(p);
-            var types = AgentTypesFor(EffectiveSpecialty(p), executor);
-            if (types.Length == 0) continue;
+            var all = AgentTypesFor(EffectiveSpecialty(p), executor);
+            if (all.Length == 0) continue;
+            var types = new List<string>();
+            foreach (var t in all)
+                if (taken.Add(t))
+                    types.Add(t);
             var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
+            if (types.Count == 0)
+            {
+                reserve.Add($"\"{p.Handle}\" — {title}");
+                continue;
+            }
             var marker = executor ? " (исполнитель: может править файлы и запускать команды)" : "";
             lines.Add($"- {string.Join(", ", types.Select(t => "oh-my-claudecode:" + t))} → \"{p.Handle}\" — {title}{marker}");
         }
@@ -103,6 +125,9 @@ public static class OmcPersonaRouting
             "запись файлов и запуск команд — они консультанты, работают только на чтение.");
         sb.AppendLine("Соответствия:");
         foreach (var l in lines) sb.AppendLine(l);
+        if (reserve.Count > 0)
+            sb.AppendLine("Резерв (та же специальность, зови только по прямой просьбе пользователя): "
+                + string.Join(", ", reserve));
         return sb.ToString().TrimEnd();
     }
 }

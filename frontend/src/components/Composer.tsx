@@ -174,16 +174,23 @@ export function Composer({
   const [dragOver, setDragOver] = useState(false);
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
-  // Разнос композера в две позиции грипом ⋮ (собрано ↔ разнесено). На планшете облачко
-  // раскладки клавиатуры перекрывает нижний ряд контролов — в разнесённом виде поле ввода
-  // и «отправить» уезжают вверх, а второстепенные кнопки садятся полосой ниже. Позиция
-  // запоминается per-device.
-  const [expanded, setExpanded] = useState(() => {
+  // Разнос композера в две позиции (собрано ↔ разнесено): поле ввода и «отправить»
+  // своей строкой, второстепенные кнопки полосой ниже. Два независимых триггера:
+  // pinned — ручной пин грипом ⋮ (на планшете уводит поле из-под облачка раскладки
+  // клавиатуры), запоминается per-device; autoWide — авто-разнос при многострочном
+  // тексте, чтобы текст занимал всю ширину композера, а не узкий столбик между
+  // кнопками слева и собеседником справа (не персистится).
+  const [pinned, setPinned] = useState(() => {
     try { return localStorage.getItem('cc_composer_split') === '1'; } catch { return false; }
   });
   useEffect(() => {
-    try { localStorage.setItem('cc_composer_split', expanded ? '1' : '0'); } catch { /* noop */ }
-  }, [expanded]);
+    try { localStorage.setItem('cc_composer_split', pinned ? '1' : '0'); } catch { /* noop */ }
+  }, [pinned]);
+  const [autoWide, setAutoWide] = useState(false);
+  // Разнос действует только на планшете/десктопе: в мобильной раскладке поле и так
+  // занимает отдельную строку во всю ширину. pinned/autoWide не сбрасываем — при
+  // возврате к широкому экрану вид восстановится.
+  const splitActive = (pinned || autoWide) && !isMobile;
   // Драг грипа ⋮: тянем — раскладка переключается под пальцем (live), «дотягивая» до
   // нового размера. dragStartYRef — якорь текущего порога (сдвигается при переключении =
   // гистерезис), dragMovedRef — был ли реальный сдвиг (чтобы погасить паразитный click).
@@ -336,13 +343,54 @@ export function Composer({
     }, 0);
   }, [text, updateSkillDropdown]);
 
-  // Авторазмер textarea
+  // Снимок позиции поля и высоты контейнера перед сменой раскладки — для FLIP-анимации.
+  // Плюс фокус и каретка: при смене раскладки textarea пересоздаётся (другая ветка JSX),
+  // без восстановления в layout-эффекте набор текста обрывается на моменте разноса.
+  const flipFocusRef = useRef<{ start: number; end: number } | null>(null);
+  const captureFlip = () => {
+    const el = textareaRef.current;
+    flipInputTopRef.current = el?.getBoundingClientRect().top ?? null;
+    flipContainerHRef.current = containerRef.current?.getBoundingClientRect().height ?? null;
+    flipFocusRef.current = el && document.activeElement === el
+      ? { start: el.selectionStart ?? el.value.length, end: el.selectionEnd ?? el.value.length }
+      : null;
+  };
+
+  // Ширина поля в собранной раскладке (замер до разноса) и канвас для замера текста —
+  // чтобы понять, влезет ли текст обратно в одну узкую строку при сборке
+  const collapsedInputWidthRef = useRef<number | null>(null);
+  const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const fitsCollapsedWidth = (el: HTMLTextAreaElement) => {
+    const narrowW = collapsedInputWidthRef.current;
+    if (narrowW === null) return true;
+    if (el.value.includes('\n')) return false;
+    if (!measureCtxRef.current) measureCtxRef.current = document.createElement('canvas').getContext('2d');
+    const ctx = measureCtxRef.current;
+    if (!ctx) return true;
+    const cs = getComputedStyle(el);
+    ctx.font = cs.font || `${cs.fontSize} ${cs.fontFamily}`; // Firefox: шорткат font пустой
+    return ctx.measureText(el.value).width <= narrowW - 16;
+  };
+
+  // Авторазмер textarea + авто-разнос при многострочном тексте (планшет/десктоп).
+  // Гистерезис: разносим, когда текст уверенно выше одной строки (44px), собираем при
+  // возврате к одной строке (<=36px) — и только если текст влезает в прежнюю узкую
+  // ширину поля, иначе раскладка зациклится (в узкой снова две строки → снова разнос).
   const autoResize = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
-  }, []);
+    const h = el.scrollHeight;
+    el.style.height = Math.min(h, 200) + 'px';
+    if (isMobile) return;
+    if (!autoWide) {
+      if (!splitActive) collapsedInputWidthRef.current = el.clientWidth;
+      if (h > 44) { captureFlip(); setAutoWide(true); }
+    } else if (h <= 36 && fitsCollapsedWidth(el)) {
+      captureFlip();
+      setAutoWide(false);
+    }
+  }, [isMobile, autoWide, splitActive]);
 
   useEffect(() => {
     autoResize();
@@ -499,17 +547,21 @@ export function Composer({
     } catch { /* noop */ }
   };
 
-  // Снимок позиции поля и высоты контейнера перед сменой раскладки — для FLIP-анимации
-  const captureFlip = () => {
-    flipInputTopRef.current = textareaRef.current?.getBoundingClientRect().top ?? null;
-    flipContainerHRef.current = containerRef.current?.getBoundingClientRect().height ?? null;
-  };
-  // После смены expanded: проигрываем разницу позиций поля (translateY+fade) и высоты
+  // После смены раскладки: проигрываем разницу позиций поля (translateY+fade) и высоты
   // контейнера (height) как плавный переход — одинаково при раскрытии и сборке.
   useLayoutEffect(() => {
+    // Пересчёт высоты поля под новую ширину — текст мог перелечь на другое число строк
+    autoResize();
     const DUR = 0.3;
     // Поле: плавный переезд по вертикали + лёгкий fade (прячет резкую смену ширины)
     const el = textareaRef.current;
+    // Возврат фокуса и каретки в пересозданную textarea — до отрисовки, набор не рвётся
+    const focus = flipFocusRef.current;
+    flipFocusRef.current = null;
+    if (el && focus) {
+      el.focus({ preventScroll: true });
+      el.setSelectionRange(focus.start, focus.end);
+    }
     const prevTop = flipInputTopRef.current;
     flipInputTopRef.current = null;
     if (el && prevTop !== null) {
@@ -548,7 +600,9 @@ export function Composer({
         }, DUR * 1000 + 30);
       }
     }
-  }, [expanded]);
+    // autoResize намеренно вне deps: эффект должен играть только на смену раскладки
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [splitActive]);
 
   // --- Drag грипа ⋮: live-переключение композера в две позиции (собрано ↔ разнесено) ---
   // Порог протягивания — раньше срабатывает, смена начинается почти сразу за движением.
@@ -556,10 +610,6 @@ export function Composer({
   // Ширина зоны справа от собеседника в собранном виде (для выравнивания его на нижней
   // строке под правый край поля): разделитель 12 + mic 32 + send 34 + зазоры.
   const micSendW = 86;
-  // Разнос доступен только на планшете/десктопе. В мобильной раскладке поле и так занимает
-  // отдельную строку во всю ширину (а собеседник уходит в левый блок к кнопкам) — разносить
-  // нечего. Само expanded не сбрасываем: при возврате к широкому экрану вид восстановится.
-  const splitActive = expanded && !isMobile;
   const onGripPointerDown = (e: React.PointerEvent) => {
     // preventDefault — чтобы не начиналось выделение текста/нативный drag на десктопе
     e.preventDefault();
@@ -577,9 +627,11 @@ export function Composer({
       if (dragStartYRef.current === null) return;
       const dy = e.clientY - dragStartYRef.current;
       if (Math.abs(dy) > 4) dragMovedRef.current = true;
-      // Live-переключение под пальцем; после смены сдвигаем якорь (гистерезис против дребезга)
-      if (!expanded && dy < -SNAP) { captureFlip(); setExpanded(true); dragStartYRef.current = e.clientY; }
-      else if (expanded && dy > SNAP) { captureFlip(); setExpanded(false); dragStartYRef.current = e.clientY; }
+      // Live-переключение под пальцем; после смены сдвигаем якорь (гистерезис против дребезга).
+      // Тянем pinned, а не splitActive: при активном autoWide (длинный текст) сборка
+      // грипом не сработает визуально — раскладка вернётся сама, когда текст укоротится.
+      if (!pinned && dy < -SNAP) { captureFlip(); setPinned(true); dragStartYRef.current = e.clientY; }
+      else if (pinned && dy > SNAP) { captureFlip(); setPinned(false); dragStartYRef.current = e.clientY; }
     };
     const onUp = () => {
       const moved = dragMovedRef.current;
@@ -600,7 +652,7 @@ export function Composer({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [dragging, expanded]);
+  }, [dragging, pinned]);
 
   // Стили контейнера — поле всегда активно (доступно для ввода и во время генерации)
   const containerStyle: React.CSSProperties = {
@@ -851,7 +903,9 @@ export function Composer({
       type="button"
       onPointerDown={onGripPointerDown}
       onContextMenu={(e) => e.preventDefault()}
-      title={expanded ? 'Собрать панель (потяни вниз)' : 'Приподнять поле ввода (потяни вверх)'}
+      title={pinned ? 'Собрать панель (потяни вниз)'
+        : splitActive ? 'Закрепить разнесённый вид (потяни вверх)'
+        : 'Приподнять поле ввода (потяни вверх)'}
       aria-label="Перетащить панель ввода"
       style={{
         ...iconBtnGuard,
@@ -978,6 +1032,7 @@ export function Composer({
       selectedAgentName={selectedAgentName ?? null}
       onSelect={onCompanionChange}
       isMobile={isMobile}
+      wide={splitActive}
       onCreateGroup={onCreateGroup}
       // На мобиле «Обсудить с командой» сливается в дропдаун собеседника (разгрузка ряда)
       onDiscussTeam={isMobile && canDiscuss ? () => setTeamOpen(true) : undefined}
@@ -1110,8 +1165,9 @@ export function Composer({
       )}
 
       {splitActive ? (
-        /* РАЗНЕСЕНО (только планшет/десктоп): поле ввода + «отправить» вверх,
-           полоса контролов снизу — уводит поле из-под облачка раскладки клавиатуры. */
+        /* РАЗНЕСЕНО (только планшет/десктоп): поле ввода + «отправить» вверх во всю
+           ширину, полоса контролов снизу. Включается грипом (планшет: уводит поле
+           из-под облачка клавиатуры) или само при многострочном тексте (autoWide). */
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {/* Верхняя строка: грип, поле и «отправить» */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

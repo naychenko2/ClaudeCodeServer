@@ -16,6 +16,7 @@ import { FilterBar } from './FilterBar';
 import { ChatOriginBadge } from './ChatOriginBadge';
 import { resolveChatOrigin, loadVisibleOrigins, persistVisibleOrigins } from '../lib/chatOrigin';
 import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
+import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic, useLastMechanicVersion } from '../lib/lastMechanic';
 
 // Время создания чата: сегодня — часы:минуты, иначе — дата (группы и так разбиты по дням)
@@ -233,7 +234,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                     )}
                     {chat.lastMessage && (
                       <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {chat.lastMessage}
+                        {teamTurnPreview(chat.lastMessage) ?? chat.lastMessage}
                       </div>
                     )}
                   </div>

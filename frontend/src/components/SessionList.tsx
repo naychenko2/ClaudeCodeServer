@@ -17,6 +17,7 @@ import { FilterBar } from './FilterBar';
 import { ChatOriginBadge } from './ChatOriginBadge';
 import { resolveChatOrigin, loadVisibleOrigins, persistVisibleOrigins } from '../lib/chatOrigin';
 import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
+import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic, useLastMechanicVersion } from '../lib/lastMechanic';
 
 // Время создания сессии: сегодня — часы:минуты, иначе — дата
@@ -339,7 +340,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               )}
               {s.lastMessage && (
                 <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {s.lastMessage}
+                  {teamTurnPreview(s.lastMessage) ?? s.lastMessage}
                 </div>
               )}
             </div>

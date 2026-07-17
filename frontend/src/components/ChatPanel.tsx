@@ -463,7 +463,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       const it = items[i];
       if (it.kind !== 'tool_use') continue;
       const wf = it as ToolUseItem;
-      if (wf.name.toLowerCase() !== 'workflow' || wf.workflowDone === true || wf.result !== undefined) continue;
+      if (wf.name.toLowerCase() !== 'workflow' || wf.workflowDone === true) continue;
+      // Workflow уходит в фон и возвращает result («launched in background») СРАЗУ —
+      // по result судить о завершённости нельзя. Считаем идущим, пока watcher не сказал
+      // workflowDone: либо result ещё не пришёл (блокирующий), либо есть работающие агенты.
+      const running = wf.result === undefined
+        || (wf.workflowAgents?.some(a => a.isDone !== true) ?? false);
+      if (!running) continue;
       const meta = parseWorkflowMeta(wf.input);
       const phases = meta?.phases ?? [];
       if (phases.length === 0) return { wfId: wf.id, rawPhasesDone: 0, phasesTotal: 0 };

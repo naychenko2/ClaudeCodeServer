@@ -48,7 +48,13 @@ public class WorkflowController : ControllerBase
     // null wfPath (без error) — папка workflow ещё/уже не существует.
     private (string? WfPath, IActionResult? Error) ResolveWorkflowDir(string transcriptDir)
     {
-        var fullPath = Path.GetFullPath(transcriptDir);
+        // Кривой путь (недопустимые символы и т.п.) — ошибка клиента, не 500
+        string fullPath;
+        try { fullPath = Path.GetFullPath(transcriptDir); }
+        catch (Exception)
+        {
+            return (null, BadRequest(new { error = "Недопустимый transcriptDir" }));
+        }
         if (!WorkflowAgentParser.IsPathAllowed(fullPath))
             return (null, Forbid());
 

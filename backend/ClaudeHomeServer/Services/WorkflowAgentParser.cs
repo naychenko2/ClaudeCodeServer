@@ -32,9 +32,16 @@ public static class WorkflowAgentParser
     }
 
     public static bool IsPathAllowed(string path) =>
-        path.StartsWith(DefaultRoot, StringComparison.OrdinalIgnoreCase) ||
-        _extraRoots.Any(r => path.StartsWith(r, StringComparison.OrdinalIgnoreCase)) ||
+        IsUnderRoot(path, DefaultRoot) ||
+        _extraRoots.Any(r => IsUnderRoot(path, r)) ||
         IsUnderProfilesProjects(path);
+
+    // Префикс строго по границе сегмента: ~/.claude/projectsEvil не должен проходить
+    // как ~/.claude/projects (как в ветке ProfilesRoot ниже)
+    private static bool IsUnderRoot(string path, string root) =>
+        path.Equals(root, StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith(root + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
     // Путь вида {ProfilesRoot}/{key}/projects/… — ровно один сегмент профиля,
     // затем обязательный projects (не даём читать credentials и прочее из профиля)
@@ -144,6 +151,9 @@ public static class WorkflowAgentParser
         var filesDedup = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         bool isFirst = true;
+        // end_turn честен только у ПОСЛЕДНЕЙ строки транскрипта: follow-up дописывает
+        // файл, и агент снова «в работе» — каждая следующая строка сбрасывает признак
+        bool lastLineEndTurn = false;
         try
         {
             foreach (var line in File.ReadLines(filePath))
@@ -160,7 +170,8 @@ public static class WorkflowAgentParser
                     }
                     continue;
                 }
-                try { ProcessLine(line, ref summary, ref isDone, toolCounts, filesSet, filesDedup); }
+                lastLineEndTurn = false;
+                try { ProcessLine(line, ref summary, ref isDone, ref lastLineEndTurn, toolCounts, filesSet, filesDedup); }
                 catch (Exception ex)
                 {
                     Log.LogDebug(ex, "Битая строка в {Path}", filePath);
@@ -174,6 +185,7 @@ public static class WorkflowAgentParser
         }
 
         if (prompt is null) return null;
+        if (lastLineEndTurn) isDone = true;
 
         IReadOnlyList<WorkflowToolDto>? tools = null;
         if (toolCounts.Count > 0)
@@ -210,7 +222,8 @@ public static class WorkflowAgentParser
     }
 
     private static void ProcessLine(string jsonLine, ref string? summary, ref bool isDone,
-        Dictionary<string, int> toolCounts, LinkedList<string> filesSet, HashSet<string> filesDedup)
+        ref bool lastLineEndTurn, Dictionary<string, int> toolCounts,
+        LinkedList<string> filesSet, HashSet<string> filesDedup)
     {
         using var doc = JsonDocument.Parse(jsonLine);
         var root = doc.RootElement;
@@ -224,11 +237,12 @@ public static class WorkflowAgentParser
 
         if (!root.TryGetProperty("message", out var message)) return;
 
-        // Новый формат (agent-*.jsonl): assistant с stop_reason == "end_turn"
+        // Новый формат (agent-*.jsonl): assistant с stop_reason == "end_turn" — done
+        // только если строка осталась последней (учёт в ParseAgentFile)
         if (message.TryGetProperty("stop_reason", out var stopReasonEl) &&
             stopReasonEl.GetString() == "end_turn")
         {
-            isDone = true;
+            lastLineEndTurn = true;
         }
 
         if (!message.TryGetProperty("content", out var content)) return;

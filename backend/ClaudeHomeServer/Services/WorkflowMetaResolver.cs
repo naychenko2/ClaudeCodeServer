@@ -18,10 +18,10 @@ public static class WorkflowMetaResolver
     public static readonly string GlobalWorkflowsDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "workflows");
 
-    // Кэш: полный путь файла → вырезанный meta-блок. Кэшируем только УСПЕХИ —
+    // Кэш: полный путь файла → (mtime, вырезанный meta-блок). Кэшируем только УСПЕХИ —
     // промахи не кэшируем, чтобы лениво засеянный профиль провайдера подхватился позже.
-    // Скрипты в рантайме не меняются, инвалидация по mtime не нужна.
-    private static readonly ConcurrentDictionary<string, string> _cache = new(StringComparer.OrdinalIgnoreCase);
+    // Инвалидация по mtime: правленый скрипт подхватывается без рестарта.
+    private static readonly ConcurrentDictionary<string, (DateTime Mtime, string Block)> _cache = new(StringComparer.OrdinalIgnoreCase);
 
     // Репо-source claude-defaults/workflows — фолбэк для dev-хоста, где ~/.claude/workflows
     // засеян не полностью (там встроенные механики — source of truth)
@@ -39,15 +39,23 @@ public static class WorkflowMetaResolver
         foreach (var dir in all)
         {
             var path = Path.Combine(dir, name + ".js");
-            if (_cache.TryGetValue(path, out var cached)) return cached;
+            var mtime = TryGetMtime(path);
+            if (mtime is not null && _cache.TryGetValue(path, out var cached) && cached.Mtime == mtime)
+                return cached.Block;
             var block = ExtractMeta(path);
             if (block is not null)
             {
-                _cache[path] = block;
+                if (mtime is not null) _cache[path] = (mtime.Value, block);
                 return block;
             }
         }
         return null;
+    }
+
+    private static DateTime? TryGetMtime(string path)
+    {
+        try { return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null; }
+        catch { return null; }
     }
 
     // Имя workflow приходит от модели — пускаем только безопасный slug (без разделителей

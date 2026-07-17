@@ -55,7 +55,7 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders) : IOne
         if (!string.IsNullOrWhiteSpace(model))
         {
             psi.ArgumentList.Add("--model");
-            psi.ArgumentList.Add(model);
+            psi.ArgumentList.Add(LlmProviderRegistry.StripClaudeWindowAlias(model)!);
         }
         if (!string.IsNullOrWhiteSpace(effort))
         {

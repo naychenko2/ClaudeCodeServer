@@ -57,6 +57,31 @@ public class LlmProviderRegistryTests
         Create().ProviderKey(model).Should().Be("claude");
     }
 
+    [Theory]
+    // Тир-алиас + окно → базовый алиас (надёжен в любом окружении/аккаунте)
+    [InlineData("opus[1m]", "opus")]
+    [InlineData("OPUS[1M]", "opus")]
+    [InlineData("sonnet[1m]", "sonnet")]
+    [InlineData("haiku[1m]", "haiku")]
+    // Базовые алиасы и обычные модели — без изменений
+    [InlineData("opus", "opus")]
+    [InlineData("claude-sonnet-5", "claude-sonnet-5")]
+    // Полный id с окном и модель стороннего провайдера — НЕ трогаем
+    [InlineData("claude-fable-5[1m]", "claude-fable-5[1m]")]
+    [InlineData("glm-5.2[1m]", "glm-5.2[1m]")]
+    public void StripClaudeWindowAlias_СводитТолькоТирАлиасы(string input, string expected)
+    {
+        LlmProviderRegistry.StripClaudeWindowAlias(input).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void StripClaudeWindowAlias_ПустоеБезИзменений(string? input)
+    {
+        LlmProviderRegistry.StripClaudeWindowAlias(input).Should().Be(input);
+    }
+
     [Fact]
     public void ResolveByModel_ВыключенныйПровайдер_ВсёРавноРезолвится()
     {

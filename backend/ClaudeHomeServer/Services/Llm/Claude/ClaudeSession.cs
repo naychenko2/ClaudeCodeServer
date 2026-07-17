@@ -716,7 +716,7 @@ public class ClaudeSession : ILlmSessionAdapter
             args.AddRange(["--permission-mode", Info.Mode.ToCliFlag()]);
 
         if (!string.IsNullOrWhiteSpace(Info.Model))
-            args.AddRange(["--model", Info.Model]);
+            args.AddRange(["--model", LlmProviderRegistry.StripClaudeWindowAlias(Info.Model)!]);
 
         if (!string.IsNullOrWhiteSpace(Info.Effort))
             args.AddRange(["--effort", Info.Effort]);

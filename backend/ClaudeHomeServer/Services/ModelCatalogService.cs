@@ -239,10 +239,16 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
                 return null;
 
             var result = new List<ModelInfo>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var m in modelsEl.EnumerateArray())
             {
                 var value = m.TryGetProperty("value", out var v) ? v.GetString() : null;
                 if (string.IsNullOrWhiteSpace(value)) continue;
+                // Сводим тир-алиас+окно (opus[1m]) к базовому алиасу (opus): CLI отдаёт Opus
+                // только с суффиксом окна, а он хрупок при исполнении (см. StripClaudeWindowAlias),
+                // и это единственный способ выбрать Opus в UI. Дедуп на случай коллизии value.
+                value = Llm.LlmProviderRegistry.StripClaudeWindowAlias(value)!;
+                if (!seen.Add(value)) continue;
                 var displayName = m.TryGetProperty("displayName", out var d) ? d.GetString() : null;
                 var description = m.TryGetProperty("description", out var ds) ? ds.GetString() : null;
                 result.Add(new ModelInfo(value, displayName ?? value, description));

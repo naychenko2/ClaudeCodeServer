@@ -76,6 +76,26 @@ public class LlmProviderRegistry
     // Wire-токен провайдера модели ("claude" | key) — для guard смены провайдера и фронта
     public string ProviderKey(string? model) => ResolveByModel(model)?.Key ?? "claude";
 
+    // Claude-каталог CLI отдаёт Opus только базовым алиасом с суффиксом окна ("opus[1m]").
+    // Базовый алиас ("opus") резолвится надёжно в любом окружении/аккаунте, а "opus[1m]"
+    // требует доступа к 1M-окну И прогретого каталога — иначе CLI отбивает «model may not
+    // exist / no access» (наблюдалось у проактивности глобальной персоны на проде: ход шёл
+    // с --model opus[1m] и падал, хотя прямой вызов той же модели работал). Перед передачей
+    // в --model сводим тир-алиас+суффикс к базовому алиасу. Полные id (claude-fable-5[1m]) и
+    // модели сторонних провайдеров (glm-5.2[1m]) НЕ трогаем — паттерн матчит только базовые
+    // Claude-тир-алиасы opus/sonnet/haiku, у которых базовый алиас гарантированно существует.
+    private static readonly System.Text.RegularExpressions.Regex ClaudeTierWindowAlias =
+        new(@"^(opus|sonnet|haiku)\[1m\]$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase
+            | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    public static string? StripClaudeWindowAlias(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return model;
+        var match = ClaudeTierWindowAlias.Match(model.Trim());
+        return match.Success ? match.Groups[1].Value.ToLowerInvariant() : model;
+    }
+
     public LlmCapabilities CapabilitiesFor(string? model) =>
         ResolveByModel(model) is { } p ? CapabilitiesOf(p) : LlmCapabilitiesCatalog.Claude;
 

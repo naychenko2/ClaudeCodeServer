@@ -189,6 +189,8 @@ const TOOLS = [
         ...PERSONA_FIELDS,
         scope: { type: 'string', enum: ['global', 'project'], description: 'Зона персоны (по умолчанию global)' },
         projectId: { type: 'string', description: 'ID проекта для scope=project (по умолчанию — проект текущей сессии)' },
+        avatarPrompt: { type: 'string', description: 'Описание внешности для фото-аватара (необязательно; ' +
+          'пусто — промпт строится из имени и роли). Фото генерируется автоматически при создании.' },
         ...BINDING_CREATE_FIELDS,
       },
     },
@@ -468,6 +470,11 @@ async function callTool(name, args) {
         if (Array.isArray(args.bindings)) body.bindings = args.bindings;
         if ('autoBindings' in args) body.autoBindings = Boolean(args.autoBindings);
       }
+      // Персона из чата не выбирает аватар руками — просим бэкенд сгенерить фото
+      // автоматически (best-effort; без Fal:ApiKey тихо остаются инициалы)
+      body.autoAvatar = true;
+      if (typeof args.avatarPrompt === 'string' && args.avatarPrompt.trim())
+        body.avatarPrompt = args.avatarPrompt;
       return json(await api('/api/personas', { method: 'POST', body: JSON.stringify(body) }));
     }
 

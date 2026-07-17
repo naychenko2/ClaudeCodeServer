@@ -78,25 +78,53 @@ function WindowCard({ w }: { w: RateWindow }) {
   );
 }
 
-function ClaudeTab({ snapshots }: { snapshots: UsageSnapshot[] | null | undefined }) {
+type RotationInfo = { inRotation?: boolean; utilization?: number; threshold?: number };
+
+// Статус роутинга аккаунта: берёт ли пул его для новых чатов (только при пуле подписок)
+function RotationBadge({ info }: { info: RotationInfo }) {
+  const out = info.inRotation === false;
+  const pct = Math.round((info.utilization ?? 0) * 100);
+  const thr = Math.round((info.threshold ?? 0.8) * 100);
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 8,
+      background: out ? C.warningBg : C.bgWhite, border: `1px solid ${out ? C.warning : C.border}`,
+      marginBottom: 12, fontFamily: FONT.sans, fontSize: 12 }}>
+      <span style={{ width: 7, height: 7, borderRadius: '50%', background: out ? C.warning : '#5FA97F', flexShrink: 0 }} />
+      <span style={{ fontWeight: 600, color: out ? C.warningText : C.textHeading }}>
+        {out ? 'Выведен из ротации' : 'В ротации'}
+      </span>
+      <span style={{ color: C.textMuted }}>
+        {out ? `нагрузка 5ч ${pct}% ≥ порога ${thr}% — новые чаты идут на свободные аккаунты`
+             : 'новые чаты могут направляться сюда'}
+      </span>
+    </div>
+  );
+}
+
+function ClaudeTab({ snapshots, rotation }: { snapshots: UsageSnapshot[] | null | undefined; rotation?: RotationInfo }) {
   const windows = snapshots ? latestPerWindow(snapshots) : [];
   const series = snapshots ? seriesByWindow(snapshots) : {};
   const latestTs = windows.reduce<number>((a, w) => { const t = w.timestamp ? new Date(w.timestamp).getTime() : 0; return t > a ? t : a; }, 0);
   const stale = latestTs > 0 && Date.now() - latestTs > STALE_MS;
   const worst = worstWindow(windows);
   const trend = worst ? (series[worst.limitType] ?? []) : [];
+  const badge = rotation ? <div><RotationBadge info={rotation} /></div> : null;
 
   if (snapshots === null || snapshots === undefined)
     return <div style={{ padding: '40px 0', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>;
   if (windows.length === 0)
     return (
-      <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
-        <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.5 }}>◌</div>
-        Лимиты приходят с ответом Claude — отправьте сообщение в любом чате, и здесь появятся данные.
+      <div>
+        {badge}
+        <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.5 }}>◌</div>
+          Лимиты приходят с ответом Claude — отправьте сообщение в любом чате, и здесь появятся данные.
+        </div>
       </div>
     );
   return (
     <div style={{ opacity: stale ? 0.6 : 1 }}>
+      {badge}
       {stale && (
         <div style={{ fontSize: 11.5, color: C.warningText, background: C.warningBg, border: `1px solid ${C.warning}`, borderRadius: 8, padding: '6px 10px', marginBottom: 12 }}>
           Снимок старше 30 минут — возможно, неактуально. Обновится после следующего ответа Claude.
@@ -337,6 +365,12 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
 
   // Подписки из пула ClaudeSubscriptionPool — табы utilisation
   const subKeys = usage?.subscriptions ? Object.keys(usage.subscriptions) : [];
+  // Статус роутинга аккаунта (только когда есть пул подписок — иначе роутить нечего)
+  const rotationOf = (key: string): RotationInfo | undefined => {
+    const s = usage?.subscriptions?.[key];
+    if (!s || s.inRotation === undefined) return undefined;
+    return { inRotation: s.inRotation, utilization: s.utilization, threshold: usage?.rotationThreshold };
+  };
   const tabs = ([['claude', 'Claude']] as [string, string][])
     .concat(subKeys.filter(k => k !== 'claude').map(k => [k, usage!.subscriptions![k].name ?? k] as [string, string]))
     .concat(providerKeys.map(k => [k, providerLabel(k)] as [string, string]))
@@ -373,8 +407,8 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
           ))}
         </div>
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px 18px' }}>
-          {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? usage?.snapshots} />
-            : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} />
+          {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? usage?.snapshots} rotation={rotationOf('claude')} />
+            : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} rotation={rotationOf(tab)} />
             : tab === 'fal' ? <FalTab days={days} setDays={setDays} />
             : <ProviderTab providerKey={tab} data={provData[tab]} />}
         </div>

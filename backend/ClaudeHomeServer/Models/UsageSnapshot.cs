@@ -17,9 +17,14 @@ public record UsageSnapshot(
 // Информация о тарифе подписки (из ~/.claude/.credentials.json)
 public record PlanInfo(string? SubscriptionType, string? RateLimitTier, string Label);
 
-// Ответ /api/usage: история снимков + тариф + per-subscription utilisation
+// Ответ /api/usage: история снимков + тариф + per-subscription utilisation.
+// RotationThreshold — порог утилизации 5h-окна, выше которого аккаунт выведен из ротации
+// новых чатов (заполняется только при наличии дополнительных подписок).
 public record UsageResponse(IReadOnlyList<UsageSnapshot> Snapshots, PlanInfo? Plan,
-    Dictionary<string, SubscriptionUsage>? Subscriptions = null);
+    Dictionary<string, SubscriptionUsage>? Subscriptions = null, double? RotationThreshold = null);
 
-// Utilisation одной подписки: снимки + опциональное имя для отображения
-public record SubscriptionUsage(IReadOnlyList<UsageSnapshot> Snapshots, string? Name = null);
+// Utilisation одной подписки: снимки + опциональное имя + статус роутинга.
+// InRotation — берёт ли пул этот аккаунт для новых чатов; Utilization — эффективная
+// утилизация 5h-окна (истёкшее окно/нет данных = 0), по которой считается InRotation.
+public record SubscriptionUsage(IReadOnlyList<UsageSnapshot> Snapshots, string? Name = null,
+    bool InRotation = true, double Utilization = 0);

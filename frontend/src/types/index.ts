@@ -420,11 +420,16 @@ export interface UsageResponse {
   snapshots: UsageSnapshot[];
   plan?: PlanInfo;
   subscriptions?: Record<string, SubscriptionUsage>;
+  // Порог утилизации 5h-окна, выше которого аккаунт выведен из ротации новых чатов
+  rotationThreshold?: number;
 }
 
 export interface SubscriptionUsage {
   snapshots: UsageSnapshot[];
   name?: string;
+  // Берёт ли пул этот аккаунт для новых чатов + эффективная утилизация 5h-окна (0..1)
+  inRotation?: boolean;
+  utilization?: number;
 }
 
 // Статистика аккаунта fal.ai (баланс + расход за период)

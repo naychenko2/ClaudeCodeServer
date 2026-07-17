@@ -18,7 +18,7 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
         var plan = usage.GetPlan();
         var bySub = usage.GetAllBySubscription();
 
-        // Для подписок из пула — проставляем DisplayName
+        // Для подписок из пула — проставляем DisplayName + статус роутинга (в ротации / выведен)
         if (bySub.Count > 1 && subscriptionPool?.HasExtra == true)
         {
             var named = new Dictionary<string, SubscriptionUsage>();
@@ -26,9 +26,11 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
             {
                 var displayName = key == "claude" ? null
                     : subscriptionPool.All.FirstOrDefault(s => s.Key == key)?.DisplayName;
-                named[key] = new SubscriptionUsage(snaps, displayName);
+                named[key] = new SubscriptionUsage(snaps, displayName,
+                    InRotation: subscriptionPool.IsInRotation(key),
+                    Utilization: subscriptionPool.EffectiveUtilization(key));
             }
-            return Ok(new UsageResponse(all, plan, named));
+            return Ok(new UsageResponse(all, plan, named, subscriptionPool.SoftThreshold));
         }
 
         return Ok(new UsageResponse(all, plan, null));

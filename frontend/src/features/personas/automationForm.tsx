@@ -27,14 +27,18 @@ export interface FormState {
   time: string;          // HH:mm
   intervalMinutes: string;
   weekdays: number[];    // ISO 1=Пн..7=Вс
+  fileTarget: 'project' | 'folder';   // «folder» — папка без проекта (только глоб. агент)
   fileProjectId: string;
+  folder: string;        // относительный подпуть в основной папке пользователя (fileTarget=folder)
   glob: string;
   watchCreated: boolean;
   watchChanged: boolean;
   noteSource: string;    // "personal" | projectId
   noteTags: string;      // через запятую
   noteSection: string;
+  gitTarget: 'project' | 'folder';
   gitProjectId: string;
+  gitFolder: string;
   taskProjectId: string; // "" = любой
   taskFrom: string;      // "" = любой
   taskTo: string;
@@ -74,14 +78,19 @@ export function initialForm(rule: PersonaAutomationRule | null, projects: Projec
     time: sched.time ?? '09:00',
     intervalMinutes: sched.intervalMinutes ? String(sched.intervalMinutes) : '60',
     weekdays: Array.isArray(sched.weekdays) ? sched.weekdays : [1, 3, 5],
+    // Режим «папка без проекта» — если в args есть ключ folder (строка, возможно "")
+    fileTarget: typeof a.folder === 'string' ? 'folder' : 'project',
     fileProjectId: a.projectId ?? firstProject,
+    folder: typeof a.folder === 'string' ? a.folder : '',
     glob: a.glob ?? '**/*.md',
     watchCreated: Array.isArray(a.kinds) ? a.kinds.includes('created') : true,
     watchChanged: Array.isArray(a.kinds) ? a.kinds.includes('changed') : true,
     noteSource: a.source ?? 'personal',
     noteTags: Array.isArray(a.tags) ? a.tags.join(', ') : '',
     noteSection: a.section ?? '',
+    gitTarget: typeof a.folder === 'string' ? 'folder' : 'project',
     gitProjectId: a.projectId ?? firstProject,
+    gitFolder: typeof a.folder === 'string' ? a.folder : '',
     taskProjectId: a.projectId ?? '',
     taskFrom: a.from ?? '',
     taskTo: a.to ?? 'Done',
@@ -111,7 +120,10 @@ export function buildArgs(f: FormState): Record<string, unknown> {
       const kinds: string[] = [];
       if (f.watchCreated) kinds.push('created');
       if (f.watchChanged) kinds.push('changed');
-      return { projectId: f.fileProjectId, glob: f.glob || '**/*', kinds };
+      const glob = f.glob || '**/*';
+      return f.fileTarget === 'folder'
+        ? { folder: f.folder.trim(), glob, kinds }
+        : { projectId: f.fileProjectId, glob, kinds };
     }
     case 'note': {
       const tags = f.noteTags.split(',').map(t => t.trim()).filter(Boolean);
@@ -120,7 +132,8 @@ export function buildArgs(f: FormState): Record<string, unknown> {
       if (f.noteSection.trim()) out.section = f.noteSection.trim();
       return out;
     }
-    case 'gitCommit': return { projectId: f.gitProjectId };
+    case 'gitCommit':
+      return f.gitTarget === 'folder' ? { folder: f.gitFolder.trim() } : { projectId: f.gitProjectId };
     case 'taskStatus': {
       const out: Record<string, unknown> = {};
       if (f.taskProjectId) out.projectId = f.taskProjectId;
@@ -167,8 +180,9 @@ export function draftSummary(f: FormState, projects: Project[]): string {
 
 // «Далее» на шаге параметров степпера заблокирована, пока не выбран обязательный проект
 export function requiresMissingProject(f: FormState): boolean {
-  if (f.triggerType === 'file') return !f.fileProjectId;
-  if (f.triggerType === 'gitCommit') return !f.gitProjectId;
+  // В режиме «папка» проект не нужен (домашний корень валиден всегда, пусто = вся домашняя папка)
+  if (f.triggerType === 'file') return f.fileTarget === 'project' && !f.fileProjectId;
+  if (f.triggerType === 'gitCommit') return f.gitTarget === 'project' && !f.gitProjectId;
   return false;
 }
 
@@ -211,8 +225,10 @@ export function TriggerTypeGrid({ value, onPick, isMobile }: {
 
 // ─── Параметры, зависящие от типа триггера (общий блок карточки/степпера) ──────
 
-export function TriggerParamsFields({ f, set, projects, isMobile }: {
+export function TriggerParamsFields({ f, set, projects, isMobile, isGlobal }: {
   f: FormState; set: SetField; projects: Project[]; isMobile?: boolean;
+  // isGlobal — персона глобальная: для file/gitCommit доступен режим «папка без проекта»
+  isGlobal?: boolean;
 }) {
   switch (f.triggerType) {
     case 'timer':
@@ -253,8 +269,24 @@ export function TriggerParamsFields({ f, set, projects, isMobile }: {
       );
     case 'file':
       return (
-        <Field label="Файлы проекта" hint="glob-шаблон: **/*.md, src/**/*.ts. Срабатывает на появление/изменение.">
-          <ProjectSelect value={f.fileProjectId} onChange={v => set('fileProjectId', v)} projects={projects} allowPersonal={false} />
+        <Field label="Файлы" hint="glob-шаблон: **/*.md, src/**/*.ts. Срабатывает на появление/изменение.">
+          {isGlobal && (
+            <div style={{ marginBottom: 8 }}>
+              <SegmentedControl
+                value={f.fileTarget}
+                options={[{ value: 'project', label: 'Проект' }, { value: 'folder', label: 'Папка' }]}
+                onChange={v => set('fileTarget', v)}
+              />
+            </div>
+          )}
+          {f.fileTarget === 'folder' && isGlobal ? (
+            <>
+              <TextField value={f.folder} onChange={v => set('folder', v)} placeholder="пусто = вся основная папка" mono />
+              <div style={folderNote}>Папка относительно вашей основной папки. Пусто — вся папка целиком.</div>
+            </>
+          ) : (
+            <ProjectSelect value={f.fileProjectId} onChange={v => set('fileProjectId', v)} projects={projects} allowPersonal={false} />
+          )}
           <div style={{ marginTop: 8 }}>
             <TextField value={f.glob} onChange={v => set('glob', v)} placeholder="**/*.md" mono />
           </div>
@@ -276,8 +308,24 @@ export function TriggerParamsFields({ f, set, projects, isMobile }: {
       );
     case 'gitCommit':
       return (
-        <Field label="Репозиторий проекта" hint="Срабатывает на каждый новый коммит в проекте.">
-          <ProjectSelect value={f.gitProjectId} onChange={v => set('gitProjectId', v)} projects={projects} allowPersonal={false} />
+        <Field label="Репозиторий" hint="Срабатывает на каждый новый коммит.">
+          {isGlobal && (
+            <div style={{ marginBottom: 8 }}>
+              <SegmentedControl
+                value={f.gitTarget}
+                options={[{ value: 'project', label: 'Проект' }, { value: 'folder', label: 'Папка' }]}
+                onChange={v => set('gitTarget', v)}
+              />
+            </div>
+          )}
+          {f.gitTarget === 'folder' && isGlobal ? (
+            <>
+              <TextField value={f.gitFolder} onChange={v => set('gitFolder', v)} placeholder="папка-репозиторий в основной папке" mono />
+              <div style={folderNote}>Папка относительно вашей основной папки. Должна быть git-репозиторием.</div>
+            </>
+          ) : (
+            <ProjectSelect value={f.gitProjectId} onChange={v => set('gitProjectId', v)} projects={projects} allowPersonal={false} />
+          )}
         </Field>
       );
     case 'taskStatus':
@@ -471,4 +519,8 @@ function weekdayBtn(active: boolean): CSSProperties {
 const hintBox: CSSProperties = {
   background: C.bgPanel, borderRadius: R.md, padding: '12px 14px',
   fontFamily: FONT.sans, fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5,
+};
+
+const folderNote: CSSProperties = {
+  marginTop: 5, fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.45,
 };

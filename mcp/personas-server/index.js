@@ -126,8 +126,9 @@ const AUTOMATION_FIELDS = {
     description: 'Параметры триггера — форма зависит от triggerType:\n' +
       '  timer: { schedule: { type: "daily"|"weekdays"|"weekly"|"interval", time: "HH:mm", weekdays?: [1..7] (1=пн), intervalMinutes?: number }, tz?: string }\n' +
       '  file: { projectId, glob: "src/**/*.ts", kinds: ["created","changed"] }\n' +
+      '        — ИЛИ вместо projectId ключ folder (только для ГЛОБАЛЬНОЙ персоны без проекта): folder — относительный подпуть в основной папке пользователя, "" = вся основная папка. Не задавай projectId и folder одновременно.\n' +
       '  note: { source: "personal"|projectId, tags?: ["#тег"], section?: "папка" }\n' +
-      '  gitCommit: { projectId, paths?: ["src/**"] }\n' +
+      '  gitCommit: { projectId, paths?: ["src/**"] } — ИЛИ folder (см. file; папка должна быть git-репозиторием)\n' +
       '  taskStatus: { projectId?, from?: статус, to?: статус, assignee?: "me"|"claude" }\n' +
       '  mention: {} — не заполняй, срабатывает автоматически.' + PROJECT_HINT,
   },

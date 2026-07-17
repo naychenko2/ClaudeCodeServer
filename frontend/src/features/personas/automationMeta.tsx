@@ -49,8 +49,9 @@ export function triggerDetails(rule: PersonaAutomationRule, projects: Project[] 
     }
     case 'file': {
       const args = (rule.trigger.args ?? {}) as Record<string, any>;
-      const proj = projects.find(p => p.id === args.projectId);
       const glob = String(args.glob ?? '**/*');
+      if (typeof args.folder === 'string') return `${glob} · 📁 ${args.folder || 'основная папка'}`;
+      const proj = projects.find(p => p.id === args.projectId);
       return proj ? `${glob} · ${proj.name}` : glob;
     }
     case 'note': {
@@ -62,6 +63,7 @@ export function triggerDetails(rule: PersonaAutomationRule, projects: Project[] 
     }
     case 'gitCommit': {
       const args = (rule.trigger.args ?? {}) as Record<string, any>;
+      if (typeof args.folder === 'string') return `📁 ${args.folder || 'основная папка'}`;
       const proj = projects.find(p => p.id === args.projectId);
       return proj ? proj.name : 'репозиторий проекта';
     }

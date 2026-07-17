@@ -28,6 +28,7 @@ public sealed class PersonaAutomationService : IDisposable
     private readonly MentionTriggerSource _mentions;
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
+    private readonly AutomationRootResolver _roots;
     private readonly IReadOnlyDictionary<AutomationTriggerType, ITriggerSource> _sources;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaAutomationService> _log;
@@ -50,11 +51,11 @@ public sealed class PersonaAutomationService : IDisposable
         PushService push, IHubContext<SessionHub> hub,
         NotificationService notif,
         AutomationStateStore state, MentionTriggerSource mentions, ProjectManager projects,
-        UserStore users, IEnumerable<ITriggerSource> sources, IConfiguration config,
-        ILogger<PersonaAutomationService> log)
+        UserStore users, AutomationRootResolver roots, IEnumerable<ITriggerSource> sources,
+        IConfiguration config, ILogger<PersonaAutomationService> log)
     {
         _personas = personas; _sessions = sessions; _push = push; _hub = hub; _notif = notif;
-        _state = state; _mentions = mentions; _projects = projects; _users = users;
+        _state = state; _mentions = mentions; _projects = projects; _users = users; _roots = roots;
         _config = config; _log = log;
         _sources = sources.ToDictionary(s => s.Type);
         _sessions.OnUserMessage += OnUserMessageAsync;
@@ -181,8 +182,9 @@ public sealed class PersonaAutomationService : IDisposable
         if (freshRule is null || !freshRule.Enabled) return;
 
         // 2. Большой промпт с контекстом срабатывания (как постановка задачи)
+        var user = _users.GetById(freshPersona.OwnerId);   // для резолва «папка без проекта»
         string prompt;
-        try { prompt = await BuildAutomationPromptAsync(freshRule, ev); }
+        try { prompt = await BuildAutomationPromptAsync(freshRule, ev, user); }
         catch (Exception ex) { _log.LogWarning(ex, "build-prompt правило {Rule}", rule.Id); MarkResult(state, "error"); return; }
 
         // 3. Закреплённый чат правила (acceptEdits — персона может править файлы/заводить задачи)
@@ -303,7 +305,7 @@ public sealed class PersonaAutomationService : IDisposable
 
     // Большой промпт для хода персоны: ## секции + объекты, вызвавшие срабатывание.
     // Характер персоны инжектится системным слоем сессии (как у персоны-исполнителя задач).
-    internal async Task<string> BuildAutomationPromptAsync(PersonaAutomationRule rule, TriggerEvent ev)
+    internal async Task<string> BuildAutomationPromptAsync(PersonaAutomationRule rule, TriggerEvent ev, User? user = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## СОБЫТИЕ");
@@ -317,7 +319,7 @@ public sealed class PersonaAutomationService : IDisposable
 
         sb.AppendLine();
         sb.AppendLine("## КОНТЕКСТ (что вызвало срабатывание)");
-        sb.AppendLine(await BuildContextBlockAsync(rule, ev));
+        sb.AppendLine(await BuildContextBlockAsync(rule, ev, user));
 
         sb.AppendLine("## ИНСТРУКЦИЯ");
         var instruction = rule.Action.Instruction?.Trim();
@@ -354,10 +356,10 @@ public sealed class PersonaAutomationService : IDisposable
 
     // Блок объектов срабатывания. Для файлов — пути + содержимое (top-N, с ограничением);
     // для остальных — детали события из источника.
-    private async Task<string> BuildContextBlockAsync(PersonaAutomationRule rule, TriggerEvent ev)
+    private async Task<string> BuildContextBlockAsync(PersonaAutomationRule rule, TriggerEvent ev, User? user)
     {
         if (rule.Trigger.Type == AutomationTriggerType.File)
-            return await BuildFileContextAsync(rule, ev);
+            return await BuildFileContextAsync(rule, ev, user);
 
         var sb = new StringBuilder();
         if (ev.Details is { Count: > 0 })
@@ -372,13 +374,13 @@ public sealed class PersonaAutomationService : IDisposable
         return sb.ToString();
     }
 
-    private async Task<string> BuildFileContextAsync(PersonaAutomationRule rule, TriggerEvent ev)
+    private async Task<string> BuildFileContextAsync(PersonaAutomationRule rule, TriggerEvent ev, User? user)
     {
         var sb = new StringBuilder();
-        var projectId = TriggerArgs.Of(rule.Trigger).GetString("projectId");
-        var project = projectId is null ? null : _projects.GetById(projectId);
-        if (project is not null)
-            sb.AppendLine($"Проект «{project.Name}» (корень: {project.RootPath}).");
+        // Корень — тем же резолвером, что и в FileTriggerSource (проект или папка без проекта)
+        var (root, label) = user is null ? (null, "") : _roots.Resolve(TriggerArgs.Of(rule.Trigger), user);
+        if (root is not null)
+            sb.AppendLine($"Источник — {label} (корень: {root}).");
 
         var paths = new List<string>();
         if (ev.Details?.TryGetValue("created", out var created) == true)
@@ -395,7 +397,7 @@ public sealed class PersonaAutomationService : IDisposable
         {
             if (shown >= 6) { sb.AppendLine($"- …и ещё {paths.Count - shown}"); break; }
             sb.AppendLine($"- {rel}");
-            if (project is not null && await ReadSnippetAsync(project.RootPath, rel) is { } snippet)
+            if (root is not null && await ReadSnippetAsync(root, rel) is { } snippet)
             {
                 sb.AppendLine("```");
                 sb.AppendLine(Truncate(snippet, 1500));
@@ -403,7 +405,7 @@ public sealed class PersonaAutomationService : IDisposable
             }
             shown++;
         }
-        sb.AppendLine("(целиком или diff — прочитай файловыми инструментами проекта)");
+        sb.AppendLine("(целиком или diff — прочитай файловыми инструментами)");
         return sb.ToString();
     }
 

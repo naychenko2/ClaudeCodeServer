@@ -16,9 +16,11 @@ public enum AutomationActionWeight { Gate, Work }
 // Args — гибкий JSON-мешок, ключи зависят от Type (на фронте — discriminated union):
 //   Timer:     schedule { type:"daily"|"weekdays"|"weekly"|"interval",
 //                          time:"HH:mm", weekdays:[1..7], intervalMinutes } , tz?
-//   File:      projectId, glob:"src/**/*.ts", kinds:["created","changed"]
+//   File:      projectId | folder, glob:"src/**/*.ts", kinds:["created","changed"]
 //   Note:      source:"personal"|projectId, tags?:["#тег"], section?:папка
-//   GitCommit: projectId, paths?:["src/**"]
+//   GitCommit: projectId | folder, paths?:["src/**"]
+//   (folder — режим «папка без проекта» для глобальных агентов: относительный подпуть в основной
+//    папке пользователя {DefaultProjectsPath}/{username}, "" = вся домашняя; резолв — AutomationRootResolver)
 //   TaskStatus:projectId?, from?:<status>, to?:<status>, assignee?:"me"|"claude"
 //   Mention:   {} (детектится автоматически по handle персоны-владельца правила)
 public class AutomationTrigger

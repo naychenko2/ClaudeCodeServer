@@ -5,14 +5,16 @@ using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.TriggerSources;
 
-// Файл-триггер: новый/изменённый файл по glob в папке проекта. Poll-snapshot на тике
+// Файл-триггер: новый/изменённый файл по glob в папке. Poll-snapshot на тике
 // (НЕ FileWatcherService — тот ref-counted по UI-коннектам и живёт только с открытым клиентом):
-// обходим дерево project.RootPath с отсевом тяжёлых папок (FileService.TreeExcludes), применяем glob
+// обходим дерево корня с отсевом тяжёлых папок (FileService.TreeExcludes), применяем glob
 // через Matcher+InMemoryDirectoryInfo, дифф по LastWriteTicks. Снапшот обновляем синхронно с детекцией
 // → следующий тик видит только новые изменения (встроенный дедуп).
 //
-// Args: projectId, glob ("src/**/*.ts", по умолчанию "**/*"), kinds:["created","changed"]
-public sealed class FileTriggerSource(ProjectManager projects, ILogger<FileTriggerSource> log) : ITriggerSource
+// Корень резолвится AutomationRootResolver: projectId → project.RootPath, либо folder →
+// подпапка основной папки пользователя (глобальный агент без проекта).
+// Args: projectId | folder, glob ("src/**/*.ts", по умолчанию "**/*"), kinds:["created","changed"]
+public sealed class FileTriggerSource(AutomationRootResolver roots, ILogger<FileTriggerSource> log) : ITriggerSource
 {
     public AutomationTriggerType Type => AutomationTriggerType.File;
 
@@ -22,18 +24,17 @@ public sealed class FileTriggerSource(ProjectManager projects, ILogger<FileTrigg
     public Task<IReadOnlyList<TriggerEvent>> EvaluateAsync(TriggerContext ctx, CancellationToken ct)
     {
         var args = TriggerArgs.Of(ctx.Rule.Trigger);
-        var projectId = args.GetString("projectId");
         var glob = args.GetString("glob");
         if (string.IsNullOrWhiteSpace(glob)) glob = "**/*";
         var kinds = args.GetStringList("kinds") ?? ["created", "changed"];
         var watchCreated = kinds.Contains("created", StringComparer.OrdinalIgnoreCase);
         var watchChanged = kinds.Contains("changed", StringComparer.OrdinalIgnoreCase);
 
-        var project = projectId is null ? null : projects.GetById(projectId);
-        if (project is null || string.IsNullOrWhiteSpace(project.RootPath) || !Directory.Exists(project.RootPath))
+        var (root, label) = roots.Resolve(args, ctx.User);
+        if (root is null || !Directory.Exists(root))
             return Task.FromResult<IReadOnlyList<TriggerEvent>>(Array.Empty<TriggerEvent>());
 
-        var cur = BuildSnapshot(project.RootPath, glob);
+        var cur = BuildSnapshot(root, glob);
         var prev = ctx.State.FileSnapshot;
         // Первое наблюдение: только базовый снапшот, без эмита — иначе «созданным» считался бы
         // весь проект и новое правило сразу запускало бы дорогой ход (guard как у GitCommit)
@@ -58,7 +59,7 @@ public sealed class FileTriggerSource(ProjectManager projects, ILogger<FileTrigg
         var bits = new List<string>();
         if (created.Count > 0) bits.Add($"новых {created.Count}");
         if (changed.Count > 0) bits.Add($"изменённых {changed.Count}");
-        var summary = $"Файлы в «{project.Name}» изменились: {string.Join(", ", bits)}";
+        var summary = $"Файлы в {label} изменились: {string.Join(", ", bits)}";
         var details = new Dictionary<string, string>();
         AddCapped(details, "created", created);
         AddCapped(details, "changed", changed);

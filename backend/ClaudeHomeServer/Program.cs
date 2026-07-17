@@ -136,6 +136,7 @@ builder.Services.AddSingleton<ChatTaskExtractionService>();
 builder.Services.AddSingleton<DailyBriefingService>();
 // Проактивность персон (событийно-управляемый rules-движок): state store, источники и сервис-collaborator
 builder.Services.AddSingleton<AutomationStateStore>();
+builder.Services.AddSingleton<AutomationRootResolver>();
 builder.Services.AddSingleton<MentionTriggerSource>();
 builder.Services.AddSingleton<ITriggerSource, TimerTriggerSource>();
 builder.Services.AddSingleton<ITriggerSource, FileTriggerSource>();

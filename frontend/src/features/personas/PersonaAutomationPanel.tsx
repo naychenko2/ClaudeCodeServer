@@ -72,6 +72,8 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
   persona: Persona; projects: Project[]; accent: string; isMobile?: boolean;
 }) {
   const rules = persona.automationRules ?? [];
+  // Глобальный агент: для file/gitCommit доступен режим «папка без проекта»
+  const isGlobal = persona.scope === 'global';
 
   // Редактирование раскрытой карточки — черновик локален, PUT только по «Сохранить»
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -258,6 +260,7 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
                 accent={accent}
                 projects={projects}
                 isMobile={isMobile}
+                isGlobal={isGlobal}
                 open={expandedId === rule.id}
                 draft={expandedId === rule.id ? draft : null}
                 setDraftField={setDraftField}
@@ -337,6 +340,7 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
             state={adding}
             accent={accent}
             isMobile={isMobile}
+            isGlobal={isGlobal}
             projects={projects}
             saving={addSaving}
             onChange={setAdding}
@@ -424,7 +428,7 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
 // ─── Карточка правила: свёрнутая строка / раскрытое редактирование на месте ────
 
 function RuleCard({
-  rule, accent, projects, isMobile, open, draft, setDraftField, saving, testBusy,
+  rule, accent, projects, isMobile, isGlobal, open, draft, setDraftField, saving, testBusy,
   menuOpen, hovered, confirming, onHover, onToggleCard, onToggleEnabled, onTest,
   onEdit, onAskDelete, onToggleMenu, onCloseMenu, onCancelEdit, onSaveEdit,
 }: {
@@ -432,6 +436,7 @@ function RuleCard({
   accent: string;
   projects: Project[];
   isMobile?: boolean;
+  isGlobal?: boolean;
   open: boolean;
   draft: FormState | null;
   setDraftField: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
@@ -563,7 +568,7 @@ function RuleCard({
                 columns={isMobile ? 2 : 3}
               />
             </Field>
-            <TriggerParamsFields f={draft} set={setDraftField} projects={projects} isMobile={isMobile} />
+            <TriggerParamsFields f={draft} set={setDraftField} projects={projects} isMobile={isMobile} isGlobal={isGlobal} />
             <ActionFields f={draft} set={setDraftField} />
             <TtlFields f={draft} set={setDraftField} isMobile={isMobile} />
             <ThrottleDisclosure f={draft} set={setDraftField} />
@@ -589,10 +594,11 @@ function RuleCard({
 
 // ─── Инлайн-степпер «Добавить правило»: ① Событие → ② Параметры → ③ Правило ────
 
-function AddRulePanel({ state, accent, isMobile, projects, saving, onChange, onClose, onCommit }: {
+function AddRulePanel({ state, accent, isMobile, isGlobal, projects, saving, onChange, onClose, onCommit }: {
   state: AddState;
   accent: string;
   isMobile?: boolean;
+  isGlobal?: boolean;
   projects: Project[];
   saving: boolean;
   onChange: (next: AddState) => void;
@@ -630,7 +636,7 @@ function AddRulePanel({ state, accent, isMobile, projects, saving, onChange, onC
 
       {step === 2 && (
         <div style={{ marginTop: 14 }}>
-          <TriggerParamsFields f={draft} set={set} projects={projects} isMobile={isMobile} />
+          <TriggerParamsFields f={draft} set={set} projects={projects} isMobile={isMobile} isGlobal={isGlobal} />
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
             <Button
               variant="primary" size="sm"

@@ -1179,6 +1179,9 @@ public class PersonasController : ControllerBase
             case AutomationTriggerType.GitCommit:
             case AutomationTriggerType.TaskStatus:
             {
+                // Пустой projectId допустим: File/GitCommit — режим «папка без проекта»
+                // (args.folder, глобальный агент; traversal-guard на рантайме в AutomationRootResolver),
+                // TaskStatus — «любой проект». Заданный projectId обязан принадлежать владельцу.
                 var projectId = dict.GetString("projectId");
                 if (string.IsNullOrWhiteSpace(projectId)) return true;
                 var project = _projects.GetById(projectId);

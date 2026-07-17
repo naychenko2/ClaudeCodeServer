@@ -73,6 +73,8 @@ builder.Services.AddSingleton<PersonaBindingsService>();
 // Пул подписок с восстановлением пометок исчерпания из снапшотов usage после рестарта
 builder.Services.AddSingleton(sp => new ClaudeSubscriptionPool(
     sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<UsageService>()));
+// Стартовый прогрев утилизации подписок (один пробный ход на аккаунт) — при HasExtra и флаге
+builder.Services.AddHostedService<SubscriptionUsageWarmupService>();
 builder.Services.AddSingleton<PersonaAgentFileGenerator>();
 builder.Services.AddSingleton<PersonaAgentFileSync>();
 builder.Services.AddSingleton<FalImageService>();

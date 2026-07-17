@@ -1369,50 +1369,12 @@ public class ClaudeSession : ILlmSessionAdapter
         } // using (doc)
     }
 
-    // Мягкий лимит API: claude шлёт rate_limit_event и приостанавливается до сброса окна
+    // Мягкий лимит API: claude шлёт rate_limit_event и приостанавливается до сброса окна.
+    // Разбор вынесен в ClaudeRateLimitParser (общий со стартовым прогревом подписок).
     private async Task HandleRateLimitAsync(JsonElement root)
     {
-        if (!root.TryGetProperty("rate_limit_info", out var info)) return;
-
-        // Форвардим ВСЕ события (включая "allowed"): utilization нужен для непрерывного индикатора
-        // использования подписки. Баннер на фронте решается по status (allowed_warning/rejected),
-        // "allowed" просто тихо обновляет индикатор.
-        var status = info.TryGetProperty("status", out var stEl) ? stEl.GetString() : null;
-
-        var utilization = info.TryGetProperty("utilization", out var utEl) && utEl.ValueKind == JsonValueKind.Number
-            ? utEl.GetDouble() : (double?)null;
-        var isUsingOverage = info.TryGetProperty("isUsingOverage", out var ovEl) && ovEl.ValueKind == JsonValueKind.True;
-
-        var limitType =
-            (info.TryGetProperty("rateLimitType", out var lt) ? lt.GetString() : null)
-            ?? (info.TryGetProperty("rate_limit_type", out var lt2) ? lt2.GetString() : null)
-            ?? "";
-
-        // Нет ни типа окна, ни utilization — нечего показывать
-        if (string.IsNullOrEmpty(limitType) && utilization is null) return;
-
-        // resetsAt может прийти как ISO-строка или unix-время (сек/мс) — нормализуем в ISO
-        var resetsAt = NormalizeReset(info, "resetsAt", "resets_at");
-
-        // Overage (перерасход сверх лимита, у тарифа Max): статус + время сброса окна перерасхода
-        var overageStatus = info.TryGetProperty("overageStatus", out var osEl) ? osEl.GetString() : null;
-        var overageResetsAt = NormalizeReset(info, "overageResetsAt", "overage_resets_at");
-
-        await _onMessage(new RateLimitMessage(limitType, resetsAt, status, utilization, isUsingOverage, overageStatus, overageResetsAt));
-    }
-
-    // Нормализует поле времени сброса (ISO-строка или unix сек/мс) в ISO-строку
-    private static string? NormalizeReset(JsonElement info, string key1, string key2)
-    {
-        if (info.TryGetProperty(key1, out var ra) || info.TryGetProperty(key2, out ra))
-        {
-            if (ra.ValueKind == JsonValueKind.String) return ra.GetString();
-            if (ra.ValueKind == JsonValueKind.Number && ra.TryGetInt64(out var n))
-                return (n > 100_000_000_000
-                    ? DateTimeOffset.FromUnixTimeMilliseconds(n)
-                    : DateTimeOffset.FromUnixTimeSeconds(n)).ToString("o");
-        }
-        return null;
+        if (ClaudeRateLimitParser.TryParse(root, out var msg))
+            await _onMessage(msg);
     }
 
     private async Task HandleUserMessageAsync(JsonElement root)

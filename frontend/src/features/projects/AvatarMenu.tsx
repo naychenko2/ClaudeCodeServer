@@ -3,7 +3,7 @@ import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { History, Book, Users, Lock, FlaskConical, LogOut } from 'lucide-react';
+import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -37,9 +37,11 @@ interface Props {
   // «Знания» (настройка баз знаний Dify) — раздел убран из хаб-таббара, вызов в меню аватара.
   // undefined — пункт не показывать
   onOpenKnowledge?: () => void;
+  // «Использование» (лимиты подписок Claude, баланс провайдеров) — вызов из меню аватара
+  onShowUsage?: () => void;
 }
 
-export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, onOpenKnowledge }: Props) {
+export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, onOpenKnowledge, onShowUsage }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const themeMode = useThemeMode();
@@ -137,6 +139,15 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
             >
               <Book size={ICON_SIZE.xs} strokeWidth={2} />
               Настройка знаний
+            </button>
+          )}
+          {onShowUsage && (
+            <button
+              onClick={() => { setOpen(false); onShowUsage(); }}
+              style={dropdownItem}
+            >
+              <Gauge size={ICON_SIZE.xs} strokeWidth={2} />
+              Использование
             </button>
           )}
           {isAdmin && (

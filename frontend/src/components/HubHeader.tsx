@@ -9,6 +9,7 @@ import { AvatarMenu } from '../features/projects/AvatarMenu';
 import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
+import { UsageScreen } from './UsageScreen';
 import { api } from '../lib/api';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed } from '../lib/notifications';
 
@@ -35,6 +36,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
   const [showUserMgmt, setShowUserMgmt] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
+  const [showUsage, setShowUsage] = useState(false);
 
   const isAdmin = auth.role === 'admin';
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';
@@ -215,6 +217,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
           onLogout={onLogout}
           onShowChangePassword={() => setShowChangePassword(true)}
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
+          onShowUsage={() => setShowUsage(true)}
           onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile}
           // «Что нового» и «Знания» на мобиле уехали в «⋯ Разделы»; на десктопе «Знания»
@@ -226,6 +229,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
       {showUserMgmt && <UserManagementModal currentUserId={auth.id} onClose={() => setShowUserMgmt(false)} />}
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
+      {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
     </div>
   );
 }

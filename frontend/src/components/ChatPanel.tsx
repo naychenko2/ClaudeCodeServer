@@ -758,7 +758,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         // Один контур: инструменты и изменения файлов — компактными строками (в т.ч. одиночные).
         // Для agent-вызовов с детьми сразу рисуем детей inline под родителем — иначе при параллельных
         // агентах все их инструменты сливаются в один безымянный блок после шапки.
-        const toolCount = slice.filter(([it]) => it.kind === 'tool_use').length;
+        // Вызов агента (Task/Agent) в свёрнутой шапке ведёт себя как изменения файлов:
+        // виден в summary, на своём месте при раскрытии и НЕ входит в счётчик «N действий»
+        const isAgentEntry = (it: ChatItem) =>
+          it.kind === 'tool_use' && (it.name.toLowerCase() === 'task' || it.name.toLowerCase() === 'agent');
+        const toolCount = slice.filter(([it]) => it.kind === 'tool_use' && !isAgentEntry(it)).length;
         // Группа завершена, как только после неё появился следующий видимый элемент
         // (текст ассистента, запрос разрешения, result, error…) — конца хода не ждём.
         // Хвостовые размышления не сигнал: они могут впитаться в группу при следующем
@@ -774,46 +778,51 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           const prev = fileAgg.get(it.path);
           fileAgg.set(it.path, prev ? { ...it, added: prev.added + it.added, removed: prev.removed + it.removed } : it);
         }
-        const filesSummary = fileAgg.size > 0
-          ? [...fileAgg.values()].map(f => (
-              <div key={`fsum-${f.path}`} style={{ borderTop: `1px solid ${C.bgInset}` }}>
-                <FileChangedRow item={f} online={online} onOpenFile={onOpenFile} onRevert={project ? handleRevert : undefined} />
+        // Единый рендер элемента группы — и в раскрытом виде (children), и в свёрнутой
+        // шапке (summary, куда попадают агенты и агрегированные изменения файлов)
+        const renderGroupEntry = (it: ChatItem, idx: number, topBorder: boolean) => {
+          // Финальный текст сабагента из транскрипта дублирует тело ответа (tool_result) —
+          // после завершения в активности его не показываем (ответ рендерит сама карточка)
+          const answerBody = it.kind === 'tool_use' && typeof it.result === 'string'
+            ? splitAgentResultTail(it.result).body.trim() : null;
+          const inlineChildren: ActivityEntry[] = it.kind === 'tool_use'
+            ? (childrenByParentId.get(it.id) ?? []).filter(e => !suppressedByWorkflow.has(e.item)
+                && !(answerBody !== null && e.item.kind === 'text' && e.item.text.trim() === answerBody))
+            : [];
+          // Консультация персоны-сабагента: активность рендерится СЕКЦИЕЙ ВНУТРИ
+          // карточки (PersonaTaskView), внешняя плашка «N действий» не нужна
+          const isPersonaTask = it.kind === 'tool_use' && inlineChildren.length > 0
+            && !!findConsultedPersona(it, getPersonasSnapshot(), project?.id ?? null);
+          return (
+            <Fragment key={itemKey(it, idx)}>
+              <div style={topBorder ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
+                {it.kind === 'file_changed'
+                  ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={project ? handleRevert : undefined} />
+                  : renderItem(it, idx, isPersonaTask
+                      ? { agentActivity: inlineChildren, agentRenderChild: renderItem }
+                      : undefined)}
               </div>
-            ))
-          : undefined;
+              {inlineChildren.length > 0 && !isPersonaTask && (
+                <AgentActionsBlock
+                  entries={inlineChildren}
+                  renderChild={renderItem}
+                />
+              )}
+            </Fragment>
+          );
+        };
+        // В свёрнутой шапке видны агенты (в порядке ленты) и агрегированные плашки файлов
+        const agentSummary = slice.filter(([it]) => isAgentEntry(it))
+          .map(([it, idx]) => renderGroupEntry(it, idx, true));
+        const filesSummary = [...fileAgg.values()].map(f => (
+          <div key={`fsum-${f.path}`} style={{ borderTop: `1px solid ${C.bgInset}` }}>
+            <FileChangedRow item={f} online={online} onOpenFile={onOpenFile} onRevert={project ? handleRevert : undefined} />
+          </div>
+        ));
+        const summaryNodes = [...agentSummary, ...filesSummary];
         pushNode(
-          <ToolGroupBlock key={`grp-${itemKey(slice[0][0], start)}`} isGroupDone={isGroupDone} toolCount={toolCount} summary={filesSummary}>
-            {slice.map(([it, idx], gi) => {
-              // Финальный текст сабагента из транскрипта дублирует тело ответа (tool_result) —
-              // после завершения в активности его не показываем (ответ рендерит сама карточка)
-              const answerBody = it.kind === 'tool_use' && typeof it.result === 'string'
-                ? splitAgentResultTail(it.result).body.trim() : null;
-              const inlineChildren: ActivityEntry[] = it.kind === 'tool_use'
-                ? (childrenByParentId.get(it.id) ?? []).filter(e => !suppressedByWorkflow.has(e.item)
-                    && !(answerBody !== null && e.item.kind === 'text' && e.item.text.trim() === answerBody))
-                : [];
-              // Консультация персоны-сабагента: активность рендерится СЕКЦИЕЙ ВНУТРИ
-              // карточки (PersonaTaskView), внешняя плашка «N действий» не нужна
-              const isPersonaTask = it.kind === 'tool_use' && inlineChildren.length > 0
-                && !!findConsultedPersona(it, getPersonasSnapshot(), project?.id ?? null);
-              return (
-                <Fragment key={itemKey(it, idx)}>
-                  <div style={gi === 0 ? undefined : { borderTop: `1px solid ${C.bgInset}` }}>
-                    {it.kind === 'file_changed'
-                      ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={project ? handleRevert : undefined} />
-                      : renderItem(it, idx, isPersonaTask
-                          ? { agentActivity: inlineChildren, agentRenderChild: renderItem }
-                          : undefined)}
-                  </div>
-                  {inlineChildren.length > 0 && !isPersonaTask && (
-                    <AgentActionsBlock
-                      entries={inlineChildren}
-                      renderChild={renderItem}
-                    />
-                  )}
-                </Fragment>
-              );
-            })}
+          <ToolGroupBlock key={`grp-${itemKey(slice[0][0], start)}`} isGroupDone={isGroupDone} toolCount={toolCount} summary={summaryNodes.length > 0 ? summaryNodes : undefined}>
+            {slice.map(([it, idx], gi) => renderGroupEntry(it, idx, gi !== 0))}
           </ToolGroupBlock>,
           start
         );

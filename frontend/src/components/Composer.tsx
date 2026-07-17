@@ -10,6 +10,7 @@ import {
   DEFAULT_TEAM_SETTINGS, buildTeamTurnText, teamMechanic,
   type TeamMechanicId, type TeamMechanicSettings,
 } from '../features/team/teamMechanics';
+import { setLastMechanic } from '../lib/lastMechanic';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
@@ -375,6 +376,7 @@ export function Composer({
       if (teamMech === 'autopilot' && teamSettings.untilDone && !workLoop?.active && onToggleWorkLoop) {
         await onToggleWorkLoop();
       }
+      setLastMechanic(sessionId, effective);
       onSend(buildTeamTurnText(effective, t, teamSettings, chatContext), [], { auto: true });
       setTeamMech(null);
       setTeamOpen(false);

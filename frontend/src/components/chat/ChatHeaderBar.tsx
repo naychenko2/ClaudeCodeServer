@@ -22,6 +22,8 @@ import { showToast } from '../../lib/toast';
 import { openNoteById } from '../../features/notes/saveToNote';
 import type { ExtractedTaskCandidate } from '../../types';
 import { ChatOriginBadge } from '../ChatOriginBadge';
+import { TeamMechanicBadge } from '../../features/team/TeamMechanicBadge';
+import type { TeamMechanicId } from '../../features/team/teamMechanics';
 import { resolveChatOrigin } from '../../lib/chatOrigin';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
@@ -608,9 +610,10 @@ function MobileCombinedBadge(props: {
       {/* Пока идёт workflow — на лицевой стороне спиннер + прогресс фаз (вместо % контекста);
           сам контекст остаётся доступен в поповере */}
       {wfActive ? (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           <div className="tool-spinner" style={{ width: 10, height: 10 }} />
-          <span>{activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'Workflow'}</span>
+          <span style={{ fontWeight: 700, color: C.accent, letterSpacing: 0.3 }}>WF</span>
+          <span>{activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : ''}</span>
         </span>
       ) : showCtx ? <ContextAmount estimate={estimate} isCompacting={isCompacting} isMobile /> : null}
       {(showCost || hasFal) && (
@@ -671,6 +674,8 @@ interface ChatHeaderBarProps {
   isMobile?: boolean;
   onBack?: () => void;
   activeWorkflow?: { phasesDone: number; phasesTotal: number };
+  // Последняя запущенная в чате механика «Обсудить с командой» — компактный бейдж в шапке
+  lastMechanic?: TeamMechanicId | null;
   onOpenSidebar?: () => void;
   artifactsOpen?: boolean;
   onToggleArtifacts?: () => void;
@@ -796,7 +801,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated }: ChatHeaderBarProps) {
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const sessionModelLabel = useModelLabel(session.model);
@@ -963,6 +968,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // На десктопе происхождение — полный бейдж в ряду; на мобиле оно уже встроено
   // в подзаголовок titleBlock (originInline), поэтому в ряду его не дублируем.
   const originBadge = origin && !isMobile ? <ChatOriginBadge origin={origin} /> : null;
+  // Бейдж последней запущенной механики команды (как origin — только на десктопе)
+  const mechanicBadge = lastMechanic && !isMobile ? <TeamMechanicBadge id={lastMechanic} size="sm" /> : null;
 
   // Пилюля временного чата: остаток до авто-удаления; клик — быстрый путь к настройке.
   // На мобиле не показываем — шапка и так плотная, метка есть в списке чатов
@@ -991,8 +998,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, flexShrink: 0,
     }}>
       <div className="tool-spinner" style={{ width: 10, height: 10, flexShrink: 0 }} />
+      <span style={{ fontFamily: FONT.sans, fontSize: 10, fontWeight: 700, color: C.accent, letterSpacing: 0.3, whiteSpace: 'nowrap' }}>WF</span>
       <span style={{ fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, whiteSpace: 'nowrap' }}>
-        {activeWorkflow.phasesTotal > 0 ? `${activeWorkflow.phasesDone}/${activeWorkflow.phasesTotal}` : 'Workflow'}
+        {activeWorkflow.phasesTotal > 0 ? `${activeWorkflow.phasesDone}/${activeWorkflow.phasesTotal} этапов` : 'Workflow'}
       </span>
     </div>
   ) : null;
@@ -1055,7 +1063,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
 
   return (
     <Toolbar isMobile={isMobile} style={personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : undefined}>
-      {openBtn}{titleEl}{originBadge}{expiryBadge}{workflowBadge}{costBadges}{actionBtns}
+      {openBtn}{titleEl}{originBadge}{mechanicBadge}{expiryBadge}{workflowBadge}{costBadges}{actionBtns}
     </Toolbar>
   );
 }

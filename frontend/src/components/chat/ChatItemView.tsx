@@ -6,7 +6,8 @@ import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW, R } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { hasUltraworkKeyword } from '../../lib/ultrawork';
-import { detectTeamMechanic, teamMechanic, type TeamMechanicId } from '../../features/team/teamMechanics';
+import { detectTeamMechanic } from '../../features/team/teamMechanics';
+import { TeamMechanicBadge } from '../../features/team/TeamMechanicBadge';
 import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
@@ -316,24 +317,6 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
 
 // Нейтральный акцент для агента без персоны (как в PersonaAskView)
 const AGENT_NEUTRAL = '#8A8070';
-
-// Бейдж командной механики на отправленном сообщении: текст такого хода — скилл-команда
-// (/oh-my-claudecode:…, /panel-of-experts) или промпт-обвязка дискуссии, и без подсказки
-// непонятен. Детект — detectTeamMechanic по тексту (тот же принцип, что «⚡ ультра»).
-function TeamMechanicBadge({ id }: { id: TeamMechanicId }) {
-  const m = teamMechanic(id);
-  const Icon = m.icon;
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5, height: 22, padding: '0 9px',
-      borderRadius: R.max, background: C.accentLight, color: C.accent,
-      fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
-    }}>
-      <Icon size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
-      {m.name}
-    </span>
-  );
-}
 
 // Сообщение с источником (не от человека): входящее от персоны через chats_send, либо
 // авто-публикация — совещание/конвейер/задача. Карточка с лицом автора (персона или

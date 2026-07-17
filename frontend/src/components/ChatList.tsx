@@ -15,6 +15,8 @@ import { agentDotColor } from './AgentSelector';
 import { FilterBar } from './FilterBar';
 import { ChatOriginBadge } from './ChatOriginBadge';
 import { resolveChatOrigin, loadVisibleOrigins, persistVisibleOrigins } from '../lib/chatOrigin';
+import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
+import { getLastMechanic, useLastMechanicVersion } from '../lib/lastMechanic';
 
 // Время создания чата: сегодня — часы:минуты, иначе — дата (группы и так разбиты по дням)
 function chatTime(iso: string): string {
@@ -36,12 +38,16 @@ interface Props {
   // Чат удалён — убрать из списка
   onDeleted: (id: string) => void;
   isMobile?: boolean;
+  // Чат с активным workflow — плашка «WF» на его карточке
+  workflowRunningFor?: string;
 }
 
-export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, isMobile = false }: Props) {
+export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, isMobile = false, workflowRunningFor }: Props) {
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары чатов персон)
   usePersonasVersion();
+  // Подписка на стор механик — перерисовать список при запуске новой механики
+  useLastMechanicVersion();
   const [editTarget, setEditTarget] = useState<Session | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
 
@@ -141,6 +147,8 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
               const accent = persona ? agentDotColor(persona.avatar?.color) : C.accent;
               // Происхождение чата (задача/автоматизация) — контекст на плашке
               const origin = resolveChatOrigin(chat);
+              // Последняя запущенная в чате механика команды — компактный бейдж
+              const mechanic = getLastMechanic(chat.id);
               return (
                 <div
                   key={chat.id}
@@ -198,10 +206,20 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
                       {(chat.status === 'starting' || chat.status === 'working' || chat.status === 'waiting' || chat.status === 'error' || chat.status === 'orphaned') && (
                         <StatusBadge status={chat.status} />
                       )}
+                      {workflowRunningFor === chat.id && (
+                        <div title="Выполняется Workflow" style={{
+                          display: 'flex', alignItems: 'center', gap: 3, padding: '1px 5px',
+                          background: C.accentLight, border: `1px solid ${C.accentMuted}`, borderRadius: 4, flexShrink: 0,
+                        }}>
+                          <div className="tool-spinner" style={{ width: 8, height: 8 }} />
+                          <span style={{ fontFamily: FONT.sans, fontSize: 10, fontWeight: 600, color: C.accent, lineHeight: 1 }}>WF</span>
+                        </div>
+                      )}
                     </div>
-                    {(group.length > 1 || persona || origin) && (
+                    {(group.length > 1 || persona || origin || mechanic) && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3, minWidth: 0 }}>
                         {origin && <ChatOriginBadge origin={origin} style={{ flexShrink: 0 }} />}
+                        {mechanic && <TeamMechanicBadge id={mechanic} size="sm" />}
                         {group.length > 1 ? (
                           <span style={{ fontSize: 11.5, fontWeight: 600, color: accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             Групповой · {group.length} участника

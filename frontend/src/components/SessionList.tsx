@@ -16,6 +16,8 @@ import { ExpiryBadge } from './ExpiryBadge';
 import { FilterBar } from './FilterBar';
 import { ChatOriginBadge } from './ChatOriginBadge';
 import { resolveChatOrigin, loadVisibleOrigins, persistVisibleOrigins } from '../lib/chatOrigin';
+import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
+import { getLastMechanic, useLastMechanicVersion } from '../lib/lastMechanic';
 
 // Время создания сессии: сегодня — часы:минуты, иначе — дата
 function sessTime(iso: string): string {
@@ -40,6 +42,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий персон)
   usePersonasVersion();
+  // Подписка на стор механик — перерисовать список при запуске новой механики
+  useLastMechanicVersion();
   const personas = usePersonas();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
@@ -243,6 +247,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           const accent = persona ? agentDotColor(persona.avatar?.color) : C.accent;
           // Происхождение чата (задача/автоматизация) — контекст на плашке
           const origin = resolveChatOrigin(s);
+          // Последняя запущенная в чате механика команды — компактный бейдж
+          const mechanic = getLastMechanic(s.id);
           return (
           <div
             key={s.id}
@@ -316,9 +322,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                   </div>
                 )}
               </div>
-              {(group.length > 1 || persona || origin) && (
+              {(group.length > 1 || persona || origin || mechanic) && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3, minWidth: 0 }}>
                   {origin && <ChatOriginBadge origin={origin} style={{ flexShrink: 0 }} />}
+                  {mechanic && <TeamMechanicBadge id={mechanic} size="sm" />}
                   {group.length > 1 ? (
                     <span style={{ fontSize: 11.5, fontWeight: 600, color: accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       Групповой · {group.length} участника

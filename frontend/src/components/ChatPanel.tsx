@@ -11,6 +11,8 @@ import { useChatScroll } from '../hooks/useChatScroll';
 import { useOnline } from '../hooks/useOnline';
 import { api } from '../lib/api';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
+import { detectTeamMechanic } from '../features/team/teamMechanics';
+import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
 import { useCtxThresholds } from '../lib/contextPrefs';
@@ -502,6 +504,22 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     onWorkflowRunning?.(isWorkflowRunning, session.id);
   }, [isWorkflowRunning, onWorkflowRunning, session.id]);
 
+  // Последняя запущенная в чате механика «Обсудить с командой» — детект по тексту хода
+  // (как бейдж в ленте). Пишем в стор ретроактивно: подтягивает бейдж в шапку и на
+  // карточку в списке чатов даже для чатов, где механику запускали до появления фичи.
+  const lastMechanic = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind !== 'user_message') continue;
+      const m = detectTeamMechanic(it.text);
+      if (m) return m;
+    }
+    return null;
+  }, [items]);
+  useEffect(() => {
+    if (lastMechanic) setLastMechanic(session.id, lastMechanic);
+  }, [lastMechanic, session.id]);
+
   // Единое условие показа WaitingIndicator — синхронизировано с флагом активности на карточке.
   // session.status покрывает случай когда isWaiting ещё не обновился (перезагрузка, переключение чата).
   // items.length > 0: не показывать спиннер на пустом чате до первого сообщения.
@@ -856,6 +874,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         isMobile={isMobile}
         onBack={onBack}
         activeWorkflow={activeWorkflowInfo ?? undefined}
+        lastMechanic={lastMechanic}
         onOpenSidebar={onOpenSidebar}
         artifactsOpen={artifactsOpen}
         onToggleArtifacts={onToggleArtifacts}

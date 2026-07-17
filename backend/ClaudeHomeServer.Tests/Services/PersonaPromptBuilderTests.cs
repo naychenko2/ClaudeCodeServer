@@ -194,6 +194,17 @@ public class PersonaPromptBuilderTests
     }
 
     [Fact]
+    public void Идентификатор_ПерсоныВыводитсяВПромпт()
+    {
+        var persona = MakePersona();
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("идентификатор персоны (personaId)")
+            .And.Contain(persona.Id)
+            .And.Contain("не разыскивая себя через personas_list");
+    }
+
+    [Fact]
     public void БезРоли_ПредставлениеТолькоПоИмени()
     {
         var persona = new Persona { Name = "Ада" };

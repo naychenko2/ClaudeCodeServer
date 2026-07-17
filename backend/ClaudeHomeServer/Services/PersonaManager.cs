@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
 
 namespace ClaudeHomeServer.Services;
@@ -162,7 +163,7 @@ public class PersonaManager
             Description = description,
             SystemPrompt = systemPrompt,
             Contract = NormalizeContract(contract),
-            Model = model,
+            Model = LlmProviderRegistry.StripClaudeWindowAlias(model),
             Effort = effort,
             Specialty = specialty,
             Scope = scope,
@@ -320,7 +321,7 @@ public class PersonaManager
             if (systemPrompt is not null) persona.SystemPrompt = systemPrompt;
             // null — не менять; объект с пустыми слотами — сбросить контракт (нормализуется в null)
             if (contract is not null) persona.Contract = NormalizeContract(contract);
-            if (model is not null) persona.Model = model.Length == 0 ? null : model;
+            if (model is not null) persona.Model = model.Length == 0 ? null : LlmProviderRegistry.StripClaudeWindowAlias(model);
             if (effort is not null) persona.Effort = effort.Length == 0 ? null : effort;
             // Специальность (функциональная роль): null — не менять; None — сбросить явно
             if (specialty is not null) persona.Specialty = specialty.Value;
@@ -661,6 +662,18 @@ public class PersonaManager
                 changed = true;
             }
             processed.Add(p);
+        }
+
+        // Проход 4: нормализация legacy-моделей — тир-алиас с окном (opus[1m]) → базовый (opus).
+        // Рантайм и так стрипает окно перед --model, но в сторе оставалось «конкретное» значение.
+        foreach (var p in _personas.Values.Where(p => !string.IsNullOrEmpty(p.Model)))
+        {
+            var norm = LlmProviderRegistry.StripClaudeWindowAlias(p.Model);
+            if (!string.Equals(norm, p.Model, StringComparison.Ordinal))
+            {
+                p.Model = norm;
+                changed = true;
+            }
         }
 
         if (changed) Save();

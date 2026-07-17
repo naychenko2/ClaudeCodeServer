@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitAgentResultTail, formatTailTokens, formatTailDuration } from '../agentTail';
+import { splitAgentResultTail, formatTailTokens, formatTailDuration, isBgLaunchResult } from '../agentTail';
 
 // Реальный формат хвоста из транскриптов CLI: строка agentId (с подсказкой SendMessage
 // в скобках) + блок <usage> с переводами строк между парами ключ-значение
@@ -51,6 +51,21 @@ describe('splitAgentResultTail', () => {
     const { tail } = splitAgentResultTail(
       'Ок.\n<usage>subagent_tokens: 100\ntool_uses: 3\nduration_ms: 4000</usage>');
     expect(tail?.toolUses).toBe(3);
+  });
+});
+
+describe('isBgLaunchResult', () => {
+  it('распознаёт все виды квитанций фонового запуска', () => {
+    expect(isBgLaunchResult('Async agent launched successfully.\nagentId: a1\noutput_file: /x')).toBe(true);
+    expect(isBgLaunchResult('Workflow launched in background.\nTranscript dir: C:\\tmp\\wf')).toBe(true);
+    expect(isBgLaunchResult('Agent resumed from transcript in the background')).toBe(true);
+  });
+
+  it('обычный результат и пустые значения — не квитанция', () => {
+    expect(isBgLaunchResult('Всё готово, отчёт приложен.')).toBe(false);
+    expect(isBgLaunchResult('')).toBe(false);
+    expect(isBgLaunchResult(undefined)).toBe(false);
+    expect(isBgLaunchResult(null)).toBe(false);
   });
 });
 

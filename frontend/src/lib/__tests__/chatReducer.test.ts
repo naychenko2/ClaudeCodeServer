@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ChatItem, ServerMessage } from '../../types';
-import { applyServerMessage, normalizeHistory, initialChatState, type ChatState } from '../chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, type ChatState } from '../chatReducer';
 
 // --- Хелперы ---
 
@@ -111,7 +111,7 @@ describe('applyServerMessage: поток сабагента', () => {
     expect(next.items).toHaveLength(2);
   });
 
-  it('agent_text дедуплицируется по (parentToolUseId, text) — та же ссылка', () => {
+  it('agent_text дедуплицируется по совпадению с ПОСЛЕДНИМ текстом того же родителя — та же ссылка', () => {
     const first = run([{ type: 'agent_text', parentToolUseId: 'task1', text: 'реплика' }]);
     const second = applyServerMessage(first, msg({ type: 'agent_text', parentToolUseId: 'task1', text: 'реплика' }));
     expect(second).toBe(first);
@@ -120,11 +120,30 @@ describe('applyServerMessage: поток сабагента', () => {
     expect(third.items).toHaveLength(2);
   });
 
-  it('agent_thinking добавляет свёрнутый thinking с parentToolUseId и дедуплицируется', () => {
+  it('легитимный повтор agent_text через другой элемент НЕ схлопывается', () => {
+    // Агент дважды сказал «готово» в разные моменты (между ними другая реплика) — оба остаются
+    const next = run([
+      { type: 'agent_text', parentToolUseId: 'task1', text: 'готово' },
+      { type: 'agent_text', parentToolUseId: 'task1', text: 'проверяю ещё раз' },
+      { type: 'agent_text', parentToolUseId: 'task1', text: 'готово' },
+    ]);
+    expect(next.items).toHaveLength(3);
+    // А эхо (тот же текст сразу после последнего) — дубль
+    const echoed = applyServerMessage(next, msg({ type: 'agent_text', parentToolUseId: 'task1', text: 'готово' }));
+    expect(echoed).toBe(next);
+  });
+
+  it('agent_thinking добавляет свёрнутый thinking с parentToolUseId и дедуплицируется по последнему', () => {
     const first = run([{ type: 'agent_thinking', parentToolUseId: 'task1', text: 'мысль' }]);
     expect(first.items).toEqual([{ kind: 'thinking', text: 'мысль', expanded: false, parentToolUseId: 'task1' }]);
     const second = applyServerMessage(first, msg({ type: 'agent_thinking', parentToolUseId: 'task1', text: 'мысль' }));
     expect(second).toBe(first);
+    // Повтор той же мысли через другую — легитимен
+    const third = run([
+      { type: 'agent_thinking', parentToolUseId: 'task1', text: 'другая' },
+      { type: 'agent_thinking', parentToolUseId: 'task1', text: 'мысль' },
+    ], second);
+    expect(third.items).toHaveLength(3);
   });
 });
 
@@ -165,6 +184,37 @@ describe('applyServerMessage: инструменты', () => {
   });
 });
 
+// --- bg_agent_done (завершение фоновых агентов) ---
+
+describe('applyServerMessage: bg_agent_done', () => {
+  it('помечает bgDone у всех перечисленных tool_use', () => {
+    const initial = state({ items: [toolUse('t1'), toolUse('t2'), toolUse('t3')] });
+    const next = run([{ type: 'bg_agent_done', toolUseIds: ['t1', 't3'] }], initial);
+    expect(next.items[0]).toMatchObject({ bgDone: true });
+    expect(next.items[1]).not.toHaveProperty('bgDone', true);
+    expect(next.items[2]).toMatchObject({ bgDone: true });
+    expect(next.items[0]).not.toHaveProperty('bgAborted', true);
+  });
+
+  it('aborted=true дополнительно ставит bgAborted', () => {
+    const initial = state({ items: [toolUse('t1')] });
+    const next = run([{ type: 'bg_agent_done', toolUseIds: ['t1'], aborted: true }], initial);
+    expect(next.items[0]).toMatchObject({ bgDone: true, bgAborted: true });
+  });
+
+  it('без совпавших карточек состояние не меняется (та же ссылка)', () => {
+    const initial = state({ items: [toolUse('t1')] });
+    const next = applyServerMessage(initial, msg({ type: 'bg_agent_done', toolUseIds: ['нет-такого'] }));
+    expect(next).toBe(initial);
+  });
+
+  it('повторное событие по уже помеченной карточке — no-op (та же ссылка)', () => {
+    const first = run([{ type: 'bg_agent_done', toolUseIds: ['t1'] }], state({ items: [toolUse('t1')] }));
+    const second = applyServerMessage(first, msg({ type: 'bg_agent_done', toolUseIds: ['t1'] }));
+    expect(second).toBe(first);
+  });
+});
+
 // --- Запросы, требующие ответа пользователя ---
 
 describe('applyServerMessage: ожидание ответа пользователя', () => {
@@ -184,6 +234,25 @@ describe('applyServerMessage: ожидание ответа пользовате
     const next = run([{ type: 'plan_review', requestId: 'r1', plan: '# План' }]);
     expect(next.isWaiting).toBe(true);
     expect(next.items).toEqual([{ kind: 'plan_review', requestId: 'r1', plan: '# План', resolved: false }]);
+  });
+
+  // Сервер реплеит ожидающую карточку при JoinSession (реконнект) — обработка идемпотентна
+  it('повторный permission_request с тем же requestId не дублируется, isWaiting остаётся', () => {
+    const first = run([{ type: 'permission_request', requestId: 'r1', toolName: 'Bash', toolInput: {} }]);
+    const second = applyServerMessage(first, msg({ type: 'permission_request', requestId: 'r1', toolName: 'Bash', toolInput: {} }));
+    expect(second).toBe(first);
+    // Реплей после сброса isWaiting (реконнект) — карточка не дублируется, ожидание восстанавливается
+    const reset = { ...first, isWaiting: false };
+    const replayed = applyServerMessage(reset, msg({ type: 'permission_request', requestId: 'r1', toolName: 'Bash', toolInput: {} }));
+    expect(replayed.items).toHaveLength(1);
+    expect(replayed.isWaiting).toBe(true);
+  });
+
+  it('повторный ask_question по toolUseId и plan_review по requestId не дублируются', () => {
+    const q = run([{ type: 'ask_question', toolUseId: 't1', input: { q: '?' } }]);
+    expect(applyServerMessage(q, msg({ type: 'ask_question', toolUseId: 't1', input: { q: '?' } }))).toBe(q);
+    const p = run([{ type: 'plan_review', requestId: 'r1', plan: '# П' }]);
+    expect(applyServerMessage(p, msg({ type: 'plan_review', requestId: 'r1', plan: '# П' }))).toBe(p);
   });
 });
 
@@ -336,6 +405,44 @@ describe('normalizeHistory', () => {
   it('пустая история → пустой список', () => {
     expect(normalizeHistory([])).toEqual([]);
   });
+
+  it('bgDone из stored tool_use переносится в ChatItem', () => {
+    const raw = [
+      { kind: 'tool_use', id: 't1', name: 'Agent', input: { run_in_background: true }, result: 'Async agent launched successfully', bgDone: true },
+    ];
+    expect(normalizeHistory(raw)[0]).toMatchObject({ kind: 'tool_use', id: 't1', bgDone: true });
+  });
+
+  it('workflow_progress вмерживается в свой tool_use и не рендерится отдельным элементом', () => {
+    const agents = [{ id: 'a1', prompt: 'сделай', isDone: true }];
+    const raw = [
+      { kind: 'tool_use', id: 'wf1', name: 'Workflow', input: {}, result: 'Transcript dir: /x' },
+      { kind: 'text', text: 'после' },
+      { kind: 'workflow_progress', toolUseId: 'wf1', isDone: false, agents },
+    ];
+    const items = normalizeHistory(raw);
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ kind: 'tool_use', id: 'wf1', workflowAgents: agents, workflowDone: false });
+    expect(items[0]).not.toHaveProperty('workflowAborted');
+  });
+
+  it('workflow_progress с aborted помечает tool_use как workflowAborted', () => {
+    const raw = [
+      { kind: 'tool_use', id: 'wf1', name: 'Workflow', input: {} },
+      { kind: 'workflow_progress', toolUseId: 'wf1', isDone: false, aborted: true, agents: [] },
+    ];
+    const items = normalizeHistory(raw);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ workflowDone: false, workflowAborted: true });
+  });
+
+  it('workflow_progress без парного tool_use молча пропускается', () => {
+    const raw = [
+      { kind: 'text', text: 'один' },
+      { kind: 'workflow_progress', toolUseId: 'нет-такого', isDone: true, agents: [] },
+    ];
+    expect(normalizeHistory(raw)).toEqual([{ kind: 'text', text: 'один' }]);
+  });
 });
 
 // --- Групповой чат: speaker_changed + derive разделителей из истории ---
@@ -429,5 +536,61 @@ describe('неизвестные типы записей', () => {
     const initial = state({ items: [{ kind: 'text', text: 'x' }] });
     const next = applyServerMessage(initial, msg({ type: 'meeting_progress', meetingId: 'm1', phase: 'independent' } as unknown as Omit<ServerMessage, 'sessionId'>));
     expect(next).toBe(initial);
+  });
+});
+
+// --- serverHistoryNewer (сверка «история сервера новее живой ленты?») ---
+
+describe('serverHistoryNewer', () => {
+  const u = (text: string): ChatItem => ({ kind: 'user_message', text });
+  const t = (text: string): ChatItem => ({ kind: 'text', text });
+
+  it('сервер длиннее → true', () => {
+    expect(serverHistoryNewer([u('в'), t('ответ')], [u('в')])).toBe(true);
+  });
+
+  it('одинаковая история → false (после reload повторная проверка не зацикливает)', () => {
+    const server = [u('в'), t('ответ')];
+    expect(serverHistoryNewer(server, [...server])).toBe(false);
+  });
+
+  it('live-only элементы клиента не завышают длину: сервер с дозаписью всё равно новее', () => {
+    // Клиент: вопрос + interrupted (live-only) = 2 элемента; сервер: вопрос + ответ = 2.
+    // Наивное сравнение длин сочло бы их равными — хелпер видит, что stored-часть выросла.
+    const prev: ChatItem[] = [u('в'), { kind: 'interrupted' }];
+    const server = [u('в'), t('ответ')];
+    expect(serverHistoryNewer(server, prev)).toBe(true);
+  });
+
+  it.each([
+    ['permission_request', { kind: 'permission_request', requestId: 'r1', toolName: 'Bash', toolInput: {}, resolved: true }],
+    ['resumed', { kind: 'resumed' }],
+    ['session_ended', { kind: 'session_ended' }],
+    ['companion_switched', { kind: 'companion_switched', label: 'Роль (Имя)' }],
+    ['truncated', { kind: 'truncated' }],
+    ['redacted_thinking', { kind: 'redacted_thinking' }],
+  ] as const)('live-only %s не учитывается с обеих сторон', (_kind, liveOnly) => {
+    const prev = [u('в'), liveOnly as ChatItem];
+    expect(serverHistoryNewer([u('в')], prev)).toBe(false);
+  });
+
+  it('равная длина, последний text сервера длиннее (дозаписанный хвост) → true', () => {
+    expect(serverHistoryNewer([u('в'), t('ответ целиком')], [u('в'), t('ответ')])).toBe(true);
+  });
+
+  it('равная длина, последний text сервера короче или равен → false', () => {
+    expect(serverHistoryNewer([u('в'), t('ответ')], [u('в'), t('ответ целиком')])).toBe(false);
+    expect(serverHistoryNewer([u('в'), t('ответ')], [u('в'), t('ответ')])).toBe(false);
+  });
+
+  it('derive-разделители группового чата в истории сервера не считаются новизной', () => {
+    // normalizeHistory(deriveSpeakers) вставляет companion_switched — фильтруется с обеих сторон
+    const server: ChatItem[] = [t('a'), { kind: 'companion_switched', label: '', personaId: 'p2' }, t('b')];
+    const prev: ChatItem[] = [t('a'), { kind: 'companion_switched', label: 'Р (И)', personaId: 'p2' }, t('b')];
+    expect(serverHistoryNewer(server, prev)).toBe(false);
+  });
+
+  it('клиент реально длиннее (оптимистичный ввод) → false', () => {
+    expect(serverHistoryNewer([u('в')], [u('в'), u('ещё')])).toBe(false);
   });
 });

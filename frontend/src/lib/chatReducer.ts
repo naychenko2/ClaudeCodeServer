@@ -25,9 +25,10 @@ export function initialChatState(): ChatState {
 }
 
 // Сообщение истории с сервера: сериализованный ChatItem без клиентских UI-полей
-// (expanded/canRetry живут только в памяти вкладки и в историю не пишутся)
+// (expanded/canRetry живут только в памяти вкладки и в историю не пишутся).
+// kind — string: история несёт и не-ChatItem записи (workflow_progress, legacy, будущие)
 interface StoredHistoryMessage {
-  kind: ChatItem['kind'];
+  kind: string;
   [field: string]: unknown;
 }
 
@@ -39,6 +40,8 @@ const LEGACY_KINDS = new Set(['meeting', 'meeting_phase', 'pipeline', 'pipeline_
 // thinking свёрнут, error без кнопки повтора (повторять исторические ошибки нельзя).
 // deriveSpeakers (групповой чат): между соседними text-сообщениями с разным personaId
 // вставляется разделитель «Теперь отвечает: …» (label резолвится по personaId при рендере).
+// Запись workflow_progress не рендерится отдельным элементом — вмерживается в свой
+// tool_use (по toolUseId), ровно как live-событие workflow_progress в редьюсере.
 // Неизвестные kind проходят насквозь — ChatItemView игнорирует их в default-ветке.
 export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boolean }): ChatItem[] {
   const items: ChatItem[] = [];
@@ -50,6 +53,23 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
     const m = msg as StoredHistoryMessage;
 
     if (LEGACY_KINDS.has(m.kind as string)) continue;
+
+    if (m.kind === 'workflow_progress') {
+      // Снапшот прогресса workflow из истории → в карточку tool_use (bgDone у tool_use
+      // приходит собственным полем и переносится насквозь спредом ниже)
+      const wp = m as unknown as { toolUseId?: string; isDone?: boolean; aborted?: boolean; agents?: unknown };
+      const idx = items.findIndex(it => it.kind === 'tool_use' && it.id === wp.toolUseId);
+      if (idx >= 0) {
+        const ex = items[idx] as Extract<ChatItem, { kind: 'tool_use' }>;
+        items[idx] = {
+          ...ex,
+          workflowAgents: (wp.agents ?? []) as Extract<ChatItem, { kind: 'tool_use' }>['workflowAgents'],
+          workflowDone: wp.isDone === true,
+          ...(wp.aborted === true ? { workflowAborted: true } : {}),
+        };
+      }
+      continue; // карточки без пары молча пропускаем (tool_use потерян — рендерить нечего)
+    }
 
     if (opts?.deriveSpeakers && m.kind === 'text' && !(m as { parentToolUseId?: string }).parentToolUseId) {
       const pid = (m as { personaId?: string }).personaId;
@@ -64,6 +84,48 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
     else items.push(m as unknown as ChatItem);
   }
   return items;
+}
+
+// Элементы, живущие только в живой ленте вкладки — в history.json не персистятся.
+// При сверке «история сервера новее?» их надо исключать из длины клиента, иначе
+// live-only элементы завышают её и дозаписанная история никогда не подтягивается.
+const LIVE_ONLY_KINDS = new Set<ChatItem['kind']>([
+  'permission_request', 'interrupted', 'resumed', 'session_ended',
+  'companion_switched', 'truncated', 'redacted_thinking',
+]);
+
+// Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only
+// элементов (фильтруются с обеих сторон: derive-разделители группового чата попадают
+// и в нормализованную историю). При равной длине сервер новее, если последний
+// text-элемент у него длиннее (дозаписанный хвост после флаша буфера).
+// После замены items той же историей проверка даёт false — цикла перезагрузок нет.
+export function serverHistoryNewer(serverItems: ChatItem[], prevItems: ChatItem[]): boolean {
+  const countable = (items: ChatItem[]) => items.filter(i => !LIVE_ONLY_KINDS.has(i.kind));
+  const server = countable(serverItems);
+  const prev = countable(prevItems);
+  if (server.length !== prev.length) return server.length > prev.length;
+
+  const lastText = (items: ChatItem[]): string | null => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === 'text') return it.text;
+    }
+    return null;
+  };
+  const s = lastText(server);
+  if (s === null) return false;
+  const p = lastText(prev);
+  return p === null ? s.length > 0 : s.length > p.length;
+}
+
+// Последний блок сабагента данного вида у данного родителя — для дедупа эха
+// «история + live» при reconnect (см. case agent_text/agent_thinking)
+function lastAgentBlock(items: ChatItem[], kind: 'text' | 'thinking', parentToolUseId: string) {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === kind && it.parentToolUseId === parentToolUseId) return it;
+  }
+  return null;
 }
 
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
@@ -109,15 +171,17 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
     }
 
     // Текст/thinking сабагента: приходят целыми блоками, каждый — отдельным элементом ленты
-    // (рендерится внутри карточки родительского tool_use). Мягкий дедуп по (parent, text)
-    // закрывает гонку «история уже загружена + live-событие догнало» при reconnect.
+    // (рендерится внутри карточки родительского tool_use). Мягкий дедуп закрывает гонку
+    // «история уже загружена + live-событие догнало» при reconnect: дублем считается
+    // только совпадение с ПОСЛЕДНИМ блоком того же вида у того же родителя — более
+    // ранние совпадения легитимны (агент повторил ту же реплику позже).
     case 'agent_text':
-      return prev.items.some(it => it.kind === 'text' && it.parentToolUseId === msg.parentToolUseId && it.text === msg.text)
+      return lastAgentBlock(prev.items, 'text', msg.parentToolUseId)?.text === msg.text
         ? prev
         : withItems([...prev.items, { kind: 'text', text: msg.text, parentToolUseId: msg.parentToolUseId }]);
 
     case 'agent_thinking':
-      return prev.items.some(it => it.kind === 'thinking' && it.parentToolUseId === msg.parentToolUseId && it.text === msg.text)
+      return lastAgentBlock(prev.items, 'thinking', msg.parentToolUseId)?.text === msg.text
         ? prev
         : withItems([...prev.items, { kind: 'thinking', text: msg.text, expanded: false, parentToolUseId: msg.parentToolUseId }]);
 
@@ -145,7 +209,11 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           : item
       ));
 
+    // Ожидающие карточки сервер РЕПЛЕИТ при JoinSession (реконнект, пока CLI ждёт ответа) —
+    // обработка идемпотентна: дубль по requestId/toolUseId не добавляется повторно.
     case 'permission_request':
+      if (prev.items.some(it => it.kind === 'permission_request' && it.requestId === msg.requestId))
+        return prev.isWaiting ? prev : { ...prev, isWaiting: true };
       return {
         ...prev,
         isWaiting: true,
@@ -159,6 +227,8 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       };
 
     case 'ask_question':
+      if (prev.items.some(it => it.kind === 'ask_question' && it.toolUseId === msg.toolUseId))
+        return prev.isWaiting ? prev : { ...prev, isWaiting: true };
       return {
         ...prev,
         isWaiting: true,
@@ -171,6 +241,8 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       };
 
     case 'plan_review':
+      if (prev.items.some(it => it.kind === 'plan_review' && it.requestId === msg.requestId))
+        return prev.isWaiting ? prev : { ...prev, isWaiting: true };
       return {
         ...prev,
         isWaiting: true,
@@ -271,6 +343,19 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           ? { ...item, workflowAgents: msg.agents, workflowDone: msg.isDone }
           : item
       ));
+
+    case 'bg_agent_done': {
+      // Фоновые агенты завершились: помечаем их карточки — единственный достоверный
+      // признак «ответ готов» для tool_use с квитанцией фонового запуска
+      const ids = new Set(msg.toolUseIds);
+      let changed = false;
+      const next = prev.items.map(item => {
+        if (item.kind !== 'tool_use' || !ids.has(item.id) || item.bgDone === true) return item;
+        changed = true;
+        return { ...item, bgDone: true, ...(msg.aborted ? { bgAborted: true } : {}) };
+      });
+      return changed ? withItems(next) : prev;
+    }
 
     case 'speaker_changed':
       // Групповой чат: сервер переключил активного спикера по @упоминанию —

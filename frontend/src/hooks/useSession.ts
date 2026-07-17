@@ -3,7 +3,7 @@ import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState } from '../t
 import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision } from '../lib/signalr';
 import { setRecallManifest } from '../lib/recallManifest';
 import { api } from '../lib/api';
-import { applyServerMessage, normalizeHistory, initialChatState, type ChatState } from '../lib/chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, type ChatState } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
 // Состояние живёт на уровне модуля и переживает переключение между сессиями.
@@ -77,15 +77,18 @@ function ensureHandler() {
       if (!s.isJoined) continue;
       try {
         await joinSession(sid);
-        // Для сессий что ждали — подтягиваем историю (пропущенные сообщения)
-        if (wasWaiting.has(sid)) {
+        // Историю подтягиваем для сессий с живой активностью на момент разрыва
+        // (working/waiting → isWaiting) И для открытых сейчас (есть подписчики-компоненты) —
+        // открыта одна-две, дёшево; иначе завершённый в офлайне ход не доехал бы до ленты
+        const isOpen = (_listeners.get(sid)?.size ?? 0) > 0;
+        if (wasWaiting.has(sid) || isOpen) {
           try {
             const raw = await loadHistory(sid, s.projectId);
             const items = normalizeFor(sid, raw);
             if (items.length > 0) {
               setState(sid, prev => ({
                 ...prev,
-                items: prev.items.length > items.length ? prev.items : items,
+                items: serverHistoryNewer(items, prev.items) ? items : prev.items,
               }));
             }
           } catch { /* история недоступна — не блокируем */ }
@@ -117,7 +120,7 @@ function ensureHandler() {
       loadHistory(sid, projectId).then(raw => {
         const serverItems = normalizeFor(sid, raw);
         setState(sid, p => {
-          if (serverItems.length <= p.items.length) return p;
+          if (!serverHistoryNewer(serverItems, p.items)) return p;
           return { ...p, items: serverItems };
         });
       }).catch(() => {});
@@ -143,9 +146,10 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
     const raw = await loadHistory(sid, projectId);
     const items = normalizeFor(sid, raw);
     setState(sid, prev => {
-      // Сервер — источник истины: используем его данные если их больше.
-      // Иначе оставляем живые сообщения от стриминга (race condition при активном ходе).
-      if (items.length <= prev.items.length) return { ...prev, isHistoryLoading: false };
+      // Сервер — источник истины: используем его данные, если история новее
+      // (сверка без live-only элементов — см. serverHistoryNewer). Иначе оставляем
+      // живые сообщения от стриминга (race condition при активном ходе).
+      if (!serverHistoryNewer(items, prev.items)) return { ...prev, isHistoryLoading: false };
       return { ...prev, items, isHistoryLoading: false };
     });
   } catch {
@@ -189,7 +193,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       loadHistory(sessionId, projectId).then(raw => {
         const serverItems = normalizeFor(sessionId, raw);
         setState(sessionId, prev => {
-          if (serverItems.length <= prev.items.length) return prev;
+          if (!serverHistoryNewer(serverItems, prev.items)) return prev;
           return { ...prev, items: serverItems };
         });
       }).catch(() => {});

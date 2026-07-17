@@ -309,6 +309,18 @@ export interface WorkflowAgentBlock {
   isError?: boolean;
 }
 
+// Запись истории kind='workflow_progress' — последний снапшот прогресса workflow
+// (переживает F5/рестарт сервера). Отдельным элементом ленты НЕ рендерится:
+// normalizeHistory вмерживает её в tool_use Workflow по toolUseId.
+// aborted=true — восстановлено после рестарта: ватчеров нет, агенты не завершатся.
+export interface StoredWorkflowProgress {
+  kind: 'workflow_progress';
+  toolUseId: string;
+  isDone: boolean;
+  aborted?: boolean;
+  agents?: WorkflowAgentInfo[];
+}
+
 // WebSocket сообщения от сервера — sessionId присутствует во всех типах
 export type ServerMessage = { sessionId: string } & (
   | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
@@ -321,6 +333,10 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'tool_use'; id: string; name: string; input: unknown; parentToolUseId?: string }
   | { type: 'tool_input_delta'; toolUseId: string; partialJson: string }
   | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean }
+  // Фоновые агенты (Agent run_in_background / Workflow) реально завершились — единственный
+  // достоверный сигнал «ответ готов» (по task-notification CLI). aborted=true — агенты
+  // умерли вместе с процессом (Стоп/несовместимый ход), не доработав
+  | { type: 'bg_agent_done'; toolUseIds: string[]; aborted?: boolean }
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
   | { type: 'ask_question'; toolUseId: string; input: unknown }
   | { type: 'plan_review'; requestId: string; plan: string }
@@ -472,7 +488,9 @@ export type ChatItem =
   // tool_use (секция «Активность»), а не в основной ленте.
   | { kind: 'text'; text: string; personaId?: string; parentToolUseId?: string }
   | { kind: 'thinking'; text: string; expanded: boolean; parentToolUseId?: string }
-  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean }
+  // bgDone/bgAborted — завершение фонового агента (bg_agent_done / bgDone из истории);
+  // workflowAborted — workflow восстановлен из истории прерванным (агенты уже не завершатся)
+  | { kind: 'tool_use'; id: string; name: string; input: unknown; result?: string; isError?: boolean; parentToolUseId?: string; streamingArg?: string; workflowAgents?: WorkflowAgentInfo[]; workflowDone?: boolean; workflowAborted?: boolean; bgDone?: boolean; bgAborted?: boolean }
   // decision — вердикт пользователя (только живая лента: permission_request в history не персистится)
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean; decision?: 'allowed' | 'denied' | 'always' }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean; answers?: Record<string, string | string[]> }

@@ -56,6 +56,16 @@ export function isAsyncLaunchAck(result: string | null | undefined): boolean {
   return /^Async agent launched successfully/i.test((result ?? '').trimStart());
 }
 
+// Любая квитанция фонового запуска (Agent run_in_background / Workflow / resume агента):
+// по такому result судить о завершённости НЕЛЬЗЯ — он приходит мгновенно при старте.
+// Достоверный признак завершения — bgDone (событие bg_agent_done) либо workflowDone.
+export function isBgLaunchResult(result: string | null | undefined): boolean {
+  if (!result) return false;
+  return isAsyncLaunchAck(result)
+    || result.includes('Transcript dir:')
+    || result.includes('resumed from transcript in the background');
+}
+
 // «30161» → «30,2k», «133903» → «134k» — как fmtTok в плашке result
 export function formatTailTokens(n: number): string {
   return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace('.', ',') + 'k' : String(n);

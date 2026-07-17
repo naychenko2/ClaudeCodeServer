@@ -55,7 +55,7 @@ const LONG_ANSWER_CHARS = 1200;
 // (agentRole), остальная структура идентична.
 // Системный хвост CLI в ответе (agentId + <usage>) вырезается и рендерится
 // аккуратной строкой метрик «токены · действия · время».
-export function PersonaConsultCard({ persona, agentRole, question, summary, running, isError, answer, children, badge = 'консультант' }: {
+export function PersonaConsultCard({ persona, agentRole, question, summary, running, isError, answer, children, badge = 'консультант', emptyAnswerNote }: {
   persona?: Persona | null;
   agentRole?: string;         // тип/роль обычного агента (не-персоны), если информативна
   question: string;           // полный вопрос (раскрывается кликом)
@@ -67,6 +67,9 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
   // Чип роли вызова в шапке: 'консультант' у Task-консультаций чата; null — скрыть
   // (в Workflow персона — полноценный агент, «консультант» там неверен)
   badge?: string | null;
+  // Пометка вместо пустого ответа (напр. «Агент прерван — ответа не будет»);
+  // undefined — дефолтная «Ответ передан без текста»
+  emptyAnswerNote?: string;
 }) {
   const { body: answerBody, tail } = useMemo(() => splitAgentResultTail(answer), [answer]);
 
@@ -181,7 +184,7 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
           }}>
             {answerBody.trim()
               ? <MarkdownContent text={answerBody} />
-              : <span style={{ fontSize: 12.5, color: C.textMuted, fontStyle: 'italic' }}>Ответ передан без текста</span>}
+              : <span style={{ fontSize: 12.5, color: C.textMuted, fontStyle: 'italic' }}>{emptyAnswerNote ?? 'Ответ передан без текста'}</span>}
             {answerCollapsed && (
               <div style={{
                 position: 'absolute', left: 0, right: 0, bottom: 0, height: 56,
@@ -253,18 +256,22 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
 
   // Фоновый запуск (run_in_background): tool_result — служебная квитанция CLI («Async
   // agent launched successfully… agentId… output_file…»), НЕ ответ — её не показываем.
-  // Ответом делаем последний текст из потока агента (транскрипт доезжает по мере работы),
-  // из активности его при этом убираем, чтобы не дублировался.
+  // Пока агент работает (до события bg_agent_done → item.bgDone), ВСЕ его тексты остаются
+  // в «Активности» — промежуточные реплики не выдаём за ответ. После bgDone ответом
+  // становится последний текст потока (из активности убираем, чтобы не дублировался);
+  // прерван (bgAborted) — тексты остаются активностью, в теле пометка «ответа не будет».
   const asyncAck = item.result !== undefined && isAsyncLaunchAck(item.result);
-  const lastTextIdx = asyncAck && activity
+  const running = item.result === undefined || (asyncAck && item.bgDone !== true);
+  const settledBg = asyncAck && item.bgDone === true;
+  const lastTextIdx = settledBg && item.bgAborted !== true && activity
     ? activity.reduce((last, e, i) => (e.item.kind === 'text' ? i : last), -1)
     : -1;
   const shownActivity = lastTextIdx >= 0 ? activity!.filter((_, i) => i !== lastTextIdx) : activity;
   const answer = asyncAck
     ? (lastTextIdx >= 0 ? (activity![lastTextIdx].item as { text: string }).text : '')
     : (item.result ?? '');
-  // Фоновый агент без единого текста — ещё работает (спиннер до первой реплики)
-  const running = item.result === undefined || (asyncAck && lastTextIdx < 0);
+  // Завершился без ответного текста (или прерван вместе с процессом) — ответа не будет
+  const bgNoAnswer = settledBg && lastTextIdx < 0;
 
   // Обычный сабагент (не персона) — стандартная карточка инструмента
   if (!persona) return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
@@ -279,6 +286,7 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
       running={running}
       isError={!!item.isError}
       answer={answer}
+      emptyAnswerNote={bgNoAnswer ? 'Агент прерван — ответа не будет' : undefined}
       badge={badge}
     >
       {/* Активность консультанта: весь поток сабагента — инструменты, текст, размышления.

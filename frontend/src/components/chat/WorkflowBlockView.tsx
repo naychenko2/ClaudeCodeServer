@@ -49,21 +49,27 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   // Серверные агенты (реалтайм через SignalR — приходят от WorkflowWatcher)
   const serverAgents = workflow.workflowAgents;
   const serverDone = workflow.workflowDone;
+  // Workflow прерван (история после рестарта / bg_agent_done aborted) — агенты не завершатся
+  const isAborted = workflow.workflowAborted === true || workflow.bgAborted === true;
 
   // Итоговые значения: сервер приоритетнее фоллбэка
   const transcriptAgents = serverAgents ?? localAgents;
   const transcriptLoading = serverAgents !== undefined ? false : localLoading;
   const hasTranscriptDir = isDone && !!parseTranscriptDir(workflow.result as string | undefined);
-  // isSettled: result получен И workflow окончательно завершён
-  // isDone=false → спиннер (workflow tool ещё не вернул result)
-  const isSettled = isDone && (
-    serverDone === true ||
-    !hasTranscriptDir ||
-    // Все агенты от сервера завершены → считаем settled (без ожидания IsDone=true)
-    (serverAgents !== undefined && serverAgents.length > 0 && serverAgents.every(a => a.isDone === true)) ||
-    // Фоллбэк для старых сессий (нет живого watcher'а) — только если ВСЕ агенты завершены
-    (serverAgents === undefined && localAgents !== null && localAgents.length > 0 && localAgents.every(a => a.isDone === true))
-  );
+  // isSettled: result получен И workflow окончательно завершён.
+  // isDone=false → спиннер (workflow tool ещё не вернул result).
+  // Есть явный флаг workflowDone от ватчера (boolean) — верим ТОЛЬКО ему: «все агенты
+  // isDone» между волнами не значит завершение (сервер держит 45с-выдержку тишины).
+  // Эвристика every(isDone) — лишь фолбэк для старых историй без флага (REST-путь).
+  const isSettled = isAborted || (isDone && (
+    typeof serverDone === 'boolean'
+      ? serverDone === true || workflow.bgDone === true
+      : (
+          !hasTranscriptDir ||
+          // Фоллбэк для старых сессий (нет живого watcher'а) — только если ВСЕ агенты завершены
+          (localAgents !== null && localAgents.length > 0 && localAgents.every(a => a.isDone === true))
+        )
+  ));
 
   const meta = parseWorkflowMeta(workflow.input);
   const phases = meta?.phases ?? [];
@@ -71,10 +77,11 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   const totalCount = agents.length;
   const progress = totalCount > 0 ? doneCount / totalCount : isSettled ? 1 : 0;
 
-  // Прогресс по фазам: сколько фаз завершено (оцениваем по transcript агентам)
+  // Прогресс по фазам: сколько фаз завершено (оцениваем по transcript агентам).
+  // Прерванный workflow не считаем полностью пройденным — фазы остаются по факту
   const transcriptDone = transcriptAgents?.filter(a => a.isDone === true).length ?? 0;
   const transcriptTotal = transcriptAgents?.length ?? 0;
-  const completedPhaseCount = isSettled
+  const completedPhaseCount = isSettled && !isAborted
     ? phases.length
     : transcriptTotal > 0 && phases.length > 0
     ? Math.min(
@@ -114,9 +121,11 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
         style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', cursor: 'pointer', userSelect: 'none' as const }}
       >
         <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', marginTop: meta?.description ? -1 : 0 }}>
-          {isSettled
-            ? <DoneIcon />
-            : <div className="tool-spinner" />}
+          {isAborted
+            ? <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.dangerText, whiteSpace: 'nowrap' }}>прерван</span>
+            : isSettled
+              ? <DoneIcon />
+              : <div className="tool-spinner" />}
         </span>
         {/* Название + описание: одна колонка, description под заголовком */}
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -131,7 +140,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                   return (
                     <div key={idx} style={{
                       width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                      background: done || isSettled ? C.success : active ? C.accent : C.borderLight,
+                      background: done || (isSettled && !isAborted) ? C.success : active ? C.accent : C.borderLight,
                       transition: 'background 0.25s',
                     }} />
                   );

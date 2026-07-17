@@ -3,7 +3,7 @@ import type { ChatItem } from '../types';
 import { useSession } from './useSession';
 import { toRelative } from '../lib/paths';
 import { workflowName } from '../lib/workflowMeta';
-import { splitAgentResultTail } from '../lib/agentTail';
+import { splitAgentResultTail, isBgLaunchResult } from '../lib/agentTail';
 
 // Артефакты, собранные за сессию из ленты чата:
 //  - файлы: измененные (file_changed/Write) + упомянутые путем в тексте ответа,
@@ -290,9 +290,12 @@ export function computeAgents(items: ChatItem[]): { agents: AgentArtifact[]; wor
       const label = typeof input.description === 'string' && input.description
         ? input.description
         : prompt ? firstLine(prompt) : 'Субагент';
-      const isBg = input.run_in_background === true;
-      // Для фоновых result приходит сразу при запуске — о завершении не говорит
-      const settled = it.result !== undefined || i <= lastTurnEndIdx;
+      const isBg = input.run_in_background === true || isBgLaunchResult(it.result);
+      // Для фоновых result приходит сразу при запуске — о завершении не говорит;
+      // достоверный признак — bgDone (событие bg_agent_done / история после рестарта)
+      const settled = isBg
+        ? it.bgDone === true
+        : it.result !== undefined || i <= lastTurnEndIdx;
       const calls = children.get(it.id) ?? [];
       const last = calls[calls.length - 1];
       agents.push({
@@ -300,10 +303,10 @@ export function computeAgents(items: ChatItem[]): { agents: AgentArtifact[]; wor
         kind: 'subagent',
         type: typeof input.subagent_type === 'string' ? input.subagent_type : undefined,
         label,
-        status: it.isError ? 'error' : settled && !isBg ? 'done' : 'running',
+        status: it.isError || it.bgAborted ? 'error' : settled ? 'done' : 'running',
         background: isBg,
         toolCount: calls.length,
-        lastTool: !settled || isBg ? last?.name : undefined,
+        lastTool: !settled ? last?.name : undefined,
         prompt,
         // Для фоновых result — это подтверждение запуска, а не ответ агента;
         // системный хвост CLI (agentId + <usage>) вырезаем
@@ -312,7 +315,12 @@ export function computeAgents(items: ChatItem[]): { agents: AgentArtifact[]; wor
         calls,
       });
     } else if (name === 'workflow') {
-      const wfSettled = it.workflowDone === true || it.result !== undefined || i <= lastTurnEndIdx;
+      // У ФОНОВОГО workflow result — мгновенная квитанция запуска, по нему судить нельзя:
+      // завершение — только workflowDone от ватчера (или конец хода у блокирующего)
+      const wfBg = isBgLaunchResult(it.result);
+      const wfSettled = it.workflowDone === true || it.workflowAborted === true || it.bgDone === true
+        || (it.result !== undefined && !wfBg)
+        || (!wfBg && i <= lastTurnEndIdx);
       const wfAgents: AgentArtifact[] = (it.workflowAgents ?? []).map(a => {
         const src = a.summary?.trim() || a.prompt;
         return {

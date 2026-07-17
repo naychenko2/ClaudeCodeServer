@@ -159,6 +159,42 @@ describe('computeAgents', () => {
     expect(a.resultText).toBeUndefined();
   });
 
+  it('фоновый агент остаётся running и после конца хода — пока нет bgDone', () => {
+    const items: ChatItem[] = [
+      tool('Task', { description: 'Фоновый', run_in_background: true }, { result: 'Async agent launched successfully' }),
+      result(),
+    ];
+    expect(computeAgents(items).agents[0].status).toBe('running');
+  });
+
+  it('bgDone гасит running фонового агента → done', () => {
+    const items: ChatItem[] = [
+      tool('Task', { description: 'Фоновый', run_in_background: true },
+        { result: 'Async agent launched successfully', bgDone: true }),
+    ];
+    const a = computeAgents(items).agents[0];
+    expect(a.background).toBe(true);
+    expect(a.status).toBe('done');
+  });
+
+  it('bgAborted → error (агент умер вместе с процессом, не доработав)', () => {
+    const items: ChatItem[] = [
+      tool('Task', { description: 'Фоновый', run_in_background: true },
+        { result: 'Async agent launched successfully', bgDone: true, bgAborted: true }),
+    ];
+    expect(computeAgents(items).agents[0].status).toBe('error');
+  });
+
+  it('фоновость видна и без run_in_background — по квитанции запуска в result', () => {
+    // resume агента: input без run_in_background, но result — квитанция CLI
+    const items: ChatItem[] = [
+      tool('Task', { description: 'Продолженный' }, { result: 'Agent resumed from transcript in the background' }),
+    ];
+    const a = computeAgents(items).agents[0];
+    expect(a.background).toBe(true);
+    expect(a.status).toBe('running');
+  });
+
   it('label из первой строки prompt, если нет description', () => {
     const items: ChatItem[] = [
       tool('Task', { prompt: 'Первая строка\nвторая строка' }),
@@ -192,6 +228,44 @@ describe('computeAgents', () => {
     const parent = tool('Task', { description: 'Родитель' });
     const child = tool('Task', { description: 'Вложенный' }, { parentToolUseId: (parent as { id: string }).id });
     expect(computeAgents([parent, child]).agents).toHaveLength(1);
+  });
+
+  it('ФОНОВЫЙ workflow не settled по квитанции запуска — только по workflowDone', () => {
+    // result — мгновенная квитанция («launched in background… Transcript dir:»), по ней
+    // судить нельзя; и конец хода фоновому workflow не помеха — он живёт дальше
+    const wf = tool('Workflow', { script: 'x' }, {
+      result: 'Workflow launched in background.\nTranscript dir: C:\\tmp\\wf',
+      workflowDone: false,
+      workflowAgents: [{ id: 'a1', prompt: 'Агент', isDone: true }],
+    });
+    const items: ChatItem[] = [wf, result()];
+    const g = computeAgents(items).workflows[0];
+    expect(g.settled).toBe(false);
+    // Пауза между волнами: все агенты isDone, но workflowDone=false — агент волны done, группа нет
+    expect(g.doneCount).toBe(1);
+
+    // Пришёл workflowDone=true → settled
+    const done = tool('Workflow', { script: 'x' }, {
+      result: 'Workflow launched in background.\nTranscript dir: C:\\tmp\\wf',
+      workflowDone: true,
+      workflowAgents: [{ id: 'a1', prompt: 'Агент', isDone: true }],
+    });
+    expect(computeAgents([done, result()]).workflows[0].settled).toBe(true);
+  });
+
+  it('блокирующий workflow settled по обычному result (не квитанции)', () => {
+    const wf = tool('Workflow', { script: 'x' }, { result: 'Готово: 3 агента отработали' });
+    expect(computeAgents([wf]).workflows[0].settled).toBe(true);
+  });
+
+  it('workflowAborted → settled (агенты уже не завершатся)', () => {
+    const wf = tool('Workflow', { script: 'x' }, {
+      result: 'Workflow launched in background.\nTranscript dir: C:\\tmp\\wf',
+      workflowDone: false,
+      workflowAborted: true,
+      workflowAgents: [{ id: 'a1', prompt: 'Агент', isDone: false }],
+    });
+    expect(computeAgents([wf]).workflows[0].settled).toBe(true);
   });
 });
 

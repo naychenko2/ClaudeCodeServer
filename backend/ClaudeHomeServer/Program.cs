@@ -140,6 +140,7 @@ builder.Services.AddSingleton<ChatTaskExtractionService>();
 builder.Services.AddSingleton<DailyBriefingService>();
 // Проактивность персон (событийно-управляемый rules-движок): state store, источники и сервис-collaborator
 builder.Services.AddSingleton<AutomationStateStore>();
+builder.Services.AddSingleton<AutomationRootResolver>();
 builder.Services.AddSingleton<MentionTriggerSource>();
 builder.Services.AddSingleton<ITriggerSource, TimerTriggerSource>();
 builder.Services.AddSingleton<ITriggerSource, FileTriggerSource>();
@@ -230,6 +231,9 @@ var app = builder.Build();
 // Логгер статического парсера workflow-транскриптов (DI туда не дотягивается)
 WorkflowAgentParser.Log = app.Services.GetRequiredService<ILoggerFactory>()
     .CreateLogger(nameof(WorkflowAgentParser));
+// Логгер резолвера meta-блоков workflow (обогащение input вызова по имени)
+ClaudeHomeServer.Services.WorkflowMetaResolver.Log = app.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger(nameof(ClaudeHomeServer.Services.WorkflowMetaResolver));
 // Дополнительные разрешённые корни транскриптов — пути проектов сторонних CLI-провайдеров
 // (GLM/DeepSeek используют изолированные профили, транскрипты пишутся не в ~/.claude)
 try

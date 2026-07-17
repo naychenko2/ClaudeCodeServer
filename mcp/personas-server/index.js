@@ -126,8 +126,9 @@ const AUTOMATION_FIELDS = {
     description: 'Параметры триггера — форма зависит от triggerType:\n' +
       '  timer: { schedule: { type: "daily"|"weekdays"|"weekly"|"interval", time: "HH:mm", weekdays?: [1..7] (1=пн), intervalMinutes?: number }, tz?: string }\n' +
       '  file: { projectId, glob: "src/**/*.ts", kinds: ["created","changed"] }\n' +
+      '        — ИЛИ вместо projectId ключ folder (только для ГЛОБАЛЬНОЙ персоны без проекта): folder — относительный подпуть в основной папке пользователя, "" = вся основная папка. Не задавай projectId и folder одновременно.\n' +
       '  note: { source: "personal"|projectId, tags?: ["#тег"], section?: "папка" }\n' +
-      '  gitCommit: { projectId, paths?: ["src/**"] }\n' +
+      '  gitCommit: { projectId, paths?: ["src/**"] } — ИЛИ folder (см. file; папка должна быть git-репозиторием)\n' +
       '  taskStatus: { projectId?, from?: статус, to?: статус, assignee?: "me"|"claude" }\n' +
       '  mention: {} — не заполняй, срабатывает автоматически.' + PROJECT_HINT,
   },
@@ -189,6 +190,8 @@ const TOOLS = [
         ...PERSONA_FIELDS,
         scope: { type: 'string', enum: ['global', 'project'], description: 'Зона персоны (по умолчанию global)' },
         projectId: { type: 'string', description: 'ID проекта для scope=project (по умолчанию — проект текущей сессии)' },
+        avatarPrompt: { type: 'string', description: 'Описание внешности для фото-аватара (необязательно; ' +
+          'пусто — промпт строится из имени и роли). Фото генерируется автоматически при создании.' },
         ...BINDING_CREATE_FIELDS,
       },
     },
@@ -468,6 +471,11 @@ async function callTool(name, args) {
         if (Array.isArray(args.bindings)) body.bindings = args.bindings;
         if ('autoBindings' in args) body.autoBindings = Boolean(args.autoBindings);
       }
+      // Персона из чата не выбирает аватар руками — просим бэкенд сгенерить фото
+      // автоматически (best-effort; без Fal:ApiKey тихо остаются инициалы)
+      body.autoAvatar = true;
+      if (typeof args.avatarPrompt === 'string' && args.avatarPrompt.trim())
+        body.avatarPrompt = args.avatarPrompt;
       return json(await api('/api/personas', { method: 'POST', body: JSON.stringify(body) }));
     }
 

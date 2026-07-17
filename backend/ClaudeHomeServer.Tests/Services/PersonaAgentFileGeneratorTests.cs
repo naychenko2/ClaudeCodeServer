@@ -139,6 +139,17 @@ public class PersonaAgentFileGeneratorTests
     }
 
     [Fact]
+    public void Тело_СодержитИдентификаторПерсоны()
+    {
+        var persona = MakePersona();
+        var text = MakeGenerator().Generate(persona, Ctx());
+
+        text.Should().Contain("идентификатор персоны (personaId)")
+            .And.Contain(persona.Id)
+            .And.Contain("не разыскивая себя через personas_list");
+    }
+
+    [Fact]
     public void БезПамяти_НетСекцииПамяти()
     {
         var text = MakeGenerator().Generate(MakePersona(memory: false), Ctx());

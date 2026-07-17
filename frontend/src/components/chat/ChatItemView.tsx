@@ -6,7 +6,8 @@ import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW, R } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { hasUltraworkKeyword } from '../../lib/ultrawork';
-import { detectTeamMechanic, teamMechanic, type TeamMechanicId } from '../../features/team/teamMechanics';
+import { detectTeamMechanic, describeTeamTurn } from '../../features/team/teamMechanics';
+import { TeamTurnRequest } from '../../features/team/TeamTurnCard';
 import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
@@ -317,24 +318,6 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
 // Нейтральный акцент для агента без персоны (как в PersonaAskView)
 const AGENT_NEUTRAL = '#8A8070';
 
-// Бейдж командной механики на отправленном сообщении: текст такого хода — скилл-команда
-// (/oh-my-claudecode:…, /panel-of-experts) или промпт-обвязка дискуссии, и без подсказки
-// непонятен. Детект — detectTeamMechanic по тексту (тот же принцип, что «⚡ ультра»).
-function TeamMechanicBadge({ id }: { id: TeamMechanicId }) {
-  const m = teamMechanic(id);
-  const Icon = m.icon;
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5, height: 22, padding: '0 9px',
-      borderRadius: R.max, background: C.accentLight, color: C.accent,
-      fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
-    }}>
-      <Icon size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
-      {m.name}
-    </span>
-  );
-}
-
 // Сообщение с источником (не от человека): входящее от персоны через chats_send, либо
 // авто-публикация — совещание/конвейер/задача. Карточка с лицом автора (персона или
 // стандартный значок) и телом в Markdown — вместо безликого пузыря пользователя.
@@ -454,6 +437,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // промпт-обвязка, поэтому даже auto-отправленный рендерим пузырём пользователя
       // с бейджем механики (пользователь сам его инициировал темой из композера)
       const teamMech = detectTeamMechanic(item.text);
+      const teamInfo = teamMech ? describeTeamTurn(item.text) : null;
       // Сообщение не от человека — показываем источник карточкой с лицом автора:
       //  • viaAgent — прислано персоной/агентом из другого чата (chats_send)
       //  • auto — авто-публикация (задача, автоматизация)
@@ -470,28 +454,32 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             background: C.accentMuted, color: C.textHeading,
             borderRadius: '18px 18px 4px 18px', padding: '12px 17px', fontSize: 14,
           }}>
-            {/* Бейджи хода: командная механика и/или ключевое слово максимального усилия */}
-            {(teamMech || hasUltraworkKeyword(item.text)) && (
-              <div style={{ marginBottom: 5, display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                {teamMech && <TeamMechanicBadge id={teamMech} />}
+            {teamInfo ? (
+              /* Командный ход механики: вместо сырой слэш-команды/JSON — карточка
+                 запроса (механика + тема + чипы параметров). Сырой текст остаётся
+                 в истории для модели, здесь только слой отображения. */
+              <TeamTurnRequest info={teamInfo} ultra={hasUltraworkKeyword(item.text)} />
+            ) : (
+              <>
                 {hasUltraworkKeyword(item.text) && (
-                  <span style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 3,
-                    background: C.accent, color: C.onAccent, borderRadius: R.pill,
-                    padding: '2px 8px', fontSize: 9.5, fontWeight: 700,
-                    letterSpacing: 0.6, textTransform: 'uppercase',
-                  }}>
-                    ⚡ ультра
-                  </span>
+                  <div style={{ marginBottom: 5, display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 3,
+                      background: C.accent, color: C.onAccent, borderRadius: R.pill,
+                      padding: '2px 8px', fontSize: 9.5, fontWeight: 700,
+                      letterSpacing: 0.6, textTransform: 'uppercase',
+                    }}>
+                      ⚡ ультра
+                    </span>
+                  </div>
                 )}
-              </div>
+                {/* Markdown и в пузыре пользователя: авто-публикуемые сообщения (задачи)
+                    приходят в MD — форматируем их; обычный текст рендерится идентично */}
+                <div className="cc-user-md">
+                  <MarkdownContent text={item.text} />
+                </div>
+              </>
             )}
-            {/* Markdown и в пузыре пользователя: авто-публикуемые сообщения (обвязка
-                «Обсудить с командой», задачи) приходят в MD — форматируем их;
-                обычный текст рендерится идентично */}
-            <div className="cc-user-md">
-              <MarkdownContent text={item.text} />
-            </div>
             {item.attachedPaths && item.attachedPaths.length > 0 && (
               <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                 {item.attachedPaths.map(p => (

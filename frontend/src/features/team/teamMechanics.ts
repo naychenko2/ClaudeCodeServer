@@ -269,3 +269,120 @@ export function costEstimate(id: TeamMechanicId, s: TeamMechanicSettings): strin
     case 'implement': return s.implWorktree ? 'параллельно в worktree + merge' : 'последовательная раздача';
   }
 }
+
+// === Декодер командного хода → человекочитаемое описание (обратный buildTeamTurnText) ===
+// Текст механики уходит в историю дословно (его читает модель/CLI), но человеку
+// показываем красиво: механика + тема + чипы параметров. Используется в ленте
+// (карточка вместо сырого JSON) и в превью списка чатов.
+
+export interface TeamTurnInfo {
+  id: TeamMechanicId;
+  topic: string;
+  chips: string[];
+}
+
+const LENS_LABEL = new Map<string, string>(REVIEW_LENSES);
+const ANGLE_LABEL = new Map<string, string>(ATTACK_ANGLES);
+const DEPTH_LABEL: Record<string, string> = { quick: 'быстро', standard: 'стандарт', deep: 'глубоко' };
+const QA_LABEL: Record<string, string> = { tests: 'тесты', build: 'сборка', lint: 'линт', typecheck: 'типы' };
+
+// Русская форма числительного (1 раунд / 2 раунда / 5 раундов)
+function plural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+  return many;
+}
+
+function parseJsonArgs(text: string): Record<string, unknown> {
+  const i = text.indexOf('{');
+  if (i === -1) return {};
+  try { return JSON.parse(text.slice(i)) as Record<string, unknown>; } catch { return {}; }
+}
+
+function quotedTopic(text: string): string {
+  return text.match(/"([^"]*)"/)?.[1] ?? '';
+}
+
+function handleChips(arr: unknown): string[] {
+  return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string').map(h => `@${h}`) : [];
+}
+
+export function describeTeamTurn(text: string | null | undefined): TeamTurnInfo | null {
+  const id = detectTeamMechanic(text);
+  if (!id) return null;
+  const t = (text ?? '').trim();
+  const chips: string[] = [];
+  let topic = '';
+
+  switch (id) {
+    case 'discuss': {
+      topic = t.slice(DISCUSS_PREFIX.length).replace(/^:\s*/, '').split('\n')[0].trim();
+      chips.push(...Array.from(new Set(t.match(/@[a-zA-Z0-9_-]+/g) ?? [])));
+      break;
+    }
+    case 'panel': {
+      const a = parseJsonArgs(t);
+      topic = String(a.topic ?? '');
+      if (a.rounds) chips.push(`${a.rounds} ${plural(Number(a.rounds), 'раунд', 'раунда', 'раундов')}`);
+      chips.push(...handleChips(a.participants));
+      break;
+    }
+    case 'review': {
+      const a = parseJsonArgs(t);
+      topic = String(a.target ?? '') || 'текущий дифф';
+      for (const l of (Array.isArray(a.lenses) ? a.lenses : [])) chips.push(LENS_LABEL.get(String(l)) ?? String(l));
+      if (a.verify) chips.push('проверка находок');
+      chips.push(...handleChips(a.participants));
+      break;
+    }
+    case 'redteam': {
+      const a = parseJsonArgs(t);
+      topic = String(a.target ?? '') || 'текущее решение';
+      for (const g of (Array.isArray(a.angles) ? a.angles : [])) chips.push(ANGLE_LABEL.get(String(g)) ?? String(g));
+      chips.push(...handleChips(a.participants));
+      break;
+    }
+    case 'implement': {
+      const a = parseJsonArgs(t);
+      topic = String(a.task ?? '');
+      if (a.worktree) chips.push('в worktree');
+      if (a.verify) chips.push('с проверкой');
+      chips.push(...handleChips(a.executors));
+      break;
+    }
+    case 'consensus': {
+      topic = quotedTopic(t);
+      if (t.includes('--interactive')) chips.push('интервью');
+      if (t.includes('--deliberate')) chips.push('тщательно');
+      break;
+    }
+    case 'interview': {
+      topic = quotedTopic(t);
+      const m = t.match(/--(quick|standard|deep)/);
+      if (m) chips.push(DEPTH_LABEL[m[1]]);
+      break;
+    }
+    case 'qa': {
+      const m = t.match(/--(tests|build|lint|typecheck)/);
+      if (m) chips.push(QA_LABEL[m[1]]);
+      topic = t.replace(/^\/oh-my-claudecode:ultraqa\s*--\w+\s*/, '').trim();
+      break;
+    }
+    case 'autopilot':
+    case 'trace':
+    case 'sci':
+      topic = quotedTopic(t);
+      break;
+  }
+
+  return { id, topic, chips };
+}
+
+// Короткое превью командного хода для списка чатов («Панель экспертов: тема»)
+// вместо сырого JSON в lastMessage. null — не механика (показать оригинал).
+export function teamTurnPreview(text: string | null | undefined): string | null {
+  const info = describeTeamTurn(text);
+  if (!info) return null;
+  return `${teamMechanic(info.id).name}${info.topic ? `: ${info.topic}` : ''}`;
+}

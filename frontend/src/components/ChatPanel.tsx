@@ -11,6 +11,8 @@ import { useChatScroll } from '../hooks/useChatScroll';
 import { useOnline } from '../hooks/useOnline';
 import { api } from '../lib/api';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
+import { detectTeamMechanic } from '../features/team/teamMechanics';
+import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
 import { useCtxThresholds } from '../lib/contextPrefs';
@@ -461,7 +463,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       const it = items[i];
       if (it.kind !== 'tool_use') continue;
       const wf = it as ToolUseItem;
-      if (wf.name.toLowerCase() !== 'workflow' || wf.workflowDone === true || wf.result !== undefined) continue;
+      if (wf.name.toLowerCase() !== 'workflow' || wf.workflowDone === true) continue;
+      // Workflow уходит в фон и возвращает result («launched in background») СРАЗУ —
+      // по result судить о завершённости нельзя. Считаем идущим, пока watcher не сказал
+      // workflowDone: либо result ещё не пришёл (блокирующий), либо есть работающие агенты.
+      const running = wf.result === undefined
+        || (wf.workflowAgents?.some(a => a.isDone !== true) ?? false);
+      if (!running) continue;
       const meta = parseWorkflowMeta(wf.input);
       const phases = meta?.phases ?? [];
       if (phases.length === 0) return { wfId: wf.id, rawPhasesDone: 0, phasesTotal: 0 };
@@ -501,6 +509,22 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   useEffect(() => {
     onWorkflowRunning?.(isWorkflowRunning, session.id);
   }, [isWorkflowRunning, onWorkflowRunning, session.id]);
+
+  // Последняя запущенная в чате механика «Обсудить с командой» — детект по тексту хода
+  // (как бейдж в ленте). Пишем в стор ретроактивно: подтягивает бейдж в шапку и на
+  // карточку в списке чатов даже для чатов, где механику запускали до появления фичи.
+  const lastMechanic = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind !== 'user_message') continue;
+      const m = detectTeamMechanic(it.text);
+      if (m) return m;
+    }
+    return null;
+  }, [items]);
+  useEffect(() => {
+    if (lastMechanic) setLastMechanic(session.id, lastMechanic);
+  }, [lastMechanic, session.id]);
 
   // Единое условие показа WaitingIndicator — синхронизировано с флагом активности на карточке.
   // session.status покрывает случай когда isWaiting ещё не обновился (перезагрузка, переключение чата).
@@ -856,6 +880,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         isMobile={isMobile}
         onBack={onBack}
         activeWorkflow={activeWorkflowInfo ?? undefined}
+        lastMechanic={lastMechanic}
         onOpenSidebar={onOpenSidebar}
         artifactsOpen={artifactsOpen}
         onToggleArtifacts={onToggleArtifacts}

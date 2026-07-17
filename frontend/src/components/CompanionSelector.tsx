@@ -31,12 +31,15 @@ interface Props {
   // Мобильное слияние: футер-строка «Обсудить с командой…» в дропдауне собеседника
   // (запускает ту же раскрывашку механик, что кнопка Users в композере). Разгрузка row2.
   onDiscussTeam?: () => void;
+  // Просторный контекст (нижняя полоса разнесённого композера): ослабляем обрезку
+  // длинного «Роль (Имя)» — места там достаточно
+  wide?: boolean;
 }
 
 // Единый селектор «собеседника» чата: персоны (наша фича) и стандартные .md-агенты
 // Claude в одном дропдауне. Заменяет пару PersonaSelector + AgentSelector в композере.
 // Раскрытие/мобильное позиционирование — по образцу PersonaSelector.
-export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup, onDiscussTeam }: Props) {
+export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup, onDiscussTeam, wide }: Props) {
   const [open, setOpen] = useState(false);
   // Режим мультивыбора участников группового чата (внутри того же дропдауна)
   const [groupMode, setGroupMode] = useState(false);
@@ -229,7 +232,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
             background: open ? C.bgSelected : C.accentLight, color: C.textSecondary,
             fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
             display: 'flex', alignItems: 'center', gap: 6,
-            maxWidth: isMobile ? 120 : 200, overflow: 'hidden',
+            maxWidth: isMobile ? 120 : wide ? 360 : 200, overflow: 'hidden',
           }}
         >
           <PersonaAvatar persona={selectedPersona} size={isMobile ? 24 : 20} />
@@ -249,7 +252,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
             background: open ? C.bgSelected : C.accentLight, color: C.textSecondary,
             fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
             display: 'flex', alignItems: 'center', gap: 5,
-            maxWidth: isMobile ? 110 : 200, overflow: 'hidden',
+            maxWidth: isMobile ? 110 : wide ? 360 : 200, overflow: 'hidden',
           }}
         >
           <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: agentDotColor(selectedAgent?.color) }} />

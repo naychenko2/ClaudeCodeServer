@@ -75,6 +75,11 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   useEffect(() => { localStorage.setItem('cc_chat_artifacts_width', String(artifactsWidth)); }, [artifactsWidth]);
   const toggleArtifacts = useCallback(() => setArtifactsOpen(v => !v), []);
   const [draggingArtifacts, setDraggingArtifacts] = useState(false);
+  // Активный workflow текущего чата — для плашки «WF» на карточке в списке
+  const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
+  const handleWorkflowRunning = useCallback((active: boolean, sessionId: string) => {
+    setWorkflowRunningFor(prev => (active ? sessionId : prev === sessionId ? null : prev));
+  }, []);
 
   const handleArtifactsSplitterMouseDown = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -216,7 +221,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
         )}
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} />
+        <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} workflowRunningFor={workflowRunningFor ?? undefined} />
       </div>
     </>
   );
@@ -236,6 +241,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               attachedFiles={attachedFiles}
               onAttachedFilesChange={setAttachedFiles}
               onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
+              onWorkflowRunning={handleWorkflowRunning}
               artifactsOpen={artifactsOpen}
               onToggleArtifacts={toggleArtifacts}
             />
@@ -253,7 +259,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           <>
             <HubHeader value="chats" onTab={onHubTab} auth={auth} onLogout={onLogout} />
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '12px 16px 14px' }}>
-              <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} isMobile />
+              <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} isMobile workflowRunningFor={workflowRunningFor ?? undefined} />
             </div>
           </>
         )}
@@ -308,6 +314,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               onAttachedFilesChange={setAttachedFiles}
               onOpenSidebar={openSidebar}
               onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
+              onWorkflowRunning={handleWorkflowRunning}
               artifactsOpen={artifactsOpen}
               onToggleArtifacts={toggleArtifacts}
             />

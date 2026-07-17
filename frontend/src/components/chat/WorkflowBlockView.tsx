@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useRef, useContext } from 'react';
+import { memo, useState, useEffect, useContext } from 'react';
 import { Check } from 'lucide-react';
 import { api, type WorkflowAgentInfo, type WorkflowAgentBlock } from '../../lib/api';
 import { parseWorkflowMeta } from '../../lib/workflowMeta';
@@ -27,7 +27,10 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   childrenByParentId: Map<string, ActivityEntry[]>;
   onOpenFile?: (path: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  // Блок Workflow раскрыт сразу — сверху видны этапы; сворачивается вручную
+  const [expanded, setExpanded] = useState(true);
+  // Секция «Агенты» внизу свёрнута по умолчанию (раскрывается своим шевроном)
+  const [agentsOpen, setAgentsOpen] = useState(false);
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
 
   // Персоны владельца: агенты workflow с agentType == handle персоны рендерятся
@@ -40,8 +43,6 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   const [localAgents, setLocalAgents] = useState<WorkflowAgentInfo[] | null>(null);
   const [localLoading, setLocalLoading] = useState(false);
 
-  // Авто-раскрытие при завершении: только если workflow завершился в этой сессии
-  const wasSettledRef = useRef(false);
 
   const isDone = workflow.result !== undefined;
 
@@ -81,12 +82,6 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
         phases.length - 1  // не помечать все фазы done пока workflow не завершён
       )
     : 0;
-
-  // Авто-раскрытие карточки при завершении workflow в текущей сессии
-  useEffect(() => {
-    if (isSettled && !wasSettledRef.current) setExpanded(true);
-    wasSettledRef.current = isSettled;
-  }, [isSettled]);
 
   // Фоллбэк-загрузка для старых сессий (где серверный ватчер не работал)
   useEffect(() => {
@@ -268,15 +263,16 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
           {/* Агенты из transcript-файлов (показываем как только приходят через SignalR, не ждём isDone) */}
           {(transcriptLoading || (transcriptAgents && transcriptAgents.length > 0)) && (
             <div style={{ borderTop: `1px solid ${C.border}` }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px 6px', background: C.bgInset, borderBottom: `1px solid ${C.borderLight}` }}>
+              <div onClick={() => setAgentsOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px 6px', background: C.bgInset, borderBottom: agentsOpen ? `1px solid ${C.borderLight}` : undefined, cursor: 'pointer', userSelect: 'none' as const }}>
                 <span style={{ fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase' as const, letterSpacing: '0.04em' }}>Агенты</span>
                 {!transcriptLoading && transcriptAgents && (
                   <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, background: C.borderLight, borderRadius: R.sm, padding: '1px 5px', fontWeight: 600, lineHeight: 1.5 }}>
                     {transcriptAgents.length}
                   </span>
                 )}
+                <span style={{ marginLeft: 'auto', color: C.textMuted, fontSize: 11, display: 'inline-block', transform: agentsOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▾</span>
               </div>
-              {transcriptLoading && (
+              {agentsOpen && transcriptLoading && (
                 <div style={{ padding: '6px 0' }}>
                   {[80, 65, 90].map((w, i) => (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', borderTop: i > 0 ? `1px solid ${C.bgInset}` : undefined }}>
@@ -286,7 +282,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                   ))}
                 </div>
               )}
-              {!transcriptLoading && transcriptAgents && transcriptAgents.length > 0 && (
+              {agentsOpen && !transcriptLoading && transcriptAgents && transcriptAgents.length > 0 && (
                 <div style={{ padding: '4px 0' }}>
                   {transcriptAgents.map((agent, idx) => {
                     const transcriptDir = parseTranscriptDir(workflow.result as string | undefined);

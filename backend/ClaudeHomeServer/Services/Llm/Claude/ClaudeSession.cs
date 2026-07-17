@@ -1554,6 +1554,9 @@ public class ClaudeSession : ILlmSessionAdapter
             if (toolName is "AskUserQuestion" or "ExitPlanMode" or "ToolSearch") continue;
             // После одобрения плана любой реальный инструмент означает, что Claude приступил к реализации
             if (_awaitPlanExecution) _sawToolSinceApprove = true;
+            // Workflow по имени (без inline-script) → дописываем meta-блок скрипта, чтобы фронт
+            // показал этапы (дотики фаз + N/M в тулбаре и карточке)
+            if (toolName == "Workflow") toolInput = EnrichWorkflowInput(toolInput);
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }
 
@@ -1562,6 +1565,37 @@ public class ClaudeSession : ILlmSessionAdapter
             && stopReason.GetString() == "max_tokens")
             await _onMessage(new TruncatedMessage());
     }
+
+    // Обогащение input вызова Workflow: сохранённый workflow запускается по имени
+    // (Workflow({ name, args }) без script), а фронт достаёт meta.phases только из
+    // input.script — этапы пропадали. Дописываем вырезанный блок `export const meta {…}`
+    // того же скрипта, что исполнил CLI (workflows-каталог профиля этой сессии).
+    private object EnrichWorkflowInput(object input)
+    {
+        if (input is not JsonElement el || el.ValueKind != JsonValueKind.Object) return input;
+        // Inline-script уже есть (модель передала скрипт целиком) — не трогаем
+        if (el.TryGetProperty("script", out _)) return input;
+        if (!el.TryGetProperty("name", out var nameEl) || nameEl.ValueKind != JsonValueKind.String) return input;
+        var name = nameEl.GetString();
+        if (string.IsNullOrWhiteSpace(name)) return input;
+
+        var metaBlock = WorkflowMetaResolver.TryGetMetaBlock(WorkflowScriptDirs(), name);
+        if (metaBlock is null) return input;
+
+        // Пересобираем input словарём: исходные поля (JsonElement) + script (строка meta-блока).
+        // System.Text.Json сериализует смешанные значения штатно.
+        var dict = new Dictionary<string, object?>();
+        foreach (var p in el.EnumerateObject()) dict[p.Name] = p.Value;
+        dict["script"] = metaBlock;
+        return dict;
+    }
+
+    // Каталоги workflow-скриптов профиля этой сессии (тот же файл, что видит CLI):
+    // сторонний провайдер — его изолированный профиль, основной Claude — ~/.claude/workflows.
+    private IReadOnlyList<string> WorkflowScriptDirs() =>
+        _providers?.GetByKey(Info.Provider) is not null
+            ? [Path.Combine(_providers.GetProfileDir(Info.Provider), "workflows")]
+            : [WorkflowMetaResolver.GlobalWorkflowsDir];
 
     // Permission-запрос старого канала (sdk_control_request) — общий пайплайн DecidePermissionAsync
     private async Task HandlePermissionAsync(JsonElement root)

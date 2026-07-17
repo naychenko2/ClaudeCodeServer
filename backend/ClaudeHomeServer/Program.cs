@@ -226,6 +226,9 @@ var app = builder.Build();
 // Логгер статического парсера workflow-транскриптов (DI туда не дотягивается)
 WorkflowAgentParser.Log = app.Services.GetRequiredService<ILoggerFactory>()
     .CreateLogger(nameof(WorkflowAgentParser));
+// Логгер резолвера meta-блоков workflow (обогащение input вызова по имени)
+ClaudeHomeServer.Services.WorkflowMetaResolver.Log = app.Services.GetRequiredService<ILoggerFactory>()
+    .CreateLogger(nameof(ClaudeHomeServer.Services.WorkflowMetaResolver));
 // Дополнительные разрешённые корни транскриптов — пути проектов сторонних CLI-провайдеров
 // (GLM/DeepSeek используют изолированные профили, транскрипты пишутся не в ~/.claude)
 try

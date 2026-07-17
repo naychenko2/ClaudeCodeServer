@@ -73,25 +73,44 @@ public class ClaudeSubscriptionPool
     public bool HasExtra => _subscriptions.Count > 0;
 
     /// <summary>Выбрать ключ подписки для новой сессии: наименее загруженный аккаунт.</summary>
-    /// Жёстко отсекаются исчерпанные (rejected/100% без overage); среди оставшихся —
-    /// минимальная утилизация 5h-окна (при равенстве — случайный). Так аккаунт, близкий
-    /// к лимиту, естественно выпадает из ротации: пока есть кто свободнее, чаты идут туда.
-    /// Все исчерпаны — минимум из всех (вместо слепого fallback на основную).
-    public string Pick()
+    /// Жёстко отсекаются исчерпанные (rejected/100% без overage) и аккаунты без доступа
+    /// к запрошенной модели (Opus есть не на всех планах — CLI на таком аккаунте падает
+    /// «issue with the selected model»); среди оставшихся — минимальная утилизация
+    /// 5h-окна (при равенстве — случайный). Все способные исчерпаны — минимум из
+    /// способных: лучше упереться в лимит на правильном аккаунте, чем гарантированно
+    /// упасть на неправильном.
+    public string Pick(string? model = null)
     {
         if (_subscriptions.Count == 0)
             return PrimaryKey;
 
         var candidates = new List<string>(_subscriptions.Count + 1);
 
-        if (!IsExhausted(PrimaryKey))
+        if (!IsExhausted(PrimaryKey) && SupportsModel(PrimaryKey, model))
             candidates.Add(PrimaryKey);
 
         foreach (var sub in _subscriptions)
-            if (!IsExhausted(sub.Key))
+            if (!IsExhausted(sub.Key) && SupportsModel(sub.Key, model))
                 candidates.Add(sub.Key);
 
-        return LeastLoaded(candidates.Count > 0 ? candidates : AllKeys());
+        if (candidates.Count > 0) return LeastLoaded(candidates);
+
+        var capable = AllKeys().Where(k => SupportsModel(k, model)).ToList();
+        return LeastLoaded(capable.Count > 0 ? capable : AllKeys());
+    }
+
+    // Модель требует Opus-тира (алиасы opus/opus[1m] и полные id claude-opus-*)
+    public static bool RequiresOpus(string? model) =>
+        !string.IsNullOrWhiteSpace(model) && model.Contains("opus", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Аккаунт может обслужить модель: для Opus-тира — только SupportsOpus-планы.</summary>
+    /// Ключи вне пула (сторонние провайдеры deepseek/glm) не наша забота — true.
+    public bool SupportsModel(string key, string? model)
+    {
+        if (!RequiresOpus(model)) return true;
+        if (key == PrimaryKey) return true; // основная — полный план владельца
+        var sub = _subscriptions.FirstOrDefault(s => s.Key == key);
+        return sub is null || sub.SupportsOpus;
     }
 
     /// <summary>Аккаунт «в ротации» для новых чатов.</summary>

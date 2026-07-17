@@ -20,6 +20,11 @@ public class ClaudeSubscriptionConfig
     // Приоритет: ApiKey > OAuthToken.
     public string ApiKey { get; set; } = "";
 
+    // Аккаунту доступны Opus-модели. false — план без Opus (например, Pro):
+    // пул не отдаёт такому аккаунту чаты с пином opus-тира, иначе CLI падает
+    // «There's an issue with the selected model (opus)».
+    public bool SupportsOpus { get; set; } = true;
+
     // Провайдер включён при наличии хотя бы одного способа аутентификации
     public bool Enabled => !string.IsNullOrWhiteSpace(OAuthToken) || !string.IsNullOrWhiteSpace(ApiKey);
 }

@@ -252,4 +252,80 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         var pool = new ClaudeSubscriptionPool(Config());
         pool.SoftThreshold.Should().Be(0.8);
     }
+
+    // --- Доступность модели (пин Opus у персоны не должен попасть на план без Opus) ---
+
+    private IConfiguration ConfigWithProPlan(string proKey, params string[] fullKeys)
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+            [$"{ClaudeSubscriptionPool.Section}:{proKey}:OAuthToken"] = "token-" + proKey,
+            [$"{ClaudeSubscriptionPool.Section}:{proKey}:SupportsOpus"] = "false",
+        };
+        foreach (var key in fullKeys)
+            dict[$"{ClaudeSubscriptionPool.Section}:{key}:OAuthToken"] = "token-" + key;
+        return new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+    }
+
+    [Fact]
+    public void Pick_ПинOpus_НеПопадаетНаПланБезOpus_ДажеСвободный()
+    {
+        var config = ConfigWithProPlan("pro");
+        var usage = new UsageService(config);
+        RecordUtil(usage, ClaudeSubscriptionPool.PrimaryKey, 0.7);
+        RecordUtil(usage, "pro", 0.0); // pro свободнее, но Opus не умеет
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick("opus").Should().Be(ClaudeSubscriptionPool.PrimaryKey);
+    }
+
+    [Fact]
+    public void Pick_ПолныйIdOpus_ТожеФильтрует()
+    {
+        var pool = new ClaudeSubscriptionPool(ConfigWithProPlan("pro"));
+        for (var i = 0; i < 20; i++)
+            pool.Pick("claude-opus-4-8[1m]").Should().Be(ClaudeSubscriptionPool.PrimaryKey);
+    }
+
+    [Fact]
+    public void Pick_БезПинаМодели_ПланБезOpus_УчаствуетВРотации()
+    {
+        var config = ConfigWithProPlan("pro");
+        var usage = new UsageService(config);
+        RecordUtil(usage, ClaudeSubscriptionPool.PrimaryKey, 0.7);
+        RecordUtil(usage, "pro", 0.0);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("pro");
+        for (var i = 0; i < 20; i++)
+            pool.Pick("sonnet").Should().Be("pro");
+    }
+
+    [Fact]
+    public void Pick_ПинOpus_СпособныеИсчерпаны_ВсёРавноВыбираетСпособную()
+    {
+        // Лучше упереться в лимит на правильном аккаунте, чем гарантированно упасть на Pro
+        var config = ConfigWithProPlan("pro", "full2");
+        var pool = new ClaudeSubscriptionPool(config, new UsageService(config));
+        pool.MarkExhausted(ClaudeSubscriptionPool.PrimaryKey, DateTime.UtcNow.AddHours(2));
+        pool.MarkExhausted("full2", DateTime.UtcNow.AddHours(2));
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick("opus").Should().BeOneOf(ClaudeSubscriptionPool.PrimaryKey, "full2");
+    }
+
+    [Fact]
+    public void SupportsModel_НеClaudeКлюч_ВсегдаTrue()
+    {
+        var pool = new ClaudeSubscriptionPool(ConfigWithProPlan("pro"));
+        pool.SupportsModel("deepseek", "deepseek-v4-pro").Should().BeTrue();
+        pool.SupportsModel("pro", "opus").Should().BeFalse();
+        pool.SupportsModel("pro", "sonnet").Should().BeTrue();
+        pool.SupportsModel(ClaudeSubscriptionPool.PrimaryKey, "opus").Should().BeTrue();
+    }
 }

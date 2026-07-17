@@ -440,13 +440,14 @@ public class SessionManager
     // Рабочая папка чата вне проекта: {DefaultProjectsPath}/{username}/Chats (создаётся при отсутствии)
 
     // Выбрать подписку Claude для новой сессии: если модель Claude (не сторонний провайдер),
-    // выбираем из пула подписок (random non-exhausted); для сторонних — по модели.
+    // выбираем из пула подписок (least-loaded из способных обслужить модель — пин Opus
+    // не должен попасть на аккаунт без Opus); для сторонних — по модели.
     private string ResolveSubscriptionProvider(string? model)
     {
         var provider = _llmProviders.ResolveByModel(model);
         if (provider is not null)
             return provider.Key;
-        return _subscriptionPool.Pick();
+        return _subscriptionPool.Pick(model);
     }
     private string ResolveChatRoot(string ownerId)
     {
@@ -1018,10 +1019,12 @@ public class SessionManager
                 entry.Info.Model = persona.Model;
                 entry.Info.Effort = persona.Effort;
             }
-            else if (_llmProviders.ProviderKey(persona.Model) == _llmProviders.ProviderKey(entry.Info.Model))
+            else if (_llmProviders.ProviderKey(persona.Model) == _llmProviders.ProviderKey(entry.Info.Model)
+                && _subscriptionPool.SupportsModel(entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey, persona.Model))
             {
-                // Тот же провайдер — модель персоны применяется со следующего хода;
-                // другой провайдер — оставляем модель сессии (характер всё равно её)
+                // Тот же провайдер И подписка сессии способна обслужить модель персоны —
+                // модель применяется со следующего хода; иначе оставляем модель сессии
+                // (характер всё равно её): пин Opus на аккаунте без Opus валил бы ход
                 entry.Info.Model = persona.Model ?? entry.Info.Model;
                 entry.Info.Effort = persona.Effort ?? entry.Info.Effort;
             }

@@ -67,6 +67,13 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
         // на этапе генерации файла неизвестна
         sb.AppendLine(promptBuilder.BuildForSubagent(persona));
 
+        // Собственный идентификатор персоны в промпте: избавляет от поиска себя через
+        // personas_list, когда инструмент задач/памяти/CRUD просит personaId
+        sb.AppendLine();
+        sb.AppendLine($"Твой идентификатор персоны (personaId) — `{persona.Id}`. Когда инструмент " +
+                      "просит ID персоны-исполнителя (например, tasks_create/tasks_update при постановке " +
+                      "задачи на себя), подставляй его напрямую, не разыскивая себя через personas_list.");
+
         // Консультационная рамка (по образцу PersonaAskService: персона не видит исходный разговор)
         sb.AppendLine();
         sb.AppendLine("## Ты — консультант");

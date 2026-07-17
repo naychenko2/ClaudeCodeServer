@@ -407,8 +407,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       // Характер — только контрактом; legacy-поле systemPrompt чистим при каждом сохранении
       contract: buildContract(),
       systemPrompt: '',
-      model: model || undefined,
-      effort: effort || undefined,
+      // Правка: шлём значение как есть — "" сбрасывает модель/усилие к дефолту (бэкенд: ""→null).
+      // Создание: пусто → не пишем (иначе сохранилась бы пустая строка вместо null).
+      model: isEdit ? model : (model || undefined),
+      effort: isEdit ? effort : (effort || undefined),
       scope,
       projectId: scope === 'project' ? projectId : undefined,
       color,

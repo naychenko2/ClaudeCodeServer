@@ -266,6 +266,27 @@ export interface Session {
   origin: 'manual' | 'task' | 'automation';
 }
 
+// Строка сводки дашборда «Домой» (GET /api/home/summary): сессия + имя проекта
+export interface HomeSessionInfo {
+  id: string;
+  projectId?: string | null;
+  projectName?: string | null;
+  name?: string | null;
+  status: Session['status'];
+  lastMessage?: string | null;
+  personaId?: string | null;
+  taskId?: string | null;
+  messageCount: number;
+  updatedAt: string;
+}
+
+export interface HomeSummaryResponse {
+  // Живые сессии (starting/working/waiting) по всем проектам + чатам
+  active: HomeSessionInfo[];
+  // Недавние завершённые/простаивающие (кроме orphaned), новые сверху
+  recent: HomeSessionInfo[];
+}
+
 export interface FileEntry {
   name: string;
   path: string;

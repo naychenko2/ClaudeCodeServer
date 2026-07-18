@@ -105,6 +105,12 @@ export function ensureAgentsLoaded(): Promise<void> {
   return _loading;
 }
 
+// Принудительный рефетч доски — страховочный пуллинг дашборда «Домой»
+// (статусы проектных исполнителей не приходят в user-группу SignalR)
+export function refreshAgentBoard(): void {
+  void fetchBoard();
+}
+
 export function useAgentBoard(): BoardItem[] {
   return useSyncExternalStore(
     fn => { _listeners.add(fn); return () => _listeners.delete(fn); },

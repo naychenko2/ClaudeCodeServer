@@ -9,7 +9,7 @@ color: green
 
 ## Стек
 
-- .NET 9 / ASP.NET Core 9
+- .NET 10 / ASP.NET Core 10
 - SignalR (встроен в фреймворк, не NuGet-пакет)
 - System.Text.Json — сериализация
 - System.Diagnostics.Process — управление subprocess claude

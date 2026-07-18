@@ -39,6 +39,27 @@ public class LlmProviderRegistryTests
         Create().ResolveByModel("deepseek-v4-pro")!.Key.Should().Be("deepseek");
     }
 
+    // Тир-алиас в ANTHROPIC_MODEL не резолвится CLI (уходит в API сырым id и валит ход
+    // «issue with the selected model») — env-дефолты ставятся только для полных id
+    [Theory]
+    [InlineData("opus")]
+    [InlineData("sonnet")]
+    [InlineData("Haiku")]
+    public void BuildOAuthCliEnv_ТирАлиас_БезEnvМодели(string alias)
+    {
+        var env = Create().BuildOAuthCliEnv("second", "tok-123", model: alias)!;
+        env.Should().ContainKey("CLAUDE_CODE_OAUTH_TOKEN");
+        env.Should().NotContainKey("ANTHROPIC_MODEL");
+        env.Should().NotContainKey("ANTHROPIC_DEFAULT_OPUS_MODEL");
+    }
+
+    [Fact]
+    public void BuildOAuthCliEnv_ПолныйId_СтавитEnvМодель()
+    {
+        var env = Create().BuildOAuthCliEnv("second", "tok-123", model: "claude-opus-4-8")!;
+        env["ANTHROPIC_MODEL"].Should().Be("claude-opus-4-8");
+    }
+
     [Fact]
     public void ResolveByModel_ПоПрефиксу_НаходитПровайдера()
     {

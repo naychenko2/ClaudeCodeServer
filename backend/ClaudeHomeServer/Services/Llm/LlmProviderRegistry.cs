@@ -241,8 +241,13 @@ public class LlmProviderRegistry
             return null; // нечего ставить — неактивна
         }
 
-        // Модель-дефолты (как для CLI-провайдеров, но без ANTHROPIC_BASE_URL)
-        if (!string.IsNullOrWhiteSpace(model))
+        // Модель-дефолты (как для CLI-провайдеров, но без ANTHROPIC_BASE_URL).
+        // ТОЛЬКО полные id: тир-алиасы (opus/sonnet/haiku) CLI резолвит лишь во флаге
+        // --model — из ANTHROPIC_MODEL алиас уходит в API сырым id и валит ход
+        // «There's an issue with the selected model (opus)» (воспроизведено на проде:
+        // чат Алисы с пином opus на подписке my-second). Алиас в env не ставим —
+        // модель задаёт --model, который ClaudeSession передаёт всегда.
+        if (!string.IsNullOrWhiteSpace(model) && !IsClaudeTierAlias(model))
         {
             env["ANTHROPIC_MODEL"] = model;
             env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model;
@@ -251,6 +256,12 @@ public class LlmProviderRegistry
 
         return env;
     }
+
+    // Тир-алиас Claude (opus/sonnet/haiku, регистронезависимо) — не полный id модели
+    internal static bool IsClaudeTierAlias(string model) =>
+        model.Equals("opus", StringComparison.OrdinalIgnoreCase)
+        || model.Equals("sonnet", StringComparison.OrdinalIgnoreCase)
+        || model.Equals("haiku", StringComparison.OrdinalIgnoreCase);
 
     // Стоимость хода по ценам конфига модели. CLI на чужом эндпоинте считает
     // total_cost_usd по ценам Anthropic — доверять ему нельзя, пересчитываем сами.

@@ -12,6 +12,16 @@ import { contextWindowFor } from './models';
 // Старые истории contextTokens не содержат: там оценки нет до первого нового хода —
 // это честнее, чем показывать заведомо неверное число.
 
+// Итог последнего сжатия: сколько ИСТОРИИ диалога было и стало (метаданные
+// compact_boundary от CLI). Это НЕ размер контекста: системный промпт, определения
+// инструментов и CLAUDE.md в post не входят, а в окно возвращаются — замер на живом
+// чате дал post=3.7k при 52k реального контекста следующего хода. Поэтому только
+// справочная строка в попапе, к оценке заполнения не подмешивается.
+export interface CompactSummary {
+  pre?: number;
+  post?: number;
+}
+
 export interface ContextEstimate {
   tokens?: number;              // ≈ текущий размер контекста; undefined — оценки нет
   window: number;               // размер окна модели
@@ -19,6 +29,7 @@ export interface ContextEstimate {
   fresh: boolean;               // контекст только что свернут — оценка появится после следующего хода
   level: 'normal' | 'warn' | 'danger';
   model?: string;               // фактическая модель (последний session_started)
+  lastCompact?: CompactSummary; // итог последнего сжатия в этом чате (если оно было)
 }
 
 // Дефолтные пороги подсветки (переопределяются per-user, см. contextPrefs)
@@ -38,6 +49,7 @@ export function estimateContext(
   let model: string | undefined;
   let tokens: number | undefined;
   let fresh = false;
+  let lastCompact: CompactSummary | undefined;
 
   // Один обратный проход: ищем последний «маркер» размера контекста.
   // Result компакт-хода приходит без contextTokens — пропускаем такие.
@@ -45,15 +57,18 @@ export function estimateContext(
     const it = items[i];
     if (!model && it.kind === 'session_started' && it.model) model = it.model;
 
-    if (tokens === undefined && !fresh) {
-      if (it.kind === 'compact_boundary') {
-        fresh = true; // компакт был позже последнего содержательного хода
-      } else if (it.kind === 'result' && it.contextTokens && it.contextTokens > 0) {
-        tokens = it.contextTokens;
-      }
+    if (it.kind === 'compact_boundary') {
+      // Итог сжатия ищем и за пределами «маркера»: после компакта мог быть ход,
+      // и тогда оценка берётся из его result, а сводка сжатия — отсюда
+      if (!lastCompact && (it.preTokens !== undefined || it.postTokens !== undefined))
+        lastCompact = { pre: it.preTokens, post: it.postTokens };
+      if (tokens === undefined && !fresh) fresh = true; // компакт позже последнего содержательного хода
+    } else if (tokens === undefined && !fresh
+      && it.kind === 'result' && it.contextTokens && it.contextTokens > 0) {
+      tokens = it.contextTokens;
     }
 
-    if (model && (tokens !== undefined || fresh)) break;
+    if (model && (tokens !== undefined || fresh) && lastCompact) break;
   }
 
   const window = contextWindowFor(model ?? fallbackModel);
@@ -64,5 +79,5 @@ export function estimateContext(
     : pct >= thresholds.warnPct ? 'warn'
     : 'normal';
 
-  return { tokens, window, pct, fresh, level, model };
+  return { tokens, window, pct, fresh, level, model, lastCompact };
 }

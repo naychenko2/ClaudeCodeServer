@@ -419,6 +419,13 @@ function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, com
             : `Оценка появится после первого ответа ${assistantName}.`}
         </div>
       )}
+      {estimate.lastCompact?.post !== undefined && (
+        // Итог последнего сжатия — про объём ИСТОРИИ, а не про окно (системный промпт и
+        // инструменты в это число не входят), поэтому отдельной строкой рядом с пояснением ниже
+        <BadgeRow k="Сжатие истории" v={estimate.lastCompact.pre !== undefined
+          ? `${fmtTokens(estimate.lastCompact.pre)} → ${fmtTokens(estimate.lastCompact.post)}`
+          : fmtTokens(estimate.lastCompact.post)} />
+      )}
       <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 6, lineHeight: 1.4 }}>
         Сжимает историю диалога в саммари, освобождая место в окне. При заполнении {assistantName} делает это автоматически.
       </div>

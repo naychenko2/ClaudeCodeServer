@@ -15,7 +15,8 @@ const result = (contextTokens?: number, u?: UsageInfo): ChatItem =>
 const started = (model: string): ChatItem =>
   ({ kind: 'session_started', model, mode: 'default' });
 
-const compact = (): ChatItem => ({ kind: 'compact_boundary', trigger: 'auto' });
+const compact = (preTokens?: number, postTokens?: number): ChatItem =>
+  ({ kind: 'compact_boundary', trigger: 'auto', preTokens, postTokens });
 
 describe('estimateContext: оценка токенов', () => {
   it('пустая лента → оценки нет, дефолтное окно 200k, уровень normal', () => {
@@ -68,6 +69,37 @@ describe('estimateContext: usage не влияет на оценку (регре
     expect(est.tokens).toBeUndefined();
     expect(est.pct).toBeUndefined();
     expect(est.level).toBe('normal');
+  });
+});
+
+// Сводка последнего сжатия — справочная (объём истории), в оценку заполнения не входит:
+// в post не попадают системный промпт, инструменты и CLAUDE.md, которые возвращаются в окно.
+describe('estimateContext: сводка последнего сжатия', () => {
+  it('без компакта сводки нет', () => {
+    expect(estimateContext([result(50_000)]).lastCompact).toBeUndefined();
+  });
+
+  it('pre/post берутся из compact_boundary', () => {
+    const est = estimateContext([result(47_221), compact(47_221, 3_702)]);
+    expect(est.lastCompact).toEqual({ pre: 47_221, post: 3_702 });
+  });
+
+  it('сводка доступна и после хода, следующего за сжатием', () => {
+    const est = estimateContext([compact(47_221, 3_702), result(52_000)]);
+    expect(est.tokens).toBe(52_000);      // оценка — из хода, не из post
+    expect(est.fresh).toBe(false);
+    expect(est.lastCompact).toEqual({ pre: 47_221, post: 3_702 });
+  });
+
+  it('берётся последнее сжатие из нескольких', () => {
+    const est = estimateContext([compact(90_000, 8_000), result(60_000), compact(47_221, 3_702)]);
+    expect(est.lastCompact).toEqual({ pre: 47_221, post: 3_702 });
+  });
+
+  it('compact_boundary без метаданных сводки не даёт', () => {
+    const est = estimateContext([result(50_000), compact()]);
+    expect(est.lastCompact).toBeUndefined();
+    expect(est.fresh).toBe(true);
   });
 });
 

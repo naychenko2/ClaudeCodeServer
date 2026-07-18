@@ -17,6 +17,7 @@ import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { showToast } from '../lib/toast';
+import { isMicKeyboardFallback, setMicKeyboardFallback, describeSpeechError, isSilentSpeechError, MIC_FALLBACK_TEXT } from '../lib/voiceInput';
 import type { SkillInfo, AgentInfo, Persona, WorkLoopState } from '../types';
 
 export interface ComposerProps {
@@ -97,6 +98,11 @@ function StopIcon() {
     </svg>
   );
 }
+
+// Сколько ждём первый звук от движка распознавания, прежде чем счесть его мёртвым.
+// 2.5с не хватало планшетам: холодный старт облачного распознавания медленнее, чем на телефоне,
+// и живой движок ошибочно попадал в клавиатурный фоллбэк.
+const MIC_WATCHDOG_MS = 6000;
 
 // Дорожка-«волна» при записи (псевдо: SpeechRecognition не даёт амплитуду — анимируем полоски)
 function Waveform() {
@@ -231,8 +237,15 @@ export function Composer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<any>(null);
   const recCancelRef = useRef(false);
-  const micWatchdogRef = useRef<number | null>(null); // детект «мёртвого» Web Speech (нет audiostart)
+  const micWatchdogRef = useRef<number | null>(null); // детект «мёртвого» Web Speech (нет признаков жизни)
   const modeRef = useRef<HTMLDivElement>(null);
+
+  // При уходе с композера гасим watchdog вместе с распознаванием, иначе таймер
+  // дёрнет состояние уже после размонтирования
+  useEffect(() => () => {
+    if (micWatchdogRef.current !== null) clearTimeout(micWatchdogRef.current);
+    try { recognitionRef.current?.abort(); } catch { /* noop */ }
+  }, []);
 
   // Таймер записи голоса
   useEffect(() => {
@@ -473,15 +486,11 @@ export function Composer({
   // Голосовой ввод. На устройствах с рабочим Web Speech (телефоны) распознаём сами.
   // Где движок «мёртвый» (например, Huawei без Google-сервисов) — фокусируем поле,
   // чтобы пользователь надиктовал системным голосовым вводом клавиатуры.
-  const micKeyboardOnly = () => {
-    try { return localStorage.getItem('micKeyboardFallback') === '1'; } catch { return false; }
-  };
-
   const startMic = () => {
     if (isListening) return;
 
     // Web Speech отсутствует или ранее выяснили, что он не работает → сразу клавиатура.
-    if (!hasSpeech || micKeyboardOnly()) {
+    if (!hasSpeech || isMicKeyboardFallback()) {
       textareaRef.current?.focus();
       return;
     }
@@ -500,9 +509,18 @@ export function Composer({
       if (micWatchdogRef.current !== null) { clearTimeout(micWatchdogRef.current); micWatchdogRef.current = null; }
     };
 
-    rec.onaudiostart = () => { gotAudio = true; clearWatchdog(); };
+    // Живым считаем движок по ЛЮБОМУ признаку жизни, а не только по audiostart:
+    // часть браузеров (Android, WebView) его не эмитит, хотя распознавание работает —
+    // и watchdog убивал вполне рабочий движок.
+    const alive = () => { gotAudio = true; clearWatchdog(); };
+
+    rec.onstart = alive;
+    rec.onaudiostart = alive;
+    rec.onsoundstart = alive;
+    rec.onspeechstart = alive;
 
     rec.onresult = (e: any) => {
+      alive();
       let last = '';
       for (let i = 0; i < e.results.length; i++) {
         const r = e.results[i];
@@ -513,24 +531,30 @@ export function Composer({
     };
 
     rec.onend = () => { clearWatchdog(); setIsListening(false); };
-    rec.onerror = () => { clearWatchdog(); setIsListening(false); };
+    rec.onerror = (e: any) => {
+      clearWatchdog();
+      setIsListening(false);
+      // Причина сбоя — прямо в тост: без неё на устройстве не понять, что именно не так
+      const code = String(e?.error ?? 'unknown');
+      if (isSilentSpeechError(code)) return;
+      showToast('Голосовой ввод', `Не удалось: ${describeSpeechError(code)}`);
+    };
 
     recognitionRef.current = rec;
     try {
       rec.start();
       setIsListening(true);
-      // Детектор «мёртвого» движка: если за 2.5с не пришёл audiostart — распознавания
-      // в браузере нет (нет Google-сервисов). Переходим на клавиатурный ввод и
-      // запоминаем выбор, чтобы впредь сразу открывать клавиатуру.
+      // Детектор «мёртвого» движка: если за MIC_WATCHDOG_MS не пришёл audiostart —
+      // распознавания в браузере нет (нет Google-сервисов). Переходим на клавиатурный
+      // ввод и запоминаем выбор, чтобы впредь сразу открывать клавиатуру.
       micWatchdogRef.current = window.setTimeout(() => {
         if (gotAudio) return;
+        micWatchdogRef.current = null;
         try { rec.abort(); } catch { /* noop */ }
         setIsListening(false);
-        try { localStorage.setItem('micKeyboardFallback', '1'); } catch { /* noop */ }
-        // Тост клампится тремя строками — текст короче исходного alert, но с той же сутью
-        showToast('Голосовой ввод',
-          'Распознавание речи в браузере недоступно. Нажми кнопку микрофона ещё раз — откроется клавиатура, говори через её микрофон.');
-      }, 2500);
+        setMicKeyboardFallback();
+        showToast('Голосовой ввод', MIC_FALLBACK_TEXT);
+      }, MIC_WATCHDOG_MS);
     } catch {
       setIsListening(false);
     }

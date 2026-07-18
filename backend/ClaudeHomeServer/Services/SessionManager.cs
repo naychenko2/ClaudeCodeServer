@@ -701,6 +701,13 @@ public class SessionManager
     public bool HasSessionsOwnedBy(string ownerId) =>
         _sessions.Values.Any(e => SessionOwner(e.Info) == ownerId);
 
+    // Все сессии пользователя (проектные + чаты) — для сводки дашборда «Домой»
+    public IReadOnlyCollection<Session> GetAllOwnedBy(string ownerId) =>
+        _sessions.Values
+            .Select(e => e.Info)
+            .Where(s => SessionOwner(s) == ownerId)
+            .ToList();
+
     // Персона-слой сессии (промпт характера + контекст памяти + auto-recall + сама персона
     // для гейтов возможностей). Строится одинаково при первом старте и при восстановлении процесса.
     // Промпт — замыкание: адаптер зовёт его на каждый ход, поэтому правки персоны

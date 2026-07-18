@@ -27,6 +27,9 @@ public static class FeatureFlagKeys
 
     // Авто-накопление общей памяти команды проекта из ходов/групповых чатов/совещаний (Волна 1).
     public const string TeamMemoryAutolearn = "team-memory-autolearn";
+
+    // Подсказка следующего сообщения в композере (prompt_suggestion от claude CLI).
+    public const string PromptSuggestions = "prompt-suggestions";
 }
 
 /// <summary>
@@ -55,6 +58,15 @@ public static class FeatureFlagCatalog
             Description: "Claude сам вычленяет решения, договорённости и факты о проекте из рабочих ходов, групповых чатов и совещаний и складывает их в общую память команды (её recall'ят все персоны проекта). Записи помечены источником, ручные не затрагиваются.",
             Default: false,
             Stage: "beta"),
+
+        // Подсказки следующего сообщения: генерирует сам claude CLI (--prompt-suggestions)
+        // с переиспользованием prompt cache хода. Только для родного Claude-провайдера.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PromptSuggestions,
+            Title: "Подсказки следующего сообщения",
+            Description: "После ответа Claude над полем ввода появляется чип с вероятным следующим сообщением — тап, → или Tab вставляют его в композер. Работает в чатах на моделях Claude.",
+            Default: false,
+            Stage: "dev"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

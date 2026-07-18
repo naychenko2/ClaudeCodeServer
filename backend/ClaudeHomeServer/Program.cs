@@ -154,6 +154,8 @@ builder.Services.AddHostedService<TaskSchedulerService>();
 builder.Services.AddHostedService<ChatExpiryService>();
 builder.Services.AddHostedService<ChatTurnLoggerService>();
 builder.Services.AddHostedService<NoteExpiryService>();
+// Фоновый прогрев сводок «Что нового» — чтобы клик по дню отдавал кеш, а не ждал генерацию
+builder.Services.AddHostedService<ChangelogWarmupService>();
 // Терминал (PTY) и Preview (dev-server) — под гейтом workspace-destructive
 builder.Services.AddSingleton<TerminalService>();
 builder.Services.AddSingleton<DevServerService>();

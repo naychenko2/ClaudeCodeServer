@@ -496,6 +496,7 @@ POST                /api/projects/{id}/files/create   { path }
 POST                /api/projects/{id}/files/mkdir    { path }
 POST                /api/projects/{id}/files/rename   { oldPath, newPath }
 DELETE              /api/projects/{id}/files          ?path=
+GET                 /api/home/summary                 ?recent=    → { active[], recent[] }  (дашборд «Домой»: сессии по всем проектам + чаты, с именами проектов)
 GET                 /api/history/days                 ?sinceDays= → [{ date, commitCount, cached }]  (по всем проектам, без LLM)
 GET                 /api/history/day/{date}                       → { date, items[] }  (продуктовая AI-сводка дня, кеш)
 GET                 /api/history/new-count            ?since=iso  → { count } (новые коммиты во всех проектах после даты; для бейджа)

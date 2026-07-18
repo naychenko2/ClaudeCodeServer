@@ -21,9 +21,18 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
         // Для подписок из пула — проставляем DisplayName + статус роутинга (в ротации / выведен)
         if (bySub.Count > 1 && subscriptionPool?.HasExtra == true)
         {
+            // Показываем только ключи из текущего конфига пула (основной + настроенные подписки).
+            // Отсекаем чужие снапшоты в per-subscription сторе: ключи сторонних провайдеров
+            // (glm/deepseek — их Anthropic-совместимый эндпоинт тоже шлёт rate_limit_event,
+            // и снапшот пишется под ключ провайдера) и сирот после переименования аккаунта.
+            var poolKeys = new HashSet<string>(StringComparer.Ordinal) { ClaudeSubscriptionPool.PrimaryKey };
+            foreach (var sub in subscriptionPool.All)
+                poolKeys.Add(sub.Key);
+
             var named = new Dictionary<string, SubscriptionUsage>();
             foreach (var (key, snaps) in bySub)
             {
+                if (!poolKeys.Contains(key)) continue;
                 var displayName = key == ClaudeSubscriptionPool.PrimaryKey
                     ? config[$"{ClaudeSubscriptionPool.Section}:{ClaudeSubscriptionPool.PrimaryKey}:DisplayName"]
                     : subscriptionPool.All.FirstOrDefault(s => s.Key == key)?.DisplayName;

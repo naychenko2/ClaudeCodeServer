@@ -532,9 +532,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Единое условие показа WaitingIndicator — синхронизировано с флагом активности на карточке.
   // session.status покрывает случай когда isWaiting ещё не обновился (перезагрузка, переключение чата).
   // items.length > 0: не показывать спиннер на пустом чате до первого сообщения.
+  const sessionBusy = isWaiting || session.status === 'working' || session.status === 'starting';
   const showWaiting =
     items.length > 0
-    && (isWaiting || session.status === 'working' || session.status === 'starting')
+    && sessionBusy
     && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review' || it.kind === 'ask_question') && !it.resolved);
 
   // Номера версий plan_review: счётчик с последнего user_message включительно (1, 2, …).
@@ -772,7 +773,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         // действии, и группа мигала бы свернулась/раскрылась на каждом межшаговом thinking.
         let after = i;
         while (after < items.length && (isThought(items[after]) || isInvisible(items[after]) || isSuppressed(items[after]))) after++;
-        const isGroupDone = after < items.length;
+        // Последняя группа сворачивается и когда после неё ещё нет видимого элемента,
+        // но ход уже завершён (сессия не работает): иначе действия последнего диалога
+        // оставались бы раскрытыми в отличие от всех предыдущих групп.
+        const isGroupDone = after < items.length || !sessionBusy;
         // Изменения файлов не теряются при сворачивании: в свёрнутой шапке — те же плашки
         // (дедуп по пути, +N/−N событий суммируются), при раскрытии они на своих местах
         const fileAgg = new Map<string, Extract<ChatItem, { kind: 'file_changed' }>>();
@@ -872,7 +876,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return result;
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
-  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion]);
+  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy]);
 
   return (
     <AssistantNameContext.Provider value={asstName}>

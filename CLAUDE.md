@@ -26,6 +26,47 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 # Vite проксирует /api и /hubs (WebSocket) на :5000
 ```
 
+## Среда исполнения пользователей (local / container)
+
+Изоляция per-**пользователь**, а не per-приложение: у `User.ExecutionEnvironment`
+(`local` | `container`, задаётся админом при создании) два режима. **local** — процессы
+пользователя (claude, терминал, dev-серверы, npx skills) запускаются на машине сервера
+с полным доступом. **container** — всё исполняется в общей docker-песочнице `cc-sandbox`.
+Модель предполагает бэкенд НА ХОСТЕ (Windows), а не в контейнере.
+
+- **Слой запуска** — [Services/Execution/](backend/ClaudeHomeServer/Services/Execution/):
+  `IProcessLauncher` (`ProcessSpec` → `Process`) с драйверами `LocalProcessRunner`
+  (Process.Start, как раньше) и `DockerProcessRunner` (`docker exec -i cc-sandbox
+  /app/run-turn.sh <turnId> …`, stdio stream-json насквозь). Резолв по владельцу —
+  `ILauncherFactory.ForOwner(ownerId)`. Все 6 точек запуска (ClaudeSession,
+  OneShotClaudeRunner, ModelCatalogService, TerminalService, DevServerService,
+  SkillsCliService) идут через него; системные one-shot (changelog, каталог моделей) —
+  всегда local.
+- **Пути** — `IPathMapper`: бэкенд ВСЕГДА работает с хостовыми путями (projects.json
+  хранит `C:\…`), а процессы container-юзера — с контейнерными; перевод в момент
+  запуска (`DockerPathMapper`, аналог SafeJoin — путь вне монтирований → ошибка).
+  Точки монтирования: `Sandbox:ProjectsRoot`→`/projects`, `data/sandbox-profiles`→
+  `/sandbox-profiles` (per-user CLAUDE_CONFIG_DIR + транскрипты resume, видны бэкенду
+  через `WorkflowAgentParser.AddAllowedRoot`), `data/sandbox-tmp`→`/turn-tmp`
+  (MCP-конфиги хода, one-shot cwd).
+- **Interrupt** — `run-turn.sh` пишет pgid хода в `/tmp/turns/{turnId}.pid`;
+  `DockerProcessRunner.Kill` добивает группу изнутри (`kill -KILL -- -pgid`), т.к.
+  убийство docker-клиента на хосте не трогает процесс в контейнере.
+- **MCP из песочницы** — `*_API_URL` = `Sandbox:McpApiUrl` (`host.docker.internal:5000`,
+  Kestrel хоста) через `ResolveTasksApiUrl(ownerId)`; node-серверы `mcp/*/index.js`
+  лежат в образе под `/app/mcp` (переписываются в `BuildTurnMcpConfig`).
+- **Корни проектов разведены**: local-юзеры — `DefaultProjectsPath`, container-юзеры —
+  `Sandbox:ProjectsRoot` (в песочницу монтируется только он; `ProjectManager`/
+  `SessionManager.ResolveChatRoot`/`PersonaAgentFileSync` выбирают базу по среде).
+- **Guard**: смена `ExecutionEnvironment` при существующих чатах запрещена (разные корни
+  и профили; `SessionManager.HasSessionsOwnedBy`). **SandboxManager** держит один общий
+  контейнер (docker CLI, `sleep infinity`, ленивый `EnsureRunningAsync`, пересоздание при
+  смене образа/параметров по label-хешу). Конфиг — секция `Sandbox` (машинно-специфичный
+  `ProjectsRoot` — в appsettings.Local.json). Образ песочницы:
+  `docker build --target sandbox -t claude-sandbox -f backend/ClaudeHomeServer/Dockerfile .`
+- **Переход на per-user контейнеры** позже без переделки: имя контейнера параметризовано,
+  меняется только `SandboxManager`/фабрика драйвера.
+
 ## Архитектура
 
 ```

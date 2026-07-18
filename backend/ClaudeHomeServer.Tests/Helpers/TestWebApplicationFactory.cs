@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -110,7 +111,25 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        if (disposing && Directory.Exists(TempDir))
-            Directory.Delete(TempDir, recursive: true);
+        if (!disposing || !Directory.Exists(TempDir)) return;
+
+        // Microsoft.Data.Sqlite пулит физические соединения: после остановки хоста файл
+        // project-events.db всё ещё открыт, и удаление временной папки падало с IOException
+        // (мигающие «Test Class Cleanup Failure» в полном прогоне).
+        SqliteConnection.ClearAllPools();
+        for (var i = 1; ; i++)
+        {
+            try
+            {
+                Directory.Delete(TempDir, recursive: true);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Уборка temp — не предмет теста: не дотёрли за 5 попыток, оставляем ОС
+                if (i >= 5) return;
+                Thread.Sleep(20 * i);
+            }
+        }
     }
 }

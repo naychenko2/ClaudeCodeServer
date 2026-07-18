@@ -108,6 +108,9 @@ public sealed class SubscriptionUsageWarmupService(
         psi.ArgumentList.Add("--output-format");
         psi.ArgumentList.Add("stream-json");
         psi.ArgumentList.Add("--verbose");
+        // Хуки плагинов не нужны и плодят окна консоли на хосте (warmup — всегда local)
+        foreach (var a in ClaudeRuntimeSettings.HooksOffArgs(Execution.LocalProcessRunner.Instance))
+            psi.ArgumentList.Add(a);
 
         // Env подписки: для дополнительной — изолированный профиль + её токен; для основной
         // ('claude') оверрайдов нет, используется базовый ~/.claude (текущий логин).

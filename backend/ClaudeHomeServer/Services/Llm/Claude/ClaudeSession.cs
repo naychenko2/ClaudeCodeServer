@@ -889,6 +889,9 @@ public class ClaudeSession : ILlmSessionAdapter
             "--permission-prompt-tool", "stdio"
         };
 
+        // Отключаем хуки плагинов на хосте (окна консоли на каждый ход); скиллы остаются
+        args.AddRange(ClaudeRuntimeSettings.HooksOffArgs(_launcher));
+
         if (Info.ClaudeSessionId is not null)
             args.AddRange(["--resume", Info.ClaudeSessionId]);
 

@@ -41,6 +41,8 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         Directory.CreateDirectory(workDir);
 
         var args = new List<string> { "--print", "--output-format", "text" };
+        // Хуки плагинов не нужны и плодят окна консоли на хосте — отключаем (скиллы one-shot не зовёт)
+        args.AddRange(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher));
         // One-shot — чистая генерация текста: инструменты жёстко выключены. Это контракт
         // (пустая temp-cwd и раньше подразумевала «без файлов», но не мешала Read по
         // абсолютному пути) и защита от инъекции в промпт — в т.ч. когда вызов сделан

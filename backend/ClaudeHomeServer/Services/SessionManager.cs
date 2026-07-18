@@ -1245,6 +1245,12 @@ public class SessionManager
                 result += "\n\n" + OmoPrompts.WorkLoopTurn(loop.Promise);
         }
 
+        // Магслова oh-my-claudecode (ultrawork, ralph, autopilot…): хук keyword-detector
+        // плагина отключён вместе со всеми хуками (disableAllHooks — иначе окна консоли
+        // на хосте), поэтому активируем скилл сами — дописываем инструкцию его запуска.
+        if (OmcKeywordRouting.BuildKeywordHint(text) is { } keywordHint)
+            result += "\n\n" + keywordHint;
+
         // Процессы oh-my-claudecode: советнические роли плагина замещаются
         // персонами-сабагентами с подходящей специальностью (таблица соответствий)
         if (OmcPersonaRouting.MentionsPluginCommand(text) && SessionOwnerId(entry.Info) is { } ownerId)

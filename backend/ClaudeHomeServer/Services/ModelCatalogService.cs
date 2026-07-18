@@ -175,7 +175,9 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
             Args =
             [
                 "--print", "--verbose", "--strict-mcp-config",
-                "--input-format", "stream-json", "--output-format", "stream-json"
+                "--input-format", "stream-json", "--output-format", "stream-json",
+                // Хуки плагинов не нужны и плодят окна консоли на хосте
+                .. Llm.Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher)
             ],
             WorkingDirectory = Path.GetTempPath(),
             StdioEncoding = new System.Text.UTF8Encoding(false),

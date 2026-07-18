@@ -3,8 +3,10 @@ import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut } from 'lucide-react';
+import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
+import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
+import { showToast } from '../../lib/toast';
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: 'light', label: 'Светлая' },
@@ -45,6 +47,15 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const themeMode = useThemeMode();
+  // Флаг мог подняться, пока меню закрыто — перечитываем на каждом открытии
+  const [micFallback, setMicFallback] = useState(false);
+
+  const toggleOpen = () => {
+    setOpen(o => {
+      if (!o) setMicFallback(isMicKeyboardFallback());
+      return !o;
+    });
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -60,7 +71,7 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       <div
-        onClick={() => setOpen(o => !o)}
+        onClick={toggleOpen}
         style={{
           display: 'flex', alignItems: 'center', gap: 7, background: C.bgPanel,
           borderRadius: 20, padding: '5px 11px 5px 7px', cursor: 'pointer',
@@ -190,6 +201,23 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
               onChange={setThemeMode}
             />
           </div>
+          {/* Виден только когда голосовой ввод свалился в клавиатурный режим —
+              сбрасывает флаг, чтобы кнопка микрофона снова пробовала распознавание */}
+          {micFallback && (
+            <button
+              onClick={() => {
+                clearMicKeyboardFallback();
+                setMicFallback(false);
+                setOpen(false);
+                showToast('Голосовой ввод',
+                  'Распознавание речи включено обратно. Нажми микрофон в поле ввода и проверь.');
+              }}
+              style={dropdownItem}
+            >
+              <Mic size={ICON_SIZE.xs} strokeWidth={2} />
+              Вернуть голосовой ввод
+            </button>
+          )}
           <button
             onClick={() => { setOpen(false); onLogout(); }}
             style={{ ...dropdownItem, color: C.danger }}

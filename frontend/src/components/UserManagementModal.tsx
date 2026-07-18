@@ -38,12 +38,14 @@ function RoleBadge({ role }: { role: 'admin' | 'user' }) {
   );
 }
 
-// Бейдж среды исполнения: показываем только песочницу (сервер — дефолт, без шума)
+// Бейдж среды исполнения: у каждого пользователя видно, где работают его процессы
 function EnvBadge({ env }: { env?: 'local' | 'container' }) {
-  if (env !== 'container') return null;
+  const sandboxed = env === 'container';
   return (
     <span
-      title="Процессы пользователя (Claude, терминал, dev-серверы) работают в Docker-песочнице"
+      title={sandboxed
+        ? 'Процессы пользователя (Claude, терминал, dev-серверы) работают изолированно в Docker-песочнице'
+        : 'Процессы пользователя (Claude, терминал, dev-серверы) работают на машине сервера с полным доступом'}
       style={{
         display: 'inline-block',
         padding: '2px 8px',
@@ -55,7 +57,7 @@ function EnvBadge({ env }: { env?: 'local' | 'container' }) {
         color: C.textSecondary,
       }}
     >
-      📦 Песочница
+      {sandboxed ? '📦 Песочница' : '🖥 Сервер'}
     </span>
   );
 }

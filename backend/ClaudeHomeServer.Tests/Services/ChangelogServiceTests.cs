@@ -32,7 +32,7 @@ public class ChangelogServiceTests : IDisposable
 
         var providers = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
         _sut = new ChangelogService(new FileService(), config, NullLogger<ChangelogService>.Instance,
-            new ClaudeHomeServer.Services.Llm.OneShotClaudeRunner(providers));
+            new ClaudeHomeServer.Services.Llm.OneShotClaudeRunner(providers, TestLauncherFactory.Instance));
     }
 
     // ─── Источник не задан ──────────────────────────────────────────────────

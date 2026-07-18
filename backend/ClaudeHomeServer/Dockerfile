@@ -38,6 +38,51 @@ WORKDIR /src
 COPY backend/pty-bridge/pty-bridge.c ./
 RUN gcc -O2 -static -o pty-bridge pty-bridge.c -lutil
 
+# ===== 4б. Sandbox: песочница container-пользователей (БЕЗ бэкенда/фронта) =====
+# Бэкенд работает на хосте и запускает здесь процессы изолированных пользователей
+# через `docker exec`: ходы claude, pty-bridge терминала, dev-серверы, npx skills.
+# Собирается отдельным target: docker build --target sandbox -t claude-sandbox .
+# (последней стадией остаётся runtime — compose без target собирает её, как раньше)
+FROM node:22-bookworm AS sandbox
+
+RUN npm install -g @anthropic-ai/claude-code skills
+
+RUN apt-get update && apt-get install -y --no-install-recommends mc \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1001 app
+WORKDIR /app
+
+COPY --from=pty-bridge /src/pty-bridge /app/pty-bridge
+COPY --from=mcp /src/mcp-dify/dist        ./mcp-dify/dist
+COPY --from=mcp /src/mcp-dify/node_modules ./mcp-dify/node_modules
+COPY --from=mcp /src/mcp-dify/package.json ./mcp-dify/package.json
+COPY mcp/tasks-server ./mcp/tasks-server
+COPY mcp/notes-server ./mcp/notes-server
+COPY mcp/memory-server ./mcp/memory-server
+COPY mcp/personas-server ./mcp/personas-server
+COPY mcp/workspace-server ./mcp/workspace-server
+COPY mcp/notifications-server ./mcp/notifications-server
+COPY claude-defaults ./claude-defaults
+# Обвязка убиваемости ходов (см. комментарий в самом скрипте); sed снимает CRLF
+# на случай Windows-чекаута
+COPY backend/sandbox/run-turn.sh /app/run-turn.sh
+USER root
+RUN sed -i 's/\r$//' /app/run-turn.sh && chmod +x /app/run-turn.sh
+
+# Точки bind-mount: /projects — корень проектов изолированных пользователей,
+# /sandbox-profiles — per-user CLAUDE_CONFIG_DIR, /turn-tmp — временные MCP-конфиги ходов
+RUN mkdir -p /projects /sandbox-profiles /turn-tmp /tmp/turns /home/app/.claude \
+ && chown -R app:app /app /projects /sandbox-profiles /turn-tmp /tmp/turns /home/app
+
+USER app
+ENV HOME=/home/app \
+    DISABLE_AUTOUPDATER=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+# Контейнер живёт как idle-хост для docker exec
+ENTRYPOINT ["sleep", "infinity"]
+
 FROM node:22-bookworm AS runtime
 
 # .NET 9 runtime из официального образа (вся раскладка /usr/share/dotnet + муксер)

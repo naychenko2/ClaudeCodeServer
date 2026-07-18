@@ -16,8 +16,11 @@ public class DevServerServiceTests
 
     public DevServerServiceTests()
     {
+        var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build();
+        var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _svc = new DevServerService(null!, new Mock<IHubContext<SessionHub>>().Object,
-            new Mock<ILogger<DevServerService>>().Object);
+            new Mock<ILogger<DevServerService>>().Object, TestLauncherFactory.Instance, sandbox);
     }
 
     [Fact]

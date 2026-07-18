@@ -163,33 +163,23 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
         return DateTime.UtcNow - _cachedAt < ttl;
     }
 
-    // Короткоживущий процесс claude: шлём initialize в stdin, ждём control_response с models
+    // Короткоживущий процесс claude: шлём initialize в stdin, ждём control_response с models.
+    // Системный вызов бэкенда — всегда локальная среда.
     private static async Task<List<ModelInfo>?> QueryCliAsync(CancellationToken ct)
     {
-        var utf8NoBom = new System.Text.UTF8Encoding(false);
-        var psi = new ProcessStartInfo
-        {
-            FileName = Llm.Claude.ClaudeCliLocator.FindClaudeExecutable(),
-            WorkingDirectory = Path.GetTempPath(),
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = utf8NoBom,
-            StandardErrorEncoding = utf8NoBom,
-            StandardInputEncoding = utf8NoBom,
-            CreateNoWindow = true
-        };
-        foreach (var a in new[]
-                 {
-                     "--print", "--verbose", "--strict-mcp-config",
-                     "--input-format", "stream-json", "--output-format", "stream-json"
-                 })
-            psi.ArgumentList.Add(a);
-
+        var launcher = Execution.LocalProcessRunner.Instance;
         const string requestId = "model-catalog";
-        using var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("Не удалось запустить claude process");
+        using var process = launcher.Start(new Execution.ProcessSpec
+        {
+            FileName = launcher.ClaudeCliCommand,
+            Args =
+            [
+                "--print", "--verbose", "--strict-mcp-config",
+                "--input-format", "stream-json", "--output-format", "stream-json"
+            ],
+            WorkingDirectory = Path.GetTempPath(),
+            StdioEncoding = new System.Text.UTF8Encoding(false),
+        });
         try
         {
             _ = process.StandardError.ReadToEndAsync(ct); // дренируем, чтобы не переполнить буфер

@@ -573,6 +573,8 @@ export interface UserProfile {
   username: string;
   role: 'admin' | 'user';
   createdAt: string;
+  // Среда исполнения процессов пользователя: сервер (полный доступ) или Docker-песочница
+  executionEnvironment?: 'local' | 'container';
 }
 
 // ===== Продуктовая история (AI-сводка по всем проектам) =====

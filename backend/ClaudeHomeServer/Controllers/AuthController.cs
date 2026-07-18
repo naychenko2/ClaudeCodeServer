@@ -41,8 +41,10 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         var role = User.FindFirstValue(ClaimTypes.Role);
         var featureFlags = userId is null ? null : flags.GetEffective(userId);
         // Пороги индикатора контекста: override юзера или null (фронт применит дефолты)
-        var contextThresholds = userId is null ? null : users.GetById(userId)?.ContextThresholds;
-        return Ok(new { userId, username, role, featureFlags, contextThresholds });
+        var me = userId is null ? null : users.GetById(userId);
+        var contextThresholds = me?.ContextThresholds;
+        var executionEnvironment = me?.ExecutionEnvironment ?? ExecutionEnvironments.Local;
+        return Ok(new { userId, username, role, featureFlags, contextThresholds, executionEnvironment });
     }
 
     // Таймзона пользователя (IANA, например "Europe/Moscow") — фронт шлёт при старте.

@@ -16,6 +16,18 @@ public class User
     // IANA-таймзона пользователя (например "Europe/Moscow") — фронт присылает при старте;
     // нужна планировщику для перевода локальных сроков задач в UTC. null — считаем UTC
     public string? TimeZone { get; set; }
+    // Среда исполнения процессов пользователя (claude, терминал, dev-серверы):
+    // local — на машине сервера с полным доступом; container — в общей Docker-песочнице.
+    // Меняется только пока у пользователя нет чатов (корни проектов и профили сред различаются)
+    public string ExecutionEnvironment { get; set; } = ExecutionEnvironments.Local;
+}
+
+// Значения User.ExecutionEnvironment
+public static class ExecutionEnvironments
+{
+    public const string Local = "local";
+    public const string Container = "container";
+    public static bool IsValid(string? value) => value is Local or Container;
 }
 
 // Пороги подсветки индикатора контекста: warn — янтарь, danger — красный

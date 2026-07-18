@@ -71,7 +71,9 @@ public class SessionManagerTests : IDisposable
         var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
         var promptBuilder = new PersonaPromptBuilder(llmProviders);
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance);
+        var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
+            NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
     }
 
     public void Dispose()

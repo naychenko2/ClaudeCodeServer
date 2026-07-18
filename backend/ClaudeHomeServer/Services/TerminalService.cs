@@ -56,8 +56,14 @@ internal sealed class TerminalInstance : IDisposable
         lock (_bufLock) return _outputBuffer.ToString();
     }
 
+    // Драйвер среды, запустивший процесс + метка: в песочнице убить процесс
+    // может только он (Kill docker-клиента не трогает процесс в контейнере)
+    private readonly Execution.IProcessLauncher _launcher;
+    private readonly string _turnId;
+
     public TerminalInstance(string id, string projectId, string name, Process process, string userId,
-        int cols, int rows, StreamWriter stdinWriter, bool isWindows, bool usesPtyBridge, string? shell = null)
+        int cols, int rows, StreamWriter stdinWriter, bool isWindows, bool usesPtyBridge, string? shell,
+        Execution.IProcessLauncher launcher, string turnId)
     {
         Id = id;
         ProjectId = projectId;
@@ -71,6 +77,8 @@ internal sealed class TerminalInstance : IDisposable
         IsWindows = isWindows;
         UsesPtyBridge = usesPtyBridge;
         Shell = shell;
+        _launcher = launcher;
+        _turnId = turnId;
     }
 
     public void AddViewer(string connId)   { lock (ConnectionIds) ConnectionIds.Add(connId); LastActivity = DateTime.UtcNow; }
@@ -82,7 +90,7 @@ internal sealed class TerminalInstance : IDisposable
         StdinWriter.Dispose();
         if (!Process.HasExited)
         {
-            try { Process.Kill(entireProcessTree: true); } catch { }
+            _launcher.Kill(Process, _turnId);
             Process.WaitForExit(3000);
         }
         Process.Dispose();
@@ -96,16 +104,24 @@ public sealed class TerminalService : IDisposable
     private readonly IHubContext<TerminalHub> _hub;
     private readonly ProjectManager _projects;
     private readonly ILogger<TerminalService> _log;
+    private readonly Execution.ILauncherFactory _launchers;
     private readonly CancellationTokenSource _shutdownCts = new();
     private readonly Timer _cleanupTimer;
 
     private static readonly string PtyBridgePath = "/app/pty-bridge";
 
-    public TerminalService(IHubContext<TerminalHub> hub, ProjectManager projects, ILogger<TerminalService> log)
+    // Есть ли pty-bridge в целевой среде: локально — файл на диске,
+    // в песочнице — гарантирован образом
+    private static bool HasPtyBridge(Execution.IProcessLauncher launcher) =>
+        launcher.IsSandboxed || File.Exists(PtyBridgePath);
+
+    public TerminalService(IHubContext<TerminalHub> hub, ProjectManager projects, ILogger<TerminalService> log,
+        Execution.ILauncherFactory launchers)
     {
         _hub = hub;
         _projects = projects;
         _log = log;
+        _launchers = launchers;
         _cleanupTimer = new Timer(_ => CleanupStale(), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
     }
 
@@ -123,8 +139,12 @@ public sealed class TerminalService : IDisposable
             name = $"Терминал {count}";
         }
 
-        var isWindows = OperatingSystem.IsWindows();
+        // Шелл выбираем по ОС ЦЕЛЕВОЙ среды: powershell на Windows-хосте,
+        // pty-bridge/bash на Linux (в т.ч. внутри песочницы)
+        var launcher = _launchers.ForOwner(project.OwnerId);
+        var isWindows = launcher.TargetIsWindows;
         var usesPtyBridge = false;
+        var turnId = Guid.NewGuid().ToString("N")[..12];
 
         Process process;
         StreamWriter stdin;
@@ -134,20 +154,14 @@ public sealed class TerminalService : IDisposable
         {
             // Windows: PowerShell с перенаправлением (без PTY)
             shell = "powershell.exe";
-            var psi = new ProcessStartInfo
+            process = launcher.Start(new Execution.ProcessSpec
             {
                 FileName = "powershell.exe",
-                Arguments = "-NoLogo -NoExit -Command $Host.UI.RawUI.WindowTitle='terminal'",
+                Args = ["-NoLogo", "-NoExit", "-Command", "$Host.UI.RawUI.WindowTitle='terminal'"],
                 WorkingDirectory = project.RootPath,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-            process.Start();
-            stdin = new StreamWriter(process.StandardInput.BaseStream, Console.OutputEncoding) { AutoFlush = true };
+                EnableRaisingEvents = true,
+                TurnId = turnId,
+            });
         }
         else
         {
@@ -156,50 +170,43 @@ public sealed class TerminalService : IDisposable
             // bash идёт с --norc, его дефолтный промпт «bash-5.2$» не показывает cwd —
             // передаём PS1 с текущей папкой, чтобы было видно, что мы в папке проекта
             const string ps1 = @"\[\e[36m\]\w\[\e[0m\] \$ ";
-            if (File.Exists(PtyBridgePath))
+            var env = new Dictionary<string, string>
+            {
+                ["TERM"] = "xterm-256color",
+                ["PS1"] = ps1,
+            };
+            if (HasPtyBridge(launcher))
             {
                 usesPtyBridge = true;
-                var psi = new ProcessStartInfo
+                process = launcher.Start(new Execution.ProcessSpec
                 {
                     FileName = PtyBridgePath,
-                    Arguments = $"{cols} {rows}",
+                    Args = [cols.ToString(), rows.ToString()],
                     WorkingDirectory = project.RootPath,
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                };
-                psi.EnvironmentVariables["TERM"] = "xterm-256color";
-                psi.EnvironmentVariables["PS1"] = ps1;
-                process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-                process.Start();
+                    Env = env,
+                    EnableRaisingEvents = true,
+                    TurnId = turnId,
+                });
             }
             else
             {
                 // Fallback без PTY
                 _log.LogWarning("pty-bridge не найден, запуск bash с перенаправлением");
-                var psi = new ProcessStartInfo
+                process = launcher.Start(new Execution.ProcessSpec
                 {
                     FileName = "/bin/bash",
-                    Arguments = "--norc --noediting -i",
+                    Args = ["--norc", "--noediting", "-i"],
                     WorkingDirectory = project.RootPath,
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                };
-                psi.EnvironmentVariables["TERM"] = "xterm-256color";
-                psi.EnvironmentVariables["PS1"] = ps1;
-                process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-                process.Start();
+                    Env = env,
+                    EnableRaisingEvents = true,
+                    TurnId = turnId,
+                });
             }
-            stdin = new StreamWriter(process.StandardInput.BaseStream, Console.OutputEncoding) { AutoFlush = true };
         }
+        stdin = new StreamWriter(process.StandardInput.BaseStream, Console.OutputEncoding) { AutoFlush = true };
 
         var instance = new TerminalInstance(terminalId, projectId, name, process, userId,
-            cols, rows, stdin, isWindows, usesPtyBridge, shell);
+            cols, rows, stdin, isWindows, usesPtyBridge, shell, launcher, turnId);
         instance.AddViewer(connId);
         _terminals[terminalId] = instance;
 

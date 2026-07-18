@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react';
-import { Book, Calendar, Folder, MessageCircle, Share2, Users } from 'lucide-react';
+import { Book, Calendar, Folder, House, MessageCircle, Share2, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
 
-export type HubTab = 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
+export type HubTab = 'home' | 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
 
 // Иконки разделов для мобильного компакт-режима (lucide-react, Feather-стиль).
 const TAB_ICONS: Record<HubTab, ReactNode> = {
+  home: <House size={18} strokeWidth={2} />,
   chats: <MessageCircle size={18} strokeWidth={2} />,
   projects: <Folder size={18} strokeWidth={2} />,
   calendar: <Calendar size={18} strokeWidth={2} />,
@@ -17,7 +18,7 @@ const TAB_ICONS: Record<HubTab, ReactNode> = {
 
 // Подписи разделов (единый источник для таббара и overflow-меню «Разделы»)
 export const TAB_LABELS: Record<HubTab, string> = {
-  chats: 'Чаты', projects: 'Проекты', calendar: 'Календарь', notes: 'Заметки',
+  home: 'Домой', chats: 'Чаты', projects: 'Проекты', calendar: 'Календарь', notes: 'Заметки',
   personas: 'Персоны', knowledge: 'Знания', notifications: 'Уведомления',
 };
 // Полный набор разделов таббара по умолчанию (desktop)
@@ -34,7 +35,12 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
   // остальное уходит в «⋯ Разделы» (overflow), чтобы вкладки не скроллились под обрез.
   tabs?: HubTab[];
 }) {
-  const options = tabs.map(v => mobile
+  // Активный раздел вне набора табов: 'home' вкладку НЕ получает (вход на дашборд —
+  // только логотип/«⋯ Разделы», в таббаре ничего не подсвечено — PillSwitch умеет
+  // «нет выбранного»), остальные скрытые (knowledge/notifications) — условной вкладкой
+  // в конец (зеркально мобильному паттерну HubHeader).
+  const shown = tabs.includes(value) || value === 'home' ? tabs : [...tabs, value];
+  const options = shown.map(v => mobile
     ? { value: v, label: TAB_LABELS[v], icon: TAB_ICONS[v] }
     : { value: v, label: TAB_LABELS[v] });
   return (

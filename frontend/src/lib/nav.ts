@@ -5,7 +5,7 @@ import type { Project } from '../types';
 // отражается в hash-части URL (#/calendar, #/project/{id}/task/{taskId}…) —
 // адрес можно копировать/обновлять, серверного роутинга под пути не нужно.
 export interface NavSnapshot {
-  screen: 'projects' | 'project' | 'chats' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
+  screen: 'home' | 'projects' | 'project' | 'chats' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
   project?: Project;              // когда screen === 'project'
   chatId?: string;                // активный чат: screen === 'chats' — глобальный, screen === 'project' — проектный
   view?: 'sidebar' | 'chat';     // мобильный вид внутри проекта / чатов
@@ -20,6 +20,7 @@ export interface NavSnapshot {
 // Hash-представление снапшота для адресной строки
 function toHash(s: NavSnapshot): string {
   switch (s.screen) {
+    case 'home': return '#/home';
     case 'chats': return s.chatId ? `#/chats/${encodeURIComponent(s.chatId)}` : '#/chats';
     case 'calendar': return s.board ? '#/calendar/board' : '#/calendar';
     case 'notes': return s.note ? `#/notes/${encodeURIComponent(s.note)}` : '#/notes';
@@ -42,7 +43,7 @@ function toHash(s: NavSnapshot): string {
 
 // Разбор hash при загрузке страницы (диплинк/обновление)
 export interface HashTarget {
-  screen: 'projects' | 'chats' | 'calendar' | 'project' | 'notes' | 'personas' | 'knowledge' | 'notifications';
+  screen: 'home' | 'projects' | 'chats' | 'calendar' | 'project' | 'notes' | 'personas' | 'knowledge' | 'notifications';
   projectId?: string;
   taskId?: string;
   file?: string;
@@ -58,6 +59,7 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
   const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   if (parts.length === 0) return null;
   switch (parts[0]) {
+    case 'home': return { screen: 'home' };
     case 'chats': {
       const target: HashTarget = { screen: 'chats' };
       // #/chats/{id} — диплинк на конкретный чат (уведомления проактивных персон)

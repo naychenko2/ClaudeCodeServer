@@ -31,6 +31,7 @@ import { PersonasPage } from './features/personas/PersonasPage'
 import { ensureNotificationsSubscribed } from './lib/notifications'
 import { KnowledgePage } from './features/knowledge/KnowledgePage'
 import { NotificationsPage } from './features/notifications/NotificationsPage'
+import { HomePage } from './pages/HomePage'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 const HUB_TAB_KEY = 'cc_hub_tab'
@@ -82,10 +83,12 @@ export default function App() {
     }
   })
 
-  // Активная вкладка хаба (Чаты | Проекты | Календарь) — вне открытого проекта.
-  // По умолчанию открываются «Чаты» (первая вкладка).
+  // Активная вкладка хаба — вне открытого проекта. Стартовый экран — дашборд «Домой»:
+  // hash-диплинк приоритетнее, а без hash всегда открывается 'home'. Ключ HUB_TAB_KEY
+  // теперь write-only (старт его НЕ читает) — записи по коду оставлены как навигационная
+  // память для будущего, но на выбор стартового экрана не влияют.
   const [hubTab, setHubTab] = useState<HubTab>(() => {
-    // Hash-диплинк приоритетнее сохранённой вкладки
+    if (initialHash?.screen === 'home') return 'home'
     if (initialHash?.screen === 'calendar') return 'calendar'
     if (initialHash?.screen === 'chats') return 'chats'
     if (initialHash?.screen === 'notes') return 'notes'
@@ -93,10 +96,7 @@ export default function App() {
     if (initialHash?.screen === 'knowledge') return 'knowledge'
     if (initialHash?.screen === 'notifications') return 'notifications'
     if (initialHash?.screen === 'projects' || initialHash?.screen === 'project') return 'projects'
-    const saved = localStorage.getItem(HUB_TAB_KEY)
-    // Сохранённое 'agents' — ключ до переименования раздела в «Персоны»
-    if (saved === 'agents') return 'personas'
-    return saved === 'projects' || saved === 'calendar' || saved === 'notes' || saved === 'personas' || saved === 'knowledge' || saved === 'notifications' ? saved : 'chats'
+    return 'home'
   })
   const effectiveHubTab: HubTab = hubTab
 
@@ -241,7 +241,7 @@ export default function App() {
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
-    const seed: NavSnapshot = { screen: hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'notifications' ? 'notifications' : 'projects' }
+    const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'notifications' ? 'notifications' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
     // Диплинк #/personas/{id}: сохраняем персону в снимок, иначе сид затрёт id в URL
@@ -280,6 +280,9 @@ export default function App() {
           setProject(s.project)
         }
         if (hubTab !== 'projects') { localStorage.setItem(HUB_TAB_KEY, 'projects'); setHubTab('projects') }
+      } else if (s?.screen === 'home') {
+        // Дашборд «Домой» — проект «спит»
+        if (hubTab !== 'home') { localStorage.setItem(HUB_TAB_KEY, 'home'); setHubTab('home') }
       } else if (s?.screen === 'chats') {
         // Раздел «Чаты» — открытый проект «спит», его не сбрасываем (навигационная память)
         if (hubTab !== 'chats') { localStorage.setItem(HUB_TAB_KEY, 'chats'); setHubTab('chats') }
@@ -372,6 +375,13 @@ export default function App() {
     navPush({ screen: 'project', project: p, view: 'sidebar', file: null })
     setProject(p)
   }
+  // Открыть проект с дашборда «Домой»: переключаем раздел на «Проекты» + открываем проект.
+  // Снимок дашборда в истории не подменяем — Back с проекта вернёт на дашборд.
+  const openProjectFromHome = (p: Project) => {
+    localStorage.setItem(HUB_TAB_KEY, 'projects')
+    setHubTab('projects')
+    openProject(p)
+  }
   // Явный выход из открытого проекта к списку проектов (кнопка «К проектам» в сайдбаре)
   const goToProjects = () => {
     localStorage.removeItem(OPEN_PROJECT_KEY)
@@ -394,12 +404,14 @@ export default function App() {
     }
     localStorage.setItem(HUB_TAB_KEY, t)
     setHubTab(t)
-    const dest: NavSnapshot = { screen: t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'notifications' ? 'notifications' : 'projects' }
+    const dest: NavSnapshot = { screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'notifications' ? 'notifications' : 'projects' }
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
-    // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Иначе латеральное
-    // переключение табов — replace (без разрастания истории).
+    // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Уход С дашборда
+    // «Домой» — тоже push: дашборд — хаб-центр, Back с любого раздела возвращает на него.
+    // Остальные латеральные переключения табов — replace (без разрастания истории).
     const cur = getNav()
     if (cur && (cur.note || cur.file || cur.task || cur.persona || cur.knowledge)) navPush(dest)
+    else if (cur?.screen === 'home' && t !== 'home') navPush(dest)
     else navReplace(dest)
   }
   // Из календаря: открыть задачу во вкладке «Задачи» её проекта.
@@ -582,6 +594,8 @@ export default function App() {
         ? <div style={{ minHeight: '100vh', background: C.bgMain }} />
         : !auth
           ? <LoginPage onConnect={setAuth} />
+          : effectiveHubTab === 'home'
+            ? <HomePage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenProject={openProjectFromHome} />
           : effectiveHubTab === 'chats'
             ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'calendar'

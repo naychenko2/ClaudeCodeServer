@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Bell, Book, History, Share2, Users } from 'lucide-react';
+import { Bell, Book, History, House, Share2, Users } from 'lucide-react';
 import type { AuthState } from '../types';
 import { C, FONT, TB, SHADOW } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
@@ -79,10 +79,13 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
   // Мобильный хаб: 3 primary-раздела в таббаре, остальное — в «⋯ Разделы» (боттом-шит),
   // вместо тихого скролла 6 вкладок под обрез экрана.
   const PRIMARY_MOBILE: HubTab[] = ['chats', 'projects', 'calendar'];
+  // 'home' сюда не входит: у дашборда нет своей вкладки даже при активности —
+  // вход через пункт «Домой» в «⋯ Разделы» (на десктопе — клик по логотипу)
   const HIDDEN_MOBILE: HubTab[] = ['notes', 'personas', 'knowledge'];
   // Если активен спрятанный раздел — показываем его 4-й вкладкой, чтобы подсветка была верной
   const mobileTabs = HIDDEN_MOBILE.includes(value) ? [...PRIMARY_MOBILE, value] : PRIMARY_MOBILE;
   const sectionItems: OverflowItem[] = [
+    { key: 'home', icon: <House size={18} strokeWidth={2} />, label: 'Домой', onClick: () => onTab('home') },
     { key: 'notes', icon: <Share2 size={18} strokeWidth={2} />, label: 'Заметки', onClick: () => onTab('notes') },
     { key: 'personas', icon: <Users size={18} strokeWidth={2} />, label: 'Персоны', onClick: () => onTab('personas') },
     { key: 'knowledge', icon: <Book size={18} strokeWidth={2} />, label: 'Знания', onClick: () => onTab('knowledge') },
@@ -91,8 +94,21 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
 
   // «Утренний бриф» и «Единый поиск» убраны из шапки — доступны через AI-палитру (⌘/Ctrl+K).
 
+  // Логотип — кнопка «Домой»: клик открывает дашборд (стартовый раздел)
+  const [logoHover, setLogoHover] = useState(false);
   const logo = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+    <div
+      role="button"
+      aria-label="Домой"
+      onClick={() => onTab('home')}
+      onMouseEnter={() => setLogoHover(true)}
+      onMouseLeave={() => setLogoHover(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, cursor: 'pointer',
+        padding: '4px 8px', margin: '-4px -8px', borderRadius: 8,
+        background: logoHover ? C.bgSelected : 'transparent', transition: 'background 0.15s',
+      }}
+    >
       <img src="/favicon.svg" alt="" width={30} height={30} style={{ display: 'block', flexShrink: 0 }} />
       <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         AI Home

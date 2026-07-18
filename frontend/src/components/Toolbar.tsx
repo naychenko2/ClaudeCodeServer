@@ -119,7 +119,9 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
   const btnRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const suppressClick = useRef(false);               // гасим клик, если это был drag
 
-  const activeIndex = Math.max(0, options.findIndex(o => o.value === value));
+  // -1 = value вне options (например, активен раздел без вкладки в таббаре) —
+  // пилюля не рисуется и никто не подсвечен, вместо ложной подсветки первого сегмента
+  const activeIndex = options.findIndex(o => o.value === value);
   // Геометрия покоящейся пилюли (по активному сегменту). Стартовое значение — из памяти
   // (позиция на прошлом экране), чтобы новый инстанс доехал до места, а не возник на нём.
   const [thumb, setThumb] = useState<PillGeom | null>(() => (persistKey ? pillMemory.get(persistKey) ?? null : null));
@@ -135,6 +137,13 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
   // (rAF), тогда CSS-transition отрабатывает переезд. Работает для любого числа опций.
   const labelsKey = options.map(o => o.label).join('|');
   useLayoutEffect(() => {
+    // Активного сегмента нет — прячем пилюлю (и чистим память позиции, чтобы новый
+    // инстанс не возник на чужом месте)
+    if (activeIndex < 0) {
+      setThumb(null);
+      if (persistKey) pillMemory.delete(persistKey);
+      return;
+    }
     const btn = btnRefs.current[activeIndex];
     if (!btn) return;
     const next: PillGeom = { left: btn.offsetLeft, width: btn.offsetWidth };

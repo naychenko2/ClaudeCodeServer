@@ -280,6 +280,31 @@ describe('applyServerMessage: завершение хода', () => {
     expect(next.items).toEqual([{ kind: 'file_changed', path: 'src/a.ts', added: 3, removed: 1 }]);
   });
 
+  it('file_changed того же файла за ход — одна строка с суммой дельт', () => {
+    const next = run([
+      { type: 'file_changed', path: 'src/a.ts', added: 3, removed: 1 },
+      { type: 'file_changed', path: 'src/b.ts', added: 2, removed: 0 },
+      { type: 'file_changed', path: 'src/a.ts', added: 5, removed: 4 },
+    ]);
+    expect(next.items).toEqual([
+      { kind: 'file_changed', path: 'src/a.ts', added: 8, removed: 5 },
+      { kind: 'file_changed', path: 'src/b.ts', added: 2, removed: 0 },
+    ]);
+  });
+
+  it('file_changed того же файла в РАЗНЫХ ходах (через result) — две строки', () => {
+    const next = run([
+      { type: 'file_changed', path: 'src/a.ts', added: 3, removed: 1 },
+      { type: 'result', subtype: 'success', durationMs: 100, numTurns: 1, totalCostUsd: 0.01 },
+      { type: 'file_changed', path: 'src/a.ts', added: 2, removed: 0 },
+    ]);
+    const changes = next.items.filter(it => it.kind === 'file_changed');
+    expect(changes).toEqual([
+      { kind: 'file_changed', path: 'src/a.ts', added: 3, removed: 1 },
+      { kind: 'file_changed', path: 'src/a.ts', added: 2, removed: 0 },
+    ]);
+  });
+
   it('exited при isWaiting без завершающего элемента → аварийный session_ended', () => {
     const next = run([{ type: 'exited' }], state({ isWaiting: true, items: [{ kind: 'text', text: 'полответа' }] }));
     expect(next.isWaiting).toBe(false);

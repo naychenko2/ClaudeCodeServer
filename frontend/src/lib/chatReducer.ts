@@ -257,8 +257,21 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         }],
       };
 
-    case 'file_changed':
+    case 'file_changed': {
+      // Дедуп за ход: повторная правка того же файла обновляет существующую строку
+      // (дельты суммируем), а не плодит новую. Граница хода — последний 'result'
+      // (симметрично серверному TurnAccumulator.OnFileChanged).
+      for (let i = prev.items.length - 1; i >= 0; i--) {
+        const it = prev.items[i];
+        if (it.kind === 'result') break;
+        if (it.kind === 'file_changed' && it.path === msg.path) {
+          const items = prev.items.slice();
+          items[i] = { ...it, added: it.added + msg.added, removed: it.removed + msg.removed };
+          return withItems(items);
+        }
+      }
       return withItems([...prev.items, { kind: 'file_changed', path: msg.path, added: msg.added, removed: msg.removed }]);
+    }
 
     case 'result':
       return {

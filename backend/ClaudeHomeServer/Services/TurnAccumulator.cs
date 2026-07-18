@@ -179,6 +179,17 @@ internal class TurnAccumulator
         lock (_lock)
         {
             FlushBuffers();
+            // Дедуп за ход: повторная правка того же файла обновляет существующую строку
+            // (дельты суммируем), а не плодит новую — иначе командные ходы (OmO, workflow)
+            // спамят ленту десятками строк по одним и тем же файлам
+            for (var i = _currentTurn.Count - 1; i >= 0; i--)
+            {
+                if (_currentTurn[i] is StoredFileChangedMessage prev && prev.Path == path)
+                {
+                    _currentTurn[i] = new StoredFileChangedMessage(path, prev.Added + added, prev.Removed + removed);
+                    return;
+                }
+            }
             _currentTurn.Add(new StoredFileChangedMessage(path, added, removed));
         }
     }

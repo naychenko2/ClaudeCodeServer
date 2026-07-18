@@ -213,7 +213,8 @@ public class ClaudeSession : ILlmSessionAdapter
         string? mcpConfigPath = null, SkillsService? skills = null,
         WorkspaceKnowledgeStore? workspaceStore = null, string[]? disallowedTools = null,
         LlmProviderRegistry? providers = null,
-        ClaudeSubscriptionPool? subscriptionPool = null)
+        ClaudeSubscriptionPool? subscriptionPool = null,
+        FileWatcherOptions? fileWatcherOptions = null)
     {
         _providers = providers;
         _subscriptionPool = subscriptionPool;
@@ -248,7 +249,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // получает «No tasks» и бросает задачу). Без задач в сессии — не трогаем.
         if (context.TasksMcp is not null)
             _disallowedTools = [.. _disallowedTools, .. BuiltInTaskTools];
-        _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage);
+        _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage, fileWatcherOptions);
     }
 
     // Объединённый MCP-конфиг хода: серверы из базового конфига (Dify с инжекцией

@@ -179,6 +179,21 @@ public class TurnAccumulatorTests : IDisposable
     }
 
     [Fact]
+    public void OnFileChanged_ПовторнаяПравкаТогоЖеФайла_СуммируетДельтуОднойСтрокой()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnFileChanged("src/file.cs", 10, 3);
+        acc.OnFileChanged("src/other.cs", 1, 0);
+        acc.OnFileChanged("src/file.cs", 5, 2);
+
+        var all = acc.GetAll().OfType<StoredFileChangedMessage>().ToList();
+        all.Should().HaveCount(2); // file.cs схлопнут в одну строку
+        var file = all.Single(m => m.Path == "src/file.cs");
+        file.Added.Should().Be(15);
+        file.Removed.Should().Be(5);
+    }
+
+    [Fact]
     public async Task OnResultAsync_FlushesBuffersAndSavesToHistory()
     {
         var sessionId = Guid.NewGuid().ToString();

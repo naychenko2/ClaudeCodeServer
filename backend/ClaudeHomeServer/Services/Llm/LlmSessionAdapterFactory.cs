@@ -20,6 +20,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     private readonly WorkspaceKnowledgeStore _workspaceStore;
     private readonly LlmProviderRegistry _providers;
     private readonly ClaudeSubscriptionPool _subscriptionPool;
+    private readonly FileWatcherOptions _fileWatcherOptions;
 
     public LlmSessionAdapterFactory(IConfiguration config, SkillsService skills,
         WorkspaceKnowledgeStore workspaceStore, LlmProviderRegistry providers,
@@ -27,6 +28,14 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     {
         _mcpConfigPath = config["McpConfigPath"];
         _disallowedTools = config.GetSection("Claude:DisallowedTools").Get<string[]>() ?? [];
+        // Шумоподавление ватчера изменений файлов (секция FileWatcher) — пустые списки
+        // в конфиге дают дефолты, отдельные ключи переопределяют только себя
+        var fw = config.GetSection("FileWatcher");
+        var d = FileWatcherOptions.Default;
+        _fileWatcherOptions = new FileWatcherOptions(
+            IgnoreDirs: fw.GetSection("IgnoreDirs").Get<string[]>() is { Length: > 0 } dirs ? dirs : d.IgnoreDirs,
+            IgnoreFilePatterns: fw.GetSection("IgnoreFilePatterns").Get<string[]>() is { Length: > 0 } pats ? pats : d.IgnoreFilePatterns,
+            RespectGitignore: fw.GetValue("RespectGitignore", d.RespectGitignore));
         // Потолок доживания процесса с фоновыми агентами после конца хода (минуты)
         if (int.TryParse(config["Claude:BgLingerMinutes"], out var lingerMin) && lingerMin > 0)
             Claude.ClaudeSession.BgLingerTimeout = TimeSpan.FromMinutes(lingerMin);
@@ -48,6 +57,6 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             throw new InvalidOperationException(
                 $"Провайдер «{provider.DisplayName}» не настроен: задай LlmProviders:{provider.Key}:ApiKey в appsettings.Local.json");
         return new Claude.ClaudeSession(session, context, _mcpConfigPath, _skills,
-            _workspaceStore, _disallowedTools, _providers, _subscriptionPool);
+            _workspaceStore, _disallowedTools, _providers, _subscriptionPool, _fileWatcherOptions);
     }
 }

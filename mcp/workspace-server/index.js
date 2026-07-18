@@ -10,6 +10,12 @@
 //   WORKSPACE_PROJECT_IDS     — csv разрешённых projectId; пусто = все проекты владельца
 //   WORKSPACE_SELF_SESSION_ID — id самой сессии (запрет chats_send самому себе)
 //   WORKSPACE_AGENT_DEPTH     — глубина делегирования; chats_send шлёт X-Agent-Depth = depth + 1
+//   WORKSPACE_WRITE           — "0" = скрыть write-инструменты (projects_create/update,
+//                               files_write/mkdir/rename, knowledge_index, chats_create/send/update).
+//                               ClaudeSession выключает их на ходах без интента записи в рабочее
+//                               пространство — read-инструменты (list/tree/read/search/status/history)
+//                               остаются всегда. Дефолт — включено; выключается только явным "0".
+//                               (destructive-инструменты гейтятся отдельной секцией сверх этого.)
 
 import { createInterface } from 'node:readline';
 
@@ -25,6 +31,14 @@ const ALLOWED_PROJECT_IDS = (process.env.WORKSPACE_PROJECT_IDS || '')
 // Секция chats: id собственной сессии (self-send запрещён) и глубина делегирования
 const SELF_SESSION_ID = process.env.WORKSPACE_SELF_SESSION_ID || null;
 const AGENT_DEPTH = parseInt(process.env.WORKSPACE_AGENT_DEPTH || '0', 10) || 0;
+// Write-инструменты рабочего пространства — скрыты при WORKSPACE_WRITE="0" (гейт по интенту хода).
+// Выключается только явным "0" (обратная совместимость прямых запусков). Тяжёлые схемы записи
+// (files_write с content, projects/chats create/update) не грузятся в контекст на ходах чтения.
+const WRITE = process.env.WORKSPACE_WRITE !== '0';
+const WRITE_TOOLS = new Set([
+  'projects_create', 'projects_update', 'files_write', 'files_mkdir', 'files_rename',
+  'knowledge_index', 'chats_create', 'chats_send', 'chats_update',
+]);
 
 // Ограничение выдачи files_tree — дерево большого проекта не должно раздувать контекст
 const TREE_MAX_ENTRIES = 500;
@@ -356,7 +370,8 @@ const SECTION_TOOLS = {
 
 const TOOLS = Object.entries(SECTION_TOOLS)
   .filter(([section]) => SECTIONS.has(section))
-  .flatMap(([, tools]) => tools);
+  .flatMap(([, tools]) => tools)
+  .filter(t => WRITE || !WRITE_TOOLS.has(t.name));
 
 // --- Реализация инструментов ---
 
@@ -374,6 +389,8 @@ async function callTool(name, args) {
   const section = TOOL_SECTION.get(name);
   if (section && !SECTIONS.has(section))
     throw new Error(`Инструмент ${name} недоступен: секция ${section} выключена для этой сессии`);
+  if (!WRITE && WRITE_TOOLS.has(name))
+    throw new Error(`Инструмент ${name} недоступен в этом ходе (только чтение). Попроси пользователя явно сформулировать запрос на запись/создание — тогда инструмент появится.`);
   switch (name) {
     case 'projects_list': {
       const [projects, groups] = await Promise.all([

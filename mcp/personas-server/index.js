@@ -12,6 +12,13 @@
 //   PERSONAS_BINDINGS   — "1" = включены привязки (флаг persona-bindings): добавляются
 //                         инструменты personas_bindings_list/suggest/set и параметры
 //                         bindings/autoBindings в personas_create/personas_update
+//   PERSONAS_WRITE      — "0" = скрыть write-инструменты управления персонами (create/update/
+//                         delete, bindings_set, automation_create/update/delete/test,
+//                         generate_avatar). ClaudeSession выключает их на ходах, не связанных
+//                         с управлением командой, чтобы тяжёлые схемы (PERSONA_FIELDS/
+//                         AUTOMATION_FIELDS ~основная масса контекста сервера) не грузились
+//                         каждый ход. Read/ask-инструменты остаются всегда. Дефолт — включено
+//                         (обратная совместимость прямых запусков); выключается только явным "0".
 //
 //   Правила проактивности (personas_automation_*) доступны ВСЕГДА, без флага (как
 //   personas_create/update) — automation-эндпоинты бэкенда ничем не гейтятся. Персона может
@@ -30,6 +37,9 @@ const PROJECT_ID = process.env.PERSONAS_PROJECT_ID || null;
 const SELF_ID = process.env.PERSONAS_SELF_ID || null;
 const MENTIONS = process.env.PERSONAS_MENTIONS === '1';
 const BINDINGS = process.env.PERSONAS_BINDINGS === '1';
+// Write-инструменты управления персонами. Выключаются только явным "0" (ClaudeSession
+// ставит его на ходах без интента управления командой) — иначе включены (совместимость).
+const WRITE = process.env.PERSONAS_WRITE !== '0';
 
 // --- HTTP к бэкенду ---
 
@@ -176,7 +186,7 @@ const TOOLS = [
       properties: { id: { type: 'string', description: 'ID персоны' } },
     },
   },
-  {
+  ...(WRITE ? [{
     name: 'personas_create',
     description: `Создать персону — AI-собеседника с именем, ролью и характером. ${CONTEXT_NOTE} ` +
       'scope: "global" — доступна во всех чатах (по умолчанию); "project" — привязана к проекту. ' +
@@ -215,7 +225,7 @@ const TOOLS = [
         } : {}),
       },
     },
-  },
+  }] : []),
   // Привязки персон (флаг persona-bindings): источники знаний и правила с условиями применения
   ...(BINDINGS ? [
     {
@@ -238,7 +248,7 @@ const TOOLS = [
         properties: { id: { type: 'string', description: 'ID персоны' } },
       },
     },
-    {
+    ...(WRITE ? [{
       name: 'personas_bindings_set',
       description: 'Полная замена набора привязок персоны (пустой массив — убрать все). ' +
         'Свои собственные привязки персона менять не может.',
@@ -250,7 +260,7 @@ const TOOLS = [
           bindings: { type: 'array', items: BINDING_ITEM_SCHEMA, description: 'Новый набор привязок' },
         },
       },
-    },
+    }] : []),
     {
       name: 'knowledge_search',
       description: 'Гибридный поиск (смысловой + полнотекстовый по ключевым словам) по привязанной ' +
@@ -304,7 +314,7 @@ const TOOLS = [
       properties: { id: { type: 'string', description: 'ID персоны' } },
     },
   },
-  {
+  ...(WRITE ? [{
     name: 'personas_automation_create',
     description: 'Создать правило проактивности персоны. Можно для ЛЮБОЙ персоны, включая ' +
       'саму себя — самоограничений нет. Троттлинг (тихие часы, минимальный интервал, потолок ' +
@@ -379,7 +389,7 @@ const TOOLS = [
         prompt: { type: 'string', description: 'Описание внешности для генерации (необязательно)' },
       },
     },
-  },
+  }] : []),
   // @упоминания (флаг persona-mentions): спросить другую персону — она ответит one-shot'ом
   // от своего лица, со своим характером, памятью и моделью. Глубина делегирования строго 1:
   // one-shot, запущенный persona_ask, этот сервер уже не получает.
@@ -435,7 +445,16 @@ function contractFrom(args) {
   return Object.keys(c).length ? c : null;
 }
 
+// Write-инструменты управления персонами — скрыты при PERSONAS_WRITE="0" (гейт по интенту хода)
+const WRITE_TOOLS = new Set([
+  'personas_create', 'personas_update', 'personas_delete', 'personas_bindings_set',
+  'personas_automation_create', 'personas_automation_update', 'personas_automation_delete',
+  'personas_automation_test', 'personas_generate_avatar',
+]);
+
 async function callTool(name, args) {
+  if (!WRITE && WRITE_TOOLS.has(name))
+    throw new Error('Инструмент управления персонами недоступен в этом ходе. Попроси пользователя явно сформулировать запрос на управление командой (создать/изменить/настроить персону) — тогда инструменты появятся.');
   switch (name) {
     case 'personas_list': {
       const scope = args.scope ?? 'context';

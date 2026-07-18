@@ -257,7 +257,43 @@ public class ClaudeSession : ILlmSessionAdapter
     // CLAUDE_CONFIG_DIR их не видит). null → базовый конфиг как есть.
     // Возвращает путь temp-конфига и отсортированный набор ключей серверов — ключи входят
     // в сигнатуру прогона (сам путь и содержимое меняются каждый ход: новый файл, свежий JWT)
-    private (string? Path, string ServerKeys) BuildTurnMcpConfig(string? datasetId, PersonaAgentsContext? personaAgents = null)
+    // Интент управления командой в тексте хода: действие (создать/изменить/настроить/удалить/…)
+    // + объект (персона/агент/роль/правило/аватар/привязка). Только при совпадении обоих в
+    // personas-server грузятся тяжёлые write-схемы (PERSONAS_WRITE=1). Обычная беседа и
+    // @упоминания (persona_ask — read) их не поднимают. Эвристика консервативная: ложный пропуск
+    // = один ход без write-инструментов (модель попросит переформулировать), а не поломка.
+    private static readonly System.Text.RegularExpressions.Regex PersonaMgmtAction = new(
+        @"созда|сотвор|завед|настро|измен|поменя|обнов|отредактир|редактир|удал|снес|переимен|привяж|отвяж|сгенери|автоматиз|назнач",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex PersonaMgmtObject = new(
+        @"персон|агент|команд|\bрол(ь|и|ью|ей)|правил|проактив|аватар|привязк",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool PersonaManagementIntent(string? turnText)
+    {
+        if (string.IsNullOrWhiteSpace(turnText)) return false;
+        return PersonaMgmtAction.IsMatch(turnText) && PersonaMgmtObject.IsMatch(turnText);
+    }
+
+    // Интент записи в рабочее пространство (wsp write): действие (создать/записать/переименовать/
+    // проиндексировать/отправить/…) + объект рабочего пространства (проект/чат/сессия/база знаний/
+    // индекс/директория). Объект НАМЕРЕННО сужен (без голого «файл/папка»): правки файлов ТЕКУЩЕГО
+    // проекта идут встроенными Read/Edit/Write, а wsp files_write — только для ДРУГИХ проектов, где
+    // пользователь называет проект/чат. Иначе каждый ход разработки поднимал бы тяжёлые схемы зря.
+    private static readonly System.Text.RegularExpressions.Regex WorkspaceWriteAction = new(
+        @"созда|сотвор|завед|запиш|запис|сохран|измен|поменя|обнов|перемест|переимен|удал|добав|индексир|напиш|отправ|перешл",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex WorkspaceWriteObject = new(
+        @"проект|\bчат|сесси|базу знаний|индекс|директори|рабоч\w* простран",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool WorkspaceWriteIntent(string? turnText)
+    {
+        if (string.IsNullOrWhiteSpace(turnText)) return false;
+        return WorkspaceWriteAction.IsMatch(turnText) && WorkspaceWriteObject.IsMatch(turnText);
+    }
+
+    private (string? Path, string ServerKeys) BuildTurnMcpConfig(string? datasetId, PersonaAgentsContext? personaAgents = null, string turnText = "")
     {
         var tasksServerPath = _tasksMcp is not null ? MapMcpPath(TasksServerLocator.FindTasksServerPath()) : null;
         var hasTasks = tasksServerPath is not null;
@@ -373,6 +409,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     && personaAgents is not { AgentHandles.Count: > 0 }
                     && _currentTurnAgentDepth < 1
                     ? "1" : "0";
+                // Write-инструменты управления персонами (create/update/delete, automation_*,
+                // bindings_set, generate_avatar) несут тяжёлые схемы (~28К токенов) — грузим их в
+                // контекст только когда ход реально про управление командой. На агентном ходу
+                // (agentDepth >= 1) управление персонами не нужно — та же анти-рекурсия, что у
+                // mentions. Read/ask-инструменты остаются всегда (надёжные @упоминания без «No such tool»).
+                var personaWrite = _currentTurnAgentDepth < 1 && PersonaManagementIntent(turnText) ? "1" : "0";
                 servers["personas"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
@@ -386,6 +428,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["PERSONAS_SELF_ID"] = _personasMcp.SelfPersonaId ?? "",
                         ["PERSONAS_MENTIONS"] = personaMentions,
                         ["PERSONAS_BINDINGS"] = _personasMcp.BindingsEnabled ? "1" : "0",
+                        ["PERSONAS_WRITE"] = personaWrite,
                     },
                 };
             }
@@ -416,6 +459,12 @@ public class ClaudeSession : ILlmSessionAdapter
                             ? string.Join(",", allowed) : "",
                         ["WORKSPACE_SELF_SESSION_ID"] = _workspaceMcp.SelfSessionId ?? "",
                         ["WORKSPACE_AGENT_DEPTH"] = Math.Max(_workspaceMcp.AgentDepth, _currentTurnAgentDepth).ToString(),
+                        // Тяжёлые write-схемы (files_write с content, projects/chats create/update,
+                        // knowledge_index) грузим в контекст только когда ход про запись в рабочее
+                        // пространство. Read (list/tree/read/search/status/history) — всегда.
+                        // Depth-гейта нет: делегированный ход тоже может нести интент записи; chats
+                        // и destructive и так режутся секциями на агентном ходу выше.
+                        ["WORKSPACE_WRITE"] = WorkspaceWriteIntent(turnText) ? "1" : "0",
                     },
                     // alwaysLoad как у memory/personas: аккаунт-коннекторы claude.ai переводят
                     // CLI в режим deferred-tools, где ленивые серверы прячут инструменты от модели.
@@ -940,7 +989,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)
         var currentWk = _wkStore?.GetByPath(_rootPath);
         var currentDatasetId = currentWk?.DifyDatasetId;
-        var (turnMcpPath, mcpServerKeys) = BuildTurnMcpConfig(currentDatasetId, personaAgents);
+        var (turnMcpPath, mcpServerKeys) = BuildTurnMcpConfig(currentDatasetId, personaAgents, text);
         var effectiveMcpConfig = turnMcpPath ?? _mcpConfigPath;
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
         {
@@ -1069,20 +1118,34 @@ public class ClaudeSession : ILlmSessionAdapter
                 var scope = _personasMcp.ProjectId is not null
                     ? "Текущий контекст — проект: создавая проектную персону (scope \"project\"), projectId можно не указывать."
                     : "Текущий чат вне проекта: по умолчанию создаются глобальные персоны, для проектной укажи projectId.";
+                // Write-интент управления командой — тот же гейт, что у PERSONAS_WRITE в BuildTurnMcpConfig:
+                // на ходах без него тяжёлые схемы create/update/… не грузятся, и подсказка их не обещает.
+                var personaWrite = _currentTurnAgentDepth < 1 && PersonaManagementIntent(text);
                 var personasHint =
                     "У пользователя есть раздел «Персоны» — AI-собеседники с именем, ролью, характером и аватаром, " +
-                    "глобальные или привязанные к проекту. Управляй ими через MCP-инструменты mcp__personas__* " +
-                    "(personas_list, personas_get, personas_create, personas_update, personas_delete, personas_generate_avatar). " +
-                    scope + " Когда пользователь просит создать/изменить/удалить персону или сгенерировать ей аватар — " +
-                    "используй эти инструменты. Создавая персону, заполняй ВСЕ слоты характера: character (на «ты», " +
-                    "«Ты — …»), tone, mustDo, mustNot, outputFormat, speechExamples; приветствие — в greeting от её лица.";
+                    "глобальные или привязанные к проекту. Смотри их через mcp__personas__* (personas_list, personas_get). " +
+                    scope;
+                if (personaWrite)
+                    personasHint +=
+                        " Управляй ими: personas_create, personas_update, personas_delete, personas_generate_avatar — " +
+                        "когда пользователь просит создать/изменить/удалить персону или сгенерировать ей аватар. " +
+                        "Создавая персону, заполняй ВСЕ слоты характера: character (на «ты», «Ты — …»), tone, mustDo, " +
+                        "mustNot, outputFormat, speechExamples; приветствие — в greeting от её лица.";
+                else
+                    personasHint +=
+                        " Инструменты управления (создать/изменить/настроить персону, аватар) появляются, " +
+                        "когда пользователь явно об этом просит.";
                 // Привязки персон (флаг persona-bindings) — кратко про инструменты работы с ними
                 if (_personasMcp.BindingsEnabled)
+                {
                     personasHint +=
                         " У персон есть «привязки» — источники знаний и правила с условиями применения: " +
-                        "personas_bindings_list — посмотреть, personas_suggest_bindings — предложить (не сохраняет), " +
-                        "personas_bindings_set — заменить набор; в personas_create — параметры bindings/autoBindings. " +
-                        "Свои собственные привязки персона менять не может.";
+                        "personas_bindings_list — посмотреть, personas_suggest_bindings — предложить (не сохраняет)";
+                    personasHint += personaWrite
+                        ? ", personas_bindings_set — заменить набор; в personas_create — параметры bindings/autoBindings. " +
+                          "Свои собственные привязки персона менять не может."
+                        : ". Свои собственные привязки персона менять не может.";
+                }
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? personasHint
                     : basePrompt + "\n\n" + personasHint;
@@ -1094,11 +1157,17 @@ public class ClaudeSession : ILlmSessionAdapter
                 var wsScope = _workspaceMcp.ProjectId is not null
                     ? "Текущая сессия идёт в проекте — его файлы правь встроенными Read/Edit/Write, а не через mcp__wsp__files_*."
                     : "Текущая сессия — чат вне проекта.";
-                // Подсказка про чаты — только когда секция chats реально подключена этим ходом
+                // Write-интент записи в рабочее пространство — тот же гейт, что у WORKSPACE_WRITE выше:
+                // без него write-инструменты не загружены, и подсказка их не перечисляет.
+                var wsWrite = WorkspaceWriteIntent(text);
+                // Подсказка про чаты — только когда секция chats реально подключена этим ходом.
+                // Read-инструменты (list/history) — всегда; write (create/update/send) — при wsWrite.
                 var chatsHint = _workspaceMcp.Sections.Contains("chats") && _currentTurnAgentDepth < 1
-                    ? " Плюс чаты пользователя: chats_list, chats_history, chats_create, chats_update " +
-                      "(переименование) и chats_send — полноценный ход в другом чате от имени пользователя " +
-                      "(результат виден ему в ленте)."
+                    ? " Плюс чаты пользователя: chats_list, chats_history" +
+                      (wsWrite
+                        ? ", chats_create, chats_update (переименование) и chats_send — полноценный ход в " +
+                          "другом чате от имени пользователя (результат виден ему в ленте)."
+                        : ".")
                     : "";
                 // Предупреждение про разрушающие операции — только когда секция destructive смонтирована
                 var destructiveHint = _workspaceMcp.Sections.Contains("destructive") && _currentTurnAgentDepth < 1
@@ -1107,13 +1176,20 @@ public class ClaudeSession : ILlmSessionAdapter
                     : "";
                 var workspaceHint =
                     "Тебе доступно всё рабочее пространство пользователя через MCP-инструменты mcp__wsp__*: " +
-                    "список проектов и их карточки (projects_list → projects_get), создание и правка проектов " +
-                    "(projects_create, projects_update), файлы любого проекта (files_tree, files_read, files_write, " +
-                    "files_search, files_mkdir, files_rename), базы знаний проектов (knowledge_search, knowledge_status, " +
-                    "knowledge_index — добавить файл в базу) и единый поиск по заметкам и задачам (search_unified)." +
+                    "список проектов и их карточки (projects_list → projects_get), файлы любого проекта " +
+                    "(files_tree, files_read, files_search), базы знаний проектов (knowledge_search, knowledge_status) " +
+                    "и единый поиск по заметкам и задачам (search_unified)." +
+                    (wsWrite
+                        ? " Запись: projects_create/projects_update, files_write/files_mkdir/files_rename, " +
+                          "knowledge_index (добавить файл в базу). files_write используй только для ДРУГИХ проектов."
+                        : "") +
                     chatsHint + destructiveHint + " " + wsScope + " " +
-                    "files_* используй только для ДРУГИХ проектов. Когда пользователь спрашивает «где-то у меня было…» — " +
-                    "начинай с search_unified. Если вызов вернул «No such tool available» — сервер ещё подключается: " +
+                    "Когда пользователь спрашивает «где-то у меня было…» — начинай с search_unified." +
+                    (wsWrite
+                        ? ""
+                        : " Инструменты записи (создать/изменить проект, записать файл в другой проект, " +
+                          "создать/переименовать чат) появляются, когда пользователь явно об этом просит.") +
+                    " Если вызов вернул «No such tool available» — сервер ещё подключается: " +
                     "подожди мгновение и повтори тот же вызов.";
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? workspaceHint

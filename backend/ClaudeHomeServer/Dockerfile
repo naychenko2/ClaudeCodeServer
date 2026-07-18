@@ -18,8 +18,8 @@ RUN npm ci
 COPY mcp-dify/ ./
 RUN npm run build && npm prune --omit=dev   # tsc → dist/, выкидываем dev-зависимости
 
-# ===== 3. Сборка бэкенда (.NET 9) =====
-FROM mcr.microsoft.com/dotnet/sdk:9.0 AS backend
+# ===== 3. Сборка бэкенда (.NET 10) =====
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS backend
 WORKDIR /src
 COPY backend/ClaudeHomeServer/ClaudeHomeServer.csproj backend/ClaudeHomeServer/
 RUN dotnet restore backend/ClaudeHomeServer/ClaudeHomeServer.csproj
@@ -85,8 +85,8 @@ ENTRYPOINT ["sleep", "infinity"]
 
 FROM node:22-bookworm AS runtime
 
-# .NET 9 runtime из официального образа (вся раскладка /usr/share/dotnet + муксер)
-COPY --from=mcr.microsoft.com/dotnet/aspnet:9.0 /usr/share/dotnet /usr/share/dotnet
+# .NET 10 runtime из официального образа (вся раскладка /usr/share/dotnet + муксер)
+COPY --from=mcr.microsoft.com/dotnet/aspnet:10.0 /usr/share/dotnet /usr/share/dotnet
 RUN ln -sf /usr/share/dotnet/dotnet /usr/bin/dotnet
 ENV DOTNET_ROOT=/usr/share/dotnet
 

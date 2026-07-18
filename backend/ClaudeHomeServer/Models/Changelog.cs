@@ -65,6 +65,17 @@ public record DaySummaryStub(
     bool Cached);
 
 /// <summary>
+/// Кандидат на фоновый прогрев сводки (для ChangelogWarmupService, на фронт не отдается).
+/// </summary>
+/// <param name="Date">День в формате yyyy-MM-dd (локальная дата коммитов).</param>
+/// <param name="Cached">В кеше есть актуальная сводка (хеш sha-набора совпадает) — греть не надо.</param>
+/// <param name="LastCommitAt">Время последнего коммита дня — для «остыва» (день с сыплющимися коммитами не греем).</param>
+public record WarmupCandidate(
+    string Date,
+    bool Cached,
+    DateTimeOffset LastCommitAt);
+
+/// <summary>
 /// Статус настройки источника changelog — чтобы фронт при пустом разделе отличал
 /// «не настроено, донастрой инстанс» от «настроено, но изменений пока нет».
 /// </summary>

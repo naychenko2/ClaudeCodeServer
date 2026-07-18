@@ -73,6 +73,25 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
             .ToList();
     }
 
+    /// <summary>
+    /// Кандидаты на фоновый прогрев за окно (для ChangelogWarmupService, без LLM).
+    /// Cached — как в GetDays: запись в кеше с совпадающим хешем sha-набора
+    /// (degraded-дни с совпадающим хешем тоже cached — их не перегенерируем).
+    /// </summary>
+    public List<WarmupCandidate> GetWarmupCandidates(int sinceDays)
+    {
+        var commits = GetCommitsInWindow(sinceDays);
+        var cache = LoadCache();
+        return commits
+            .GroupBy(c => DayKey(c.Date))
+            .OrderByDescending(g => g.Key)
+            .Select(g => new WarmupCandidate(
+                g.Key,
+                cache.TryGetValue(g.Key, out var cached) && cached.ShasHash == ShasHash(g),
+                g.Max(c => c.Date)))
+            .ToList();
+    }
+
     /// <summary>Продуктовая сводка одного дня: из кеша либо генерация через Claude.</summary>
     public async Task<ChangelogDay> GetDay(string date)
     {

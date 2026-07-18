@@ -1034,15 +1034,17 @@ export function Composer({
       isMobile={isMobile}
       wide={splitActive}
       onCreateGroup={onCreateGroup}
-      // На мобиле «Обсудить с командой» сливается в дропдаун собеседника (разгрузка ряда)
-      onDiscussTeam={isMobile && canDiscuss ? () => setTeamOpen(true) : undefined}
     />
   ) : null;
 
-  // Мобильный overflow «⋯»: цикл «до готово» + вставка скилла (уводим из ряда контролов —
-  // так он не наматывается в 2-3 строки, а «/» скилл возвращается на мобил). Обсуждение
-  // с командой обычно сливается в дропдаун собеседника; если собеседника нет — кладём сюда.
+  // Мобильный overflow «⋯»: вложение файла + цикл «до готово» + вставка скилла (уводим
+  // из ряда контролов — так он не наматывается в 2-3 строки, а в ряду остаётся место
+  // под всегда видимую кнопку «Обсудить с командой»).
   const overflowItems: OverflowItem[] = [];
+  overflowItems.push({
+    key: 'attach', icon: <Plus size={16} strokeWidth={ICON_STROKE} />,
+    label: 'Прикрепить файл', onClick: onAttach,
+  });
   if (onToggleWorkLoop) overflowItems.push({
     key: 'loop', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />,
     label: 'Цикл «до готово»', sublabel: 'Повторять итерациями, пока не готово',
@@ -1051,10 +1053,6 @@ export function Composer({
   if (skills.length > 0) overflowItems.push({
     key: 'slash', icon: <span style={{ fontFamily: FONT.mono, fontSize: 15, fontWeight: 700, lineHeight: 1 }}>/</span>,
     label: 'Вставить скилл', sublabel: 'Список навыков через «/»', onClick: handleSlashButton,
-  });
-  if (canDiscuss && !companionSelector) overflowItems.push({
-    key: 'discuss', icon: <Users size={16} strokeWidth={ICON_STROKE} />,
-    label: 'Обсудить с командой', onClick: () => setTeamOpen(true),
   });
 
   return (
@@ -1199,18 +1197,18 @@ export function Composer({
         </div>
       ) : isMobile ? (
         /* Мобильная раскладка: статус-пилюли + поле сверху; primary-контролы фиксированным
-           рядом снизу. Цикл/скилл спрятаны в «⋯», собеседник и «Обсудить с командой» слиты —
+           рядом снизу. Вложение/цикл/скилл спрятаны в «⋯», «Обсудить с командой» всегда видна —
            row2 не наматывается в 2-3 строки, mic/send всегда на месте (гарантированные 2 строки).
            Грипа здесь нет: разнос на узком экране недоступен (вернётся при расширении). */
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>{teamChip}{loopBadge}{inputArea}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {/* Primary-контролы: overflow-меню, вложение, режим, собеседник */}
+            {/* Primary-контролы: overflow-меню, обсуждение с командой, режим, собеседник */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
               {overflowItems.length > 0 && (
                 <ToolbarOverflowMenu isMobile items={overflowItems} title="Ещё" indicator={loopActive} />
               )}
-              {attachButton}
+              {discussButton}
               {modeButton}
               {companionSelector}
             </div>

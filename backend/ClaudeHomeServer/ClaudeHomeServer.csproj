@@ -14,6 +14,14 @@
   </ItemGroup>
 
 
+  <!-- Хостовый publish: встроенные MCP-серверы и дефолты CLI кладём рядом с exe —
+       TasksServerLocator и синк workflows ищут их от AppContext.BaseDirectory
+       (в контейнере это делала копия в /app из Dockerfile) -->
+  <ItemGroup>
+    <None Include="..\..\mcp\**\*" LinkBase="mcp" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\claude-defaults\**\*" LinkBase="claude-defaults" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.6" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Negotiate" Version="9.0.6" />

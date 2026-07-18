@@ -14,6 +14,11 @@ using Yarp.ReverseProxy.Forwarder;
 
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
+// Кириллица в stdout: без явной кодировки .NET на Windows пишет в OEM (866), и потребители
+// вывода (раннер-трей, docker logs) получают кашу. Единый UTF-8 — при любом способе запуска.
+try { Console.OutputEncoding = System.Text.Encoding.UTF8; }
+catch { /* нет консоли/права — не критично, останется дефолт */ }
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Локальные машинно-специфичные переопределения (пути, URL, секреты).

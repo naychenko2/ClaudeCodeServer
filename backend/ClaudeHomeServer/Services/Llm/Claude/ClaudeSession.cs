@@ -38,6 +38,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // Стриминг tool_use: индекс content-блока → (id инструмента, накопленный partial_json).
     // Concurrent — для видимости между потоками пампа разных ходов
     private readonly ConcurrentDictionary<int, (string Id, System.Text.StringBuilder Sb)> _toolStream = new();
+    // Контекст последнего запроса к API (input + cache_read + cache_creation из usage
+    // последнего assistant-сообщения ОСНОВНОГО агента) — оценка заполнения окна для клиента.
+    // Обновляется на каждом шаге tool-лупа, уезжает в ResultMessage.ContextTokens.
+    private volatile int _lastContextTokens;
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _turnLock = new(1, 1);
     // Сериализует записи в stdin процесса: control_response шлются из SignalR-потоков
@@ -1670,6 +1674,7 @@ public class ClaudeSession : ILlmSessionAdapter
             case "assistant":
                 if (_run is { TurnDone: true } asRun && !HasParentToolUseId(root))
                     asRun.ContinuationActive = true;
+                TrackContextTokens(root);
                 await HandleAssistantToolsAsync(root);
                 break;
 
@@ -1725,7 +1730,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     && !string.IsNullOrWhiteSpace(resText.GetString()))
                     await _onMessage(new ErrorMessage(resText.GetString()!));
                 // Статус Error/Active выставит SessionManager по ResultMessage
-                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials));
+                var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
+                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens));
                 // Ход завершён. Без живых фоновых задач закрываем stdin — CLI выйдет сам,
                 // дальше ждём его не дольше ResultExitGrace. С ними stdin держим открытым:
                 // прогон доживает (агенты работают внутри процесса) и готов принять
@@ -2153,6 +2159,22 @@ public class ClaudeSession : ILlmSessionAdapter
             behavior
         });
         WriteLineToStdin(response);
+    }
+
+    // Размер контекста последнего запроса к API. usage у assistant-сообщения относится к ОДНОМУ
+    // запросу (в отличие от result, где всё сложено за ход), поэтому сумма входных токенов здесь
+    // и есть текущее заполнение окна. Сабагентов пропускаем: у них свой контекст, к окну
+    // основной сессии отношения не имеющий.
+    private void TrackContextTokens(JsonElement root)
+    {
+        if (HasParentToolUseId(root)) return;
+        if (!root.TryGetProperty("message", out var msg)) return;
+        if (!msg.TryGetProperty("usage", out var u)) return;
+
+        var tokens = (u.TryGetProperty("input_tokens", out var i) ? i.GetInt32() : 0)
+            + (u.TryGetProperty("cache_read_input_tokens", out var cr) ? cr.GetInt32() : 0)
+            + (u.TryGetProperty("cache_creation_input_tokens", out var cc) ? cc.GetInt32() : 0);
+        if (tokens > 0) _lastContextTokens = tokens;
     }
 
     private static UsageInfo? ParseUsage(JsonElement root)

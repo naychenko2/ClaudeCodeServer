@@ -1761,7 +1761,7 @@ public class SessionManager
                     if (entry is not null) entry.LastRecallManifest = m;
                     break;
                 case ResultMessage m:
-                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history);
+                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens);
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
                     break;
                 case RateLimitMessage m:

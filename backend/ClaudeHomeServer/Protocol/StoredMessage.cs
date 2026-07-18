@@ -69,7 +69,7 @@ public class StoredFileChangedMessage(string path, int added, int removed) : Sto
 
 public class StoredResultMessage(string subtype, long durationMs, int numTurns,
     UsageInfo? usage = null, double? totalCostUsd = null, string? apiErrorStatus = null,
-    IReadOnlyList<string>? permissionDenials = null) : StoredMessage
+    IReadOnlyList<string>? permissionDenials = null, int? contextTokens = null) : StoredMessage
 {
     public string Subtype { get; init; } = subtype;
     public long DurationMs { get; init; } = durationMs;
@@ -78,6 +78,9 @@ public class StoredResultMessage(string subtype, long durationMs, int numTurns,
     public double? TotalCostUsd { get; init; } = totalCostUsd;
     public string? ApiErrorStatus { get; init; } = apiErrorStatus;
     public IReadOnlyList<string>? PermissionDenials { get; init; } = permissionDenials;
+    // Размер контекста последнего запроса хода — см. ResultMessage.ContextTokens.
+    // В историях до этого поля null: старый чат остаётся без оценки до первого нового хода.
+    public int? ContextTokens { get; init; } = contextTokens;
 }
 
 public class StoredErrorMessage(string text) : StoredMessage

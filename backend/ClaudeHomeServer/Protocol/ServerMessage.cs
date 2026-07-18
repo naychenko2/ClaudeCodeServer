@@ -72,7 +72,11 @@ public record PlanReviewMessage(string RequestId, string Plan)
 public record FileChangedMessage(string Path, int Added, int Removed)
     : ServerMessage("file_changed");
 
-public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null)
+// ContextTokens — размер контекста ПОСЛЕДНЕГО запроса к API за ход (input + cache_read +
+// cache_creation из usage последнего assistant-сообщения основного агента). Именно он, а не
+// Usage: тот суммирует ВСЕ запросы хода (каждый шаг tool-лупа плюс сабагенты), поэтому годится
+// для стоимости, но как оценка заполнения окна завышает её кратно числу тул-вызовов.
+public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null, int? ContextTokens = null)
     : ServerMessage("result");
 
 // Фактически списанная стоимость генерации fal.ai. Приходит асинхронно после tool_result:

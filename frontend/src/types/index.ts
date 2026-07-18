@@ -341,7 +341,9 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'ask_question'; toolUseId: string; input: unknown }
   | { type: 'plan_review'; requestId: string; plan: string }
   | { type: 'file_changed'; path: string; added: number; removed: number }
-  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[] }
+  // contextTokens — размер контекста последнего запроса хода (оценка заполнения окна).
+  // usage для этого не годится: он суммирует все запросы хода, включая сабагентов.
+  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number }
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { type: 'error'; text: string }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean; overageStatus?: string; overageResetsAt?: string }
@@ -498,7 +500,7 @@ export type ChatItem =
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean; answers?: Record<string, string | string[]> }
   | { kind: 'plan_review'; requestId: string; plan: string; resolved: boolean; approved?: boolean; feedback?: string }
   | { kind: 'file_changed'; path: string; added: number; removed: number }
-  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[] }
+  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number }
   | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }
   | { kind: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }

@@ -264,7 +264,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return {
         ...prev,
         isWaiting: false,
-        items: [...prev.items, { kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd, apiErrorStatus: msg.apiErrorStatus, permissionDenials: msg.permissionDenials }],
+        items: [...prev.items, { kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd, apiErrorStatus: msg.apiErrorStatus, permissionDenials: msg.permissionDenials, contextTokens: msg.contextTokens }],
       };
 
     case 'fal_cost':

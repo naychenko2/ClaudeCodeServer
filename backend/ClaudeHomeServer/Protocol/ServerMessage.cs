@@ -207,6 +207,11 @@ public record RecallItemDto(string Kind, string? Ref, string Title, string? Snip
 public record RecallManifestMessage(IReadOnlyList<RecallItemDto> Items)
     : ServerMessage("recall_manifest");
 
+// Подсказка следующего сообщения (флаг prompt-suggestions): текст от claude CLI после хода.
+// Эфемерное событие — в history.json не пишется (нет case в OnMessageAsync и StoredMessage).
+public record PromptSuggestionMessage(string Text)
+    : ServerMessage("prompt_suggestion");
+
 // Сообщения от клиента к серверу
 public record ClientMessage([property: JsonPropertyName("type")] string Type);
 

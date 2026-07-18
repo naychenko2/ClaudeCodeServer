@@ -59,6 +59,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // не дожидаясь часового watchdog.
     private static readonly TimeSpan ResultExitGrace = TimeSpan.FromSeconds(15);
 
+    // Расширенный грейс для прогонов с --prompt-suggestions: CLI генерит подсказку ПОСЛЕ
+    // result (замер: ~9с на лёгком ходе, на тяжёлых дольше) — 15с обрывали её на середине.
+    // Цена расширения — лишнее ожидание только в аварийном случае (CLI сам не вышел).
+    private static readonly TimeSpan PromptSuggestionExitGrace = TimeSpan.FromSeconds(45);
+
     // Потолок доживания процесса с работающими фоновыми агентами после конца хода.
     // Агенты (Agent run_in_background, Workflow) живут ВНУТРИ процесса CLI: убить его
     // по грейсу — значит убить их на середине (наблюдалось на проде: task-notification
@@ -110,6 +115,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // Прогон убит ради несовместимого нового хода: ExitedMessage не слать —
         // статусом сессии владеет уже новый ход
         public volatile bool SuppressExited;
+        // Прогон запущен с --prompt-suggestions: после result ждём выхода CLI дольше
+        // (PromptSuggestionExitGrace) — подсказка генерится и приходит после result
+        public bool PromptSuggestionsActive { get; init; }
 
         public bool HasPendingBg
         {
@@ -186,6 +194,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // Файловые сабагенты-персоны: план хода — папки --add-dir
     // + pmem-серверы памяти консультантов; вычисляется на каждый ход
     private readonly Func<PersonaAgentsContext?>? _personaAgentsProvider;
+    // Подсказка следующего сообщения: флаг prompt-suggestions владельца, проверка на каждый ход
+    private readonly Func<bool>? _promptSuggestionsEnabled;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -222,6 +232,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _workspaceMcp = context.WorkspaceMcp;
         _notificationsMcp = context.NotificationsMcp;
         _personaAgentsProvider = context.PersonaAgentsProvider;
+        _promptSuggestionsEnabled = context.PromptSuggestionsEnabled;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
@@ -891,6 +902,15 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!string.IsNullOrWhiteSpace(Info.Effort))
             args.AddRange(["--effort", Info.Effort]);
 
+        // Подсказка следующего сообщения: CLI после result испускает prompt_suggestion
+        // (генерация фоном с переиспользованием prompt cache хода; при холодном кэше CLI
+        // сам пропускает). Только родной Claude — сторонним провайдерам фоновые запросы
+        // не включаем (кэш-экономика чужая).
+        var promptSuggestionsActive = _promptSuggestionsEnabled?.Invoke() == true
+            && (_providers is null || _providers.ResolveByModel(Info.Model) is null);
+        if (promptSuggestionsActive)
+            args.AddRange(["--prompt-suggestions", "true"]);
+
         // Файловые сабагенты-персоны. На агентном ходу (agentDepth >= 1) план урезается
         // до pmem-серверов: подсказки и --add-dir не даём (анти-рекурсия, как
         // TASKS_EXECUTE/PERSONAS_MENTIONS), но .md-файлы в cwd проекта/Chats CLI видит
@@ -1334,7 +1354,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             _fileWatcher.Start();
 
-            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId };
+            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive };
             // Читаем stderr асинхронно, иначе при переполнении буфера процесс зависнет
             run.StderrTask = process.StandardError.ReadToEndAsync(ct);
 
@@ -1432,6 +1452,7 @@ public class ClaudeSession : ILlmSessionAdapter
     private static TimeSpan WatchdogFor(CliRun run) =>
         !run.TurnDone ? IdleTimeout
         : run.HasPendingBg ? BgLingerTimeout
+        : run.PromptSuggestionsActive ? PromptSuggestionExitGrace
         : ResultExitGrace;
 
     // Финализация прогона: единственная точка уборки после смерти процесса
@@ -1753,8 +1774,49 @@ public class ClaudeSession : ILlmSessionAdapter
             case "rate_limit_event":
                 await HandleRateLimitAsync(root);
                 break;
+
+            case "prompt_suggestion":
+                await HandlePromptSuggestionAsync(root);
+                break;
         }
         } // using (doc)
+    }
+
+    // Подсказка следующего сообщения (--prompt-suggestions): формат поля с текстом
+    // официально не документирован — парсим снисходительно (suggestion/prompt/text,
+    // строка или объект с теми же полями), непонятный payload пропускаем молча.
+    private async Task HandlePromptSuggestionAsync(JsonElement root)
+    {
+        var text = ExtractSuggestionText(root);
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            Console.WriteLine($"[ClaudeSession] prompt_suggestion: {Truncate(text.Trim(), 120)}");
+            await _onMessage(new PromptSuggestionMessage(text.Trim()));
+        }
+        else
+            // Формат события не документирован: если CLI сменил имя поля — увидим в логе
+            Console.WriteLine($"[ClaudeSession] prompt_suggestion без распознанного текста: {Truncate(root.GetRawText(), 300)}");
+    }
+
+    private static string Truncate(string s, int max) =>
+        s.Length <= max ? s : s[..max] + "…";
+
+    private static string? ExtractSuggestionText(JsonElement root)
+    {
+        foreach (var key in (string[])["suggestion", "prompt", "text"])
+        {
+            if (!root.TryGetProperty(key, out var prop)) continue;
+            switch (prop.ValueKind)
+            {
+                case JsonValueKind.String:
+                    return prop.GetString();
+                case JsonValueKind.Object:
+                    var nested = ExtractSuggestionText(prop);
+                    if (nested is not null) return nested;
+                    break;
+            }
+        }
+        return null;
     }
 
     // Сообщение принадлежит сабагенту (у CLI помечено parent_tool_use_id)

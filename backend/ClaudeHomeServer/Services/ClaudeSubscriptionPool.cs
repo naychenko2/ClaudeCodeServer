@@ -33,6 +33,9 @@ public class ClaudeSubscriptionPool
         var list = new List<ClaudeSubscriptionConfig>();
         foreach (var child in config.GetSection(Section).GetChildren())
         {
+            // Запись с ключом основной подписки задаёт только её DisplayName (читает
+            // UsageController) — участником ротации не становится
+            if (child.Key == PrimaryKey) continue;
             var cfg = child.Get<ClaudeSubscriptionConfig>();
             if (cfg is null) continue;
             cfg.Key = child.Key;

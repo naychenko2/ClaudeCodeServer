@@ -8,7 +8,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/usage")]
-public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscriptionPool) : ControllerBase
+public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscriptionPool, IConfiguration config) : ControllerBase
 {
     // История снимков использования лимитов подписки + тариф + per-subscription (для экрана usage)
     [HttpGet]
@@ -24,7 +24,8 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
             var named = new Dictionary<string, SubscriptionUsage>();
             foreach (var (key, snaps) in bySub)
             {
-                var displayName = key == "claude" ? null
+                var displayName = key == ClaudeSubscriptionPool.PrimaryKey
+                    ? config[$"{ClaudeSubscriptionPool.Section}:{ClaudeSubscriptionPool.PrimaryKey}:DisplayName"]
                     : subscriptionPool.All.FirstOrDefault(s => s.Key == key)?.DisplayName;
                 named[key] = new SubscriptionUsage(snaps, displayName,
                     InRotation: subscriptionPool.IsInRotation(key),

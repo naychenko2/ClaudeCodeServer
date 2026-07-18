@@ -14,6 +14,12 @@
   </ItemGroup>
 
 
+  <!-- appsettings.Local.json — машинно-специфичный конфиг ЭТОЙ машины разработчика:
+       в publish не попадает (иначе затирает прод-конфиг при деплое поверх) -->
+  <ItemGroup>
+    <Content Update="appsettings.Local.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
   <!-- Хостовый publish: встроенные MCP-серверы и дефолты CLI кладём рядом с exe —
        TasksServerLocator и синк workflows ищут их от AppContext.BaseDirectory
        (в контейнере это делала копия в /app из Dockerfile) -->

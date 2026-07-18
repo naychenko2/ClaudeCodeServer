@@ -212,16 +212,19 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     };
   }, [sessionId, projectId, isGroup]);
 
-  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined };
+  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, promptSuggestion: null as string | null };
 
   const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string, opts?: { auto?: boolean }) => {
     if (!sessionId) return;
     const auto = opts?.auto ?? false;
     // Авто-ходы (командные механики, «продолжить обсуждение») НЕ добавляем оптимистично:
-    // сервер рассылает их событием user_message в session-группу — иначе дубль в ленте
+    // сервер рассылает их событием user_message в session-группу — иначе дубль в ленте.
+    // promptSuggestion сбрасываем здесь: обычный ход идёт в обход редьюсера, а stale-подсказка
+    // не должна всплывать, если новый ход её не породил (холодный кэш)
     setState(sessionId, prev => ({
       ...prev,
       isWaiting: true,
+      promptSuggestion: null,
       items: auto ? prev.items : [...prev.items, { kind: 'user_message', text, attachedPaths }],
     }));
     try {
@@ -327,10 +330,11 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
   const interrupt = useCallback(() => {
     if (!sessionId) return;
     interruptSession(sessionId);
-    // Оптимистично помечаем ход как остановленный пользователем
+    // Оптимистично помечаем ход как остановленный пользователем; подсказка прерванного хода неактуальна
     setState(sessionId, prev => ({
       ...prev,
       isWaiting: false,
+      promptSuggestion: null,
       items: prev.items[prev.items.length - 1]?.kind === 'interrupted'
         ? prev.items
         : [...prev.items, { kind: 'interrupted' }],
@@ -376,5 +380,5 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     ));
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, promptSuggestion: state.promptSuggestion, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch };
 }

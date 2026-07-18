@@ -363,6 +363,8 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
+  // Подсказка следующего сообщения (флаг prompt-suggestions) — чип в композере
+  | { type: 'prompt_suggestion'; text: string }
 );
 
 export interface UsageInfo {

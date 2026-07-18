@@ -62,6 +62,9 @@ export interface ComposerProps {
   // Краткий контекст последних реплик чата — для механики «Панель экспертов»
   // с настройкой «Приложить контекст чата» (собирает ChatPanel из ленты)
   chatContext?: string;
+  // Подсказка следующего сообщения (флаг prompt-suggestions): текст от сервера после хода,
+  // null — подсказки нет. Чип виден при пустом поле; принятие — тап / → / Tab
+  promptSuggestion?: string | null;
 }
 
 // Получить имя файла из пути
@@ -146,6 +149,7 @@ export function Composer({
   workLoop = null,
   onToggleWorkLoop,
   chatContext,
+  promptSuggestion = null,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
@@ -475,7 +479,33 @@ export function Composer({
     if (Array.from(e.dataTransfer.types).includes('Files')) { e.preventDefault(); setDragOver(true); }
   };
 
+  // Подсказка следующего сообщения: дисмисс крестиком живёт до прихода новой подсказки
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+  useEffect(() => { setSuggestionDismissed(false); }, [promptSuggestion]);
+  const suggestionVisible = !!promptSuggestion && text.trim() === '' && !suggestionDismissed && !isGenerating && !isListening;
+  const acceptSuggestion = useCallback(() => {
+    if (!promptSuggestion) return;
+    setText(promptSuggestion);
+    setTimeout(() => {
+      const el = textareaRef.current;
+      if (el) { el.focus(); el.setSelectionRange(promptSuggestion.length, promptSuggestion.length); }
+    }, 0);
+  }, [promptSuggestion]);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Принятие подсказки: → или Tab при пустом поле. Tab при открытых дропдаунах @ и /
+    // до textarea не доходит — их capture-листенеры на document перехватывают раньше
+    if (suggestionVisible && (e.key === 'ArrowRight' || e.key === 'Tab')) {
+      e.preventDefault();
+      acceptSuggestion();
+      return;
+    }
+    // Esc — скрыть подсказку до прихода следующей
+    if (suggestionVisible && e.key === 'Escape') {
+      e.preventDefault();
+      setSuggestionDismissed(true);
+      return;
+    }
     // На мобиле Enter переносит строку, отправка — только кнопкой (десктоп: Enter отправляет)
     if (e.key === 'Enter' && !e.shiftKey && !isMobile) {
       e.preventDefault();
@@ -812,37 +842,68 @@ export function Composer({
       <Waveform />
     </div>
   ) : (
-    <textarea
-      ref={textareaRef}
-      className="cc-composer-input"
-      value={text}
-      onChange={(e) => {
-        setText(e.target.value);
-        updateSkillDropdown(e.target.value, e.target.selectionStart ?? e.target.value.length);
-      }}
-      onKeyDown={handleKeyDown}
-      onInput={autoResize}
-      onPaste={handlePaste}
-      placeholder={teamMechMeta ? teamMechMeta.placeholder : `Спросите ${asstName}…`}
-      rows={1}
-      style={{
-        flex: 1,
-        width: isMobile ? '100%' : undefined,
-        border: 'none',
-        outline: 'none',
-        resize: 'none',
-        fontSize: isMobile ? 16 : 15, // 16px — чтобы iOS не зумил при фокусе
-        color: C.textPrimary,
-        background: 'transparent',
-        minHeight: 34,
-        maxHeight: 200,
-        lineHeight: '1.5',
-        padding: isMobile ? '6px 8px' : '6px 4px',
-        fontFamily: 'inherit',
-        overflowY: 'auto',
-        boxSizing: 'border-box',
-      }}
-    />
+    // Обёртка нужна ghost-слою подсказки: он позиционируется поверх ПУСТОГО textarea
+    // (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно)
+    <div style={{ position: 'relative', flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex' }}>
+      <textarea
+        ref={textareaRef}
+        className="cc-composer-input"
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          updateSkillDropdown(e.target.value, e.target.selectionStart ?? e.target.value.length);
+        }}
+        onKeyDown={handleKeyDown}
+        onInput={autoResize}
+        onPaste={handlePaste}
+        // Пока видна ghost-подсказка, обычный плейсхолдер прячем — тексты бы наложились
+        placeholder={suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : `Спросите ${asstName}…`}
+        rows={1}
+        style={{
+          flex: 1,
+          width: '100%',
+          border: 'none',
+          outline: 'none',
+          resize: 'none',
+          fontSize: isMobile ? 16 : 15, // 16px — чтобы iOS не зумил при фокусе
+          color: C.textPrimary,
+          background: 'transparent',
+          minHeight: 34,
+          maxHeight: 200,
+          lineHeight: '1.5',
+          padding: isMobile ? '6px 8px' : '6px 4px',
+          fontFamily: 'inherit',
+          overflowY: 'auto',
+          boxSizing: 'border-box',
+        }}
+      />
+      {suggestionVisible && promptSuggestion && (
+        // Ghost text как в Claude Code Desktop: серый текст подсказки в самом поле
+        // + бейдж-клавиша ⇥ (тап — принять; на десктопе также → / Tab).
+        // pointerEvents:none у слоя — тап по полю ставит фокус как обычно
+        <div style={{
+          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', gap: 8,
+          padding: isMobile ? '0 8px' : '0 4px', pointerEvents: 'none', boxSizing: 'border-box',
+          fontSize: isMobile ? 16 : 15, lineHeight: '1.5', color: C.textMuted, minWidth: 0,
+        }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+            {promptSuggestion}
+          </span>
+          <button
+            onClick={acceptSuggestion}
+            title="Вставить подсказку (→ или Tab)"
+            style={{
+              pointerEvents: 'auto', flexShrink: 0, cursor: 'pointer',
+              border: `1px solid ${C.border}`, borderRadius: R.sm, background: 'transparent',
+              color: C.textMuted, fontSize: 11, fontWeight: 600, lineHeight: 1,
+              padding: '3px 7px', fontFamily: 'inherit',
+            }}
+          >
+            ⇥
+          </button>
+        </div>
+      )}
+    </div>
   );
 
   const modeButton = (

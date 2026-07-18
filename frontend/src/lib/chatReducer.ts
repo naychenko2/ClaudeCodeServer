@@ -18,10 +18,13 @@ export interface ChatState {
   // Live-состояние цикла «до готово» (событие work_loop, флаг work-loop).
   // undefined — событий ещё не было (UI берёт значение из Session.workLoop)
   workLoop?: WorkLoopState;
+  // Подсказка следующего сообщения (флаг prompt-suggestions) — чип в композере.
+  // Эфемерная: в историю не пишется, сбрасывается при отправке хода (в хуке).
+  promptSuggestion: string | null;
 }
 
 export function initialChatState(): ChatState {
-  return { items: [], isWaiting: false, rateLimits: {}, isCompacting: false };
+  return { items: [], isWaiting: false, rateLimits: {}, isCompacting: false, promptSuggestion: null };
 }
 
 // Сообщение истории с сервера: сериализованный ChatItem без клиентских UI-полей
@@ -368,6 +371,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...prev,
         workLoop: { active: msg.active, iteration: msg.iteration, maxIterations: msg.maxIterations, phase: msg.phase },
       };
+
+    case 'prompt_suggestion':
+      // Подсказка следующего сообщения — приходит после result хода; в ленту не попадает
+      return { ...prev, promptSuggestion: msg.text };
 
     case 'status_changed':
       // Синхронизируем isWaiting по статусу — работает для всех открытых вкладок/браузеров.

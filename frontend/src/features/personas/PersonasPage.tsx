@@ -61,6 +61,12 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   // когда раздел «Персоны» уже смонтирован и hash просто переключился на «#/personas» без id.
   useEffect(() => {
     const consume = () => {
+      // Хинт с дашборда «Домой» (кнопка «Новая персона») — сразу открыть мастер создания
+      if (sessionStorage.getItem('cc_pending_persona_create')) {
+        sessionStorage.removeItem('cc_pending_persona_create');
+        setSelectedId(null); setCreating(true); setMobileView('card');
+        return;
+      }
       const pending = sessionStorage.getItem('cc_pending_persona_id');
       if (pending) {
         sessionStorage.removeItem('cc_pending_persona_id');

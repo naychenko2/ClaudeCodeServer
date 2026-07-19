@@ -258,42 +258,6 @@ public class ClaudeSession : ILlmSessionAdapter
     // CLAUDE_CONFIG_DIR их не видит). null → базовый конфиг как есть.
     // Возвращает путь temp-конфига и отсортированный набор ключей серверов — ключи входят
     // в сигнатуру прогона (сам путь и содержимое меняются каждый ход: новый файл, свежий JWT)
-    // Интент управления командой в тексте хода: действие (создать/изменить/настроить/удалить/…)
-    // + объект (персона/агент/роль/правило/аватар/привязка). Только при совпадении обоих в
-    // personas-server грузятся тяжёлые write-схемы (PERSONAS_WRITE=1). Обычная беседа и
-    // @упоминания (persona_ask — read) их не поднимают. Эвристика консервативная: ложный пропуск
-    // = один ход без write-инструментов (модель попросит переформулировать), а не поломка.
-    private static readonly System.Text.RegularExpressions.Regex PersonaMgmtAction = new(
-        @"созда|сотвор|завед|настро|измен|поменя|обнов|отредактир|редактир|удал|снес|переимен|привяж|отвяж|сгенери|автоматиз|назнач",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
-    private static readonly System.Text.RegularExpressions.Regex PersonaMgmtObject = new(
-        @"персон|агент|команд|\bрол(ь|и|ью|ей)|правил|проактив|аватар|привязк",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    private static bool PersonaManagementIntent(string? turnText)
-    {
-        if (string.IsNullOrWhiteSpace(turnText)) return false;
-        return PersonaMgmtAction.IsMatch(turnText) && PersonaMgmtObject.IsMatch(turnText);
-    }
-
-    // Интент записи в рабочее пространство (wsp write): действие (создать/записать/переименовать/
-    // проиндексировать/отправить/…) + объект рабочего пространства (проект/чат/сессия/база знаний/
-    // индекс/директория). Объект НАМЕРЕННО сужен (без голого «файл/папка»): правки файлов ТЕКУЩЕГО
-    // проекта идут встроенными Read/Edit/Write, а wsp files_write — только для ДРУГИХ проектов, где
-    // пользователь называет проект/чат. Иначе каждый ход разработки поднимал бы тяжёлые схемы зря.
-    private static readonly System.Text.RegularExpressions.Regex WorkspaceWriteAction = new(
-        @"созда|сотвор|завед|запиш|запис|сохран|измен|поменя|обнов|перемест|переимен|удал|добав|индексир|напиш|отправ|перешл",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
-    private static readonly System.Text.RegularExpressions.Regex WorkspaceWriteObject = new(
-        @"проект|\bчат|сесси|базу знаний|индекс|директори|рабоч\w* простран",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    private static bool WorkspaceWriteIntent(string? turnText)
-    {
-        if (string.IsNullOrWhiteSpace(turnText)) return false;
-        return WorkspaceWriteAction.IsMatch(turnText) && WorkspaceWriteObject.IsMatch(turnText);
-    }
-
     private (string? Path, string ServerKeys) BuildTurnMcpConfig(string? datasetId, PersonaAgentsContext? personaAgents = null, string turnText = "")
     {
         var tasksServerPath = _tasksMcp is not null ? MapMcpPath(TasksServerLocator.FindTasksServerPath()) : null;
@@ -415,7 +379,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // контекст только когда ход реально про управление командой. На агентном ходу
                 // (agentDepth >= 1) управление персонами не нужно — та же анти-рекурсия, что у
                 // mentions. Read/ask-инструменты остаются всегда (надёжные @упоминания без «No such tool»).
-                var personaWrite = _currentTurnAgentDepth < 1 && PersonaManagementIntent(turnText) ? "1" : "0";
+                var personaWrite = _currentTurnAgentDepth < 1 && Prompts.WriteIntentGate.PersonaManagement(turnText) ? "1" : "0";
                 servers["personas"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
@@ -465,7 +429,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         // пространство. Read (list/tree/read/search/status/history) — всегда.
                         // Depth-гейта нет: делегированный ход тоже может нести интент записи; chats
                         // и destructive и так режутся секциями на агентном ходу выше.
-                        ["WORKSPACE_WRITE"] = WorkspaceWriteIntent(turnText) ? "1" : "0",
+                        ["WORKSPACE_WRITE"] = Prompts.WriteIntentGate.WorkspaceWrite(turnText) ? "1" : "0",
                     },
                     // alwaysLoad как у memory/personas: аккаунт-коннекторы claude.ai переводят
                     // CLI в режим deferred-tools, где ленивые серверы прячут инструменты от модели.
@@ -1139,7 +1103,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     : "Текущий чат вне проекта: по умолчанию создаются глобальные персоны, для проектной укажи projectId.";
                 // Write-интент управления командой — тот же гейт, что у PERSONAS_WRITE в BuildTurnMcpConfig:
                 // на ходах без него тяжёлые схемы create/update/… не грузятся, и подсказка их не обещает.
-                var personaWrite = _currentTurnAgentDepth < 1 && PersonaManagementIntent(text);
+                var personaWrite = _currentTurnAgentDepth < 1 && Prompts.WriteIntentGate.PersonaManagement(text);
                 var personasHint =
                     "У пользователя есть раздел «Персоны» — AI-собеседники с именем, ролью, характером и аватаром, " +
                     "глобальные или привязанные к проекту. Смотри их через mcp__personas__* (personas_list, personas_get). " +
@@ -1178,7 +1142,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     : "Текущая сессия — чат вне проекта.";
                 // Write-интент записи в рабочее пространство — тот же гейт, что у WORKSPACE_WRITE выше:
                 // без него write-инструменты не загружены, и подсказка их не перечисляет.
-                var wsWrite = WorkspaceWriteIntent(text);
+                var wsWrite = Prompts.WriteIntentGate.WorkspaceWrite(text);
                 // Подсказка про чаты — только когда секция chats реально подключена этим ходом.
                 // Read-инструменты (list/history) — всегда; write (create/update/send) — при wsWrite.
                 var chatsHint = _workspaceMcp.Sections.Contains("chats") && _currentTurnAgentDepth < 1

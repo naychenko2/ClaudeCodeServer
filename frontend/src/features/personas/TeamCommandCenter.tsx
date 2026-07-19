@@ -381,9 +381,11 @@ function Timeline({ events, personaById, onOpen }: {
   }, [events]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {groups.map(([label, rows]) => (
-        <div key={label} style={{ position: 'relative', paddingLeft: 26 }}>
+        // Колонка с зазором: карточки не слипаются друг с другом и с заголовком дня.
+        // Линия таймлайна абсолютная, в поток не входит и на зазоры не влияет.
+        <div key={label} style={{ position: 'relative', paddingLeft: 26, display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={dayHeaderStyle}>{label}</div>
           {/* вертикальная линия таймлайна */}
           <div style={{ position: 'absolute', left: 4, top: 30, bottom: 6, width: 2, background: C.divider }} />

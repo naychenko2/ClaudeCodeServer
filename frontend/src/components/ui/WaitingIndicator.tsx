@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { C } from '../../lib/design';
 import { pickVerb } from '../chat/thinkingVerbs';
+import aiHome from '../../assets/ai-home.png';
 
-// Живой индикатор ожидания: пульс-аватар Claude + «печатная машинка» по синонимам.
+// Живой индикатор ожидания: значок-логотип «AI Home» с дымком из трубы + «печатная машинка» по синонимам.
 // Текст печатается посимвольно с курсором, в конце дописывается «…», держит паузу,
 // затем стирается и сменяется новым случайным синонимом. Общий для чата и любых
 // других долгих ИИ-операций (подбор/генерация по кнопке «✨ …») — hint поясняет,
@@ -48,11 +49,18 @@ export function WaitingIndicator({ planning, hint }: {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span className="cc-pulse-ring" style={{
-          width: 22, height: 22, borderRadius: 6, background: pulseColor,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        }}>
-          <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.bgMain }} />
+        {/* Значок-логотип «AI Home» маской (тонируется под тему/режим) + дымок из трубы */}
+        <span style={{ position: 'relative', width: 24, height: 22, flexShrink: 0, display: 'inline-block' }}>
+          <span style={{
+            display: 'block', width: 24, height: 22, background: pulseColor,
+            WebkitMaskImage: `url(${aiHome})`, maskImage: `url(${aiHome})`,
+            WebkitMaskRepeat: 'no-repeat', maskRepeat: 'no-repeat',
+            WebkitMaskPosition: 'center', maskPosition: 'center',
+            WebkitMaskSize: 'contain', maskSize: 'contain',
+          }} />
+          {!reduced && (
+            <span className="cc-smoke"><i /><i /><i /><i /></span>
+          )}
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'baseline', minHeight: 17 }}>
           <span className="cc-shimmer-text" style={{ fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>

@@ -139,6 +139,19 @@ body {
 }
 .cc-pulse-ring { animation: cc-pulse-ring 1.6s ease-out infinite; }
 
+/* Дымок из трубы значка ожидания: 4 частицы поднимаются и растут кверху */
+.cc-smoke { position: absolute; top: 1px; left: 19px; width: 0; height: 0; }
+.cc-smoke i { position: absolute; width: 4px; height: 4px; border-radius: 50%; background: var(--c-smoke); opacity: 0; animation: cc-smoke 2.8s ease-out infinite; }
+.cc-smoke i:nth-child(2) { animation-delay: .7s; }
+.cc-smoke i:nth-child(3) { animation-delay: 1.4s; }
+.cc-smoke i:nth-child(4) { animation-delay: 2.1s; }
+@keyframes cc-smoke {
+  0%   { opacity: 0; transform: translate(0, 0) scale(.6); }
+  15%  { opacity: .6; }
+  60%  { opacity: .4; }
+  100% { opacity: 0; transform: translate(-7px, -22px) scale(2.1); }
+}
+
 @keyframes cc-shimmer-text {
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
@@ -197,6 +210,7 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .cc-pulse-ring { animation: none; }
+  .cc-smoke i { animation: none; }
   .cc-shimmer-text { animation: none; -webkit-text-fill-color: var(--c-text-muted); color: var(--c-text-muted); }
   .cc-overlay, .cc-modal-card, .cc-sheet-card { animation: none; }
 }

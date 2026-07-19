@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/sessions/{sessionId}")]
-public class SessionMessagesController(SessionManager sessions, ProjectManager projects) : ControllerBase
+public class SessionMessagesController(SessionManager sessions) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -21,16 +21,8 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
     private const int MaxTextLength = 2000;
 
     // Сессия текущего пользователя: у проектной — владелец проекта, у чата — сама сессия.
-    // Чужая/несуществующая — как отсутствующая (404).
-    private Models.Session? OwnedSession(string sessionId)
-    {
-        var s = sessions.GetById(sessionId);
-        if (s is null) return null;
-        var ownerId = s.ProjectId is not null
-            ? projects.GetById(s.ProjectId)?.OwnerId
-            : s.OwnerId;
-        return ownerId is not null && ownerId == UserId ? s : null;
-    }
+    // Чужая/несуществующая — как отсутствующая (404). Владелец резолвится в SessionManager.
+    private Models.Session? OwnedSession(string sessionId) => sessions.GetOwned(sessionId, UserId);
 
     // GET /api/sessions/{sid}/history?limit= — последние N сообщений (компактно, тексты усечены)
     [HttpGet("history")]

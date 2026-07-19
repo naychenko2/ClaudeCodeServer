@@ -11,20 +11,12 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/board")]
-public class BoardController(BoardService board, SessionManager sessions, ProjectManager projects) : ControllerBase
+public class BoardController(BoardService board, SessionManager sessions) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    // Сессия текущего пользователя: у проектной — владелец проекта, у чата — сама сессия
-    private Session? OwnedSession(string sessionId)
-    {
-        var s = sessions.GetById(sessionId);
-        if (s is null) return null;
-        var ownerId = s.ProjectId is not null
-            ? projects.GetById(s.ProjectId)?.OwnerId
-            : s.OwnerId;
-        return ownerId is not null && ownerId == UserId ? s : null;
-    }
+    // Сессия текущего пользователя (владелец резолвится в SessionManager)
+    private Session? OwnedSession(string sessionId) => sessions.GetOwned(sessionId, UserId);
 
     /// <summary>
     /// GET /api/board/agents — доска агентов: все задачи с исполнителем Claude/персона,

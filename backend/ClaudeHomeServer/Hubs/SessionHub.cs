@@ -34,9 +34,7 @@ public class SessionHub : Hub
     {
         var info = _sessions.GetById(sessionId);
         if (info is null) return false;
-        var ownerId = info.ProjectId is not null
-            ? _projects.GetById(info.ProjectId)?.OwnerId
-            : info.OwnerId;
+        var ownerId = _sessions.ResolveOwnerId(info);
         return ownerId is not null && ownerId == UserId;
     }
 

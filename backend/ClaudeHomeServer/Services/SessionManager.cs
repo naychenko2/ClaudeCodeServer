@@ -671,7 +671,7 @@ public class SessionManager
     public Session? SetParticipants(string sessionId, string ownerId, IReadOnlyList<string> personaIds)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        if (SessionOwner(entry.Info) != ownerId) return null;
+        if (ResolveOwnerId(entry.Info) != ownerId) return null;
 
         var participants = ValidateParticipants(ownerId, personaIds);
         entry.Info.Participants = participants.Select(p => p.Id).ToList();
@@ -695,24 +695,26 @@ public class SessionManager
     public IReadOnlyList<Session> GetPersonaChats(string ownerId, string personaId) =>
         _sessions.Values
             .Select(e => e.Info)
-            .Where(s => s.PersonaId == personaId && SessionOwner(s) == ownerId)
+            .Where(s => s.PersonaId == personaId && ResolveOwnerId(s) == ownerId)
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 
     // Владелец сессии: у чата — OwnerId, у проектной — владелец проекта
-    private string? SessionOwner(Session s) =>
+    // Единая точка резолва владельца сессии: у проектной — владелец проекта, у чата вне
+    // проекта — сама сессия. Единственный источник истины для хаба и контроллеров тоже.
+    public string? ResolveOwnerId(Session s) =>
         s.ProjectId is not null ? _projects.GetById(s.ProjectId)?.OwnerId : s.OwnerId;
 
     // Есть ли у пользователя хоть одна сессия/чат — среда исполнения меняется только «начисто»
     // (корни проектов и профили сред различаются, resume привязан к путям старой среды)
     public bool HasSessionsOwnedBy(string ownerId) =>
-        _sessions.Values.Any(e => SessionOwner(e.Info) == ownerId);
+        _sessions.Values.Any(e => ResolveOwnerId(e.Info) == ownerId);
 
     // Все сессии пользователя (проектные + чаты) — для сводки дашборда «Домой»
     public IReadOnlyCollection<Session> GetAllOwnedBy(string ownerId) =>
         _sessions.Values
             .Select(e => e.Info)
-            .Where(s => SessionOwner(s) == ownerId)
+            .Where(s => ResolveOwnerId(s) == ownerId)
             .ToList();
 
     // Персона-слой сессии (промпт характера + контекст памяти + auto-recall + сама персона
@@ -1033,7 +1035,7 @@ public class SessionManager
     public Session? SetPersona(string sessionId, string ownerId, string? personaId, string? agentName = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        if (SessionOwner(entry.Info) != ownerId) return null;
+        if (ResolveOwnerId(entry.Info) != ownerId) return null;
 
         Persona? persona = null;
         if (!string.IsNullOrEmpty(personaId))
@@ -1099,7 +1101,7 @@ public class SessionManager
     {
         if (entry.Info.Participants is not { Count: > 1 } participantIds) return;
         if (entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting) return;
-        var ownerId = SessionOwner(entry.Info);
+        var ownerId = ResolveOwnerId(entry.Info);
         if (ownerId is null) return;
 
         var participants = participantIds
@@ -1132,10 +1134,7 @@ public class SessionManager
         var entry = new SessionEntry { Info = session, Accumulator = accumulator };
         _sessions[session.Id] = entry;
 
-        // Владелец: у проектной сессии — владелец проекта, у чата — из самой сессии
-        var ownerId = session.ProjectId is not null
-            ? _projects.GetById(session.ProjectId)?.OwnerId
-            : session.OwnerId;
+        var ownerId = ResolveOwnerId(session);
 
         // Персона: её характер инжектится в системный промпт.
         // Scope контекста уже задан типом сессии (глобальная персона → чат без проекта →
@@ -1287,7 +1286,7 @@ public class SessionManager
 
         // Процессы oh-my-claudecode: советнические роли плагина замещаются
         // персонами-сабагентами с подходящей специальностью (таблица соответствий)
-        if (OmcPersonaRouting.MentionsPluginCommand(text) && SessionOwnerId(entry.Info) is { } ownerId)
+        if (OmcPersonaRouting.MentionsPluginCommand(text) && ResolveOwnerId(entry.Info) is { } ownerId)
         {
             var (subagents, _) = SplitConsultants(ownerId, entry.Info,
                 ResolveOtherPersonas(ownerId, entry.Info.ProjectId, entry.Info));
@@ -1298,10 +1297,6 @@ public class SessionManager
         return result;
     }
 
-    // Владелец сессии: у проектной — владелец проекта, у чата — из самой сессии
-    private string? SessionOwnerId(Session session) => session.ProjectId is not null
-        ? _projects.GetById(session.ProjectId)?.OwnerId
-        : session.OwnerId;
 
     // Отправка сообщения с ожиданием завершения хода — REST-канал агентов (chats_send).
     // Занятую или ждущую человека сессию не трогаем (Busy). Таймаут НЕ отменяет ход:
@@ -1576,7 +1571,7 @@ public class SessionManager
     public async Task<Session?> SetWorkLoopAsync(string sessionId, bool enabled, string? userId = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        if (userId is not null && SessionOwnerId(entry.Info) != userId) return null;
+        if (userId is not null && ResolveOwnerId(entry.Info) != userId) return null;
 
         entry.Info.WorkLoop = enabled
             ? new SessionWorkLoop
@@ -2166,7 +2161,7 @@ public class SessionManager
     public Session? GetOwned(string sessionId, string ownerId)
     {
         var s = GetById(sessionId);
-        return s is not null && SessionOwner(s) == ownerId ? s : null;
+        return s is not null && ResolveOwnerId(s) == ownerId ? s : null;
     }
 
     // Рассылаем в session-группу (сам чат) всегда, плюс в project-группу (все вкладки проекта)

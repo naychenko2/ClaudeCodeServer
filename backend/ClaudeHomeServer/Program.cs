@@ -448,9 +448,12 @@ app.Use(async (ctx, next) =>
                 return;
             }
 
-            var destUrl = $"http://127.0.0.1:{port}{restPath}{ctx.Request.QueryString}";
+            // HttpTransformer.Default сам дописывает к префиксу Path и QueryString запроса,
+            // поэтому в префиксе пути быть не должно (иначе /preview/{id} уедет на дев-сервер
+            // дважды и тот ответит 404). Срезаем свой префикс прямо в запросе.
+            ctx.Request.Path = restPath.Length == 0 ? "/" : restPath;
             var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
-            await forwarder.SendAsync(ctx, destUrl, previewInvoker,
+            await forwarder.SendAsync(ctx, $"http://127.0.0.1:{port}", previewInvoker,
                 ForwarderRequestConfig.Empty, HttpTransformer.Default);
             return;
         }

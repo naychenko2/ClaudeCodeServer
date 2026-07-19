@@ -61,8 +61,9 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
               без выравнивания рядов — блоки разной высоты не оставляют дыр),
               на мобилке — один столбец */}
           {/* Порядок колонок: слева — «пульс продукта» (действия → что нового →
-              сейчас работают → команда → использование), справа — «мои пространства»
-              (задачи → чаты → проекты → заметки). Мобильная лента — важное сверху вниз. */}
+              сейчас работают → использование), справа — «мои пространства»
+              (задачи → чаты → проекты → заметки), а «команда» замыкает правую
+              колонку. Мобильная лента — важное сверху вниз. */}
           {isMobile ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <QuickActions onHubTab={onHubTab} onOpenProject={onOpenProject} />
@@ -81,7 +82,6 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
                 <QuickActions onHubTab={onHubTab} onOpenProject={onOpenProject} />
                 <WhatsNewWidget userId={auth.id} />
                 <ActivityWidget active={data?.active ?? []} />
-                <TeamWidget onHubTab={onHubTab} />
                 <UsageWidget />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
@@ -89,6 +89,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
                 <RecentSessionsWidget recent={data?.recent ?? []} onHubTab={onHubTab} />
                 <ProjectsWidget onHubTab={onHubTab} onOpenProject={onOpenProject} />
                 <NotesWidget onHubTab={onHubTab} />
+                <TeamWidget onHubTab={onHubTab} />
               </div>
             </div>
           )}

@@ -143,11 +143,21 @@ export default function App() {
     return () => window.removeEventListener(OPEN_GLOBAL_SEARCH_EVENT, open)
   }, [])
 
+  // Уход в раздел из «глубокого» места (открытый проект, заметка, файл, задача, персона,
+  // база знаний) добавляет запись в историю, а не затирает текущую: иначе снимок того, откуда
+  // ушли, пропадает и Back уводит мимо. Латеральные переходы с плоского экрана — replace.
+  const navToSection = (dest: NavSnapshot) => {
+    const cur = getNav()
+    const deep = !!cur && (cur.screen === 'project' || !!cur.note || !!cur.file || !!cur.task || !!cur.persona || !!cur.knowledge)
+    if (deep) navPush(dest)
+    else navReplace(dest)
+  }
+
   // Переход в раздел «Заметки» по клику на [[wikilink]] из файлов/чата.
   // Целевая заметка передаётся через sessionStorage (cc_pending_note_title),
   // NotesPage подхватывает её при монтировании и по тому же событию.
   useEffect(() => {
-    const open = () => { localStorage.setItem(HUB_TAB_KEY, 'notes'); setHubTab('notes'); navReplace({ screen: 'notes' }) }
+    const open = () => { localStorage.setItem(HUB_TAB_KEY, 'notes'); setHubTab('notes'); navToSection({ screen: 'notes' }) }
     window.addEventListener('cc-open-note', open)
     return () => window.removeEventListener('cc-open-note', open)
   }, [])
@@ -160,7 +170,7 @@ export default function App() {
       if (chatId) localStorage.setItem('cc_open_chat', chatId)
       localStorage.setItem(HUB_TAB_KEY, 'chats')
       setHubTab('chats')
-      navReplace({ screen: 'chats', chatId })
+      navToSection({ screen: 'chats', chatId })
     }
     window.addEventListener('cc-open-chat', open)
     return () => window.removeEventListener('cc-open-chat', open)

@@ -10,7 +10,8 @@ import { WidgetCard, WidgetAction, WidgetEmpty } from './WidgetCard';
 // (студию в разделе «Персоны»). Стор персон уже загружен HomePage (ensurePersonasLoaded).
 export function TeamWidget({ onHubTab }: { onHubTab: (t: HubTab) => void }) {
   const personas = usePersonas();
-  const team = personas.filter(p => p.scope === 'global');
+  // Кап на два ряда плиток — как топ-5 в списочных виджетах; остальные за «Все персоны →»
+  const team = personas.filter(p => p.scope === 'global').slice(0, 12);
 
   const openProfile = (id: string) => {
     window.dispatchEvent(new CustomEvent('cc-open-url', {

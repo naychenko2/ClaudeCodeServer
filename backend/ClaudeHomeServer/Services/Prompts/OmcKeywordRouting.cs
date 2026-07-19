@@ -28,7 +28,9 @@ public static class OmcKeywordRouting
         ("ralplan",         Word(@"ralplan")),
         ("deep-interview",  Word(@"deep[\s-]interview|ouroboros")),
         ("ai-slop-cleaner", Word(@"ai[\s-]?slop|deslop")),
-        ("wiki",            Word(@"wiki(?:\s+(?:this|add|lint|query))?")),
+        // wiki — только с действием (wiki this/add/lint/query): голое «wiki» слишком часто
+        // встречается в обычной речи («посмотри вики», «wiki page») и давало ложный запуск.
+        ("wiki",            Word(@"wiki\s+(?:this|add|lint|query)")),
     ];
 
     // Граница по буквам/цифрам (юникод) — как MagicWordRe в OmcPersonaRouting:

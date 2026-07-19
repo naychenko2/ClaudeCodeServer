@@ -86,6 +86,10 @@ export async function markReadBatch(ids: string[]) {
 
 export async function deleteNotification(id: string) {
   await api(`${BASE}/${id}`, { method: 'DELETE' });
+  // Удаляем непрочитанное — счётчик тоже уменьшаем, иначе бейдж «зависнет» ненулевым
+  if (items.some(i => i.id === id && !i.isRead)) {
+    unreadCount = Math.max(0, unreadCount - 1);
+  }
   items = items.filter(i => i.id !== id);
   notify();
 }
@@ -96,6 +100,11 @@ export async function deleteBatch(ids: string[]) {
     body: JSON.stringify({ ids }),
   });
   const idSet = new Set(ids);
+  // Считаем непрочитанные среди удаляемых ДО фильтрации — иначе счётчик разъедется
+  const removedUnread = items.filter(i => idSet.has(i.id) && !i.isRead).length;
+  if (removedUnread > 0) {
+    unreadCount = Math.max(0, unreadCount - removedUnread);
+  }
   items = items.filter(i => !idSet.has(i.id));
   notify();
   return result.deleted;
@@ -119,6 +128,30 @@ export function isLoaded() { return loaded; }
 // ====== SignalR subscription ======
 
 let subscribed = false;
+
+// Гейт для счётчика непрочитанных: шапка (HubHeader) монтируется заново в каждом
+// разделе, поэтому наивный вызов бил бы по API на каждое переключение таба.
+let unreadInFlight = false;
+let unreadLoadedAt = 0;
+const UNREAD_TTL_MS = 60_000;
+
+/** Подтянуть счётчик непрочитанных для бейджа, если он ещё не известен или протух. */
+export async function ensureUnreadCountLoaded() {
+  // Список уже загружен целиком — счётчик пришёл вместе с ним, запрос не нужен
+  if (loaded) return;
+  if (unreadInFlight) return;
+  if (unreadLoadedAt && Date.now() - unreadLoadedAt < UNREAD_TTL_MS) return;
+
+  unreadInFlight = true;
+  try {
+    await loadUnreadCount();
+    unreadLoadedAt = Date.now();
+  } catch {
+    // Бейдж не критичен — молча живём без него, как HubHeader с api.history.newCount
+  } finally {
+    unreadInFlight = false;
+  }
+}
 
 export function ensureNotificationsSubscribed() {
   if (subscribed) return;

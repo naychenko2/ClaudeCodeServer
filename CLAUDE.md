@@ -56,8 +56,21 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
   Kestrel хоста) через `ResolveTasksApiUrl(ownerId)`; node-серверы `mcp/*/index.js`
   лежат в образе под `/app/mcp` (переписываются в `BuildTurnMcpConfig`).
 - **Корни проектов разведены**: local-юзеры — `DefaultProjectsPath`, container-юзеры —
-  `Sandbox:ProjectsRoot` (в песочницу монтируется только он; `ProjectManager`/
-  `SessionManager.ResolveChatRoot`/`PersonaAgentFileSync` выбирают базу по среде).
+  `Sandbox:ProjectsRoot` (в песочницу монтируется только он). Единая точка резолва —
+  [UserHomeResolver.cs](backend/ClaudeHomeServer/Services/UserHomeResolver.cs): домашняя
+  папка юзера = `{база по среде}/{логин}`, внутри неё живут проекты без явного пути, `Chats`
+  и корни файловых триггеров. Все четыре потребителя (`ProjectManager.Create`,
+  `SessionManager.ResolveChatRoot`, `PersonaAgentFileSync.ChatRoot`, `AutomationRootResolver`)
+  ходят через него.
+  **Override**: `Projects:UserHomeOverrides` (словарь логин → абсолютный путь, в
+  appsettings.Local.json) снимает прослойку `{логин}` — на однопользовательском инстансе
+  можно работать прямо в общей папке (`"admin": "C:\\GIT"`). Путь обязан быть абсолютным, а у
+  container-юзеров — лежать СТРОГО внутри `Sandbox:ProjectsRoot` (сам корень общий для всех
+  изолированных, домом одного быть не может); негодный override игнорируется с warning. Уже
+  созданные проекты не затрагиваются (`RootPath` абсолютный), а у чатов вне проекта меняется
+  cwd — старые такие чаты остаются в прежней папке и могут потерять `--resume`.
+  Существующую папку в проект подключают без всего этого: `POST /api/projects` с явным
+  `rootPath` (на фронте — «Добавить проект» → «Существующий»).
 - **Guard**: смена `ExecutionEnvironment` при существующих чатах запрещена (разные корни
   и профили; `SessionManager.HasSessionsOwnedBy`). **SandboxManager** держит один общий
   контейнер (docker CLI, `sleep infinity`, ленивый `EnsureRunningAsync`, пересоздание при

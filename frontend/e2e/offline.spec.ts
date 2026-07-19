@@ -22,11 +22,6 @@ async function login(request: APIRequestContext): Promise<string> {
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
-async function enableFlag(request: APIRequestContext, token: string, key: string) {
-  const r = await request.put(`/api/feature-flags/${key}`, { headers: auth(token), data: { enabled: true } });
-  expect(r.ok(), `флаг ${key} должен включиться`).toBeTruthy();
-}
-
 // Счётчик записей в сторе IndexedDB (outbox / notesOutbox / noteContent)
 async function idbCount(page: Page, store: string): Promise<number> {
   return page.evaluate(async (s) => {
@@ -47,10 +42,10 @@ test.describe('офлайн-режим', () => {
   let token: string;
 
   test.beforeAll(async ({ playwright, baseURL }) => {
+    // Офлайн-режим задач/заметок теперь включён безусловно (каталог фич-флагов
+    // опустошён — прежние флаги tasks-offline/notes-offline удалены), включать нечего.
     const request = await playwright.request.newContext({ baseURL });
     token = await login(request);
-    await enableFlag(request, token, 'tasks-offline');
-    await enableFlag(request, token, 'notes-offline');
     await request.dispose();
   });
 

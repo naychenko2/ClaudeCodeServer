@@ -290,7 +290,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // передаёт режим ещё раз, так что неудачный запрос не оставит расхождения.
   const changeMode = (m: Mode) => {
     setMode(m);
-    api.chats.setMode(session.id, m).catch(() => { /* режим доедет со следующим сообщением */ });
+    api.chats.setMode(session.id, m)
+      // Обновляем объект сессии у родителя: он держит его в своём состоянии и при
+      // возврате в чат отдаёт обратно пропсом. Без этого сервер уже знает новый режим,
+      // а список сессий — ещё старый, и перемонтированная панель показывает прежний.
+      .then(updated => onSessionUpdated?.(updated))
+      .catch(() => { /* режим доедет со следующим сообщением */ });
   };
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   const [showEdit, setShowEdit] = useState(false);

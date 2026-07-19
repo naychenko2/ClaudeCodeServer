@@ -254,6 +254,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
         )}
         <AvatarMenu
           username={auth.username}
+          displayName={auth.displayName}
           isAdmin={isAdmin}
           serverUrl={serverUrl}
           onLogout={onLogout}

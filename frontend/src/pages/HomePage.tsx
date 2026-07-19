@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import type { AuthState, Project } from '../types';
+import { displayNameOf, type AuthState, type Project } from '../types';
 import { C, FONT } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { ensurePersonasLoaded } from '../lib/personas';
@@ -51,7 +51,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
           {/* Приветствие */}
           <div style={{ marginBottom: isMobile ? 16 : 22 }}>
             <div style={{ fontFamily: FONT.serif, fontSize: isMobile ? 24 : 28, fontWeight: 500, color: C.textHeading }}>
-              {greeting()}, {auth.username}
+              {greeting()}, {displayNameOf(auth)}
             </div>
             <div style={{ fontFamily: FONT.sans, fontSize: 13.5, color: C.textMuted, marginTop: 4 }}>
               {today}

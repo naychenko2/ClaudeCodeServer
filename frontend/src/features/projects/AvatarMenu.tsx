@@ -24,6 +24,8 @@ const dropdownItem: React.CSSProperties = {
 
 interface Props {
   username: string;
+  // Имя из профиля («Григорий»); пусто — обходимся логином
+  displayName?: string;
   isAdmin: boolean;
   serverUrl: string;
   onLogout: () => void;
@@ -43,7 +45,10 @@ interface Props {
   onShowUsage?: () => void;
 }
 
-export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, onOpenKnowledge, onShowUsage }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, onOpenKnowledge, onShowUsage }: Props) {
+  // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
+  // чтобы было понятно, под каким аккаунтом сидишь
+  const name = displayName?.trim() || username;
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const themeMode = useThemeMode();
@@ -83,7 +88,7 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
           color: C.onAccent, fontSize: 11, fontWeight: 700,
           display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
         }}>
-          {username ? username.slice(0, 2).toUpperCase() : 'ME'}
+          {name ? name.slice(0, 2).toUpperCase() : 'ME'}
         </div>
         {!hideStatus && <ConnectionStatus variant="badge" label={serverUrl || 'localhost'} />}
       </div>
@@ -115,9 +120,13 @@ export function AvatarMenu({ username, isAdmin, serverUrl, onLogout, onShowChang
             padding: '8px 14px 6px', fontSize: 12, color: C.textMuted,
             borderBottom: `1px solid ${C.borderLight}`, marginBottom: 4,
           }}>
-            <span style={{ fontWeight: 600, color: C.textHeading }}>{username}</span>
+            <span style={{ fontWeight: 600, color: C.textHeading }}>{name}</span>
             {isAdmin && (
               <span style={{ marginLeft: 6, fontSize: 11, color: C.accent }}>admin</span>
+            )}
+            {/* Логин показываем, только если он отличается от имени — иначе дубль */}
+            {name !== username && username && (
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{username}</div>
             )}
           </div>
           {onShowHistory && (

@@ -283,11 +283,12 @@ export default function App() {
     if (seed.screen === 'knowledge' && initialHash?.screen === 'knowledge') seed.knowledge = initialHash.knowledgeId ?? null
     // Диплинк #/calendar/board: сохраняем доску, чтобы URL пережил перезагрузку
     if (seed.screen === 'calendar' && initialHash?.screen === 'calendar' && initialHash.board) seed.board = true
+    // Диплинк #/chats/{id}: сохраняем чат в снимок, иначе сид затрёт id в URL
+    // (присваиваем ДО navReplace — иначе снимок уже записан и адрес схлопывается в #/chats)
+    if (seed.screen === 'chats' && initialHash?.screen === 'chats' && initialHash.chatId) seed.chatId = initialHash.chatId
     // Диплинк #/history: сид не должен затирать открытый overlay «Что нового» —
     // иначе адрес уезжает на #/home, а страница остаётся открытой
     if (!initialHash?.history) navReplace(seed)
-    // Диплинк #/chats/{id}: сохраняем чат в снимок, иначе сид затрёт id в URL
-    if (seed.screen === 'chats' && initialHash?.screen === 'chats' && initialHash.chatId) seed.chatId = initialHash.chatId
     // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
     // проектом — при hubTab==='chats' проект «спит» и в истории не отражается.
     // Если hash-диплинк указывает на ДРУГОЙ проект — восстановленный не пушим,

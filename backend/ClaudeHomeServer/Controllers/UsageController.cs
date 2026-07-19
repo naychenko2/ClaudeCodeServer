@@ -36,10 +36,15 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                 var displayName = key == ClaudeSubscriptionPool.PrimaryKey
                     ? config[$"{ClaudeSubscriptionPool.Section}:{ClaudeSubscriptionPool.PrimaryKey}:DisplayName"]
                     : subscriptionPool.All.FirstOrDefault(s => s.Key == key)?.DisplayName;
+                // Тариф основной подписки: явно заданный в конфиге, иначе — авто-детект из
+                // .credentials.json (тот же, что показывается в общей плашке плана).
+                var tier = subscriptionPool.TierLabel(key)
+                    ?? (key == ClaudeSubscriptionPool.PrimaryKey ? plan?.Label : null);
                 named[key] = new SubscriptionUsage(snaps, displayName,
                     InRotation: subscriptionPool.IsInRotation(key),
                     Utilization: subscriptionPool.EffectiveUtilization(key),
-                    Exhausted: subscriptionPool.IsExhausted(key));
+                    Exhausted: subscriptionPool.IsExhausted(key),
+                    Tier: tier);
             }
             return Ok(new UsageResponse(all, plan, named, subscriptionPool.SoftThreshold));
         }

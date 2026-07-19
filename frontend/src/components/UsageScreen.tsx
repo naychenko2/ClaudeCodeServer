@@ -102,14 +102,26 @@ function RotationBadge({ info }: { info: RotationInfo }) {
   );
 }
 
-function ClaudeTab({ snapshots, rotation }: { snapshots: UsageSnapshot[] | null | undefined; rotation?: RotationInfo }) {
+function TierPill({ tier }: { tier: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 8,
+      background: C.accentMuted, border: `1px solid ${C.accent}`, marginBottom: 12, marginLeft: 8,
+      fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, color: C.accent }}>
+      Тариф: {tier}
+    </span>
+  );
+}
+
+function ClaudeTab({ snapshots, rotation, tier }: { snapshots: UsageSnapshot[] | null | undefined; rotation?: RotationInfo; tier?: string }) {
   const windows = snapshots ? latestPerWindow(snapshots) : [];
   const series = snapshots ? seriesByWindow(snapshots) : {};
   const latestTs = windows.reduce<number>((a, w) => { const t = w.timestamp ? new Date(w.timestamp).getTime() : 0; return t > a ? t : a; }, 0);
   const stale = latestTs > 0 && Date.now() - latestTs > STALE_MS;
   const worst = worstWindow(windows);
   const trend = worst ? (series[worst.limitType] ?? []) : [];
-  const badge = rotation ? <div><RotationBadge info={rotation} /></div> : null;
+  const badge = (rotation || tier)
+    ? <div>{rotation && <RotationBadge info={rotation} />}{tier && <TierPill tier={tier} />}</div>
+    : null;
 
   if (snapshots === null || snapshots === undefined)
     return <div style={{ padding: '40px 0', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>;
@@ -408,8 +420,8 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
           ))}
         </div>
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px 18px' }}>
-          {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? usage?.snapshots} rotation={rotationOf('claude')} />
-            : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} rotation={rotationOf(tab)} />
+          {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? usage?.snapshots} rotation={rotationOf('claude')} tier={usage?.subscriptions?.['claude']?.tier} />
+            : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} rotation={rotationOf(tab)} tier={usage?.subscriptions?.[tab]?.tier} />
             : tab === 'fal' ? <FalTab days={days} setDays={setDays} />
             : <ProviderTab providerKey={tab} data={provData[tab]} />}
         </div>

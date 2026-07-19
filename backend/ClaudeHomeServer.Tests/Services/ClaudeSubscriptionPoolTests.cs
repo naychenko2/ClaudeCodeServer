@@ -328,4 +328,132 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         pool.SupportsModel("pro", "sonnet").Should().BeTrue();
         pool.SupportsModel(ClaudeSubscriptionPool.PrimaryKey, "opus").Should().BeTrue();
     }
+
+    // --- Приоритизация по тарифу (высший тариф среди доступных выигрывает) ---
+
+    // Конфиг с тарифами: словарь key → tier ("" = не задавать). primaryTier — тариф основной.
+    private IConfiguration ConfigWithTiers(string? primaryTier, params (string key, string tier)[] subs)
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+        };
+        if (!string.IsNullOrEmpty(primaryTier))
+            dict[$"{ClaudeSubscriptionPool.Section}:{ClaudeSubscriptionPool.PrimaryKey}:Tier"] = primaryTier;
+        foreach (var (key, tier) in subs)
+        {
+            dict[$"{ClaudeSubscriptionPool.Section}:{key}:OAuthToken"] = "token-" + key;
+            if (!string.IsNullOrEmpty(tier))
+                dict[$"{ClaudeSubscriptionPool.Section}:{key}:Tier"] = tier;
+        }
+        return new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+    }
+
+    [Fact]
+    public void Pick_ВышеТариф_ВыигрываетДажеПриБольшейЗагрузке()
+    {
+        // big (Max 20×) загружен 0.6, small (Pro) — 0.1; оба ниже порога → берём высший тариф.
+        var config = ConfigWithTiers(null, ("big", "max20"), ("small", "pro"));
+        var usage = new UsageService(config);
+        RecordUtil(usage, "big", 0.6);
+        RecordUtil(usage, "small", 0.1);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("big");
+    }
+
+    [Fact]
+    public void Pick_КрупныйВышеПорога_СпиллНаСвободныйМелкий()
+    {
+        // big (Max 20×) перегружен 0.9 (выше порога) → доступен только small (Pro, 0.2).
+        var config = ConfigWithTiers(null, ("big", "max20"), ("small", "pro"));
+        var usage = new UsageService(config);
+        RecordUtil(usage, "big", 0.9);
+        RecordUtil(usage, "small", 0.2);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("small");
+    }
+
+    [Fact]
+    public void Pick_КрупныйИсчерпан_СпиллНаМелкий()
+    {
+        var config = ConfigWithTiers(null, ("big", "max20"), ("small", "pro"));
+        var pool = new ClaudeSubscriptionPool(config, new UsageService(config));
+        pool.MarkExhausted("big", DateTime.UtcNow.AddHours(2));
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("small");
+    }
+
+    [Fact]
+    public void Pick_ВсеВышеПорога_БерётВысшийТариф()
+    {
+        // Все выше порога 0.8 (в т.ч. основная) → нет «свободных», но приоритет высшему тарифу.
+        var config = ConfigWithTiers(null, ("big", "max20"), ("small", "pro"));
+        var usage = new UsageService(config);
+        RecordUtil(usage, ClaudeSubscriptionPool.PrimaryKey, 0.9);
+        RecordUtil(usage, "big", 0.95);
+        RecordUtil(usage, "small", 0.85);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("big");
+    }
+
+    [Fact]
+    public void Pick_РавныйТариф_ВыбираетНаименееЗагруженную()
+    {
+        var config = ConfigWithTiers(null, ("a", "max5"), ("b", "max5"));
+        var usage = new UsageService(config);
+        RecordUtil(usage, "a", 0.5);
+        RecordUtil(usage, "b", 0.1);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("b");
+    }
+
+    [Fact]
+    public void Pick_ТарифОсновнойИзКонфига_ПриоритетнееМелкойДополнительной()
+    {
+        // Основная — Max 20× (из конфига), дополнительная — Pro; обе свободны → основная.
+        var config = ConfigWithTiers("max20", ("small", "pro"));
+        var pool = new ClaudeSubscriptionPool(config, new UsageService(config));
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be(ClaudeSubscriptionPool.PrimaryKey);
+    }
+
+    [Fact]
+    public void TierLabel_ЧитаетсяИзКонфигаИНормализуется()
+    {
+        var config = ConfigWithTiers("Max 20x", ("small", "pro"));
+        var pool = new ClaudeSubscriptionPool(config, new UsageService(config));
+
+        pool.TierLabel(ClaudeSubscriptionPool.PrimaryKey).Should().Be("Max 20×");
+        pool.TierLabel("small").Should().Be("Pro");
+    }
+
+    [Theory]
+    [InlineData("max20", 4)]
+    [InlineData("Max 20x", 4)]
+    [InlineData("max_20x", 4)]
+    [InlineData("max5", 3)]
+    [InlineData("Max 5x", 3)]
+    [InlineData("max", 2)]
+    [InlineData("pro", 1)]
+    [InlineData("", 0)]
+    [InlineData(null, 0)]
+    [InlineData("нечто", 0)]
+    public void TierRank_Нормализация(string? tier, int expected)
+    {
+        ClaudeHomeServer.Models.ClaudeSubscriptionTier.Rank(tier).Should().Be(expected);
+    }
 }

@@ -25,6 +25,8 @@ public class ClaudeSubscriptionPool
     private readonly UsageService? _usage;
     // Аккаунт с утилизацией 5h-окна >= порога выводится из ротации (если есть кто ниже).
     private readonly double _softThreshold;
+    // Тариф основной подписки из конфига ("ClaudeSubscriptions:claude:Tier"); пусто — не задан.
+    private readonly string _primaryTier;
     // exhaustedKey → resetsAt (UTC, null = пока не сбросится вручную / DefaultExhaustion)
     private readonly ConcurrentDictionary<string, DateTime?> _exhausted = new();
 
@@ -33,8 +35,8 @@ public class ClaudeSubscriptionPool
         var list = new List<ClaudeSubscriptionConfig>();
         foreach (var child in config.GetSection(Section).GetChildren())
         {
-            // Запись с ключом основной подписки задаёт только её DisplayName (читает
-            // UsageController) — участником ротации не становится
+            // Запись с ключом основной подписки задаёт только её DisplayName/Tier (читает
+            // UsageController и приоритизация пула) — участником ротации не становится
             if (child.Key == PrimaryKey) continue;
             var cfg = child.Get<ClaudeSubscriptionConfig>();
             if (cfg is null) continue;
@@ -45,6 +47,7 @@ public class ClaudeSubscriptionPool
         _subscriptions = list.AsReadOnly();
         _usage = usage;
         _softThreshold = config.GetValue($"{Section}:SoftThreshold", DefaultSoftThreshold);
+        _primaryTier = config[$"{Section}:{PrimaryKey}:Tier"] ?? "";
 
         if (usage is not null)
             RestoreFromSnapshots(usage);
@@ -75,31 +78,58 @@ public class ClaudeSubscriptionPool
     /// <summary>Есть ли хотя бы одна дополнительная подписка</summary>
     public bool HasExtra => _subscriptions.Count > 0;
 
-    /// <summary>Выбрать ключ подписки для новой сессии: наименее загруженный аккаунт.</summary>
+    /// <summary>Выбрать ключ подписки для новой сессии: доступный аккаунт с высшим тарифом.</summary>
     /// Жёстко отсекаются исчерпанные (rejected/100% без overage) и аккаунты без доступа
     /// к запрошенной модели (Opus есть не на всех планах — CLI на таком аккаунте падает
-    /// «issue with the selected model»); среди оставшихся — минимальная утилизация
-    /// 5h-окна (при равенстве — случайный). Все способные исчерпаны — минимум из
-    /// способных: лучше упереться в лимит на правильном аккаунте, чем гарантированно
-    /// упасть на неправильном.
+    /// «issue with the selected model»). Среди оставшихся приоритет отдаётся аккаунтам «в
+    /// ротации» (утилизация 5h-окна ниже мягкого порога) — из них берётся высший тариф
+    /// (Max 20× > Max 5× > Max > Pro), при равенстве тарифа — минимальная утилизация. Если
+    /// доступных «свободных» нет (все выше порога), спилл на них же с той же логикой; если
+    /// все исчерпаны — минимум из способных по модели: лучше упереться в лимит на правильном
+    /// аккаунте, чем гарантированно упасть на неправильном.
     public string Pick(string? model = null)
     {
         if (_subscriptions.Count == 0)
             return PrimaryKey;
 
-        var candidates = new List<string>(_subscriptions.Count + 1);
-
-        if (!IsExhausted(PrimaryKey) && SupportsModel(PrimaryKey, model))
-            candidates.Add(PrimaryKey);
-
-        foreach (var sub in _subscriptions)
-            if (!IsExhausted(sub.Key) && SupportsModel(sub.Key, model))
-                candidates.Add(sub.Key);
-
-        if (candidates.Count > 0) return LeastLoaded(candidates);
+        var candidates = AllKeys().Where(k => !IsExhausted(k) && SupportsModel(k, model)).ToList();
+        if (candidates.Count > 0)
+        {
+            // Приоритет свободным (ниже порога) — крупный, но перегруженный тариф уступает
+            // свободному мелкому; если свободных нет — выбираем среди всех кандидатов.
+            var healthy = candidates.Where(k => EffectiveUtilization(k) < _softThreshold).ToList();
+            return PickTopTier(healthy.Count > 0 ? healthy : candidates);
+        }
 
         var capable = AllKeys().Where(k => SupportsModel(k, model)).ToList();
-        return LeastLoaded(capable.Count > 0 ? capable : AllKeys());
+        return PickTopTier(capable.Count > 0 ? capable : AllKeys());
+    }
+
+    // Из набора ключей — высший тариф, при равенстве тарифа — наименее загруженный.
+    private string PickTopTier(IReadOnlyList<string> keys)
+    {
+        if (keys.Count == 0) return PrimaryKey;
+        var topRank = keys.Max(TierRank);
+        var top = keys.Where(k => TierRank(k) == topRank).ToList();
+        return LeastLoaded(top);
+    }
+
+    // Ранг тарифа аккаунта: основная — из конфига primary:Tier, дополнительная — из её Tier.
+    private int TierRank(string key)
+    {
+        var tier = key == PrimaryKey
+            ? _primaryTier
+            : _subscriptions.FirstOrDefault(s => s.Key == key)?.Tier;
+        return ClaudeSubscriptionTier.Rank(tier);
+    }
+
+    /// <summary>Ярлык тарифа аккаунта для UI ("Max 20×", "Pro", …); null — тариф не задан.</summary>
+    public string? TierLabel(string key)
+    {
+        var tier = key == PrimaryKey
+            ? _primaryTier
+            : _subscriptions.FirstOrDefault(s => s.Key == key)?.Tier;
+        return ClaudeSubscriptionTier.Label(tier);
     }
 
     // Модель требует Opus-тира (алиасы opus/opus[1m] и полные id claude-opus-*)

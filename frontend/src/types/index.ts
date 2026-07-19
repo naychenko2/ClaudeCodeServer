@@ -473,6 +473,8 @@ export interface SubscriptionUsage {
   utilization?: number;
   // Жёсткое исчерпание (rejected/100%) — выведен независимо от числа utilization
   exhausted?: boolean;
+  // Ярлык тарифа ("Max 20×", "Pro", …) — по нему пул приоритизирует аккаунты
+  tier?: string;
 }
 
 // Статистика аккаунта fal.ai (баланс + расход за период)

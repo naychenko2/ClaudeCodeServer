@@ -1,7 +1,21 @@
 using System.Text;
+using System.Text.Json;
 using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.Services.Llm;
+
+// Расход одного вызова: токены по видам, стоимость и модель, которой он реально
+// посчитан. Вход разбит на виды — они тарифицируются по-разному (cache read дешевле).
+public sealed record OneShotUsage(
+    long InputTokens, long CacheCreationTokens, long CacheReadTokens, long OutputTokens,
+    double? CostUsd, string? Model)
+{
+    public long TotalInputTokens => InputTokens + CacheCreationTokens + CacheReadTokens;
+}
+
+// Ответ вызова вместе с расходом. Usage = null, если CLI метрик не дал
+// (нераспознанный формат ответа) — потребитель должен это пережить.
+public sealed record OneShotResult(string Text, OneShotUsage? Usage, long DurationMs);
 
 // Абстракция one-shot вызова LLM — для мокирования в тестах.
 // В DI интерфейс указывает на тот же singleton OneShotClaudeRunner.
@@ -14,6 +28,12 @@ public interface IOneShotRunner
     // (локально или в песочнице). null — системный вызов, всегда локально.
     // effort — усилие рассуждения (--effort), для моделей с его поддержкой.
     Task<string> RunAsync(string prompt, string? model = null,
+        TimeSpan? timeout = null, CancellationToken ct = default,
+        string? ownerId = null, string? effort = null);
+
+    // То же, но с расходом вызова (просит у CLI json-формат вместо text).
+    // Для мест, которые показывают пользователю цену генерации.
+    Task<OneShotResult> RunDetailedAsync(string prompt, string? model = null,
         TimeSpan? timeout = null, CancellationToken ct = default,
         string? ownerId = null, string? effort = null);
 }
@@ -34,13 +54,25 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
 
     public async Task<string> RunAsync(string prompt, string? model = null,
         TimeSpan? timeout = null, CancellationToken ct = default,
-        string? ownerId = null, string? effort = null)
+        string? ownerId = null, string? effort = null) =>
+        (await RunCliAsync(prompt, model, timeout, ct, ownerId, effort, withUsage: false)).Text;
+
+    public Task<OneShotResult> RunDetailedAsync(string prompt, string? model = null,
+        TimeSpan? timeout = null, CancellationToken ct = default,
+        string? ownerId = null, string? effort = null) =>
+        RunCliAsync(prompt, model, timeout, ct, ownerId, effort, withUsage: true);
+
+    // withUsage: json-формат вместо text — тот же ответ плюс расход вызова.
+    // Разделение сознательное: текстовый путь используют полтора десятка сервисов,
+    // и лишний слой разбора json им ни к чему.
+    private async Task<OneShotResult> RunCliAsync(string prompt, string? model,
+        TimeSpan? timeout, CancellationToken ct, string? ownerId, string? effort, bool withUsage)
     {
         var launcher = launchers.ForOwner(ownerId);
         var workDir = Path.Combine(launcher.HostTempDir, "claude-oneshot");
         Directory.CreateDirectory(workDir);
 
-        var args = new List<string> { "--print", "--output-format", "text" };
+        var args = new List<string> { "--print", "--output-format", withUsage ? "json" : "text" };
         // Хуки плагинов не нужны и плодят окна консоли на хосте — отключаем (скиллы one-shot не зовёт).
         // Нужно и при --safe-mode: в песочнице флага нет, а хуки отключить всё равно надо.
         args.AddRange(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher));
@@ -89,6 +121,7 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         // возможен deadlock на заполненных пайпах
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(timeout ?? DefaultTimeout);
+        var started = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);
@@ -100,6 +133,7 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             await process.WaitForExitAsync(cts.Token);
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
+            started.Stop();
 
             if (process.ExitCode != 0)
             {
@@ -107,12 +141,17 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
                 // уходит в stdout при пустом stderr. Раньше её тут теряли, и в логах всех
                 // сервисов оставалось «завершился с кодом 1:» без объяснения.
                 var detail = stderr.Trim();
-                if (detail.Length == 0) detail = stdout.Trim();
+                if (detail.Length == 0) detail = ErrorDetail(stdout.Trim(), withUsage);
                 if (detail.Length > 500) detail = detail[..500] + "…";
                 throw new InvalidOperationException(
                     $"claude завершился с кодом {process.ExitCode}: {detail}");
             }
-            return stdout.Trim();
+
+            // Время меряем по своим часам, а не по duration_ms от CLI: пользователь ждёт
+            // весь вызов вместе со стартом процесса (~5-15 с), а не только запрос к API
+            return withUsage
+                ? ParseJsonResult(stdout, model, started.ElapsedMilliseconds)
+                : new OneShotResult(stdout.Trim(), null, started.ElapsedMilliseconds);
         }
         catch (OperationCanceledException)
         {
@@ -120,4 +159,74 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             throw new InvalidOperationException("Claude не ответил за отведённое время");
         }
     }
+
+    // В json-режиме причина ошибки лежит в поле result, а не голым текстом —
+    // достаём её, чтобы в логи и degraded-подпись не уезжала простыня JSON
+    private static string ErrorDetail(string stdout, bool withUsage)
+    {
+        if (!withUsage || stdout.Length == 0) return stdout;
+        try
+        {
+            var root = JsonDocument.Parse(stdout).RootElement;
+            var text = root.TryGetProperty("result", out var r) ? r.GetString() : null;
+            return string.IsNullOrWhiteSpace(text) ? stdout : text!;
+        }
+        catch { return stdout; }
+    }
+
+    // Ответ CLI в json: { result, total_cost_usd, modelUsage: { "<model>": {…} }, usage: {…} }.
+    // Метрики берём из modelUsage — это агрегат по всем итерациям ответа, тогда как usage
+    // описывает только последнюю (на длинных ответах расходятся в разы).
+    private OneShotResult ParseJsonResult(string stdout, string? model, long durationMs)
+    {
+        try
+        {
+            var root = JsonDocument.Parse(stdout).RootElement;
+            var text = (root.TryGetProperty("result", out var r) ? r.GetString() : null) ?? "";
+
+            long input = 0, cacheCreate = 0, cacheRead = 0, output = 0;
+            double? cliCost = null;
+            string? usedModel = null;
+
+            if (root.TryGetProperty("modelUsage", out var mu) && mu.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var m in mu.EnumerateObject())
+                {
+                    usedModel ??= m.Name;
+                    input += Num(m.Value, "inputTokens");
+                    cacheCreate += Num(m.Value, "cacheCreationInputTokens");
+                    cacheRead += Num(m.Value, "cacheReadInputTokens");
+                    output += Num(m.Value, "outputTokens");
+                }
+            }
+            else if (root.TryGetProperty("usage", out var u) && u.ValueKind == JsonValueKind.Object)
+            {
+                input = Num(u, "input_tokens");
+                cacheCreate = Num(u, "cache_creation_input_tokens");
+                cacheRead = Num(u, "cache_read_input_tokens");
+                output = Num(u, "output_tokens");
+            }
+
+            if (root.TryGetProperty("total_cost_usd", out var c) && c.TryGetDouble(out var cost))
+                cliCost = cost;
+
+            // На стороннем эндпоинте CLI считает стоимость по ценам Anthropic — пересчитываем
+            // по ценам конфига (та же логика, что у ходов сессии). Для родного Claude
+            // ComputeCost возвращает null, и остаётся оценка CLI.
+            var usage = new Protocol.UsageInfo((int)input, (int)output, (int)cacheRead, (int)cacheCreate);
+            var finalCost = llmProviders.ComputeCost(model, usage) ?? cliCost;
+
+            return new OneShotResult(text.Trim(),
+                new OneShotUsage(input, cacheCreate, cacheRead, output, finalCost, usedModel ?? model),
+                durationMs);
+        }
+        catch
+        {
+            // Формат ответа не распознан — отдаём как есть, без метрик: генерация важнее цифр
+            return new OneShotResult(stdout.Trim(), null, durationMs);
+        }
+    }
+
+    private static long Num(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var v) && v.TryGetInt64(out var n) ? n : 0;
 }

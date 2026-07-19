@@ -451,7 +451,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
           <div style={{
-            background: C.accentMuted, color: C.textHeading,
+            background: C.bgWhite, color: C.textPrimary,
+            border: `1px solid ${C.borderLight}`, boxShadow: SHADOW.card,
             borderRadius: '18px 18px 4px 18px', padding: '12px 17px', fontSize: 14,
           }}>
             {teamInfo ? (
@@ -484,7 +485,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
               <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                 {item.attachedPaths.map(p => (
                   <span key={p} style={{
-                    background: C.accentLight, borderRadius: 5,
+                    background: C.bgPanel, color: C.textSecondary, borderRadius: 5,
                     padding: '1px 6px', fontSize: 11,
                   }}>
                     {/* В проекте — путь относительно корня; в чате без проекта — только имя файла */}

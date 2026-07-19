@@ -50,9 +50,9 @@ export function WaitingIndicator({ planning, hint }: {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         {/* Значок-логотип «AI Home» маской (тонируется под тему/режим) + дымок из трубы */}
-        <span style={{ position: 'relative', width: 24, height: 22, flexShrink: 0, display: 'inline-block' }}>
+        <span style={{ position: 'relative', width: 19, height: 18, flexShrink: 0, display: 'inline-block' }}>
           <span style={{
-            display: 'block', width: 24, height: 22, background: pulseColor,
+            display: 'block', width: 19, height: 18, background: pulseColor,
             WebkitMaskImage: `url(${aiHome})`, maskImage: `url(${aiHome})`,
             WebkitMaskRepeat: 'no-repeat', maskRepeat: 'no-repeat',
             WebkitMaskPosition: 'center', maskPosition: 'center',

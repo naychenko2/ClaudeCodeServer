@@ -56,7 +56,7 @@ export function TeamWidget({ onHubTab }: { onHubTab: (t: HubTab) => void }) {
   return (
     <WidgetCard
       icon={<Users size={16} strokeWidth={2} />}
-      title="Команда"
+      title="Персоны"
       onCreate={createPersona}
       createTitle="Новая персона"
       action={

@@ -20,8 +20,11 @@ public record PlanInfo(string? SubscriptionType, string? RateLimitTier, string L
 // Ответ /api/usage: история снимков + тариф + per-subscription utilisation.
 // RotationThreshold — порог утилизации 5h-окна, выше которого аккаунт выведен из ротации
 // новых чатов (заполняется только при наличии дополнительных подписок).
+// Providers — снимки окон лимитов сторонних CLI-провайдеров (glm/deepseek): их
+// Anthropic-совместимые эндпоинты тоже шлют rate_limit_event, снимок пишется под ключ провайдера.
 public record UsageResponse(IReadOnlyList<UsageSnapshot> Snapshots, PlanInfo? Plan,
-    Dictionary<string, SubscriptionUsage>? Subscriptions = null, double? RotationThreshold = null);
+    Dictionary<string, SubscriptionUsage>? Subscriptions = null, double? RotationThreshold = null,
+    Dictionary<string, IReadOnlyList<UsageSnapshot>>? Providers = null);
 
 // Utilisation одной подписки: снимки + опциональное имя + статус роутинга.
 // InRotation — берёт ли пул этот аккаунт для новых чатов; Utilization — эффективная

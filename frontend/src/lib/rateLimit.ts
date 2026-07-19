@@ -55,16 +55,34 @@ export function worstWindow(windows: RateWindow[]): RateWindow | undefined {
   return [...windows].sort((a, b) => (rank[b.level] - rank[a.level]) || ((b.utilization ?? 0) - (a.utilization ?? 0)))[0];
 }
 
-// Последний снимок по каждому окну (для колец на экране usage), с временем снимка
+// Последний снимок по каждому окну (для колец на экране usage), с временем снимка.
+// Если самый свежий снимок окна без процента (live-события шлют utilization только у
+// лимита), а раньше в ТОМ ЖЕ окне (сброс совпадает с точностью до пары минут) процент
+// был — берём его: точная цифра опроса не должна затираться событием «в пределах нормы».
+const SAME_WINDOW_MS = 5 * 60_000;
+
 export function latestPerWindow(snapshots: UsageSnapshot[]): Array<RateWindow & { timestamp?: string }> {
   const latest = new Map<string, UsageSnapshot>();
+  const latestWithUtil = new Map<string, UsageSnapshot>();
   for (const s of snapshots) {
+    const ts = new Date(s.timestamp).getTime();
     const prev = latest.get(s.limitType);
-    if (!prev || new Date(s.timestamp).getTime() > new Date(prev.timestamp).getTime()) latest.set(s.limitType, s);
+    if (!prev || ts > new Date(prev.timestamp).getTime()) latest.set(s.limitType, s);
+    if (typeof s.utilization === 'number') {
+      const prevU = latestWithUtil.get(s.limitType);
+      if (!prevU || ts > new Date(prevU.timestamp).getTime()) latestWithUtil.set(s.limitType, s);
+    }
   }
   const map: Record<string, RateLimitInfo> = {};
   latest.forEach((s, k) => {
-    map[k] = { limitType: s.limitType, utilization: s.utilization, status: s.status, isUsingOverage: s.isUsingOverage, resetsAt: s.resetsAt, overageStatus: s.overageStatus, overageResetsAt: s.overageResetsAt };
+    let utilization = s.utilization;
+    if (typeof utilization !== 'number') {
+      const withUtil = latestWithUtil.get(k);
+      const sameWindow = withUtil?.resetsAt && s.resetsAt
+        && Math.abs(new Date(withUtil.resetsAt).getTime() - new Date(s.resetsAt).getTime()) < SAME_WINDOW_MS;
+      if (sameWindow) utilization = withUtil!.utilization;
+    }
+    map[k] = { limitType: s.limitType, utilization, status: s.status, isUsingOverage: s.isUsingOverage, resetsAt: s.resetsAt, overageStatus: s.overageStatus, overageResetsAt: s.overageResetsAt };
   });
   return toRateWindows(map).map(w => ({ ...w, timestamp: latest.get(w.limitType)?.timestamp }));
 }

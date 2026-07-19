@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { RateLimitInfo } from '../../types';
-import { toRateWindows, worstWindow, fmtReset, windowLabel } from '../rateLimit';
+import type { RateLimitInfo, UsageSnapshot } from '../../types';
+import { toRateWindows, worstWindow, fmtReset, windowLabel, latestPerWindow } from '../rateLimit';
 
 const win = (limitType: string, over: Partial<RateLimitInfo> = {}): RateLimitInfo =>
   ({ limitType, ...over });
@@ -56,6 +56,39 @@ describe('toRateWindows', () => {
       warnUtil: 'warn',
       ok: 'normal',
     });
+  });
+});
+
+describe('latestPerWindow', () => {
+  const snap = (ts: string, limitType: string, over: Partial<UsageSnapshot> = {}): UsageSnapshot =>
+    ({ timestamp: ts, limitType, ...over });
+
+  it('берёт последний снимок каждого окна', () => {
+    const out = latestPerWindow([
+      snap('2026-07-19T10:00:00Z', 'five_hour', { utilization: 0.3 }),
+      snap('2026-07-19T12:00:00Z', 'five_hour', { utilization: 0.5 }),
+      snap('2026-07-19T11:00:00Z', 'seven_day', { utilization: 0.1 }),
+    ]);
+    const byType = Object.fromEntries(out.map(w => [w.limitType, w]));
+    expect(byType.five_hour.pct).toBe(50);
+    expect(byType.seven_day.pct).toBe(10);
+  });
+
+  it('свежий снимок без процента наследует процент того же окна (сброс совпадает)', () => {
+    const reset = '2026-07-19T15:00:00Z';
+    const out = latestPerWindow([
+      snap('2026-07-19T10:00:00Z', 'five_hour', { utilization: 0.51, resetsAt: reset }),
+      snap('2026-07-19T12:00:00Z', 'five_hour', { status: 'allowed', resetsAt: reset }),
+    ]);
+    expect(out[0]).toMatchObject({ pct: 51, hasUtil: true, resetsAt: reset });
+  });
+
+  it('после сброса окна старый процент не подставляется', () => {
+    const out = latestPerWindow([
+      snap('2026-07-19T10:00:00Z', 'five_hour', { utilization: 0.9, resetsAt: '2026-07-19T11:00:00Z' }),
+      snap('2026-07-19T12:00:00Z', 'five_hour', { status: 'allowed', resetsAt: '2026-07-19T16:00:00Z' }),
+    ]);
+    expect(out[0].hasUtil).toBe(false);
   });
 });
 

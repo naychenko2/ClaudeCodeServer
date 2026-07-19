@@ -54,7 +54,10 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
                 ["Auth:LoginRateLimit"] = "1000",
                 // не опрашивать claude CLI при прогреве каталога моделей: каждый подъём
                 // приложения спавнил настоящий claude.exe с мелькающими окнами bash/cmd
-                ["ModelCatalog:QueryCli"] = "false"
+                ["ModelCatalog:QueryCli"] = "false",
+                // не опрашивать api/oauth/usage: тест не должен ходить в сеть с реальным
+                // токеном ~/.claude машины
+                ["ClaudeSubscriptions:UsagePollMinutes"] = "0"
             });
         });
 

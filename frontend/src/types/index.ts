@@ -441,6 +441,8 @@ export interface RateLimitInfo {
 export interface UsageSnapshot {
   timestamp: string;
   limitType: string;
+  // Чей снимок: ключ подписки пула ("claude", …) или CLI-провайдера ("glm", "deepseek")
+  subscriptionKey?: string;
   utilization?: number;
   status?: string;
   isUsingOverage?: boolean;
@@ -463,6 +465,9 @@ export interface UsageResponse {
   subscriptions?: Record<string, SubscriptionUsage>;
   // Порог утилизации 5h-окна, выше которого аккаунт выведен из ротации новых чатов
   rotationThreshold?: number;
+  // Снимки окон лимитов сторонних CLI-провайдеров (glm/deepseek) — их Anthropic-совместимые
+  // эндпоинты тоже шлют rate_limit_event, снимки пишутся под ключ провайдера
+  providers?: Record<string, UsageSnapshot[]>;
 }
 
 export interface SubscriptionUsage {

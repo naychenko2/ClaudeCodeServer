@@ -366,7 +366,11 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
     return () => { c = true; };
   }, []);
 
-  const windows = usage?.snapshots ? latestPerWindow(usage.snapshots) : [];
+  // Снимки сторонних провайдеров (glm/deepseek) лежат под их ключами — из сводки Claude
+  // исключаем, чтобы лимит чужого эндпоинта не выглядел клодовским
+  const provSnapKeys = new Set(Object.keys(usage?.providers ?? {}));
+  const claudeSnaps = (usage?.snapshots ?? []).filter(s => !s.subscriptionKey || !provSnapKeys.has(s.subscriptionKey));
+  const windows = latestPerWindow(claudeSnaps);
   const worst = worstWindow(windows);
   const plan = usage?.plan;
   const lowBal = typeof falBalance === 'number' && falBalance < LOW_BALANCE;
@@ -420,7 +424,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
           ))}
         </div>
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px 18px' }}>
-          {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? usage?.snapshots} rotation={rotationOf('claude')} tier={usage?.subscriptions?.['claude']?.tier} />
+          {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? (usage ? claudeSnaps : usage)} rotation={rotationOf('claude')} tier={usage?.subscriptions?.['claude']?.tier} />
             : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} rotation={rotationOf(tab)} tier={usage?.subscriptions?.[tab]?.tier} />
             : tab === 'fal' ? <FalTab days={days} setDays={setDays} />
             : <ProviderTab providerKey={tab} data={provData[tab]} />}

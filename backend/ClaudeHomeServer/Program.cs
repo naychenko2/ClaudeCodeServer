@@ -85,6 +85,8 @@ builder.Services.AddSingleton(sp => new ClaudeSubscriptionPool(
     sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<UsageService>()));
 // Стартовый прогрев утилизации подписок (один пробный ход на аккаунт) — при HasExtra и флаге
 builder.Services.AddHostedService<SubscriptionUsageWarmupService>();
+// Точная утилизация обоих окон (5ч + неделя) каждого аккаунта через api/oauth/usage
+builder.Services.AddHostedService<SubscriptionOAuthUsageService>();
 builder.Services.AddSingleton<PersonaAgentFileGenerator>();
 builder.Services.AddSingleton<PersonaAgentFileSync>();
 builder.Services.AddSingleton<FalImageService>();
@@ -175,6 +177,7 @@ builder.Services.AddHttpClient("safe-download")
 builder.Services.AddHttpClient("dify");
 builder.Services.AddHttpClient("fal");
 builder.Services.AddHttpClient("llm-provider");
+builder.Services.AddHttpClient("anthropic-oauth");
 builder.Services.AddHttpForwarder();
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));

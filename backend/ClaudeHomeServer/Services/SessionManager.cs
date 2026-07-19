@@ -1456,38 +1456,48 @@ public class SessionManager
 
     // Редактирование названия и модели. Модель применяется со следующего хода
     // (процесс claude пересоздаётся в RunTurnAsync), Info — общая ссылка с адаптером.
+    //
+    // PATCH-семантика: null = «поле не передано, не трогать». Иначе частичные апдейты
+    // (MCP chats_update только с name; PUT {pinned} из togglePin) затирали бы модель/имя,
+    // а для начатой сессии стороннего провайдера ещё и падали с «нельзя сменить провайдера».
     public Session? Update(string sessionId, string? name, string? model, string? effort)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        var newModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
 
-        // Смена провайдера: контекст сессии живёт у провайдера (транскрипт эндпоинта),
-        // «переехавшая» сессия молча потеряла бы его — для начатых сессий запрещаем.
-        // Проверяем: если новый model ведёт к другому стороннему провайдеру (DeepSeek/GLM),
-        // а сессия начата — запрещаем. В рамках одного провайдера/пула модель менять можно.
-        var newProvKey = _llmProviders.ResolveByModel(newModel)?.Key;
-        var curProvKey = _llmProviders.ResolveByModel(entry.Info.Model)?.Key;
-        // Если обе модели не матчатся стороннему провайдеру — обе «Claude»; смена внутри пула разрешена.
-        if (newProvKey != curProvKey)
+        if (model is not null)
         {
-            if (entry.Info.ClaudeSessionId is not null)
-                throw new InvalidOperationException(
-                    "Нельзя сменить провайдера у начатой сессии — создайте новый чат");
-            // Ходов ещё не было — пересоздаём адаптер нужного типа при следующем сообщении
-            if (entry.Process is { } old)
+            var newModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+
+            // Смена провайдера: контекст сессии живёт у провайдера (транскрипт эндпоинта),
+            // «переехавшая» сессия молча потеряла бы его — для начатых сессий запрещаем.
+            // В рамках одного провайдера/пула модель менять можно.
+            var newProvKey = _llmProviders.ResolveByModel(newModel)?.Key;
+            var curProvKey = _llmProviders.ResolveByModel(entry.Info.Model)?.Key;
+            if (newProvKey != curProvKey)
             {
-                entry.Process = null;
-                FireAndForget(old.DisposeAsync().AsTask(),
-                    $"остановка адаптера при смене провайдера ({sessionId})");
+                if (entry.Info.ClaudeSessionId is not null)
+                    throw new InvalidOperationException(
+                        "Нельзя сменить провайдера у начатой сессии — создайте новый чат");
+                // Ходов ещё не было — пересоздаём адаптер нужного типа при следующем сообщении
+                if (entry.Process is { } old)
+                {
+                    entry.Process = null;
+                    FireAndForget(old.DisposeAsync().AsTask(),
+                        $"остановка адаптера при смене провайдера ({sessionId})");
+                }
             }
+
+            entry.Info.Model = newModel;
+            // При смене модели на стороннего провайдера — обновляем Provider
+            if (newModel is not null && _llmProviders.ResolveByModel(newModel) is { } newProv)
+                entry.Info.Provider = newProv.Key;
         }
 
-        entry.Info.Name = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
-        entry.Info.Model = newModel;
-        // При смене модели на стороннего провайдера — обновляем Provider
-        if (newModel is not null && _llmProviders.ResolveByModel(newModel) is { } newProv)
-            entry.Info.Provider = newProv.Key;
-        entry.Info.Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim();
+        if (name is not null)
+            entry.Info.Name = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+        if (effort is not null)
+            entry.Info.Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim();
+
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return entry.Info;

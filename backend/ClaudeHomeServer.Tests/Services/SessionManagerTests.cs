@@ -192,6 +192,51 @@ public class SessionManagerTests : IDisposable
         session.Name.Should().Be("Мой чат");
     }
 
+    // --- Update: PATCH-семантика (null = не трогать) ---
+
+    [Fact]
+    public async Task Update_NullFields_KeepExistingNameModelEffort()
+    {
+        var dir = MkProjectDir("upd");
+        var project = _projectManager.Create("UPD", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Имя", model: "opus", effort: "high");
+
+        // Частичный апдейт (как togglePin/chats_update): все поля null — ничего не затирается
+        var updated = _sut.Update(session.Id, name: null, model: null, effort: null);
+
+        updated!.Name.Should().Be("Имя");
+        updated.Model.Should().Be("opus");
+        updated.Effort.Should().Be("high");
+    }
+
+    [Fact]
+    public async Task Update_OnlyName_DoesNotWipeModel()
+    {
+        var dir = MkProjectDir("upd2");
+        var project = _projectManager.Create("UPD2", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Старое", model: "opus", effort: "high");
+
+        var updated = _sut.Update(session.Id, name: "Новое", model: null, effort: null);
+
+        updated!.Name.Should().Be("Новое");
+        updated.Model.Should().Be("opus", "модель не передавалась — не трогаем");
+        updated.Effort.Should().Be("high");
+    }
+
+    [Fact]
+    public async Task Update_ExplicitValues_AreApplied()
+    {
+        var dir = MkProjectDir("upd3");
+        var project = _projectManager.Create("UPD3", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "N", model: "opus", effort: "high");
+
+        var updated = _sut.Update(session.Id, name: "N2", model: "sonnet", effort: "low");
+
+        updated!.Name.Should().Be("N2");
+        updated.Model.Should().Be("sonnet");
+        updated.Effort.Should().Be("low");
+    }
+
     [Fact]
     public async Task CreateAsync_WithTaskId_SessionHasTaskIdAndTaskOrigin()
     {

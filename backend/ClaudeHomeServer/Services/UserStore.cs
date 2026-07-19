@@ -234,6 +234,20 @@ public class UserStore
         }
     }
 
+    /// <summary>Сохраняет аккаунт Forgejo (логин + персональный токен) после провижна.</summary>
+    public bool SetForgejoAccount(string id, string username, string token)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            user.ForgejoUsername = username;
+            user.ForgejoToken = token;
+            Save();
+            return true;
+        }
+    }
+
     /// <summary>
     /// Устанавливает per-user override фич-флага. Возвращает false если пользователь не найден.
     /// </summary>

@@ -174,6 +174,11 @@ public record NotesChangedMessage(string Action, string? NoteId = null)
 public record KnowledgeChangedMessage(string Action, string? DatasetId = null)
     : ServerMessage("knowledge_changed");
 
+// Изменение git-статуса проекта (commit/stage/unstage/checkout/discard) — в группу
+// user_{userId}. Без payload: клиент сам перезапрашивает GET git/status (не спамим).
+public record GitStatusChangedMessage(string ProjectId)
+    : ServerMessage("git_status_changed");
+
 // Изменение персон — created/updated/deleted — в группу user_{userId},
 // чтобы все устройства обновили раздел «Персоны».
 public record PersonasChangedMessage(string Action, string? PersonaId = null)

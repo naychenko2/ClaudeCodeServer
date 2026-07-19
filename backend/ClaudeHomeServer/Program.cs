@@ -97,6 +97,10 @@ builder.Services.AddHostedService<PersonaProjectBindingsMigration>();
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitServerService>();
+// Режим документов: авто-commit/push после каждого хода Claude (Project.GitAutoCommit)
+builder.Services.AddHostedService<ClaudeHomeServer.Services.Git.GitAutoCommitService>();
 builder.Services.AddSingleton<NotesService>();
 builder.Services.AddSingleton<NotesKnowledgeService>();
 builder.Services.AddSingleton<NotesAiService>();
@@ -165,6 +169,7 @@ builder.Services.AddHttpClient("proxy");
 builder.Services.AddHttpClient("safe-download")
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient("dify");
+builder.Services.AddHttpClient("forgejo");
 builder.Services.AddHttpClient("fal");
 builder.Services.AddHttpClient("llm-provider");
 builder.Services.AddHttpForwarder();

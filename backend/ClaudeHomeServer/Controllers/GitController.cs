@@ -1,0 +1,322 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Git;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
+
+namespace ClaudeHomeServer.Controllers;
+
+[ApiController]
+[Authorize]
+[Route("api/projects/{projectId}/git")]
+public class GitController(GitService git, GitServerService gitServer, ProjectManager projects, UserStore users, IHubContext<SessionHub> hub) : ControllerBase
+{
+    private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
+    // Креды Forgejo владельца проекта — для push/pull/fetch по HTTP (null — без кред,
+    // git попробует анонимно/системный helper, публичные remote так тоже работают)
+    private GitCredentials? CredsFor(Models.Project p)
+    {
+        var owner = p.OwnerId is null ? null : users.GetById(p.OwnerId);
+        return owner is { ForgejoUsername: { Length: > 0 } u, ForgejoToken: { Length: > 0 } t }
+            ? new GitCredentials(u, t)
+            : null;
+    }
+
+    // Проект текущего пользователя; чужой/несуществующий → 404 (как в FilesController)
+    private Models.Project GetProject(string projectId)
+    {
+        var p = projects.GetById(projectId);
+        if (p is null || p.OwnerId != UserId)
+            throw new KeyNotFoundException($"Проект не найден: {projectId}");
+        return p;
+    }
+
+    // Владелец проекта = резолвит среду исполнения git (local/container).
+    // OwnerId nullable по модели; ForOwner(null) корректно даёт локальную среду.
+    private static string? Owner(Models.Project p) => p.OwnerId;
+
+    private Task NotifyChanged(string projectId) =>
+        hub.Clients.Group("user_" + UserId).SendAsync("message", new GitStatusChangedMessage(projectId));
+
+    [HttpGet("status")]
+    public async Task<IActionResult> Status(string projectId, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(await git.StatusAsync(Owner(p), p.RootPath, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    [HttpGet("diff")]
+    public async Task<IActionResult> Diff(string projectId, [FromQuery] string path, [FromQuery] bool staged = false, CancellationToken ct = default)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var diff = await git.DiffFileAsync(Owner(p), p.RootPath, path, staged, ct);
+            return Ok(new { diff });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    [HttpGet("log")]
+    public async Task<IActionResult> Log(string projectId, [FromQuery] int limit = 100, [FromQuery] string? branch = null, CancellationToken ct = default)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(await git.LogAsync(Owner(p), p.RootPath, limit, branch, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    [HttpGet("commits/{sha}")]
+    public async Task<IActionResult> CommitDetail(string projectId, string sha, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var detail = await git.CommitDetailAsync(Owner(p), p.RootPath, sha, ct);
+            return detail is null ? NotFound() : Ok(detail);
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    [HttpGet("commits/{sha}/diff")]
+    public async Task<IActionResult> CommitFileDiff(string projectId, string sha, [FromQuery] string path, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var diff = await git.CommitFileDiffAsync(Owner(p), p.RootPath, sha, path, ct);
+            return Ok(new { diff });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    [HttpGet("branches")]
+    public async Task<IActionResult> Branches(string projectId, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(await git.BranchesAsync(Owner(p), p.RootPath, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    [HttpPost("stage")]
+    public Task<IActionResult> Stage(string projectId, [FromBody] GitPathRequest body, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.StageAsync(Owner(p), p.RootPath, body.Path, ct));
+
+    [HttpPost("unstage")]
+    public Task<IActionResult> Unstage(string projectId, [FromBody] GitPathRequest body, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.UnstageAsync(Owner(p), p.RootPath, body.Path, ct));
+
+    [HttpPost("stage-all")]
+    public Task<IActionResult> StageAll(string projectId, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.StageAllAsync(Owner(p), p.RootPath, ct));
+
+    // Откат правок файла к HEAD — теряет несохранённые изменения (подтверждение на фронте)
+    [HttpPost("discard")]
+    public Task<IActionResult> Discard(string projectId, [FromBody] GitPathRequest body, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.DiscardAsync(Owner(p), p.RootPath, body.Path, ct));
+
+    // Зернистый stage: патч хунка/выбранных строк (синтезирует фронт)
+    [HttpPost("stage-hunk")]
+    public Task<IActionResult> StageHunk(string projectId, [FromBody] GitPatchRequest body, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.StageHunkAsync(Owner(p), p.RootPath, body.Patch, ct));
+
+    [HttpPost("unstage-hunk")]
+    public Task<IActionResult> UnstageHunk(string projectId, [FromBody] GitPatchRequest body, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.UnstageHunkAsync(Owner(p), p.RootPath, body.Patch, ct));
+
+    // ---------- Stash ----------
+
+    [HttpGet("stash")]
+    public async Task<IActionResult> StashList(string projectId, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(await git.StashListAsync(Owner(p), p.RootPath, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    [HttpPost("stash")]
+    public Task<IActionResult> StashPush(string projectId, [FromBody] GitStashRequest body, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.StashPushAsync(Owner(p), p.RootPath, body.Message, ct));
+
+    [HttpPost("stash/{index:int}/pop")]
+    public Task<IActionResult> StashPop(string projectId, int index, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.StashPopAsync(Owner(p), p.RootPath, index, ct));
+
+    // Удаление стэша необратимо — фронт спрашивает подтверждение
+    [HttpDelete("stash/{index:int}")]
+    public Task<IActionResult> StashDrop(string projectId, int index, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.StashDropAsync(Owner(p), p.RootPath, index, ct));
+
+    // Безопасная отмена коммита: git revert — новый коммит, история не переписывается
+    [HttpPost("commits/{sha}/revert")]
+    public Task<IActionResult> RevertCommit(string projectId, string sha, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.RevertCommitAsync(Owner(p), p.RootPath, sha, ct));
+
+    [HttpGet("blame")]
+    public async Task<IActionResult> Blame(string projectId, [FromQuery] string path, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(await git.BlameAsync(Owner(p), p.RootPath, path, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    [HttpPost("commit")]
+    public async Task<IActionResult> Commit(string projectId, [FromBody] GitCommitRequest body, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(body.Message))
+            return BadRequest(new { error = "Пустое сообщение коммита" });
+        try
+        {
+            var p = GetProject(projectId);
+            var sha = await git.CommitAsync(Owner(p), p.RootPath, body.Message, body.Amend, ct);
+            await NotifyChanged(projectId);
+            return Ok(new { sha });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    [HttpPost("fetch")]
+    public Task<IActionResult> Fetch(string projectId, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.FetchAsync(Owner(p), p.RootPath, CredsFor(p), ct));
+
+    [HttpPost("pull")]
+    public Task<IActionResult> Pull(string projectId, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.PullAsync(Owner(p), p.RootPath, CredsFor(p), ct));
+
+    [HttpPost("push")]
+    public async Task<IActionResult> Push(string projectId, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var status = await git.StatusAsync(Owner(p), p.RootPath, ct);
+            // Ветка без upstream (первый push) — сразу с -u origin <branch>
+            if (status.Upstream is null && status.Branch is not null)
+                await git.PushSetUpstreamAsync(Owner(p), p.RootPath, status.Branch, CredsFor(p), ct);
+            else
+                await git.PushAsync(Owner(p), p.RootPath, CredsFor(p), ct);
+            await NotifyChanged(projectId);
+            return Ok(await git.StatusAsync(Owner(p), p.RootPath, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    // Инициализация git в папке проекта + (при настроенном Forgejo) создание remote-репозитория
+    [HttpPost("init")]
+    public async Task<IActionResult> Init(string projectId, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            await git.InitAsync(Owner(p), p.RootPath, ct);
+            string? htmlUrl = null;
+            if (gitServer.Enabled && p.OwnerId is not null && users.GetById(p.OwnerId) is { } owner)
+            {
+                var repo = await gitServer.CreateRepoAsync(owner, p.Name, ct);
+                await git.SetRemoteAsync(Owner(p), p.RootPath, repo.CloneUrl, ct);
+                projects.UpdateGitSettings(p.Id, remoteUrl: repo.CloneUrl);
+                htmlUrl = repo.HtmlUrl;
+            }
+            await NotifyChanged(projectId);
+            return Ok(new { status = await git.StatusAsync(Owner(p), p.RootPath, ct), htmlUrl });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    // Данные remote для UI: настроен ли Forgejo, подключён ли origin, deep-link
+    [HttpGet("remote")]
+    public IActionResult Remote(string projectId)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var owner = p.OwnerId is null ? null : users.GetById(p.OwnerId);
+            string? htmlUrl = null;
+            if (p.GitRemoteUrl is not null && owner?.ForgejoUsername is not null)
+            {
+                // clone URL → html: срезать .git
+                htmlUrl = p.GitRemoteUrl.EndsWith(".git") ? p.GitRemoteUrl[..^4] : p.GitRemoteUrl;
+            }
+            return Ok(new { serverEnabled = gitServer.Enabled, remoteUrl = p.GitRemoteUrl, htmlUrl, autoCommit = p.GitAutoCommit, autoPush = p.GitAutoPush });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    // Режим документов: авто-commit (и опционально push) после каждого хода Claude
+    [HttpPut("auto-commit")]
+    public IActionResult SetAutoCommit(string projectId, [FromBody] GitAutoCommitRequest body)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var updated = projects.UpdateGitSettings(p.Id, autoCommit: body.Enabled, autoPush: body.Push);
+            return Ok(new { autoCommit = updated.GitAutoCommit, autoPush = updated.GitAutoPush });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    [HttpPost("checkout")]
+    public Task<IActionResult> Checkout(string projectId, [FromBody] GitCheckoutRequest body, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.CheckoutAsync(Owner(p), p.RootPath, body.Branch, ct));
+
+    [HttpPost("branches")]
+    public Task<IActionResult> CreateBranch(string projectId, [FromBody] GitCreateBranchRequest body, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.CreateBranchAsync(Owner(p), p.RootPath, body.Name, body.From, ct));
+
+    // Общая обёртка write-операции: guard проекта → операция → realtime + свежий статус
+    private async Task<IActionResult> Mutate(string projectId, Func<Models.Project, Task> op)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            await op(p);
+            await NotifyChanged(projectId);
+            return Ok(await git.StatusAsync(Owner(p), p.RootPath));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+}
+
+public record GitPathRequest(string Path);
+public record GitPatchRequest(string Patch);
+public record GitStashRequest(string? Message = null);
+public record GitAutoCommitRequest(bool Enabled, bool Push = false);
+public record GitCommitRequest(string Message, bool Amend = false);
+public record GitCheckoutRequest(string Branch);
+public record GitCreateBranchRequest(string Name, string? From = null);

@@ -14,6 +14,7 @@ import { QuickActions } from '../features/home/QuickActions';
 import { ProjectsWidget } from '../features/home/ProjectsWidget';
 import { NotesWidget } from '../features/home/NotesWidget';
 import { TeamWidget } from '../features/home/TeamWidget';
+import { WhatsNewWidget } from '../features/home/WhatsNewWidget';
 
 interface Props {
   auth: AuthState;
@@ -59,12 +60,13 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
           {/* Виджеты: на десктопе — две НЕЗАВИСИМЫЕ колонки (каждая своим потоком,
               без выравнивания рядов — блоки разной высоты не оставляют дыр),
               на мобилке — один столбец */}
-          {/* Порядок — «смысловые пары» рядов: старт (действия | работают) → фокус дня
-              (задачи | чаты) → пространства (проекты | заметки) → служебное
-              (команда | использование). Мобильная лента разворачивает те же пары сверху вниз. */}
+          {/* Порядок колонок: слева — «пульс продукта» (действия → что нового →
+              сейчас работают → команда → использование), справа — «мои пространства»
+              (задачи → чаты → проекты → заметки). Мобильная лента — важное сверху вниз. */}
           {isMobile ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <QuickActions onHubTab={onHubTab} onOpenProject={onOpenProject} />
+              <WhatsNewWidget userId={auth.id} />
               <ActivityWidget active={data?.active ?? []} />
               <TasksWidget onHubTab={onHubTab} />
               <RecentSessionsWidget recent={data?.recent ?? []} onHubTab={onHubTab} />
@@ -74,28 +76,19 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
               <UsageWidget />
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {/* Первый ряд: высоту задают «Быстрые действия», «Сейчас работают» повторяет её
-                  (absolute-заполнение ячейки) и скроллит длинный список внутри себя */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, alignItems: 'start' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
                 <QuickActions onHubTab={onHubTab} onOpenProject={onOpenProject} />
-                <div style={{ position: 'relative', minHeight: 130 }}>
-                  <div style={{ position: 'absolute', inset: 0 }}>
-                    <ActivityWidget active={data?.active ?? []} fill />
-                  </div>
-                </div>
+                <WhatsNewWidget userId={auth.id} />
+                <ActivityWidget active={data?.active ?? []} />
+                <TeamWidget onHubTab={onHubTab} />
+                <UsageWidget />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, alignItems: 'start' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-                  <TasksWidget onHubTab={onHubTab} />
-                  <ProjectsWidget onHubTab={onHubTab} onOpenProject={onOpenProject} />
-                  <TeamWidget onHubTab={onHubTab} />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-                  <RecentSessionsWidget recent={data?.recent ?? []} onHubTab={onHubTab} />
-                  <NotesWidget onHubTab={onHubTab} />
-                  <UsageWidget />
-                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
+                <TasksWidget onHubTab={onHubTab} />
+                <RecentSessionsWidget recent={data?.recent ?? []} onHubTab={onHubTab} />
+                <ProjectsWidget onHubTab={onHubTab} onOpenProject={onOpenProject} />
+                <NotesWidget onHubTab={onHubTab} />
               </div>
             </div>
           )}

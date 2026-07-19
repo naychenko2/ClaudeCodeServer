@@ -169,6 +169,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
             return Ok(WithCount(updated));
         }
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+        // папка вне песочницы либо уже занята другим проектом владельца — это ошибка ввода, не 500
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     // Кастомные колонки Kanban-доски проекта (пустой список → дефолтные 3)

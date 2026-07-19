@@ -44,6 +44,22 @@ public class ProjectManagerTests : IDisposable
         CreateUserStore(),
         CreateAppSettings());
 
+    // Менеджер, у которого домашняя папка пользователя = homeDir (через Projects:UserHomeOverrides,
+    // как на однопользовательском инстансе) — для проверок создания проекта без явного пути
+    private ProjectManager CreateManagerWithHome(string homeDir)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json"),
+                ["DefaultProjectsPath"] = _tempDir,
+                [$"Projects:UserHomeOverrides:{TestUsername}"] = homeDir,
+            }).Build();
+        var appSettings = new AppSettingsService(config);
+        return new ProjectManager(config, CreateUserStore(), appSettings,
+            homes: new UserHomeResolver(config, appSettings));
+    }
+
     private string MkDir(string name)
     {
         var dir = Path.Combine(_tempDir, name);
@@ -174,6 +190,119 @@ public class ProjectManagerTests : IDisposable
 
         var manager2 = CreateManager();
         manager2.GetById(created.Id).Should().BeNull();
+    }
+
+    // === Одна папка — один проект на владельца ===
+    // Иначе появляются проекты-близнецы, спорящие за общий датасет знаний (он ключуется по RootPath).
+
+    [Fact]
+    public void Create_ПовторноеПодключениеТойЖеПапки_Отклоняется()
+    {
+        var dir = MkDir("twin");
+        _sut.Create("Twin", dir, TestUserId, TestUsername);
+
+        var act = () => _sut.Create("Twin2", dir, TestUserId, TestUsername);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*уже подключена*Twin*");
+    }
+
+    [Fact]
+    public void Create_ПутьСДвойнымиРазделителями_СчитаетсяТойЖеПапкой()
+    {
+        // Реальный случай с боя: путь вставили в JSON-экранированном виде «c:\\GIT\\x».
+        // Windows двойные разделители схлопывает, значит это та же папка — а не второй проект
+        var dir = MkDir("dbl");
+        _sut.Create("Dbl", dir, TestUserId, TestUsername);
+        var doubled = dir.Replace(Path.DirectorySeparatorChar.ToString(),
+            new string(Path.DirectorySeparatorChar, 2));
+
+        var act = () => _sut.Create("Dbl2", doubled, TestUserId, TestUsername);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*уже подключена*");
+    }
+
+    [Fact]
+    public void Create_ПутьСохраняетсяВКаноничномВиде()
+    {
+        var dir = MkDir("canon");
+        var doubled = dir.Replace(Path.DirectorySeparatorChar.ToString(),
+            new string(Path.DirectorySeparatorChar, 2));
+
+        var created = _sut.Create("Canon", doubled, TestUserId, TestUsername);
+
+        created.RootPath.Should().Be(dir);
+    }
+
+    [Fact]
+    public void Create_ТаЖеПапкаУДругогоВладельца_Разрешена()
+    {
+        // Общая папка у разных владельцев — осознанно допустимый сценарий: на нём построены
+        // каскады «соседей по папке» (GetByRootPath)
+        var dir = MkDir("shared");
+        _sut.Create("Mine", dir, TestUserId, TestUsername);
+
+        var act = () => _sut.Create("Theirs", dir, "other-user", "other");
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Update_СохранениеБезСменыПапки_НеСчитаетсяДублем()
+    {
+        var dir = MkDir("same");
+        var created = _sut.Create("Same", dir, TestUserId, TestUsername);
+
+        var act = () => _sut.Update(created.Id, "Переименован", dir);
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Update_ПереездВПапкуДругогоПроекта_Отклоняется()
+    {
+        var busy = MkDir("busy");
+        _sut.Create("Busy", busy, TestUserId, TestUsername);
+        var mine = _sut.Create("Mine", MkDir("mine"), TestUserId, TestUsername);
+
+        var act = () => _sut.Update(mine.Id, null, busy);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*уже подключена*Busy*");
+    }
+
+    [Fact]
+    public void Create_БезПути_КогдаПапкаСТакимИменемУжеЕсть_Отклоняется()
+    {
+        // Домашняя папка может быть общим корнем вроде C:\GIT (override), где лежат рабочие репы:
+        // «Новый проект» с совпавшим именем не должен молча подцепить чужую папку
+        var manager = CreateManagerWithHome(_tempDir);
+        MkDir("Занято");
+
+        var act = () => manager.Create("Занято", null, TestUserId, TestUsername);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*уже существует*существующую*");
+    }
+
+    [Fact]
+    public void Create_БезПути_СоздаётПапкуВДомашней()
+    {
+        var manager = CreateManagerWithHome(_tempDir);
+
+        var created = manager.Create("Свежий", null, TestUserId, TestUsername);
+
+        created.RootPath.Should().Be(Path.Combine(_tempDir, "Свежий"));
+        Directory.Exists(created.RootPath).Should().BeTrue();
+    }
+
+    [Fact]
+    public void NormalizePath_ОдинарныеИДвойныеРазделители_ДаютОдинКлюч()
+    {
+        // Ключ датасета знаний в Dify: разойдись он — индексация одной папки уехала бы в две базы
+        var single = Path.Combine(_tempDir, "kb");
+        var doubled = single.Replace(Path.DirectorySeparatorChar.ToString(),
+            new string(Path.DirectorySeparatorChar, 2));
+
+        WorkspaceKnowledgeStore.NormalizePath(doubled)
+            .Should().Be(WorkspaceKnowledgeStore.NormalizePath(single));
     }
 
     public void Dispose()

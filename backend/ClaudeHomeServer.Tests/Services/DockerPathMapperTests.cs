@@ -59,6 +59,25 @@ public class DockerPathMapperTests
         m.CanMap(@"C:\Windows").Should().BeFalse();
     }
 
+    [Fact]
+    public void CanMap_ПрефиксСоседнейПапки_False()
+    {
+        // Правило для «…/ClaudeSandbox» не должно матчить «…/ClaudeSandboxBackup»:
+        // StartsWith без границы сегмента пробивал бы инвариант «путь вне монтирований».
+        var m = Make();
+        var sibling = RootProjectsHost(m) + "Backup";
+        m.CanMap(Path.Combine(sibling, "x")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ToRuntime_ПрефиксСоседнейПапки_Бросает()
+    {
+        var m = Make();
+        var sibling = RootProjectsHost(m) + "Backup";
+        var act = () => m.ToRuntime(Path.Combine(sibling, "secret.txt"));
+        act.Should().Throw<InvalidOperationException>();
+    }
+
     // Достаём хостовый корень /projects через ToHost (внутренние правила приватны)
     private static string RootProjectsHost(DockerPathMapper m) => m.ToHost("/projects");
 }

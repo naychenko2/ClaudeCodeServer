@@ -28,12 +28,23 @@ public sealed class DockerPathMapper : IPathMapper
         _rules.Add((Path.GetFullPath(host).TrimEnd('\\', '/'), runtime.TrimEnd('/')));
     }
 
+    // Префикс-совпадение по ГРАНИЦЕ сегмента: правило "C:\SandboxProjects" не должно
+    // матчить "C:\SandboxProjectsBackup". Правила хранятся без хвостового разделителя,
+    // поэтому за префиксом обязан идти разделитель либо конец строки.
+    private static bool IsUnderPrefix(string path, string prefix, StringComparison cmp)
+    {
+        if (!path.StartsWith(prefix, cmp)) return false;
+        if (path.Length == prefix.Length) return true;
+        var next = path[prefix.Length];
+        return next is '/' or '\\';
+    }
+
     public string ToRuntime(string hostPath)
     {
         var full = Path.GetFullPath(hostPath);
         foreach (var (host, runtime) in _rules)
         {
-            if (!full.StartsWith(host, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!IsUnderPrefix(full, host, StringComparison.OrdinalIgnoreCase)) continue;
             var rest = full[host.Length..].TrimStart('\\', '/');
             var mapped = rest.Length == 0 ? runtime : runtime + "/" + rest.Replace('\\', '/');
             return mapped;
@@ -46,7 +57,7 @@ public sealed class DockerPathMapper : IPathMapper
         var norm = runtimePath.Replace('\\', '/');
         foreach (var (host, runtime) in _rules)
         {
-            if (!norm.StartsWith(runtime, StringComparison.Ordinal)) continue;
+            if (!IsUnderPrefix(norm, runtime, StringComparison.Ordinal)) continue;
             var rest = norm[runtime.Length..].TrimStart('/');
             return rest.Length == 0 ? host : Path.Combine(host, rest.Replace('/', Path.DirectorySeparatorChar));
         }
@@ -57,6 +68,6 @@ public sealed class DockerPathMapper : IPathMapper
     public bool CanMap(string hostPath)
     {
         var full = Path.GetFullPath(hostPath);
-        return _rules.Any(r => full.StartsWith(r.Host, StringComparison.OrdinalIgnoreCase));
+        return _rules.Any(r => IsUnderPrefix(full, r.Host, StringComparison.OrdinalIgnoreCase));
     }
 }

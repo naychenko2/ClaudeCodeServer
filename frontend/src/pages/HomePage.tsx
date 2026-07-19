@@ -64,18 +64,24 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
           {/* Порядок колонок: слева — «пульс продукта» (действия → уведомления →
               что нового → сейчас работают → использование), справа — «мои пространства»
               (задачи → чаты → проекты → заметки), а «команда» замыкает правую
-              колонку. Мобильная лента — важное сверху вниз. */}
+              колонку. Мобильная лента порядок НЕ повторяет: действия и уведомления
+              сверху, следом «мои пространства», а справочные сводки (что нового,
+              сейчас работают, использование) уходят в хвост — до них долистывают редко. */}
           {isMobile ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Уведомления — сразу под действиями: единственная сводка, которая
+                  требует реакции, остальные листают реже */}
               <QuickActions onHubTab={onHubTab} onOpenProject={onOpenProject} />
               <NotificationsWidget onHubTab={onHubTab} />
-              <WhatsNewWidget userId={auth.id} />
-              <ActivityWidget active={data?.active ?? []} />
+              {/* «Мои пространства» — то, ради чего заходят с телефона */}
               <TasksWidget onHubTab={onHubTab} />
               <RecentSessionsWidget recent={data?.recent ?? []} onHubTab={onHubTab} />
               <ProjectsWidget onHubTab={onHubTab} onOpenProject={onOpenProject} />
               <NotesWidget onHubTab={onHubTab} />
               <TeamWidget onHubTab={onHubTab} />
+              {/* Справочные сводки — хвостом */}
+              <WhatsNewWidget userId={auth.id} />
+              <ActivityWidget active={data?.active ?? []} />
               <UsageWidget />
             </div>
           ) : (

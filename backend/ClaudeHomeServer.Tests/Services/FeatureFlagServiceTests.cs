@@ -34,6 +34,7 @@ public class FeatureFlagServiceTests : IDisposable
             {
                 ["DataPath"] = Path.Combine(_tempDir, "projects.json")
             }).Build(),
+        new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(),
         NullLogger<UserStore>.Instance);
 
     // --- GetEffective: дефолты ---

@@ -26,6 +26,7 @@ public class ProjectManagerTests : IDisposable
             {
                 ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json")
             }).Build(),
+        new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(),
         NullLogger<UserStore>.Instance);
 
     private AppSettingsService CreateAppSettings() => new(

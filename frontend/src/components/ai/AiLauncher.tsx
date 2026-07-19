@@ -148,12 +148,12 @@ export function AiLauncher() {
           onClick={() => { setQ(''); setOpen(true); }}
           aria-label="AI-действия (Ctrl/⌘ + K)"
           title="AI-действия · ⌘K"
-          style={{ ...fabStyle, ...(isMobile ? { right: 16 } : {}) }}
+          style={{ ...fabStyle, ...(isMobile ? { right: 16, width: FAB_MOBILE, height: FAB_MOBILE } : {}) }}
           onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; }}
           onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
         >
-          {suggestion && <span style={pulseDot} />}
-          <SparkleIcon />
+          {suggestion && <span style={isMobile ? pulseDotMobile : pulseDot} />}
+          <SparkleIcon size={isMobile ? 16 : 24} />
         </button>
       )}
 
@@ -251,6 +251,10 @@ function Kbd({ children }: { children: React.ReactNode }) {
   );
 }
 
+// На мобиле кнопка мельче в полтора раза (54 → 36): на телефоне она ближе к контенту
+// и в полный размер заметно его перекрывала
+const FAB_MOBILE = 36;
+
 const fabStyle: React.CSSProperties = {
   // --cc-fab-bottom задаёт страница снизу (в чате — высота композера + зазор), чтобы
   // FAB вставал НАД композером и не сталкивался с кнопкой «вниз». Дефолт — угол 20px.
@@ -323,6 +327,10 @@ const toggleThumb: React.CSSProperties = {
 const pulseDot: React.CSSProperties = {
   position: 'absolute', top: 3, right: 4, width: 12, height: 12, borderRadius: '50%',
   background: C.success, border: `2px solid ${C.accent}`,
+};
+// Точка на уменьшенной мобильной кнопке — тоже мельче, иначе съедает пол-иконки
+const pulseDotMobile: React.CSSProperties = {
+  ...pulseDot, top: 2, right: 2, width: 8, height: 8, borderWidth: 1.5,
 };
 const balloonStyle: React.CSSProperties = {
   position: 'fixed', right: 20, bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 66px)',

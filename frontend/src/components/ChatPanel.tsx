@@ -100,7 +100,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
   const workLoopState = useMemo<WorkLoopState | null>(() => {
@@ -284,6 +284,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }, []);
 
   const [mode, setMode] = useState<Mode>(session.mode);
+  // Смена режима: локальный стейт + push на сервер (применяется к идущему ходу на лету)
+  const handleModeChange = useCallback((m: Mode) => {
+    setMode(m);
+    changeMode(m);
+  }, [changeMode]);
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   // Скролл-механика ленты (прилипание к низу, восстановление позиции, кнопка «вниз») — hooks/useChatScroll
@@ -630,7 +635,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       planVersion={planVersions.get(i)?.version}
       planShowBadge={!!planVersions.get(i) && (planVersions.get(i)!.version > 1 || planVersions.get(i)!.hadRejected)}
       planShowSwitch={i === lastApprovedPlanIdx && mode === 'plan'}
-      onSwitchMode={setMode}
+      onSwitchMode={handleModeChange}
       onOpenFile={onOpenFile}
       onRevert={project ? handleRevert : undefined}
       onRetry={handleRetry}
@@ -643,7 +648,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, lastTaskIdx, taskTodos,
+    interrupt, lastTaskIdx, taskTodos, handleModeChange,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем
@@ -1035,7 +1040,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onAttach={project ? (() => setShowAttachPicker(true)) : (() => chatFileInputRef.current?.click())}
             isGenerating={isWaiting}
             mode={mode}
-            onModeChange={setMode}
+            onModeChange={handleModeChange}
             planAvailable={caps.supportsPlanMode}
             attachments={attachedFiles}
             onRemoveAttachment={path => onAttachedFilesChange(attachedFiles.filter(p => p !== path))}

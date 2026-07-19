@@ -635,6 +635,12 @@ GET                 /api/knowledge/{id}/search?q=&topK=&method=semantic|fulltext
 ## Соглашения
 
 - Хранилище проектов: `data/projects.json` рядом с executable
+- **Одна папка — один проект на владельца**: `RootPath` нормализуется при создании и смене папки
+  (`Path.GetFullPath` — схлопывает двойные разделители), а `ProjectManager.EnsureRootFree`
+  отклоняет повторное подключение той же папки (400 «Эта папка уже подключена как проект …»).
+  Причина: датасет знаний в Dify и запись `WorkspaceKnowledge` ключуются по `RootPath` —
+  проекты-близнецы спорили бы за одну базу. У **разных** владельцев общая папка допустима:
+  на этом держатся каскады «соседей по папке» (`GetByRootPath`)
 - Метаданные сессий персистятся в `data/sessions.json`, история чата — `data/sessions/{claudeSessionId}/history.json`; процессы claude in-memory, resume через `--resume <claude-session-id>`
 - Временные чаты: `Session.ExpiresAfterMinutes` (null — обычный чат), тумблер + пресеты срока в «Настройках чата»; `ChatExpiryService` (тик 60с) удаляет чаты, неактивные дольше срока (кроме статусов Working/Waiting); `DeleteAsync` чистит историю на диске и шлёт `chat_deleted`
 - Path traversal защита: `FileService.SafeJoin` — все пути через неё

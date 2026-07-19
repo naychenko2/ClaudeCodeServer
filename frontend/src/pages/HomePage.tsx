@@ -15,6 +15,7 @@ import { ProjectsWidget } from '../features/home/ProjectsWidget';
 import { NotesWidget } from '../features/home/NotesWidget';
 import { TeamWidget } from '../features/home/TeamWidget';
 import { WhatsNewWidget } from '../features/home/WhatsNewWidget';
+import { NotificationsWidget } from '../features/home/NotificationsWidget';
 
 interface Props {
   auth: AuthState;
@@ -60,13 +61,14 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
           {/* Виджеты: на десктопе — две НЕЗАВИСИМЫЕ колонки (каждая своим потоком,
               без выравнивания рядов — блоки разной высоты не оставляют дыр),
               на мобилке — один столбец */}
-          {/* Порядок колонок: слева — «пульс продукта» (действия → что нового →
-              сейчас работают → использование), справа — «мои пространства»
+          {/* Порядок колонок: слева — «пульс продукта» (действия → уведомления →
+              что нового → сейчас работают → использование), справа — «мои пространства»
               (задачи → чаты → проекты → заметки), а «команда» замыкает правую
               колонку. Мобильная лента — важное сверху вниз. */}
           {isMobile ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <QuickActions onHubTab={onHubTab} onOpenProject={onOpenProject} />
+              <NotificationsWidget onHubTab={onHubTab} />
               <WhatsNewWidget userId={auth.id} />
               <ActivityWidget active={data?.active ?? []} />
               <TasksWidget onHubTab={onHubTab} />
@@ -80,6 +82,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, alignItems: 'start' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
                 <QuickActions onHubTab={onHubTab} onOpenProject={onOpenProject} />
+                <NotificationsWidget onHubTab={onHubTab} />
                 <WhatsNewWidget userId={auth.id} />
                 <ActivityWidget active={data?.active ?? []} />
                 <UsageWidget />

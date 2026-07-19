@@ -153,6 +153,21 @@ export async function ensureUnreadCountLoaded() {
   }
 }
 
+// Гейт загрузки списка: виджет дашборда и раздел монтируются независимо,
+// без него один и тот же список тянулся бы дважды (плюс дубль в StrictMode).
+let listInFlight: Promise<unknown> | null = null;
+
+/** Загрузить список уведомлений, если он еще не загружен. */
+export async function ensureNotificationsLoaded() {
+  if (loaded) return;
+  if (!listInFlight) {
+    listInFlight = loadNotifications()
+      .catch(() => { /* виджет не критичен — переживем без списка */ })
+      .finally(() => { listInFlight = null; });
+  }
+  await listInFlight;
+}
+
 export function ensureNotificationsSubscribed() {
   if (subscribed) return;
   subscribed = true;

@@ -35,7 +35,10 @@ if (-not $SkipFrontend) {
     Write-Host '[1/5] Сборка фронта (npm run build)...' -ForegroundColor Yellow
     Push-Location $frontendDir
     if (-not (Test-Path 'node_modules')) { npm ci }
-    npm run build
+    # build:quiet = vite build --logLevel warn: без простыни ассетов в логах раннера,
+    # предупреждения и ошибки сборки остаются видны. Отдельный скрипт, а не `npm run build --
+    # --logLevel warn`: npm парсит --logLevel как СВОЙ конфиг-ключ даже после `--` и съедает его.
+    npm run build:quiet
     $code = $LASTEXITCODE
     Pop-Location
     if ($code -ne 0) { throw "Сборка фронта упала (exit $code)" }

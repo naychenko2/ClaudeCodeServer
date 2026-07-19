@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import type { AuthState, Project } from '../types';
+import { displayNameOf, type AuthState, type Project } from '../types';
 import { C, FONT } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { ensurePersonasLoaded } from '../lib/personas';
@@ -14,6 +14,8 @@ import { QuickActions } from '../features/home/QuickActions';
 import { ProjectsWidget } from '../features/home/ProjectsWidget';
 import { NotesWidget } from '../features/home/NotesWidget';
 import { TeamWidget } from '../features/home/TeamWidget';
+import { WhatsNewWidget } from '../features/home/WhatsNewWidget';
+import { NotificationsWidget } from '../features/home/NotificationsWidget';
 
 interface Props {
   auth: AuthState;
@@ -49,7 +51,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
           {/* Приветствие */}
           <div style={{ marginBottom: isMobile ? 16 : 22 }}>
             <div style={{ fontFamily: FONT.serif, fontSize: isMobile ? 24 : 28, fontWeight: 500, color: C.textHeading }}>
-              {greeting()}, {auth.username}
+              {greeting()}, {displayNameOf(auth)}
             </div>
             <div style={{ fontFamily: FONT.sans, fontSize: 13.5, color: C.textMuted, marginTop: 4 }}>
               {today}
@@ -59,43 +61,44 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
           {/* Виджеты: на десктопе — две НЕЗАВИСИМЫЕ колонки (каждая своим потоком,
               без выравнивания рядов — блоки разной высоты не оставляют дыр),
               на мобилке — один столбец */}
-          {/* Порядок — «смысловые пары» рядов: старт (действия | работают) → фокус дня
-              (задачи | чаты) → пространства (проекты | заметки) → служебное
-              (команда | использование). Мобильная лента разворачивает те же пары сверху вниз. */}
+          {/* Порядок колонок: слева — «пульс продукта» (действия → уведомления →
+              что нового → сейчас работают → использование), справа — «мои пространства»
+              (задачи → чаты → проекты → заметки), а «команда» замыкает правую
+              колонку. Мобильная лента порядок НЕ повторяет: действия и уведомления
+              сверху, следом «мои пространства», а справочные сводки (что нового,
+              сейчас работают, использование) уходят в хвост — до них долистывают редко. */}
           {isMobile ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Уведомления — сразу под действиями: единственная сводка, которая
+                  требует реакции, остальные листают реже */}
               <QuickActions onHubTab={onHubTab} onOpenProject={onOpenProject} />
-              <ActivityWidget active={data?.active ?? []} />
+              <NotificationsWidget onHubTab={onHubTab} />
+              {/* «Мои пространства» — то, ради чего заходят с телефона */}
               <TasksWidget onHubTab={onHubTab} />
               <RecentSessionsWidget recent={data?.recent ?? []} onHubTab={onHubTab} />
               <ProjectsWidget onHubTab={onHubTab} onOpenProject={onOpenProject} />
               <NotesWidget onHubTab={onHubTab} />
               <TeamWidget onHubTab={onHubTab} />
+              {/* Справочные сводки — хвостом */}
+              <WhatsNewWidget userId={auth.id} />
+              <ActivityWidget active={data?.active ?? []} />
               <UsageWidget />
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {/* Первый ряд: высоту задают «Быстрые действия», «Сейчас работают» повторяет её
-                  (absolute-заполнение ячейки) и скроллит длинный список внутри себя */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, alignItems: 'start' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
                 <QuickActions onHubTab={onHubTab} onOpenProject={onOpenProject} />
-                <div style={{ position: 'relative', minHeight: 130 }}>
-                  <div style={{ position: 'absolute', inset: 0 }}>
-                    <ActivityWidget active={data?.active ?? []} fill />
-                  </div>
-                </div>
+                <NotificationsWidget onHubTab={onHubTab} />
+                <WhatsNewWidget userId={auth.id} />
+                <ActivityWidget active={data?.active ?? []} />
+                <UsageWidget />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, alignItems: 'start' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-                  <TasksWidget onHubTab={onHubTab} />
-                  <ProjectsWidget onHubTab={onHubTab} onOpenProject={onOpenProject} />
-                  <TeamWidget onHubTab={onHubTab} />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-                  <RecentSessionsWidget recent={data?.recent ?? []} onHubTab={onHubTab} />
-                  <NotesWidget onHubTab={onHubTab} />
-                  <UsageWidget />
-                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
+                <TasksWidget onHubTab={onHubTab} />
+                <RecentSessionsWidget recent={data?.recent ?? []} onHubTab={onHubTab} />
+                <ProjectsWidget onHubTab={onHubTab} onOpenProject={onOpenProject} />
+                <NotesWidget onHubTab={onHubTab} />
+                <TeamWidget onHubTab={onHubTab} />
               </div>
             </div>
           )}

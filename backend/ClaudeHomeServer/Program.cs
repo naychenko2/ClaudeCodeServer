@@ -14,6 +14,11 @@ using Yarp.ReverseProxy.Forwarder;
 
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
+// Кириллица в stdout: без явной кодировки .NET на Windows пишет в OEM (866), и потребители
+// вывода (раннер-трей, docker logs) получают кашу. Единый UTF-8 — при любом способе запуска.
+try { Console.OutputEncoding = System.Text.Encoding.UTF8; }
+catch { /* нет консоли/права — не критично, останется дефолт */ }
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Локальные машинно-специфичные переопределения (пути, URL, секреты).
@@ -65,6 +70,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFacto
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
+builder.Services.AddSingleton<UserHomeResolver>();
 builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
@@ -154,6 +160,8 @@ builder.Services.AddHostedService<TaskSchedulerService>();
 builder.Services.AddHostedService<ChatExpiryService>();
 builder.Services.AddHostedService<ChatTurnLoggerService>();
 builder.Services.AddHostedService<NoteExpiryService>();
+// Фоновый прогрев сводок «Что нового» — чтобы клик по дню отдавал кеш, а не ждал генерацию
+builder.Services.AddHostedService<ChangelogWarmupService>();
 // Терминал (PTY) и Preview (dev-server) — под гейтом workspace-destructive
 builder.Services.AddSingleton<TerminalService>();
 builder.Services.AddSingleton<DevServerService>();
@@ -476,9 +484,12 @@ app.Use(async (ctx, next) =>
                 return;
             }
 
-            var destUrl = $"http://127.0.0.1:{port}{restPath}{ctx.Request.QueryString}";
+            // HttpTransformer.Default сам дописывает к префиксу Path и QueryString запроса,
+            // поэтому в префиксе пути быть не должно (иначе /preview/{id} уедет на дев-сервер
+            // дважды и тот ответит 404). Срезаем свой префикс прямо в запросе.
+            ctx.Request.Path = restPath.Length == 0 ? "/" : restPath;
             var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
-            await forwarder.SendAsync(ctx, destUrl, previewInvoker,
+            await forwarder.SendAsync(ctx, $"http://127.0.0.1:{port}", previewInvoker,
                 ForwarderRequestConfig.Empty, HttpTransformer.Default);
             return;
         }

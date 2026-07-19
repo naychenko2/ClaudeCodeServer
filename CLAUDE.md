@@ -56,8 +56,21 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
   Kestrel хоста) через `ResolveTasksApiUrl(ownerId)`; node-серверы `mcp/*/index.js`
   лежат в образе под `/app/mcp` (переписываются в `BuildTurnMcpConfig`).
 - **Корни проектов разведены**: local-юзеры — `DefaultProjectsPath`, container-юзеры —
-  `Sandbox:ProjectsRoot` (в песочницу монтируется только он; `ProjectManager`/
-  `SessionManager.ResolveChatRoot`/`PersonaAgentFileSync` выбирают базу по среде).
+  `Sandbox:ProjectsRoot` (в песочницу монтируется только он). Единая точка резолва —
+  [UserHomeResolver.cs](backend/ClaudeHomeServer/Services/UserHomeResolver.cs): домашняя
+  папка юзера = `{база по среде}/{логин}`, внутри неё живут проекты без явного пути, `Chats`
+  и корни файловых триггеров. Все четыре потребителя (`ProjectManager.Create`,
+  `SessionManager.ResolveChatRoot`, `PersonaAgentFileSync.ChatRoot`, `AutomationRootResolver`)
+  ходят через него.
+  **Override**: `Projects:UserHomeOverrides` (словарь логин → абсолютный путь, в
+  appsettings.Local.json) снимает прослойку `{логин}` — на однопользовательском инстансе
+  можно работать прямо в общей папке (`"admin": "C:\\GIT"`). Путь обязан быть абсолютным, а у
+  container-юзеров — лежать СТРОГО внутри `Sandbox:ProjectsRoot` (сам корень общий для всех
+  изолированных, домом одного быть не может); негодный override игнорируется с warning. Уже
+  созданные проекты не затрагиваются (`RootPath` абсолютный), а у чатов вне проекта меняется
+  cwd — старые такие чаты остаются в прежней папке и могут потерять `--resume`.
+  Существующую папку в проект подключают без всего этого: `POST /api/projects` с явным
+  `rootPath` (на фронте — «Добавить проект» → «Существующий»).
 - **Guard**: смена `ExecutionEnvironment` при существующих чатах запрещена (разные корни
   и профили; `SessionManager.HasSessionsOwnedBy`). **SandboxManager** держит один общий
   контейнер (docker CLI, `sleep infinity`, ленивый `EnsureRunningAsync`, пересоздание при
@@ -160,6 +173,9 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
 `TasksServerLocator`. Модель Claude-исполнителя задач — `Tasks:ExecutorModel`; AI-генерация
 описания/подзадач — `Tasks:AiModel`; сводки «Что нового» — `Changelog:Model` (везде
 валидна модель любого провайдера: one-shot идёт через claude --print с теми же env).
+Локальные one-shot — с `--safe-mode` (CLI 2.1.169+): юзерские кастомизации ~/.claude
+(CLAUDE.md, скиллы, плагины, хуки) не грузятся в контекст — минус ~половина входных
+токенов на вызов; CLAUDE_CONFIG_DIR память НЕ отсекает, а `--bare` ломает OAuth.
 
 ## Claude Code CLI subprocess
 
@@ -189,6 +205,16 @@ WorkingDirectory = `project.RootPath`
 (сервисный JWT владельца сессии, `JwtService.IssueServiceToken`), `TASKS_PROJECT_ID`
 (пусто = чат вне проекта → контекст личных задач). В системный промпт добавляется
 подсказка об инструментах. Задачи per-owner: токен владельца ограничивает доступ его задачами.
+
+> **Грабли HTTPS-деплоя.** Все MCP-прокси (tasks/notes/memory/wsp/personas) — node-процессы,
+> ходящие в бэкенд обычным `fetch` с той же машины. Если Kestrel слушает ТОЛЬКО https,
+> `ResolveTasksApiUrl` подставит `https://localhost:<порт>`, и node упрётся в
+> `ERR_TLS_CERT_ALTNAME_INVALID` — боевой серт выписан на внешний домен, `localhost`/`127.0.0.1`
+> в SAN нет. Наружу это выглядит как «fetch failed» у всех инструментов разом, при полностью
+> живом бэкенде. Лечение: поднять отдельный http-эндпоинт на `127.0.0.1` и прописать
+> `McpTasksApiUrl` явно (так сделано в `appsettings.Production80.json`). Автовыбор адреса
+> предпочитает http https-у, но это лишь подпорка — при единственном https-эндпоинте
+> спасает только явный `McpTasksApiUrl`.
 
 ## Заметки (Obsidian-совместимая база знаний)
 
@@ -619,6 +645,12 @@ GET                 /api/knowledge/{id}/search?q=&topK=&method=semantic|fulltext
 ## Соглашения
 
 - Хранилище проектов: `data/projects.json` рядом с executable
+- **Одна папка — один проект на владельца**: `RootPath` нормализуется при создании и смене папки
+  (`Path.GetFullPath` — схлопывает двойные разделители), а `ProjectManager.EnsureRootFree`
+  отклоняет повторное подключение той же папки (400 «Эта папка уже подключена как проект …»).
+  Причина: датасет знаний в Dify и запись `WorkspaceKnowledge` ключуются по `RootPath` —
+  проекты-близнецы спорили бы за одну базу. У **разных** владельцев общая папка допустима:
+  на этом держатся каскады «соседей по папке» (`GetByRootPath`)
 - Метаданные сессий персистятся в `data/sessions.json`, история чата — `data/sessions/{claudeSessionId}/history.json`; процессы claude in-memory, resume через `--resume <claude-session-id>`
 - Временные чаты: `Session.ExpiresAfterMinutes` (null — обычный чат), тумблер + пресеты срока в «Настройках чата»; `ChatExpiryService` (тик 60с) удаляет чаты, неактивные дольше срока (кроме статусов Working/Waiting); `DeleteAsync` чистит историю на диске и шлёт `chat_deleted`
 - Path traversal защита: `FileService.SafeJoin` — все пути через неё

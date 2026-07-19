@@ -28,7 +28,7 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         if (req.Password is not null) users.EnsureNtHash(user, req.Password);
 
         var (token, expiresAt) = jwt.Issue(user);
-        return Ok(new { token, expiresAt, username = user.Username });
+        return Ok(new { token, expiresAt, username = user.Username, displayName = user.DisplayName });
     }
 
     [Authorize]
@@ -44,7 +44,9 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         var me = userId is null ? null : users.GetById(userId);
         var contextThresholds = me?.ContextThresholds;
         var executionEnvironment = me?.ExecutionEnvironment ?? ExecutionEnvironments.Local;
-        return Ok(new { userId, username, role, featureFlags, contextThresholds, executionEnvironment });
+        // displayName отдаём и здесь: имя могли поправить в users.json уже после логина,
+        // а перевыпускать токен ради этого незачем
+        return Ok(new { userId, username, displayName = me?.DisplayName, role, featureFlags, contextThresholds, executionEnvironment });
     }
 
     // Таймзона пользователя (IANA, например "Europe/Moscow") — фронт шлёт при старте.

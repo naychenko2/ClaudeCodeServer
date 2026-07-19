@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "backend",
-      "runtimeExecutable": "dotnet",
-      "runtimeArgs": ["run", "--project", "backend/ClaudeHomeServer"],
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd backend\\ClaudeHomeServer && dotnet run"],
       "port": 5000
     },
     {
@@ -12,36 +12,6 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
       "port": 5173
-    },
-    {
-      "name": "smoke-frontend",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd frontend && npx vite --config vite.config.smoke.ts"],
-      "port": 5199
-    },
-    {
-      "name": "smoke-frontend-2",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd frontend && npx vite --config vite.config.smoke.ts --port 5299"],
-      "port": 5299
-    },
-    {
-      "name": "smoke-personas-v2",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd .claude\\worktrees\\personas-v2\\frontend && npx vite --config vite.config.smoke.ts --port 5299"],
-      "port": 5299
-    },
-    {
-      "name": "smoke-kanban",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd .claude\\worktrees\\kanban\\frontend && npx vite --config vite.config.smoke.ts"],
-      "port": 5199
-    },
-    {
-      "name": "smoke-personas-omo",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd .claude\\worktrees\\personas-omo\\frontend && npx vite --config vite.config.omo.ts"],
-      "port": 5197
     }
   ]
 }

@@ -140,6 +140,8 @@ public class SessionManager
     // Драйверы среды исполнения владельцев (local / docker-песочница)
     private readonly Execution.ILauncherFactory _launchers;
     private readonly Execution.SandboxManager _sandbox;
+    // Домашняя папка владельца ({база по среде}/{username} либо override из конфига)
+    private readonly UserHomeResolver _homes;
 
     private readonly PersonaAgentFileSync? _agentSync;
 
@@ -157,9 +159,11 @@ public class SessionManager
         Execution.ILauncherFactory launchers,
         Execution.SandboxManager sandbox,
         // Опционально (в тестах не передаётся): синк файловых сабагентов-персон
-        PersonaAgentFileSync? agentSync = null)
+        PersonaAgentFileSync? agentSync = null,
+        UserHomeResolver? homes = null)
     {
         _agentSync = agentSync;
+        _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
         _launchers = launchers;
         _sandbox = sandbox;
         _projects = projects;
@@ -199,8 +203,13 @@ public class SessionManager
     // --- MCP tasks-server ---
 
     // Базовый URL API для MCP-сервера: среда владельца (из песочницы Kestrel виден
-    // как host.docker.internal) → конфиг → первый адрес Kestrel → дефолт.
+    // как host.docker.internal) → конфиг → адрес Kestrel → дефолт.
     // 0.0.0.0/[::] заменяем на localhost — MCP-сервер ходит с той же машины.
+    // Среди адресов Kestrel предпочитаем http: MCP-серверы на node ходят обычным
+    // fetch, а боевой серт выписан на внешний домен — по https://localhost они
+    // упираются в ERR_TLS_CERT_ALTNAME_INVALID (localhost/127.0.0.1 нет в SAN).
+    // Если http-адреса нет вообще, поднимите локальный http-эндпоинт и пропишите
+    // McpTasksApiUrl явно — иначе все MCP-прокси (tasks/notes/memory/wsp) отвалятся.
     private string ResolveTasksApiUrl(string? ownerId = null)
     {
         if (ownerId is not null && _launchers.ForOwner(ownerId).McpApiUrlOverride is { } sandboxUrl)
@@ -209,9 +218,11 @@ public class SessionManager
         var fromConfig = _config["McpTasksApiUrl"];
         if (!string.IsNullOrWhiteSpace(fromConfig)) return fromConfig.TrimEnd('/');
 
-        var addr = _server.Features
+        var addresses = _server.Features
             .Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()?
-            .Addresses.FirstOrDefault();
+            .Addresses;
+        var addr = addresses?.FirstOrDefault(a => a.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                   ?? addresses?.FirstOrDefault();
         if (string.IsNullOrEmpty(addr)) return "http://localhost:5000";
         return addr.Replace("0.0.0.0", "localhost").Replace("[::]", "localhost").TrimEnd('/');
     }
@@ -451,7 +462,7 @@ public class SessionManager
         return ResolveChatRoot(ownerId);
     }
 
-    // Рабочая папка чата вне проекта: {DefaultProjectsPath}/{username}/Chats (создаётся при отсутствии)
+    // Рабочая папка чата вне проекта: {домашняя папка владельца}/Chats (создаётся при отсутствии)
 
     // Выбрать подписку Claude для новой сессии: если модель Claude (не сторонний провайдер),
     // выбираем из пула подписок (least-loaded из способных обслужить модель — пин Opus
@@ -469,21 +480,10 @@ public class SessionManager
             ?? throw new KeyNotFoundException($"Пользователь не найден: {ownerId}");
         // Container-пользователи живут в отдельном корне (Sandbox:ProjectsRoot):
         // только он монтируется в песочницу — данные local-пользователей туда не попадают
-        string basePath;
-        if (user.ExecutionEnvironment == Models.ExecutionEnvironments.Container)
-        {
-            basePath = _sandbox.Options.ProjectsRoot;
-            if (string.IsNullOrWhiteSpace(basePath))
-                throw new InvalidOperationException(
-                    "Песочница не настроена: задайте Sandbox:ProjectsRoot в appsettings.Local.json");
-        }
-        else
-        {
-            basePath = _appSettings.Get().DefaultProjectsPath;
-            if (string.IsNullOrWhiteSpace(basePath))
-                throw new InvalidOperationException("Не задана папка проектов по умолчанию");
-        }
-        var path = Path.Combine(basePath, user.Username, "Chats");
+        var home = _homes.Resolve(user)
+            ?? throw new InvalidOperationException(
+                UserHomeResolver.NotConfiguredMessage(user.ExecutionEnvironment));
+        var path = Path.Combine(home, "Chats");
         Directory.CreateDirectory(path);
         return path;
     }
@@ -528,7 +528,7 @@ public class SessionManager
         return session;
     }
 
-    // Создание чата вне проекта: рабочая папка — {DefaultProjectsPath}/{username}/Chats,
+    // Создание чата вне проекта: рабочая папка — {домашняя папка владельца}/Chats,
     // системный промпт — только встроенная часть (rawSystemPrompt=null), без проектных правил.
     public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,
@@ -1145,22 +1145,6 @@ public class SessionManager
         SaveSessions();
     }
 
-    // Смена режима прав из UI на лету (переключатель композера), без отправки сообщения.
-    // Обновляет Info.Mode (следующий ход пересоздаст процесс с --permission-mode) и, если ход
-    // живой, толкает set_permission_mode в CLI — новый режим подхватывается уже текущим ходом.
-    // Режим «План» у провайдера без поддержки тихо игнорируем (защита от рассинхрона UI).
-    public void SetMode(string sessionId, string mode)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-        if (!Enum.TryParse<ClaudeMode>(mode, true, out var parsed)) return;
-        if (parsed == ClaudeMode.Plan
-            && !_llmProviders.CapabilitiesFor(entry.Info.Model).SupportsPlanMode) return;
-        if (entry.Info.Mode == parsed) return;
-        entry.Info.Mode = parsed;
-        SaveSessions();
-        entry.Process?.TrySetPermissionModeLive(parsed);
-    }
-
     public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
@@ -1548,6 +1532,30 @@ public class SessionManager
     // Включение/выключение цикла «до готово» (флаг work-loop). Включение сбрасывает
     // счётчик итераций; лимит — из конфига Loop:MaxIterations (дефолт 20).
     // userId задан (вызов из API) — сверяется с владельцем; null — внутренний вызов.
+    // Режим прав, выбранный в Composer. Раньше он доезжал до сессии только вместе с
+    // сообщением (см. SendMessageAsync), и выбор, сделанный до первого хода, терялся при
+    // уходе со страницы: UI перечитывал Session.Mode и показывал прежний режим.
+    // На сам ход это не влияет — процесс claude всё равно пересоздаётся в RunTurnAsync
+    // и читает --permission-mode из Info.Mode.
+    public Session? SetMode(string sessionId, string mode, string? userId = null)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        if (userId is not null && ResolveOwnerId(entry.Info) != userId) return null;
+        if (!Enum.TryParse<ClaudeMode>(mode, true, out var parsed))
+            throw new InvalidOperationException($"Неизвестный режим: {mode}");
+        // «План» у провайдера без поддержки не принимаем — та же защита, что и на ходе
+        var caps = _llmProviders.CapabilitiesFor(entry.Info.Model);
+        if (parsed == ClaudeMode.Plan && !caps.SupportsPlanMode)
+            throw new InvalidOperationException("Провайдер не поддерживает режим «План»");
+        if (entry.Info.Mode == parsed) return entry.Info;
+        entry.Info.Mode = parsed;
+        SaveSessions();
+        // Живой ход перенастраиваем на лету (control-протокол set_permission_mode):
+        // новый режим применяется уже к идущему ходу, а не только со следующего.
+        entry.Process?.TrySetPermissionModeLive(parsed);
+        return entry.Info;
+    }
+
     public async Task<Session?> SetWorkLoopAsync(string sessionId, bool enabled, string? userId = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;

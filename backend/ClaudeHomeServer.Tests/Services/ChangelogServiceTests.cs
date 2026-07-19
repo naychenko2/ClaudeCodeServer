@@ -44,6 +44,12 @@ public class ChangelogServiceTests : IDisposable
     }
 
     [Fact]
+    public void GetWarmupCandidates_БезИсточника_ПустойСписок()
+    {
+        _sut.GetWarmupCandidates(5).Should().BeEmpty();
+    }
+
+    [Fact]
     public void GetNewCommitCount_БезИсточника_Ноль()
     {
         _sut.GetNewCommitCount(DateTimeOffset.Now.AddDays(-7)).Should().Be(0);

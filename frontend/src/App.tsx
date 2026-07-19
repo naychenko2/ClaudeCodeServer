@@ -63,9 +63,10 @@ export default function App() {
     if (!token) return null
     const url = localStorage.getItem('cc_server_url') || window.location.origin
     const username = localStorage.getItem('cc_username') || ''
+    const displayName = localStorage.getItem('cc_display_name') || undefined
     const role = localStorage.getItem('cc_role') || sessionStorage.getItem('cc_role') || undefined
     const id = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id') || undefined
-    return { serverUrl: url, token, username, role, id }
+    return { serverUrl: url, token, username, displayName, role, id }
   })
   // Если токен восстановлен из localStorage — ждём ответа сервера перед показом контента,
   // чтобы не было flash рабочего экрана с последующим переключением на пустой фон.
@@ -106,6 +107,11 @@ export default function App() {
   useEffect(() => {
     const open = () => {
       setHistoryOpen(true)
+      // Вписываем открытие в browser history (#/history поверх текущего снимка с флагом):
+      // Back закрывает overlay и возвращает на исходную страницу, «вперёд» — открывает снова
+      if (!(window.history.state as { historyOverlay?: boolean } | null)?.historyOverlay) {
+        window.history.pushState({ ...(window.history.state ?? {}), historyOverlay: true }, '', '#/history')
+      }
       // Фиксируем момент просмотра — от него отсчитывается бейдж новых изменений.
       // Ключ per-user (актуальный id на момент открытия), чтобы на одном устройстве
       // у разных аккаунтов была своя отметка.
@@ -115,7 +121,18 @@ export default function App() {
       } catch { /* ignore */ }
     }
     window.addEventListener(PRODUCT_HISTORY_EVENT, open)
+    // Диплинк #/history при полной загрузке страницы — открываем overlay штатным путём
+    if (initialHash?.history) open()
     return () => window.removeEventListener(PRODUCT_HISTORY_EVENT, open)
+  }, [])
+
+  // Синхронизация overlay «Что нового» с кнопками «назад/вперёд»: состояние открытости
+  // повторяет флаг historyOverlay в снимке истории (Back — закрыть, Forward — открыть)
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) =>
+      setHistoryOpen(!!(e.state as { historyOverlay?: boolean } | null)?.historyOverlay)
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
   }, [])
 
   // Единый поиск, открытый из AI-палитры (App-уровневый оверлей, независимый от шапки)
@@ -126,11 +143,21 @@ export default function App() {
     return () => window.removeEventListener(OPEN_GLOBAL_SEARCH_EVENT, open)
   }, [])
 
+  // Уход в раздел из «глубокого» места (открытый проект, заметка, файл, задача, персона,
+  // база знаний) добавляет запись в историю, а не затирает текущую: иначе снимок того, откуда
+  // ушли, пропадает и Back уводит мимо. Латеральные переходы с плоского экрана — replace.
+  const navToSection = (dest: NavSnapshot) => {
+    const cur = getNav()
+    const deep = !!cur && (cur.screen === 'project' || !!cur.note || !!cur.file || !!cur.task || !!cur.persona || !!cur.knowledge)
+    if (deep) navPush(dest)
+    else navReplace(dest)
+  }
+
   // Переход в раздел «Заметки» по клику на [[wikilink]] из файлов/чата.
   // Целевая заметка передаётся через sessionStorage (cc_pending_note_title),
   // NotesPage подхватывает её при монтировании и по тому же событию.
   useEffect(() => {
-    const open = () => { localStorage.setItem(HUB_TAB_KEY, 'notes'); setHubTab('notes'); navReplace({ screen: 'notes' }) }
+    const open = () => { localStorage.setItem(HUB_TAB_KEY, 'notes'); setHubTab('notes'); navToSection({ screen: 'notes' }) }
     window.addEventListener('cc-open-note', open)
     return () => window.removeEventListener('cc-open-note', open)
   }, [])
@@ -143,29 +170,23 @@ export default function App() {
       if (chatId) localStorage.setItem('cc_open_chat', chatId)
       localStorage.setItem(HUB_TAB_KEY, 'chats')
       setHubTab('chats')
-      navReplace({ screen: 'chats', chatId })
+      navToSection({ screen: 'chats', chatId })
     }
     window.addEventListener('cc-open-chat', open)
     return () => window.removeEventListener('cc-open-chat', open)
   }, [])
 
   // Диплинк #/project/{id}/chat/{chatId} при полной загрузке страницы (клик по пушу
-  // из service worker). Если проект ещё не открыт — загружаем и открываем.
+  // из service worker), когда нужный проект УЖЕ восстановлен из localStorage: WorkspacePage
+  // смонтирован, сам он ничего не перечитает — будим его событием, чат лежит в sessionStorage.
+  // Если проект другой или не открыт, его грузит и пушит в историю эффект диплинка ниже
+  // (он ждёт авторизации и кладёт chatId в снимок) — здесь этого делать НЕ надо, иначе
+  // получаются два api.projects.list() и две записи истории на один диплинк.
   useEffect(() => {
     if (!initialHash || initialHash.screen !== 'project' || !initialHash.chatId) return;
-    const pid = initialHash.projectId;
-    if (!pid) return;
-    if (project?.id === pid) {
-      // Проект уже открыт — WorkspacePage сам подхватит sessionStorage
+    if (initialHash.projectId && project?.id === initialHash.projectId) {
       window.dispatchEvent(new Event('cc-pending-project-chat'));
-      return;
     }
-    api.projects.list()
-      .then(list => {
-        const p = list.find(x => x.id === pid);
-        if (p) openProject(p);
-      })
-      .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Переход к чату проектной персоны из раздела «Персоны»: открываем её проект.
@@ -204,6 +225,11 @@ export default function App() {
       .then(me => {
         if (me?.featureFlags) setAllFlags(me.featureFlags)
         setCtxThresholdsFromServer(me?.contextThresholds)
+        // Имя могли поправить в профиле после логина — подхватываем без перевхода
+        const fresh = me?.displayName?.trim() || undefined
+        setAuth(prev => (prev && prev.displayName !== fresh ? { ...prev, displayName: fresh } : prev))
+        if (fresh) localStorage.setItem('cc_display_name', fresh)
+        else localStorage.removeItem('cc_display_name')
         loadModels() // актуальный список моделей Claude (fire-and-forget, есть fallback)
         // Таймзона устройства — серверу для напоминаний (fire-and-forget)
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -222,6 +248,7 @@ export default function App() {
     const onUnauthorized = () => {
       localStorage.removeItem('cc_token')
       localStorage.removeItem('cc_username')
+    localStorage.removeItem('cc_display_name')
       localStorage.removeItem('cc_server_url')
       localStorage.removeItem('cc_role')
       localStorage.removeItem('cc_user_id')
@@ -230,6 +257,11 @@ export default function App() {
       sessionStorage.removeItem('cc_role')
       sessionStorage.removeItem('cc_user_id')
       idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
+      // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
+      // модуля, поэтому вход без перезагрузки страницы оставил бы hubTab прошлого
+      // пользователя — при смене аккаунта человек видел бы чужой раздел
+      localStorage.setItem(HUB_TAB_KEY, 'projects')
+      setHubTab('projects')
       navReplace({ screen: 'projects' })
       setProject(null)
       setAuth(null)
@@ -250,9 +282,12 @@ export default function App() {
     if (seed.screen === 'knowledge' && initialHash?.screen === 'knowledge') seed.knowledge = initialHash.knowledgeId ?? null
     // Диплинк #/calendar/board: сохраняем доску, чтобы URL пережил перезагрузку
     if (seed.screen === 'calendar' && initialHash?.screen === 'calendar' && initialHash.board) seed.board = true
-    navReplace(seed)
     // Диплинк #/chats/{id}: сохраняем чат в снимок, иначе сид затрёт id в URL
+    // (присваиваем ДО navReplace — иначе снимок уже записан и адрес схлопывается в #/chats)
     if (seed.screen === 'chats' && initialHash?.screen === 'chats' && initialHash.chatId) seed.chatId = initialHash.chatId
+    // Диплинк #/history: сид не должен затирать открытый overlay «Что нового» —
+    // иначе адрес уезжает на #/home, а страница остаётся открытой
+    if (!initialHash?.history) navReplace(seed)
     // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
     // проектом — при hubTab==='chats' проект «спит» и в истории не отражается.
     // Если hash-диплинк указывает на ДРУГОЙ проект — восстановленный не пушим,
@@ -393,6 +428,19 @@ export default function App() {
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTab) => {
+    // Уход в раздел закрывает overlay «Что нового» ЗАМЕНОЙ записи #/history, а не Back'ом:
+    // history.back() асинхронен, и его popstate прилетел бы уже ПОСЛЕ смены раздела, вернув
+    // hubTab на снимок, из которого overlay открывали (клик по «Персонам» кидал в «Проекты»).
+    // Снимаем флаг с текущей записи — дальше switchHubTab работает от чистого снимка.
+    if (historyOpen) {
+      setHistoryOpen(false)
+      const st = window.history.state as (NavSnapshot & { historyOverlay?: boolean }) | null
+      if (st?.historyOverlay) {
+        const rest: NavSnapshot & { historyOverlay?: boolean } = { ...st }
+        delete rest.historyOverlay
+        navReplace(rest)
+      }
+    }
     // Повторный клик по активному разделу «Проекты» с открытым проектом — выход к списку.
     if (t === 'projects' && hubTab === 'projects' && project) {
       localStorage.removeItem(OPEN_PROJECT_KEY)
@@ -549,6 +597,13 @@ export default function App() {
       else switchHubTab('knowledge')
       return
     }
+    // Диплинк #/history — это overlay «Что нового», а не раздел: parseHash отдаёт его как
+    // screen:'home' с флагом history, и без этой ветки ссылка внутри приложения молча
+    // уводила на дашборд (overlay открывался только при полной загрузке страницы)
+    if (target?.history) {
+      window.dispatchEvent(new Event(PRODUCT_HISTORY_EVENT))
+      return
+    }
     // Диплинк на раздел без глубокой цели — просто переключаемся на него
     if (target) {
       switchHubTab(target.screen === 'project' ? 'projects' : target.screen)
@@ -573,6 +628,7 @@ export default function App() {
   const logout = () => {
     localStorage.removeItem('cc_token')
     localStorage.removeItem('cc_username')
+    localStorage.removeItem('cc_display_name')
     localStorage.removeItem('cc_server_url')
     localStorage.removeItem('cc_role')
     localStorage.removeItem('cc_user_id')
@@ -581,6 +637,10 @@ export default function App() {
     sessionStorage.removeItem('cc_role')
     sessionStorage.removeItem('cc_user_id')
     idbClear() // чистим кэш при смене аккаунта/сервера
+    // Раздел сбрасываем вместе с адресом — см. тот же комментарий в обработчике
+    // cc-unauthorized: иначе следующий вход поднимет раздел прошлого пользователя
+    localStorage.setItem(HUB_TAB_KEY, 'projects')
+    setHubTab('projects')
     navReplace({ screen: 'projects' })
     setProject(null)
     setAuth(null)
@@ -616,7 +676,18 @@ export default function App() {
                 : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
       }
       {auth && historyOpen && (
-        <ProductHistory isMobile={isMobileView} onClose={() => setHistoryOpen(false)} />
+        <ProductHistory
+          isMobile={isMobileView}
+          auth={auth}
+          onLogout={logout}
+          onHubTab={switchHubTab}
+          // Overlay вписан в history — закрытие крестиком идёт через Back, чтобы не копить
+          // запись #/history (иначе следующий Back открыл бы overlay заново)
+          onClose={() => {
+            if ((window.history.state as { historyOverlay?: boolean } | null)?.historyOverlay) window.history.back()
+            else setHistoryOpen(false)
+          }}
+        />
       )}
       {auth && !authChecking && <AiLauncher />}
       {auth && aiSearchOpen && <GlobalSearch onClose={() => setAiSearchOpen(false)} />}

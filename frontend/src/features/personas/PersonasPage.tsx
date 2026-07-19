@@ -13,7 +13,7 @@ import { showToast } from '../../lib/toast';
 import { ConfirmDialog, Splitter, IconButton } from '../../components/ui';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile } from '../../lib/breakpoints';
-import { PersonaList } from './PersonaList';
+import { PersonaList, type PersonaListMode } from './PersonaList';
 import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './PersonaForm';
 import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
 import { PersonaEditFab } from './PersonaEditFab';
@@ -37,9 +37,16 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed' | 'open'>(() =>
     localStorage.getItem('cc_personas_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
   useEffect(() => { if (sidebarMode !== 'open') localStorage.setItem('cc_personas_sidebar_mode', sidebarMode); }, [sidebarMode]);
-  // Глобальный раздел показывает только глобальные персоны — проектные живут в своих проектах
+  // Раздел показывает глобальных персон, а по переключателю — вообще всех, вместе с
+  // проектными. Дефолт «Глобальные»: у кого много проектных персон, список иначе
+  // распухает и глобальные в нём тонут. Выбор запоминается на устройстве.
   const allPersonas = usePersonas();
-  const personas = useMemo(() => allPersonas.filter(p => p.scope === 'global'), [allPersonas]);
+  const [listMode, setListMode] = useState<PersonaListMode>(() =>
+    localStorage.getItem('cc_personas_list_mode') === 'all' ? 'all' : 'global');
+  useEffect(() => { localStorage.setItem('cc_personas_list_mode', listMode); }, [listMode]);
+  const personas = useMemo(
+    () => listMode === 'all' ? allPersonas : allPersonas.filter(p => p.scope === 'global'),
+    [allPersonas, listMode]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Вкладка студии, на которую нужно сразу открыться (бэйдж автоматизации в чате) —
   // одноразовая, сбрасывается любым обычным выбором персоны из списка
@@ -204,7 +211,8 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const sidebar = (
     <>
       {!isMobile && sidebarHeader}
-      <PersonaList personas={personas} selectedId={selectedId} onSelect={selectPersona} onNew={startCreate} />
+      <PersonaList personas={personas} selectedId={selectedId} onSelect={selectPersona} onNew={startCreate}
+        mode={listMode} onModeChange={setListMode} projects={projects} />
     </>
   );
 

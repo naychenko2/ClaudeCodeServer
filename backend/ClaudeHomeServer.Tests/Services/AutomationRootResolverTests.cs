@@ -105,6 +105,31 @@ public class AutomationRootResolverTests : IDisposable
         resolved.Should().BeNull();
     }
 
+    // Домашняя папка берётся из UserHomeResolver, поэтому override из конфига переносит
+    // и корень триггеров, и границу guard'а от traversal
+    [Fact]
+    public void Override_домашней_папки_переносит_корень_и_guard()
+    {
+        var custom = Path.Combine(_tempDir, "flat");
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+                ["DefaultProjectsPath"] = _tempDir,
+                ["Projects:UserHomeOverrides:alice"] = custom,
+            })
+            .Build();
+        var resolver = new AutomationRootResolver(_projects, _appSettings,
+            new UserHomeResolver(config, new AppSettingsService(config)));
+
+        var (resolved, _) = resolver.Resolve(Args(("folder", "sub")), Alice);
+        resolved.Should().Be(Path.GetFullPath(Path.Combine(custom, "sub")));
+
+        // выход за новую домашнюю папку по-прежнему отклоняется
+        var (escaped, _) = resolver.Resolve(Args(("folder", "../alice")), Alice);
+        escaped.Should().BeNull();
+    }
+
     [Fact]
     public void Пустой_DefaultProjectsPath_даёт_null()
     {

@@ -44,7 +44,7 @@ export function RecentSessionsWidget({ recent, onHubTab }: {
   return (
     <WidgetCard
       icon={<History size={16} strokeWidth={2} />}
-      title="Недавние чаты"
+      title="Чаты"
       onCreate={() => void newChat()}
       createTitle="Новый чат"
       action={

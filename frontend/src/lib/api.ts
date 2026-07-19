@@ -14,12 +14,12 @@ export interface DifyDocument {
 export const api = {
   auth: {
     login: (username: string, password: string) =>
-      request<{ token: string; expiresAt: string; username: string }>('/auth/login', {
+      request<{ token: string; expiresAt: string; username: string; displayName?: string | null }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ username, password }),
       }),
     me: () =>
-      request<{ userId: string; username: string; role: string; featureFlags?: Record<string, boolean>; contextThresholds?: { warnPct: number; dangerPct: number } | null }>('/auth/me'),
+      request<{ userId: string; username: string; displayName?: string | null; role: string; featureFlags?: Record<string, boolean>; contextThresholds?: { warnPct: number; dangerPct: number } | null }>('/auth/me'),
     changePassword: (currentPassword: string, newPassword: string) =>
       request<void>('/auth/password', {
         method: 'PUT',
@@ -632,6 +632,13 @@ export const api = {
       request<Session>(`/chats/${id}/loop`, {
         method: 'PUT',
         body: JSON.stringify({ enabled }),
+      }),
+    // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
+    // только вместе со следующим сообщением и терялся при уходе со страницы
+    setMode: (id: string, mode: string) =>
+      request<Session>(`/chats/${id}/mode`, {
+        method: 'PUT',
+        body: JSON.stringify({ mode }),
       }),
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),

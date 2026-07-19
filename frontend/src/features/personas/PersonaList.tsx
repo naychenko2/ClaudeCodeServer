@@ -1,23 +1,38 @@
-import type { Persona } from '../../types';
+import type { Persona, Project } from '../../types';
 import { Plus } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { C, FONT, R } from '../../lib/design';
 import { personaTitleLines } from '../../lib/personas';
+import { PillSwitch } from '../../components/Toolbar';
 import { PersonaAvatar } from './PersonaAvatar';
 
+// Что показывать в разделе: только глобальных или вообще всех (с проектными)
+export type PersonaListMode = 'global' | 'all';
+
 // Сайдбар раздела «Персоны»: кнопка создания сверху, ниже — список персон.
-export function PersonaList({ personas, selectedId, onSelect, onNew }: {
+export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onModeChange, projects }: {
   personas: Persona[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
+  // Переключатель зоны — только в глобальном разделе. В панели команды проекта список
+  // и так ограничен проектом, поэтому пропсы опциональны: нет onModeChange — нет и тумблера.
+  mode?: PersonaListMode;
+  onModeChange?: (m: PersonaListMode) => void;
+  projects?: Project[];
 }) {
   return (
     <>
-      <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, flex: 'none' }}>
+      <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, flex: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
         <button onClick={onNew} style={newBtn}>
           <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />Новая персона
         </button>
+        {onModeChange && (
+          <PillSwitch<PersonaListMode>
+            value={mode ?? 'global'} onChange={onModeChange} fill
+            options={[{ value: 'global', label: 'Глобальные' }, { value: 'all', label: 'Все' }]}
+          />
+        )}
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 6 }}>
         {personas.length === 0 ? (
@@ -73,9 +88,38 @@ export function PersonaList({ personas, selectedId, onSelect, onNew }: {
               </button>
             );
           };
+          // В режиме «Все» проектные персоны идут отдельными секциями под своим проектом:
+          // плоским списком глобальные тонут среди проектных. Порядок проектов — как в
+          // projects (там своя сортировка), персоны без живого проекта — в конец общей группой.
+          // Группируем только там, где список смешанный (глобальный раздел в режиме «Все»).
+          // В панели команды проекта персоны и так все из одного проекта — секции ни к чему.
+          const grouped = mode === 'all' && !!projects;
+          const ownGlobal = grouped ? own.filter(p => p.scope !== 'project') : own;
+          const ownByProject = grouped
+            ? (projects ?? [])
+              .map(pr => ({ title: pr.name, rows: own.filter(p => p.scope === 'project' && p.projectId === pr.id) }))
+              .filter(g => g.rows.length > 0)
+            : [];
+          const known = new Set((projects ?? []).map(pr => pr.id));
+          const orphans = grouped
+            ? own.filter(p => p.scope === 'project' && (!p.projectId || !known.has(p.projectId)))
+            : [];
+
           return (
             <>
-              {own.map(row)}
+              {ownGlobal.map(row)}
+              {ownByProject.map((g, i) => (
+                <div key={g.title}>
+                  <div style={{ ...groupHeader, marginTop: i === 0 && ownGlobal.length === 0 ? 2 : 8 }}>{g.title}</div>
+                  {g.rows.map(row)}
+                </div>
+              ))}
+              {orphans.length > 0 && (
+                <div>
+                  <div style={{ ...groupHeader, marginTop: 8 }}>Проект удалён</div>
+                  {orphans.map(row)}
+                </div>
+              )}
               {pantheon.length > 0 && (
                 <>
                   {/* Разделитель + заголовок группы пантеона */}
@@ -98,6 +142,13 @@ export function PersonaList({ personas, selectedId, onSelect, onNew }: {
     </>
   );
 }
+
+// Заголовок группы — тот же стиль, что у группы «Пантеон OmO» ниже по списку
+const groupHeader: React.CSSProperties = {
+  margin: '8px 8px 4px', paddingTop: 8, borderTop: `1px solid ${C.border}`,
+  fontSize: 10.5, fontWeight: 700, color: C.textMuted,
+  textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
+};
 
 const newBtn: React.CSSProperties = {
   width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,

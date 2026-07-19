@@ -7,7 +7,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../../components/Toolbar
 import { useIsMobile } from '../../lib/breakpoints';
 import type { HubTab } from '../../components/HubTabs';
 import type { AuthState } from '../../types';
-import type { NotificationItem, NotificationKind } from '../../types';
+import type { NotificationItem } from '../../types';
 import {
   loadNotifications,
   getNotifications,
@@ -20,35 +20,7 @@ import {
   deleteReadAll,
 } from '../../lib/notifications';
 import { AgentKanban } from '../agent-kanban/AgentKanban';
-
-// Токены design.ts (CSS-переменные) — хардкод-hex ломал тёмную тему
-const KIND_META: Record<NotificationKind, { icon: string; color: string; bg: string }> = {
-  reminder: { icon: '⏰', color: C.warning, bg: C.warningBg },
-  claude: { icon: '●', color: C.accent, bg: C.accentLight },
-  info: { icon: 'ℹ', color: C.info, bg: C.infoBg },
-  success: { icon: '✓', color: C.success, bg: C.successBg },
-  meeting: { icon: '🏁', color: C.plan, bg: C.planLight },
-};
-
-const KIND_LABELS: Record<string, string> = {
-  reminder: 'Напоминание',
-  claude: 'Claude',
-  info: 'Системное',
-  success: 'Выполнено',
-  meeting: 'Совещание',
-};
-
-function formatTime(iso: string) {
-  const d = new Date(iso);
-  const now = new Date();
-  const diff = now.getTime() - d.getTime();
-  const day = 86400000;
-
-  if (diff < day) return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-  if (diff < 2 * day) return 'Вчера';
-  if (diff < 7 * day) return d.toLocaleDateString('ru-RU', { weekday: 'short' });
-  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
-}
+import { KIND_META, KIND_LABELS, formatTime, openNotificationUrl } from './kindMeta';
 
 function dateGroupKey(iso: string) {
   const d = new Date(iso);
@@ -199,11 +171,9 @@ function NotificationCard({ item, onRead, onDelete }: {
                 cursor: 'pointer',
                 background: C.accent, color: C.onAccent,
               }}
-              // SPA-переход через обработчик App (cc-open-url): смена location.hash сама по
-              // себе экран не меняет — hashchange в приложении никто не слушает
               onClick={() => {
                 if (!item.isRead) onRead(item.id);
-                window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: item.url } }));
+                openNotificationUrl(item.url!);
               }}
               onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}
               onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
@@ -319,19 +289,30 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
       <div style={{
         flex: 1, overflow: 'auto', padding: '24px 16px',
         display: 'flex', justifyContent: 'center',
+        // Резерв под скроллбар: без него появление/исчезновение полосы сдвигает
+        // весь центрированный контент вбок при переключении режимов
+        scrollbarGutter: 'stable',
       }}>
-        <div style={{ width: '100%', maxWidth: mode === 'notifications' ? 680 : 1180 }}>
+        {/* Ширина каркаса НЕ зависит от режима — иначе заголовок и переключатель
+            ездят по горизонтали при клике. Широкая раскладка нужна только
+            «Диспетчеру»; шапка и лента уведомлений живут в колонке 680. */}
+        <div style={{ width: '100%', maxWidth: 1180 }}>
 
-          {/* Page header */}
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            marginBottom: 24, flexWrap: 'wrap', gap: 12,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+          {/* Page header. Ширина шапки следует за контентом режима (680 у ленты,
+              1180 у канбана) — тогда «Период» диспетчера идёт вровень со своей
+              шапкой. При этом заголовок с переключателем ЦЕНТРИРОВАНЫ: оба блока
+              центрированы по одной оси экрана, поэтому переключатель остаётся на
+              месте при смене режима. Тулбар — отдельной строкой ниже, чтобы не
+              сбивать эту центровку. */}
+          <div style={{ maxWidth: mode === 'notifications' ? 680 : 1180, margin: '0 auto 24px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, minWidth: 0 }}>
               {!isMobile && (
                 <div style={{
                   fontFamily: FONT.serif, fontSize: FS.h2, fontWeight: 700,
                   color: C.textHeading, letterSpacing: '-0.3px',
+                  // Ширина под более длинное слово («Уведомления»), чтобы смена
+                  // заголовка не сдвигала переключатель рядом
+                  minWidth: 150, whiteSpace: 'nowrap',
                 }}>
                   {mode === 'notifications' ? 'Уведомления' : 'Диспетчер'}
                 </div>
@@ -371,8 +352,12 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
                 </button>
               </div>
             </div>
-            {mode === 'notifications' && !isMobile && (
-              <div style={{ display: 'flex', gap: SP.md, alignItems: 'center' }}>
+            {/* Тулбар — своей строкой под заголовком (только у ленты уведомлений).
+                Он идёт ПОСЛЕ центрированного заголовка, поэтому его появление
+                и исчезновение не сдвигает переключатель */}
+            {!isMobile && mode === 'notifications' && (
+              <div style={{ display: 'flex', gap: SP.md, alignItems: 'center', justifyContent: 'flex-end', minHeight: 34, marginTop: SP.lg }}>
+                {(<>
                 {/* Search */}
                 <div style={{ position: 'relative', width: 200 }}>
                   <Search size={14} style={{
@@ -430,13 +415,14 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
                     <Trash2 size={14} /> Очистить прочитанные
                   </button>
                 )}
+                </>)}
               </div>
             )}
           </div>
 
           {/* Мобильная строка toolbar: поиск (primary) + «Фильтр» (overflow) + «⋯» действия */}
           {mode === 'notifications' && isMobile && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: SP.lg }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', maxWidth: 680, margin: `0 auto ${SP.lg}px` }}>
               <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
                 <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
                 <input
@@ -452,7 +438,8 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
           {mode === 'dispatcher' ? (
             <AgentKanban />
           ) : (
-            <>
+            // Читаемая колонка ленты — 680 по центру, вровень с шапкой
+            <div style={{ maxWidth: 680, margin: '0 auto' }}>
               {/* Filter chips — десктоп; на мобиле фильтр в «⋯ Фильтр» */}
               {!isMobile && (
                 <div style={{ display: 'flex', gap: SP.sm, marginBottom: SP.xl, flexWrap: 'wrap' }}>
@@ -533,7 +520,7 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
                   </div>
                 ))
               )}
-            </>
+            </div>
           )}
 
         </div>

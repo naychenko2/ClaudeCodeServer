@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:quiet": "tsc -b && vite build --logLevel warn",
     "lint": "eslint .",
     "test": "vitest run",
     "test:e2e": "playwright test",

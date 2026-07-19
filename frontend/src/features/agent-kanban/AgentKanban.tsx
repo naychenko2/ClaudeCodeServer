@@ -175,6 +175,9 @@ export function AgentKanban() {
           <div className="cc-hide-scrollbar" style={{
             display: 'flex', alignItems: 'center', gap: 8,
             overflowX: 'auto', paddingBottom: 2, flexWrap: 'wrap',
+            // По центру — вровень с центрированным заголовком раздела, иначе
+            // фильтры висят у левого края широкой колонки канбана
+            justifyContent: 'center',
           }}>
             <span style={{
               fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,

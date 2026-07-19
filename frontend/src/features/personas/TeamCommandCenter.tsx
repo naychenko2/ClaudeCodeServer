@@ -381,9 +381,11 @@ function Timeline({ events, personaById, onOpen }: {
   }, [events]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {groups.map(([label, rows]) => (
-        <div key={label} style={{ position: 'relative', paddingLeft: 26 }}>
+        // Колонка с зазором: карточки не слипаются друг с другом и с заголовком дня.
+        // Линия таймлайна абсолютная, в поток не входит и на зазоры не влияет.
+        <div key={label} style={{ position: 'relative', paddingLeft: 26, display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={dayHeaderStyle}>{label}</div>
           {/* вертикальная линия таймлайна */}
           <div style={{ position: 'absolute', left: 4, top: 30, bottom: 6, width: 2, background: C.divider }} />
@@ -656,10 +658,15 @@ const memberCard: CSSProperties = { display: 'flex', alignItems: 'center', gap: 
 const specialtyBadge: CSSProperties = { display: 'inline-block', fontSize: 10.5, fontWeight: 600, color: C.textSecondary, background: C.bgInset, borderRadius: R.sm, padding: '1px 7px', fontFamily: FONT.sans, marginTop: 3 };
 const inputStyle: CSSProperties = { flex: 1, padding: '8px 10px', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, color: C.textPrimary, fontFamily: FONT.sans, fontSize: 13, outline: 'none' };
 const memRowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderLeft: `3px solid ${C.accentMuted}`, borderRadius: R.md, padding: '10px 12px' };
-const filterBarStyle: CSSProperties = { position: 'sticky', top: 44, zIndex: 4, background: C.bgMain, padding: '8px 0 10px', borderBottom: `1px solid ${C.borderLight}` };
+// top отсчитывается от верха СВОЕЙ прокрутки (тело командного центра), а не страницы:
+// над лентой ничего нет, поэтому фильтры липнут к нулю, а заголовок дня — на их высоту
+// (padding 8+10 + чипы ≈ 26). Раньше обе константы были смещены на 44 вниз, и «СЕГОДНЯ»
+// зависал посреди ленты, наезжая на карточки.
+const FILTER_BAR_H = 44;
+const filterBarStyle: CSSProperties = { position: 'sticky', top: 0, zIndex: 4, background: C.bgMain, padding: '8px 0 10px', borderBottom: `1px solid ${C.borderLight}` };
 const filterChip: CSSProperties = { border: 'none', background: C.bgInset, color: C.textSecondary, borderRadius: R.sm, padding: '3px 9px', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans };
 const filterChipActive: CSSProperties = { ...filterChip, background: C.accentLight, color: C.accent };
-const dayHeaderStyle: CSSProperties = { position: 'sticky', top: 88, zIndex: 3, background: C.bgMain, padding: '8px 0 6px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: C.textMuted, fontFamily: FONT.sans, borderBottom: `1px solid ${C.borderLight}` };
+const dayHeaderStyle: CSSProperties = { position: 'sticky', top: FILTER_BAR_H, zIndex: 3, background: C.bgMain, padding: '8px 0 6px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: C.textMuted, fontFamily: FONT.sans, borderBottom: `1px solid ${C.borderLight}` };
 const actorDot: CSSProperties = { width: 20, height: 20, borderRadius: '50%', background: C.bgInset, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: C.textSecondary, flexShrink: 0 };
 const eventCardStyle: CSSProperties = { display: 'flex', alignItems: 'stretch', gap: 10, width: '100%', background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.xl, boxShadow: SHADOW.card, padding: '10px 12px', transition: 'border-color .12s, box-shadow .12s' };
 const chipIconStyle: CSSProperties = { width: 28, height: 28, borderRadius: R.md, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 };

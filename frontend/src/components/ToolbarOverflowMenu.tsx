@@ -27,6 +27,7 @@ export type OverflowItem = {
   // (клик переключает, меню остаётся открытым, справа рисуется свитч по значению).
   toggle?: boolean;
   dot?: boolean;        // точка-индикатор справа («живой» пункт)
+  active?: boolean;     // текущий раздел — подсвечивается accent-цветом
   danger?: boolean;
   disabled?: boolean;
 };
@@ -170,13 +171,17 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
         border: 'none', background: 'transparent', cursor: item.disabled ? 'default' : 'pointer',
         borderRadius: R.lg, padding: isMobile ? '11px 12px' : '9px 10px',
         minHeight: isMobile ? 44 : undefined, fontFamily: FONT.sans,
-        color: item.danger ? C.dangerText : C.textHeading, opacity: item.disabled ? 0.5 : 1,
+        color: item.danger ? C.dangerText : item.active ? C.accent : C.textHeading,
+        opacity: item.disabled ? 0.5 : 1,
       }}
       onMouseEnter={e => { if (!item.disabled) e.currentTarget.style.background = C.bgInset; }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
     >
       {item.icon != null && (
-        <span style={{ width: 24, display: 'grid', placeItems: 'center', flex: 'none', color: item.danger ? C.dangerText : C.textSecondary }}>
+        <span style={{
+          width: 24, display: 'grid', placeItems: 'center', flex: 'none',
+          color: item.danger ? C.dangerText : item.active ? C.accent : C.textSecondary,
+        }}>
           {item.icon}
         </span>
       )}

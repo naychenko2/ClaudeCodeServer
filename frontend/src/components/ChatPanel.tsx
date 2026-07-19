@@ -100,7 +100,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
   const workLoopState = useMemo<WorkLoopState | null>(() => {
@@ -284,11 +284,20 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }, []);
 
   const [mode, setMode] = useState<Mode>(session.mode);
-  // Смена режима: локальный стейт + push на сервер (применяется к идущему ходу на лету)
-  const handleModeChange = useCallback((m: Mode) => {
+  // Выбор режима сразу уезжает в сессию: иначе он жил бы только в состоянии этой вкладки
+  // и терялся при уходе со страницы (при возврате ChatPanel перечитывает session.mode).
+  // Локальный setMode делаем сразу — переключатель не должен ждать сеть; ход всё равно
+  // передаёт режим ещё раз, так что неудачный запрос не оставит расхождения. Бэкенд в
+  // SetMode перенастраивает и живой ход на лету (control-протокол set_permission_mode).
+  const changeMode = (m: Mode) => {
     setMode(m);
-    changeMode(m);
-  }, [changeMode]);
+    api.chats.setMode(session.id, m)
+      // Обновляем объект сессии у родителя: он держит его в своём состоянии и при
+      // возврате в чат отдаёт обратно пропсом. Без этого сервер уже знает новый режим,
+      // а список сессий — ещё старый, и перемонтированная панель показывает прежний.
+      .then(updated => onSessionUpdated?.(updated))
+      .catch(() => { /* режим доедет со следующим сообщением */ });
+  };
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   // Скролл-механика ленты (прилипание к низу, восстановление позиции, кнопка «вниз») — hooks/useChatScroll
@@ -635,7 +644,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       planVersion={planVersions.get(i)?.version}
       planShowBadge={!!planVersions.get(i) && (planVersions.get(i)!.version > 1 || planVersions.get(i)!.hadRejected)}
       planShowSwitch={i === lastApprovedPlanIdx && mode === 'plan'}
-      onSwitchMode={handleModeChange}
+      onSwitchMode={changeMode}
       onOpenFile={onOpenFile}
       onRevert={project ? handleRevert : undefined}
       onRetry={handleRetry}
@@ -648,7 +657,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, lastTaskIdx, taskTodos, handleModeChange,
+    interrupt, lastTaskIdx, taskTodos, changeMode,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем
@@ -1040,7 +1049,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onAttach={project ? (() => setShowAttachPicker(true)) : (() => chatFileInputRef.current?.click())}
             isGenerating={isWaiting}
             mode={mode}
-            onModeChange={handleModeChange}
+            onModeChange={changeMode}
             planAvailable={caps.supportsPlanMode}
             attachments={attachedFiles}
             onRemoveAttachment={path => onAttachedFilesChange(attachedFiles.filter(p => p !== path))}

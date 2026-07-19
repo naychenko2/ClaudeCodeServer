@@ -18,18 +18,19 @@ public class ProjectManager
     private readonly ConcurrentDictionary<string, Project> _projects = new();
     private readonly string _storePath;
     private readonly UserStore _users;
-    private readonly AppSettingsService _appSettings;
     // Песочница container-пользователей: их проекты живут только под Sandbox:ProjectsRoot.
     // null — в тестах (все пользователи считаются local)
     private readonly Execution.SandboxManager? _sandbox;
+    // Домашняя папка владельца ({база по среде}/{username} либо override из конфига)
+    private readonly UserHomeResolver _homes;
     private readonly Lock _saveLock = new();
 
     public ProjectManager(IConfiguration config, UserStore users, AppSettingsService appSettings,
-        Execution.SandboxManager? sandbox = null)
+        Execution.SandboxManager? sandbox = null, UserHomeResolver? homes = null)
     {
         _users = users;
-        _appSettings = appSettings;
         _sandbox = sandbox;
+        _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
         _storePath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         Load();
     }
@@ -42,9 +43,10 @@ public class ProjectManager
         if (_sandbox is null) return;
         if (_users.GetById(userId)?.ExecutionEnvironment != ExecutionEnvironments.Container) return;
         var sandboxRoot = _sandbox.Options.ProjectsRoot;
+        // Сравнение вложенности — общим хелпером: голый StartsWith пропускал бы соседа
+        // «C:\Sandbox-old» при корне «C:\Sandbox»
         if (string.IsNullOrWhiteSpace(sandboxRoot)
-            || !Path.GetFullPath(rootPath).StartsWith(
-                Path.GetFullPath(sandboxRoot), StringComparison.OrdinalIgnoreCase))
+            || !UserHomeResolver.IsInside(rootPath, sandboxRoot))
             throw new ArgumentException(
                 "Проекты изолированного пользователя должны находиться внутри папки песочницы (Sandbox:ProjectsRoot)");
     }
@@ -59,30 +61,53 @@ public class ProjectManager
     public Project? GetByName(string name) =>
         _projects.Values.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
 
+    // Одна папка — один проект НА ВЛАДЕЛЬЦА. Иначе появляются проекты-близнецы (пользователь
+    // подключил ту же папку второй раз, например записав путь иначе — «c:\\GIT\\x» вместо
+    // «c:\GIT\x»), а датасет знаний в Dify общий на RootPath: два проекта начинают спорить за
+    // одну базу. У РАЗНЫХ владельцев общая папка допустима — на этом держатся каскады
+    // «соседей по папке» (GetByRootPath).
+    private void EnsureRootFree(string userId, string rootPath, string? exceptProjectId = null)
+    {
+        var key = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        var taken = _projects.Values.FirstOrDefault(p =>
+            p.OwnerId == userId
+            && p.Id != exceptProjectId
+            && WorkspaceKnowledgeStore.NormalizePath(p.RootPath) == key);
+        if (taken is not null)
+            throw new ArgumentException($"Эта папка уже подключена как проект «{taken.Name}»");
+    }
+
     public Project Create(string name, string? rootPath, string userId, string username, bool createDirectory = false, string? groupId = null)
     {
-        if (string.IsNullOrWhiteSpace(rootPath))
+        // Путь не задан — «Новый проект»: папку под него придумываем сами
+        var autoPath = string.IsNullOrWhiteSpace(rootPath);
+        if (autoPath)
         {
-            // База по среде владельца: изолированные — в корне песочницы
-            string? basePath;
-            if (_sandbox is not null
-                && _users.GetById(userId)?.ExecutionEnvironment == ExecutionEnvironments.Container)
-            {
-                basePath = _sandbox.Options.ProjectsRoot;
-                if (string.IsNullOrWhiteSpace(basePath))
-                    throw new ArgumentException(
-                        "Песочница не настроена: задайте Sandbox:ProjectsRoot в appsettings.Local.json");
-            }
-            else
-            {
-                basePath = _appSettings.Get().DefaultProjectsPath;
-                if (string.IsNullOrWhiteSpace(basePath))
-                    throw new ArgumentException("Укажите путь к папке или задайте папку по умолчанию в настройках");
-            }
-            rootPath = Path.Combine(basePath, username, name);
+            // Домашняя папка владельца: у изолированных — в корне песочницы, у остальных —
+            // в DefaultProjectsPath; прослойка {username} может быть снята override'ом конфига
+            var env = _sandbox is not null
+                ? _users.GetById(userId)?.ExecutionEnvironment
+                : ExecutionEnvironments.Local;
+            var home = _homes.Resolve(username, env)
+                ?? throw new ArgumentException(env == ExecutionEnvironments.Container
+                    ? UserHomeResolver.NotConfiguredMessage(env)
+                    : "Укажите путь к папке или задайте папку по умолчанию в настройках");
+            rootPath = Path.Combine(home, name);
             createDirectory = true;
         }
+        // Путь приводим к каноничному виду СРАЗУ: иначе «c:\GIT\x» и «c:\\GIT\\x» лягут в стор
+        // как разные проекты, хотя это одна папка (Windows схлопывает двойные разделители сам)
+        rootPath = Path.GetFullPath(rootPath);
         EnsureRootAllowed(userId, rootPath);
+        EnsureRootFree(userId, rootPath);
+
+        // «Новый проект» обязан получить НОВУЮ папку. Раньше домашняя папка была отдельной
+        // ({база}/{логин}), и совпасть с рабочей репой не могла; с override домашней папкой
+        // может быть общий корень вроде C:\GIT — и совпадение имени тихо подцепило бы чужую
+        // репу со всем содержимым. Явный отказ вместо молчаливого «Новый = Существующий».
+        if (autoPath && Directory.Exists(rootPath))
+            throw new ArgumentException(
+                $"Папка «{rootPath}» уже существует. Чтобы работать с ней, добавьте её как существующую.");
 
         if (createDirectory)
             Directory.CreateDirectory(rootPath);
@@ -111,9 +136,15 @@ public class ProjectManager
         if (name is not null) project.Name = name;
         if (rootPath is not null)
         {
+            rootPath = Path.GetFullPath(rootPath);
             if (!Directory.Exists(rootPath))
                 throw new DirectoryNotFoundException($"Папка не найдена: {rootPath}");
-            if (project.OwnerId is { } ownerId) EnsureRootAllowed(ownerId, rootPath);
+            if (project.OwnerId is { } ownerId)
+            {
+                EnsureRootAllowed(ownerId, rootPath);
+                // сам проект из проверки исключаем: сохранение без смены папки — не дубль
+                EnsureRootFree(ownerId, rootPath, exceptProjectId: project.Id);
+            }
             project.RootPath = rootPath;
         }
         if (systemPrompt is not null) project.SystemPrompt = systemPrompt;

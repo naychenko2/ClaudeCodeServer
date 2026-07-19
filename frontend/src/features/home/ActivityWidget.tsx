@@ -77,7 +77,11 @@ export function ActivityWidget({ active, fill }: { active: HomeSessionInfo[]; fi
         : (
           <div style={{
             display: 'flex', flexDirection: 'column',
-            ...(fill ? { flex: 1, minHeight: 0, overflowY: 'auto' as const } : {}),
+            // Длинный список не раздувает карточку: в fill-ячейке — скролл по высоте
+            // соседа, в потоке колонки — скролл после ~6 строк (maxHeight)
+            ...(fill
+              ? { flex: 1, minHeight: 0, overflowY: 'auto' as const }
+              : { maxHeight: 300, overflowY: 'auto' as const }),
           }}>
             {liveAgents.map(item => <AgentRow key={item.taskId} item={item} />)}
             {sessions.map(s => <SessionRow key={s.id} s={s} showStatus onOpen={openSession} />)}

@@ -434,7 +434,7 @@ export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: 
     }}>
       {/* Шапка — та же, что у остальных разделов (логотип, разделы, аватар):
           уход в любой раздел закрывает страницу */}
-      <HubHeader value="home" onTab={t => { onClose(); onHubTab(t); }} auth={auth} onLogout={onLogout} historyActive />
+      <HubHeader value="home" onTab={onHubTab} auth={auth} onLogout={onLogout} historyActive />
       {feed}
       {/* Единый попап-подтверждение (обновление дня / очистка истории) в стиле приложения */}
       {confirm && (

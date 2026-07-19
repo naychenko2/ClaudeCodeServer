@@ -418,6 +418,19 @@ export default function App() {
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTab) => {
+    // Уход в раздел закрывает overlay «Что нового» ЗАМЕНОЙ записи #/history, а не Back'ом:
+    // history.back() асинхронен, и его popstate прилетел бы уже ПОСЛЕ смены раздела, вернув
+    // hubTab на снимок, из которого overlay открывали (клик по «Персонам» кидал в «Проекты»).
+    // Снимаем флаг с текущей записи — дальше switchHubTab работает от чистого снимка.
+    if (historyOpen) {
+      setHistoryOpen(false)
+      const st = window.history.state as (NavSnapshot & { historyOverlay?: boolean }) | null
+      if (st?.historyOverlay) {
+        const rest: NavSnapshot & { historyOverlay?: boolean } = { ...st }
+        delete rest.historyOverlay
+        navReplace(rest)
+      }
+    }
     // Повторный клик по активному разделу «Проекты» с открытым проектом — выход к списку.
     if (t === 'projects' && hubTab === 'projects' && project) {
       localStorage.removeItem(OPEN_PROJECT_KEY)

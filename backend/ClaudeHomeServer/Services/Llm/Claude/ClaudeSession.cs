@@ -1537,7 +1537,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
                 if (line is null) break; // stdout закрыт — процесс завершился
                 if (string.IsNullOrWhiteSpace(line)) continue;
-                await ProcessLineAsync(line);
+                await ProcessLineAsync(run, line);
             }
         }
         catch (OperationCanceledException) { /* отмена сессии — штатно */ }
@@ -1669,7 +1669,11 @@ public class ClaudeSession : ILlmSessionAdapter
         return sb.ToString();
     }
 
-    private async Task ProcessLineAsync(string line)
+    // run — прогон-владелец read-loop'а, из которого пришла строка. Корреляцию ведём по нему,
+    // а НЕ по полю _run: после механики доживания _run мог быть заменён новым прогоном, пока
+    // старый reader дочитывает хвост — тогда поздние строки замещённого прогона (в т.ч. его
+    // result) попадали бы в чужой CliRun.
+    private async Task ProcessLineAsync(CliRun run, string line)
     {
         // Невалидный JSON от CLI не должен убивать весь turn
         JsonDocument doc;
@@ -1764,16 +1768,16 @@ public class ClaudeSession : ILlmSessionAdapter
                 // (ответ на task-notification); его result не должен завершить будущий ход
                 // (см. case "result"). Сообщения сабагентов (parent_tool_use_id) — это стрим
                 // доживающих фоновых агентов, а не продолжение.
-                if (_run is { TurnDone: true } seRun && !HasParentToolUseId(root))
-                    seRun.ContinuationActive = true;
+                if (run is { TurnDone: true } && !HasParentToolUseId(root))
+                    run.ContinuationActive = true;
                 await HandleStreamEventAsync(root);
                 break;
 
             case "assistant":
-                if (_run is { TurnDone: true } asRun && !HasParentToolUseId(root))
-                    asRun.ContinuationActive = true;
+                if (run is { TurnDone: true } && !HasParentToolUseId(root))
+                    run.ContinuationActive = true;
                 TrackContextTokens(root);
-                await HandleAssistantToolsAsync(root);
+                await HandleAssistantToolsAsync(run, root);
                 break;
 
             case "result":
@@ -1786,8 +1790,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 // не ждёт); SkipResults>0 → продолжение шло в момент отправки текущего хода,
                 // его result приходит первым (stdout последовательный) — пропускаем, result
                 // самого хода будет следующим.
-                if (_run is { } contRun)
                 {
+                    var contRun = run;
                     if (contRun.TurnDone)
                     {
                         contRun.ContinuationActive = false;
@@ -1835,8 +1839,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 // прогон доживает (агенты работают внутри процесса) и готов принять
                 // следующий совместимый ход. Result'ы ходов-продолжений CLI сюда не доходят —
                 // отфильтрованы корреляцией выше.
-                if (_run is { } doneRun)
                 {
+                    var doneRun = run;
                     doneRun.TurnDone = true;
                     if (!doneRun.HasPendingBg) CloseStdin(doneRun);
                     else
@@ -1864,7 +1868,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 break;
 
             case "user":
-                await HandleUserMessageAsync(root);
+                await HandleUserMessageAsync(run, root);
                 break;
 
             case "sdk_control_request":
@@ -1935,7 +1939,7 @@ public class ClaudeSession : ILlmSessionAdapter
             await _onMessage(msg);
     }
 
-    private async Task HandleUserMessageAsync(JsonElement root)
+    private async Task HandleUserMessageAsync(CliRun run, JsonElement root)
     {
         if (!root.TryGetProperty("message", out var msg)) return;
         if (!msg.TryGetProperty("content", out var content)) return;
@@ -1980,7 +1984,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             // Запуск фоновой задачи (async-агент, resume через SendMessage, workflow) —
             // берём её id на учёт прогона: пока pending не пуст, процесс переживает ход
-            TrackBgLaunch(toolUseId, resultContent, isError);
+            TrackBgLaunch(run, toolUseId, resultContent, isError);
 
             // Если это результат Workflow с транскриптом — запускаем watcher
             if (!isError && resultContent.Contains("Transcript dir:"))
@@ -1990,7 +1994,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     var transcriptDir = m.Groups[1].Value.Trim();
                     Console.WriteLine($"[WorkflowWatcher] старт: dir={transcriptDir} allowed={WorkflowAgentParser.IsPathAllowed(transcriptDir)}");
-                    var watcher = new WorkflowWatcher(transcriptDir, toolUseId, _onMessage) { Owner = _run };
+                    var watcher = new WorkflowWatcher(transcriptDir, toolUseId, _onMessage) { Owner = run };
                     lock (_workflowWatchers)
                     {
                         // Завершившиеся ватчеры диспозятся сами — чистим список, чтобы не рос
@@ -2019,10 +2023,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // workflow — «runId: wf_…». Структурный кандидат (run_in_background/Workflow из
     // HandleAssistantToolsAsync) без распарсенного id → PendingBgUnknown: точный учёт
     // потерян, доживание прогона ограничится только потолком BgLingerTimeout.
-    private void TrackBgLaunch(string toolUseId, string content, bool isError)
+    private void TrackBgLaunch(CliRun run, string toolUseId, string content, bool isError)
     {
-        var run = _run;
-        if (run is null) return;
         bool candidate;
         lock (run.PendingBg) candidate = run.BgLaunchCandidates.Remove(toolUseId);
         if (isError) return;
@@ -2144,7 +2146,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
     }
 
-    private async Task HandleAssistantToolsAsync(JsonElement root)
+    private async Task HandleAssistantToolsAsync(CliRun run, JsonElement root)
     {
         if (!root.TryGetProperty("message", out var msg)) return;
         if (!msg.TryGetProperty("content", out var content)) return;
@@ -2187,12 +2189,12 @@ public class ClaudeSession : ILlmSessionAdapter
 
             // Кандидат в фоновые задачи прогона: Agent/Task с run_in_background или Workflow —
             // подтверждение запуска и id задачи придут в tool_result (TrackBgLaunch)
-            if (parentId is null && _run is { } bgRun && toolId.Length > 0
+            if (parentId is null && toolId.Length > 0
                 && (toolName == "Workflow"
                     || (toolName is "Agent" or "Task" && block.TryGetProperty("input", out var inputEl)
                         && inputEl.TryGetProperty("run_in_background", out var bgEl)
                         && bgEl.ValueKind == JsonValueKind.True)))
-                lock (bgRun.PendingBg) bgRun.BgLaunchCandidates.Add(toolId);
+                lock (run.PendingBg) run.BgLaunchCandidates.Add(toolId);
 
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }

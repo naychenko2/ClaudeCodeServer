@@ -14,6 +14,11 @@ const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: 'system', label: 'Системная' },
 ];
 
+// Разделитель между смысловыми группами пунктов меню
+function MenuDivider() {
+  return <div style={{ height: 1, background: C.borderLight, margin: '4px 0' }} />;
+}
+
 const dropdownItem: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 9,
   width: '100%', textAlign: 'left', padding: '8px 14px',
@@ -38,6 +43,7 @@ interface Props {
   onShowHistory?: () => void;
   historyBadge?: number;       // число новых изменений с последнего захода
   historyNeverSeen?: boolean;  // ещё ни разу не открывал историю — точка без числа
+  historyActive?: boolean;     // страница «Что нового» открыта — подсвечиваем пункт
   // «Знания» (настройка баз знаний Dify) — раздел убран из хаб-таббара, вызов в меню аватара.
   // undefined — пункт не показывать
   onOpenKnowledge?: () => void;
@@ -45,7 +51,7 @@ interface Props {
   onShowUsage?: () => void;
 }
 
-export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, onOpenKnowledge, onShowUsage }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowUsage }: Props) {
   // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
   // чтобы было понятно, под каким аккаунтом сидишь
   const name = displayName?.trim() || username;
@@ -129,10 +135,53 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
               <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{username}</div>
             )}
           </div>
+          {onOpenKnowledge && (
+            <button
+              onClick={() => { setOpen(false); onOpenKnowledge(); }}
+              style={dropdownItem}
+            >
+              <Book size={ICON_SIZE.xs} strokeWidth={2} />
+              Знания
+            </button>
+          )}
+          {onShowUsage && (
+            <button
+              onClick={() => { setOpen(false); onShowUsage(); }}
+              style={dropdownItem}
+            >
+              <Gauge size={ICON_SIZE.xs} strokeWidth={2} />
+              Использование
+            </button>
+          )}
+          <MenuDivider />
+          {isAdmin && (
+            <button
+              onClick={() => { setOpen(false); onShowUserManagement(); }}
+              style={dropdownItem}
+            >
+              <Users size={ICON_SIZE.xs} strokeWidth={2} />
+              Пользователи
+            </button>
+          )}
+          <button
+            onClick={() => { setOpen(false); onShowChangePassword(); }}
+            style={dropdownItem}
+          >
+            <Lock size={ICON_SIZE.xs} strokeWidth={2} />
+            Сменить пароль
+          </button>
+          <MenuDivider />
+          <button
+            onClick={() => { setOpen(false); onShowFeatureFlags(); }}
+            style={dropdownItem}
+          >
+            <FlaskConical size={ICON_SIZE.xs} strokeWidth={2} />
+            Эксперименты
+          </button>
           {onShowHistory && (
             <button
               onClick={() => { setOpen(false); onShowHistory(); }}
-              style={dropdownItem}
+              style={historyActive ? { ...dropdownItem, color: C.accent } : dropdownItem}
             >
               <History size={ICON_SIZE.xs} strokeWidth={2} />
               Что нового
@@ -152,47 +201,6 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
               )}
             </button>
           )}
-          {onOpenKnowledge && (
-            <button
-              onClick={() => { setOpen(false); onOpenKnowledge(); }}
-              style={dropdownItem}
-            >
-              <Book size={ICON_SIZE.xs} strokeWidth={2} />
-              Настройка знаний
-            </button>
-          )}
-          {onShowUsage && (
-            <button
-              onClick={() => { setOpen(false); onShowUsage(); }}
-              style={dropdownItem}
-            >
-              <Gauge size={ICON_SIZE.xs} strokeWidth={2} />
-              Использование
-            </button>
-          )}
-          {isAdmin && (
-            <button
-              onClick={() => { setOpen(false); onShowUserManagement(); }}
-              style={dropdownItem}
-            >
-              <Users size={ICON_SIZE.xs} strokeWidth={2} />
-              Управление пользователями
-            </button>
-          )}
-          <button
-            onClick={() => { setOpen(false); onShowChangePassword(); }}
-            style={dropdownItem}
-          >
-            <Lock size={ICON_SIZE.xs} strokeWidth={2} />
-            Сменить пароль
-          </button>
-          <button
-            onClick={() => { setOpen(false); onShowFeatureFlags(); }}
-            style={dropdownItem}
-          >
-            <FlaskConical size={ICON_SIZE.xs} strokeWidth={2} />
-            Экспериментальные функции
-          </button>
           {/* Оформление: светлая / тёмная / системная тема */}
           <div style={{
             padding: '10px 14px 12px', margin: '4px 0',

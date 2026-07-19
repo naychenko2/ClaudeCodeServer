@@ -73,16 +73,27 @@ export function UsageWidget() {
                   {reset && (
                     <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>сброс {reset}</span>
                   )}
-                  <span style={{
-                    fontFamily: FONT.mono, fontSize: 13, fontWeight: 700,
-                    color: w.hasUtil ? (w.level === 'normal' ? C.textHeading : c.text) : C.textMuted,
-                  }}>
-                    {w.hasUtil ? `${w.pct}%` : '—'}
+                  <span
+                    style={{
+                      fontFamily: w.hasUtil ? FONT.mono : FONT.sans, fontSize: w.hasUtil ? 13 : 11,
+                      fontWeight: w.hasUtil ? 700 : 400,
+                      color: w.hasUtil ? (w.level === 'normal' ? C.textHeading : c.text) : C.textMuted,
+                    }}
+                    // Долю CLI присылает только при приближении к лимиту, и молчание —
+                    // это «расход невелик», а не «ноль». Поясняем, чтобы прочерк не выглядел сбоем.
+                    title={w.hasUtil ? undefined : 'Claude сообщает долю использования только при приближении к лимиту'}
+                  >
+                    {w.hasUtil ? `${w.pct}%` : 'в пределах нормы'}
                   </span>
                 </div>
-                <div style={{ height: 5, borderRadius: 3, background: C.track, overflow: 'hidden', marginTop: 5 }}>
-                  <div style={{ width: `${w.hasUtil ? Math.min(100, w.pct) : 0}%`, height: '100%', background: c.fill }} />
-                </div>
+                {/* Шкалу рисуем ТОЛЬКО с реальными данными: пустая полоса читалась как
+                    «израсходовано 0%», хотя означала «доля неизвестна». Так же на экране
+                    «Использование» (UsageScreen.WindowCard) */}
+                {w.hasUtil && (
+                  <div style={{ height: 5, borderRadius: 3, background: C.track, overflow: 'hidden', marginTop: 5 }}>
+                    <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
+                  </div>
+                )}
               </div>
             );
           })}

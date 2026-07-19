@@ -18,6 +18,9 @@ interface Props {
   onTab: (t: HubTab) => void;
   auth: AuthState;
   onLogout: () => void;
+  // Открыта страница «Что нового» (она не вкладка хаба, а overlay) — подсвечиваем
+  // её кнопку в шапке, как подсвечен колокольчик в разделе уведомлений
+  historyActive?: boolean;
 }
 
 // Событие открытия продуктовой истории — слушает App (overlay на верхнем уровне)
@@ -31,7 +34,7 @@ export const productHistorySeenKey = (userId?: string | null) =>
 
 // Верхняя шапка-хаб главной страницы: логотип слева, переключатель «Чаты | Проекты» по центру,
 // аватар/меню справа. На мобилке логотип и URL-бейдж скрыты (не помещаются).
-export function HubHeader({ value, onTab, auth, onLogout }: Props) {
+export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props) {
   const isMobile = useIsMobile();
   const [showUserMgmt, setShowUserMgmt] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -84,12 +87,14 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
   const HIDDEN_MOBILE: HubTab[] = ['notes', 'personas', 'knowledge'];
   // Если активен спрятанный раздел — показываем его 4-й вкладкой, чтобы подсветка была верной
   const mobileTabs = HIDDEN_MOBILE.includes(value) ? [...PRIMARY_MOBILE, value] : PRIMARY_MOBILE;
+  // active — текущий раздел подсвечен accent-цветом (на мобилке эти пункты живут
+  // в «⋯ Разделы», и без подсветки не видно, где находишься)
   const sectionItems: OverflowItem[] = [
-    { key: 'home', icon: <House size={18} strokeWidth={2} />, label: 'Домой', onClick: () => onTab('home') },
-    { key: 'notes', icon: <Share2 size={18} strokeWidth={2} />, label: 'Заметки', onClick: () => onTab('notes') },
-    { key: 'personas', icon: <Users size={18} strokeWidth={2} />, label: 'Персоны', onClick: () => onTab('personas') },
-    { key: 'knowledge', icon: <Book size={18} strokeWidth={2} />, label: 'Знания', onClick: () => onTab('knowledge') },
-    { key: 'history', icon: <History size={18} strokeWidth={2} />, label: 'Что нового', onClick: openHistory, dot: historyBadge > 0 || neverSeen },
+    { key: 'home', icon: <House size={18} strokeWidth={2} />, label: 'Домой', onClick: () => onTab('home'), active: !historyActive && value === 'home' },
+    { key: 'notes', icon: <Share2 size={18} strokeWidth={2} />, label: 'Заметки', onClick: () => onTab('notes'), active: !historyActive && value === 'notes' },
+    { key: 'personas', icon: <Users size={18} strokeWidth={2} />, label: 'Персоны', onClick: () => onTab('personas'), active: !historyActive && value === 'personas' },
+    { key: 'knowledge', icon: <Book size={18} strokeWidth={2} />, label: 'Знания', onClick: () => onTab('knowledge'), active: !historyActive && value === 'knowledge' },
+    { key: 'history', icon: <History size={18} strokeWidth={2} />, label: 'Что нового', onClick: openHistory, dot: historyBadge > 0 || neverSeen, active: historyActive },
   ];
 
   // «Утренний бриф» и «Единый поиск» убраны из шапки — доступны через AI-палитру (⌘/Ctrl+K).
@@ -189,7 +194,7 @@ export function HubHeader({ value, onTab, auth, onLogout }: Props) {
             aria-label={historyTip}
             style={{
               position: 'relative', width: 32, height: 32, borderRadius: 8, border: 'none',
-              background: 'none', color: C.textSecondary, cursor: 'pointer',
+              background: 'none', color: historyActive ? C.accent : C.textSecondary, cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
             }}
             onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; setShowHistoryTip(true); }}

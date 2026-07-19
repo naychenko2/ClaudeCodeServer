@@ -197,8 +197,13 @@ public class SessionManager
     // --- MCP tasks-server ---
 
     // Базовый URL API для MCP-сервера: среда владельца (из песочницы Kestrel виден
-    // как host.docker.internal) → конфиг → первый адрес Kestrel → дефолт.
+    // как host.docker.internal) → конфиг → адрес Kestrel → дефолт.
     // 0.0.0.0/[::] заменяем на localhost — MCP-сервер ходит с той же машины.
+    // Среди адресов Kestrel предпочитаем http: MCP-серверы на node ходят обычным
+    // fetch, а боевой серт выписан на внешний домен — по https://localhost они
+    // упираются в ERR_TLS_CERT_ALTNAME_INVALID (localhost/127.0.0.1 нет в SAN).
+    // Если http-адреса нет вообще, поднимите локальный http-эндпоинт и пропишите
+    // McpTasksApiUrl явно — иначе все MCP-прокси (tasks/notes/memory/wsp) отвалятся.
     private string ResolveTasksApiUrl(string? ownerId = null)
     {
         if (ownerId is not null && _launchers.ForOwner(ownerId).McpApiUrlOverride is { } sandboxUrl)
@@ -207,9 +212,11 @@ public class SessionManager
         var fromConfig = _config["McpTasksApiUrl"];
         if (!string.IsNullOrWhiteSpace(fromConfig)) return fromConfig.TrimEnd('/');
 
-        var addr = _server.Features
+        var addresses = _server.Features
             .Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()?
-            .Addresses.FirstOrDefault();
+            .Addresses;
+        var addr = addresses?.FirstOrDefault(a => a.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                   ?? addresses?.FirstOrDefault();
         if (string.IsNullOrEmpty(addr)) return "http://localhost:5000";
         return addr.Replace("0.0.0.0", "localhost").Replace("[::]", "localhost").TrimEnd('/');
     }

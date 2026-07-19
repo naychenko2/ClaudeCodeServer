@@ -78,10 +78,9 @@ public class SessionManager
     private readonly JwtService _jwt;
     private readonly Microsoft.AspNetCore.Hosting.Server.IServer _server;
     private readonly IConfiguration _config;
-    // Сервисные токены MCP tasks-server — по одному на владельца, с перевыпуском до истечения
-    private readonly ConcurrentDictionary<string, (string Token, DateTime IssuedAt)> _tasksTokens = new();
-    // Аналогично для MCP notes-server (тот же сервисный токен владельца по смыслу, свой кэш)
-    private readonly ConcurrentDictionary<string, (string Token, DateTime IssuedAt)> _notesTokens = new();
+    // Сервисный токен MCP-серверов — ОДИН на владельца (задачи/заметки/память/персоны/…
+    // используют один и тот же owner-scoped JWT), с перевыпуском до истечения. См. GetServiceToken.
+    private readonly ConcurrentDictionary<string, (string Token, DateTime IssuedAt)> _serviceTokens = new();
 
     // Зрители сессии: sessionId → множество SignalR-соединений в её группе.
     // Уникальность по connectionId: повторный JoinSession того же соединения (клиент
@@ -224,41 +223,38 @@ public class SessionManager
     private bool TasksMcpEnabled(string? ownerId, Session session, Persona? persona) =>
         session.TaskExecution || _bindings.EffectiveToolEnabled(ownerId, persona, "tasks");
 
+    // Единый сервисный токен владельца для MCP-серверов (tasks/notes/memory/personas/…):
+    // per-owner JWT с перевыпуском за сутки до истечения (сервер может жить дольше срока токена).
+    private string GetServiceToken(string ownerId) =>
+        _serviceTokens.AddOrUpdate(ownerId,
+            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
+            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
+                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
+                : old).Token;
+
     // Контекст MCP-сервера задач для сессии; null — только для чата без владельца
     private TasksMcpContext? BuildTasksContext(string? ownerId, string? projectId)
     {
         if (ownerId is null) return null;
         // Перевыпуск за сутки до истечения — сервер может жить дольше срока токена
-        var entry = _tasksTokens.AddOrUpdate(ownerId,
-            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
-            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
-                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
-                : old);
-        return new TasksMcpContext(ResolveTasksApiUrl(ownerId), entry.Token, projectId);
+        var token = GetServiceToken(ownerId);
+        return new TasksMcpContext(ResolveTasksApiUrl(ownerId), token, projectId);
     }
 
     // Контекст MCP-сервера заметок; null — только для чата без владельца
     private NotesMcpContext? BuildNotesContext(string? ownerId, string? projectId)
     {
         if (ownerId is null) return null;
-        var entry = _notesTokens.AddOrUpdate(ownerId,
-            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
-            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
-                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
-                : old);
-        return new NotesMcpContext(ResolveTasksApiUrl(ownerId), entry.Token, projectId);
+        var token = GetServiceToken(ownerId);
+        return new NotesMcpContext(ResolveTasksApiUrl(ownerId), token, projectId);
     }
 
     // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes).
     // projectId — только у проектных персон (③-3.4: даёт доступ к team_memory_* команды).
     private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId, string? projectId)
     {
-        var entry = _notesTokens.AddOrUpdate(ownerId,
-            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
-            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
-                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
-                : old);
-        return new MemoryMcpContext(ResolveTasksApiUrl(ownerId), entry.Token, personaId, projectId);
+        var token = GetServiceToken(ownerId);
+        return new MemoryMcpContext(ResolveTasksApiUrl(ownerId), token, personaId, projectId);
     }
 
     // Контекст memory-server для проектной сессии БЕЗ персоны: только team_memory_* (③-3.4) —
@@ -855,16 +851,12 @@ public class SessionManager
                 // файлы в add-dir видны все, определение сервера дешёвое (ленивый, без процесса)
                 var (subagents, _) = SplitConsultants(ownerId, session,
                     _personas.GetForContext(ownerId, projectId).ToList());
-                var entry = _notesTokens.AddOrUpdate(ownerId,
-                    id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
-                    (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
-                        ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
-                        : old);
+                var token = GetServiceToken(ownerId);
                 var servers = subagents
                     .Where(p => p.MemoryEnabled)
                     .Select(p => new ConsultantMemoryServer(
                         PersonaConsultantToolset.PmemServerKey(p.Handle),
-                        ResolveTasksApiUrl(ownerId), entry.Token, p.Id,
+                        ResolveTasksApiUrl(ownerId), token, p.Id,
                         p.Scope == PersonaScope.Project ? p.ProjectId : null))
                     .ToList();
                 var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList()!;
@@ -941,12 +933,8 @@ public class SessionManager
         var mentionsHint = BuildMentionsHint(ownerId, session,
             ResolveOtherPersonas(ownerId, projectId, session));
 
-        var entry = _notesTokens.AddOrUpdate(ownerId,
-            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
-            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
-                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
-                : old);
-        return new PersonasMcpContext(ResolveTasksApiUrl(ownerId), entry.Token, projectId, selfPersonaId,
+        var token = GetServiceToken(ownerId);
+        return new PersonasMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, selfPersonaId,
             mentionsHint, BindingsEnabled: true);
     }
 
@@ -989,12 +977,8 @@ public class SessionManager
             allowedIds = set.ToList();
         }
 
-        var entry = _notesTokens.AddOrUpdate(ownerId,
-            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
-            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
-                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
-                : old);
-        return new WorkspaceMcpContext(ResolveTasksApiUrl(ownerId), entry.Token, projectId,
+        var token = GetServiceToken(ownerId);
+        return new WorkspaceMcpContext(ResolveTasksApiUrl(ownerId), token, projectId,
             sections, allowedIds, selfSessionId);
     }
 
@@ -1003,12 +987,8 @@ public class SessionManager
     private NotificationsMcpContext? BuildNotificationsContext(string? ownerId)
     {
         if (ownerId is null) return null;
-        var entry = _notesTokens.AddOrUpdate(ownerId,
-            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
-            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
-                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
-                : old);
-        return new NotificationsMcpContext(ResolveTasksApiUrl(ownerId), entry.Token);
+        var token = GetServiceToken(ownerId);
+        return new NotificationsMcpContext(ResolveTasksApiUrl(ownerId), token);
     }
 
     // Гейт подсказки следующего сообщения: делегат проверяет флаг prompt-suggestions

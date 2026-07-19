@@ -18,11 +18,12 @@ self.addEventListener('message', e => {
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
-// SPA-fallback. /api/*, OnlyOffice-пути (версионированные /X.Y.Z-hash/... и статика)
-// и /drawio/* (iframe self-hosted draw.io) не должны перехватываться SW — иначе навигация
-// iframe на /drawio/ получит index.html приложения вместо редактора.
+// SPA-fallback. /api/*, OnlyOffice-пути (версионированные /X.Y.Z-hash/... и статика),
+// /drawio/* (iframe self-hosted draw.io) и /preview/* (iframe dev-сервера проекта)
+// не должны перехватываться SW — иначе навигация iframe получит index.html
+// приложения вместо самого редактора/дев-сервера.
 registerRoute(new NavigationRoute(createHandlerBoundToURL('index.html'), {
-  denylist: [/^\/api\//, /^\/\d/, /^\/web-apps\//, /^\/sdkjs\//, /^\/doceditor\//, /^\/doc\//, /^\/coauthoring\//, /^\/cache\//, /^\/drawio\//],
+  denylist: [/^\/api\//, /^\/\d/, /^\/web-apps\//, /^\/sdkjs\//, /^\/doceditor\//, /^\/doc\//, /^\/coauthoring\//, /^\/cache\//, /^\/drawio\//, /^\/preview\//],
 }));
 
 // === Web push ===

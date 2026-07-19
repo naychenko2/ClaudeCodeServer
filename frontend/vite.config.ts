@@ -4,7 +4,10 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 // Порт бэкенда для прокси /api и /hubs (по умолчанию 5000; переопределяется BACKEND_PORT)
 const backendPort = process.env.BACKEND_PORT || '5000';
-const backendUrl = `http://localhost:${backendPort}`;
+// Именно 127.0.0.1, а НЕ localhost: профиль запуска бэкенда слушает 0.0.0.0 (IPv4-wildcard,
+// нужен для захода с телефона), а Node резолвит localhost в ::1 первым — прокси упирался в
+// ECONNREFUSED и отдавал Bad Gateway на /api/auth/login.
+const backendUrl = `http://127.0.0.1:${backendPort}`;
 
 export default defineConfig({
   plugins: [
